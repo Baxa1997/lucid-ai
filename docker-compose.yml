@@ -18,6 +18,10 @@ services:
       - AI_SERVICE_WS_URL=ws://ai_engine:8000
       - NEXT_PUBLIC_AGENT_WS_URL=ws://localhost:8000/api/v1/ws
       - INTERNAL_API_KEY=lucid_internal_k8s_2f9a7e3c1d4b6e8a0f2c5d7e9b1a3c5d
+      - SESSION_SECRET=6977c6e899b6846aee73922de6ac653ddf41e5074cb904816eb2d3c5f5cd9325
+      - AUTH_SECRET=lucid_dev_auth_secret_please_change_in_production
+      - AUTH_URL=http://localhost:3000
+      - ENCRYPTION_KEY=lucid_dev_encryption_key_change_in_production
     depends_on:
       - ai_engine
       - db

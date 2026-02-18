@@ -88,6 +88,44 @@
 
 ---
 
+## Phase 4 — Notion Integration
+
+The goal: user connects Notion, picks a task from a database, Lucid runs the agent, pushes code, opens a PR, and writes the PR link back to the Notion task — exactly like Devin.
+
+### Backend
+
+| # | Task | Priority | Description |
+|---|------|----------|-------------|
+| N1 | **Notion OAuth** | P0 | OAuth 2.0 flow to connect a user's Notion workspace. Store encrypted Notion access token in DB (per user/org). Endpoints: `GET /api/notion/auth/url`, `GET /api/notion/auth/callback`. |
+| N2 | **List Notion databases** | P0 | `GET /api/notion/databases` — returns all databases the user has granted access to. Used to let the user pick which DB contains their tasks. |
+| N3 | **List Notion tasks** | P0 | `GET /api/notion/tasks?database_id=X` — fetches pages from a Notion database, returns title, status, assignee, description. Supports filtering (e.g. status = "To Do"). |
+| N4 | **Get Notion task detail** | P0 | `GET /api/notion/tasks/{page_id}` — returns full page content (title + body blocks) to use as the agent's task prompt. |
+| N5 | **Write back to Notion** | P1 | `POST /api/notion/tasks/{page_id}/update` — updates the Notion page: set status to "In Progress" when agent starts, add PR URL as a property when agent finishes, add a comment with a summary. |
+| N6 | **Store Notion config per org** | P1 | Save selected database ID and field mappings (which Notion property = status, which = PR link) in the DB so user doesn't have to reconfigure each time. |
+
+### Frontend
+
+| # | Task | Priority | Description |
+|---|------|----------|-------------|
+| NF1 | **Notion connect page** | P0 | Settings → Integrations → "Connect Notion" button. Starts OAuth flow, shows connected workspace name and avatar on success. Disconnect button to revoke. |
+| NF2 | **Task picker UI** | P0 | New flow: "Start from Notion" → pick database → browse tasks list (title, status, assignee) → select task → auto-fills the agent prompt and starts the session. |
+| NF3 | **Task context panel** | P1 | In the workspace, show a sidebar card with the linked Notion task: title, description, status. Link opens Notion page. |
+| NF4 | **Auto-update indicator** | P1 | After the agent creates a PR, show a banner: "Notion task updated — PR link added" with a link to the Notion page. |
+
+### Flow
+
+```
+User → Settings → Connect Notion (OAuth)
+     → "New Session" → "From Notion" → picks database → picks task
+     → Lucid sets task status = "In Progress" in Notion
+     → Agent clones repo, reads code, makes changes
+     → Agent pushes branch, Lucid creates PR via GitHub API
+     → Lucid sets task status = "In Review", adds PR URL to Notion task
+     → User gets notification with Notion task link + PR link
+```
+
+---
+
 ## Suggested Build Order
 
 This is the critical path — each step unlocks visible progress:
@@ -100,8 +138,11 @@ Week 3:  B1 + B2 + B3 + F5   → File write API + git endpoints + git status pan
 Week 4:  F6 + F9 + B4         → Diff viewer + commit/push UI + PR endpoint
 Week 5:  B5 + B6 + F11        → Streaming + session resume + agent controls
 Week 6:  F10 + F12 + B8       → Create PR UI + session history + task queue
-Week 7:  B10 + B12 + F13      → Test runner + cost tracking + notifications
-Week 8:  Phase 3 polish        → Rate limiting, shortcuts, themes
+Week 7:  N1 + N2 + N3 + NF1   → Notion OAuth + database/task listing + connect page
+Week 8:  N4 + N5 + NF2        → Task detail fetch + write-back + task picker UI
+Week 9:  N6 + NF3 + NF4       → Notion config storage + task context panel + auto-update indicator
+Week 10: B10 + B12 + F13      → Test runner + cost tracking + notifications
+Week 11: Phase 3 polish        → Rate limiting, shortcuts, themes
 ```
 
 After Week 4, you have a working Devin-like product:
@@ -110,39 +151,54 @@ After Week 4, you have a working Devin-like product:
 - User sees file tree, views code in editor, watches diffs
 - User commits, pushes, and creates a PR — all from the UI
 
+After Week 9, you have the full Notion-integrated flow:
+- User connects Notion workspace via OAuth
+- User picks a task directly from their Notion database
+- Agent runs, pushes code, creates PR
+- Notion task is auto-updated with PR link and status change
+
 ---
 
 ## Architecture Diagram (Target State)
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Browser                                                         │
-│ ┌───────────┬──────────────────────┬──────────────────────────┐ │
-│ │ File      │  Code Editor         │  Chat          Terminal  │ │
-│ │ Explorer  │  (Monaco)            │  ───────────   ────────  │ │
-│ │           │                      │  Agent msgs    xterm.js  │ │
-│ │ Git       │  Diff Viewer         │  User input    Commands  │ │
-│ │ Status    │  (Monaco Diff)       │  Controls      Output    │ │
-│ └───────────┴──────────────────────┴──────────────────────────┘ │
-│          ↕ REST + WebSocket                                      │
-├─────────────────────────────────────────────────────────────────┤
-│  Next.js (Frontend)                                              │
-│  Auth · API Routes · Prisma · Zustand                           │
-│          ↕ HTTP                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│  FastAPI (ai_engine)                                             │
-│  Sessions · WebSocket · Chat · Files · Git · Auth               │
-│          ↕ Docker SDK                                            │
-├─────────────────────────────────────────────────────────────────┤
-│  Docker Containers (per session)                                 │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │
-│  │ Session A    │  │ Session B    │  │ Session C    │            │
-│  │ /workspace   │  │ /workspace   │  │ /workspace   │            │
-│  │ git, node,   │  │ git, python, │  │ git, go,     │            │
-│  │ npm, tests   │  │ pip, pytest  │  │ make, tests  │            │
-│  └─────────────┘  └─────────────┘  └─────────────┘            │
-├─────────────────────────────────────────────────────────────────┤
-│  PostgreSQL                                                      │
-│  Users · Orgs · Projects · ChatSessions · ChatMessages          │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  Notion                                                           │
+│  Databases · Tasks · Status · PR links                           │
+└─────────────────────┬────────────────────────────────────────────┘
+                       │ OAuth + API (read tasks / write back)
+┌──────────────────────▼───────────────────────────────────────────┐
+│  Browser                                                          │
+│ ┌────────────┬──────────────────────┬──────────────────────────┐ │
+│ │ File       │  Code Editor         │  Chat          Terminal  │ │
+│ │ Explorer   │  (Monaco)            │  ───────────   ────────  │ │
+│ │            │                      │  Agent msgs    xterm.js  │ │
+│ │ Git        │  Diff Viewer         │  User input    Commands  │ │
+│ │ Status     │  (Monaco Diff)       │  Controls      Output    │ │
+│ │            │                      │                          │ │
+│ │ Notion     │                      │                          │ │
+│ │ Task card  │                      │                          │ │
+│ └────────────┴──────────────────────┴──────────────────────────┘ │
+│          ↕ REST + WebSocket                                       │
+├───────────────────────────────────────────────────────────────────┤
+│  Next.js (Frontend)                                               │
+│  Auth · API Routes · Prisma · Zustand                            │
+│          ↕ HTTP                                                   │
+├───────────────────────────────────────────────────────────────────┤
+│  FastAPI (ai_engine)                                              │
+│  Sessions · WebSocket · Chat · Files · Git · Auth · Notion       │
+│          ↕ Docker SDK                          ↕ Notion API      │
+├───────────────────────────────────────────────────────────────────┤
+│  Docker Containers (per session)                                  │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
+│  │ Session A    │  │ Session B    │  │ Session C    │             │
+│  │ /workspace   │  │ /workspace   │  │ /workspace   │             │
+│  │ git, node,   │  │ git, python, │  │ git, go,     │             │
+│  │ npm, tests   │  │ pip, pytest  │  │ make, tests  │             │
+│  └─────────────┘  └─────────────┘  └─────────────┘             │
+├───────────────────────────────────────────────────────────────────┤
+│  PostgreSQL                                                       │
+│  Users · Orgs · Projects · ChatSessions · ChatMessages           │
+│  NotionTokens · NotionConfigs                                     │
+└───────────────────────────────────────────────────────────────────┘
 ```
