@@ -71,7 +71,7 @@ const DEFAULT_TREE = [
 function TreeNode({ node, depth = 0, selectedFile, onFileSelect, parentPath = '' }) {
   const [isOpen, setIsOpen] = useState(depth < 2);
   const filePath = parentPath ? `${parentPath}/${node.name}` : node.name;
-  const isDir = node.type === 'dir';
+  const isDir = node.type === 'dir' || node.type === 'folder';
   const isSelected = selectedFile === filePath;
   const { icon: FileIcon, color: fileColor } = getFileIcon(node.name);
 
@@ -121,7 +121,9 @@ function TreeNode({ node, depth = 0, selectedFile, onFileSelect, parentPath = ''
           {node.children
             .sort((a, b) => {
               // Dirs first, then alphabetical
-              if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+              const aDir = a.type === 'dir' || a.type === 'folder';
+              const bDir = b.type === 'dir' || b.type === 'folder';
+              if (aDir !== bDir) return aDir ? -1 : 1;
               return a.name.localeCompare(b.name);
             })
             .map((child) => (

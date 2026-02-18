@@ -7,6 +7,7 @@ import jwt from 'jsonwebtoken';
 // ── Environment Variables ─────────────────────────────────
 const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://localhost:8000';
 const SESSION_SECRET = process.env.SESSION_SECRET;
+const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || '';
 
 if (!SESSION_SECRET) {
   console.warn('⚠️ SESSION_SECRET is not set. WebSocket tokens will be insecure.');
@@ -139,6 +140,7 @@ export async function POST(req) {
       headers: {
         'Content-Type': 'application/json',
         'X-User-ID': userId,
+        'X-Internal-Key': INTERNAL_API_KEY,
       },
       body: JSON.stringify(remotePayload),
     });

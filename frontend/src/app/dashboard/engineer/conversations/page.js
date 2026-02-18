@@ -1,75 +1,30 @@
 'use client';
 
-import { 
+import {
   MessageSquare, Search, Filter, MoreHorizontal, Clock,
-  ArrowUpDown, ChevronDown, Plus, Ghost, GitBranch, 
+  ArrowUpDown, ChevronDown, Plus, Ghost, GitBranch,
   CheckCircle2, Loader2, AlertCircle, Pause, ExternalLink,
   Calendar, Hash, Bot
 } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import { useRouter } from 'next/navigation';
 
-/* ═══════════════════════════════════════════════════
-   MOCK DATA — will be replaced by real API calls
-   ═══════════════════════════════════════════════════ */
-const MOCK_CONVERSATIONS = [
-  {
-    id: 'conv-001',
-    title: 'Implement user authentication flow',
-    repo: 'lucid-ai/frontend',
-    branch: 'feat/auth-flow',
-    status: 'completed',
-    lastMessage: 'All authentication endpoints have been implemented and tested. The JWT middleware is working correctly.',
-    messageCount: 24,
-    createdAt: '2026-02-15T14:30:00',
-    updatedAt: '2026-02-15T18:45:00',
-  },
-  {
-    id: 'conv-002',
-    title: 'Fix database connection pooling',
-    repo: 'lucid-ai/backend',
-    branch: 'fix/db-pool',
-    status: 'running',
-    lastMessage: 'Currently investigating the connection timeout issue in production. Running diagnostics...',
-    messageCount: 12,
-    createdAt: '2026-02-15T16:00:00',
-    updatedAt: '2026-02-15T19:30:00',
-  },
-  {
-    id: 'conv-003',
-    title: 'Redesign dashboard layout',
-    repo: 'lucid-ai/frontend',
-    branch: 'feat/dashboard-v2',
-    status: 'paused',
-    lastMessage: 'Paused while waiting for design team feedback on the new card layout.',
-    messageCount: 18,
-    createdAt: '2026-02-14T10:00:00',
-    updatedAt: '2026-02-14T16:20:00',
-  },
-  {
-    id: 'conv-004',
-    title: 'API rate limiting middleware',
-    repo: 'lucid-ai/backend',
-    branch: 'feat/rate-limit',
-    status: 'error',
-    lastMessage: 'Build failed: Redis connection refused on port 6379. Check Redis service status.',
-    messageCount: 8,
-    createdAt: '2026-02-13T09:15:00',
-    updatedAt: '2026-02-13T11:00:00',
-  },
-  {
-    id: 'conv-005',
-    title: 'Set up CI/CD pipeline',
-    repo: 'lucid-ai/infra',
-    branch: 'feat/cicd',
-    status: 'completed',
-    lastMessage: 'GitHub Actions workflow configured successfully. All tests pass on PR merge.',
-    messageCount: 31,
-    createdAt: '2026-02-12T08:00:00',
-    updatedAt: '2026-02-12T17:30:00',
-  },
-];
+/** Map a chat from the ai_engine API to the shape the UI cards expect. */
+function mapChat(chat) {
+  return {
+    id: chat.id,
+    agentSessionId: chat.agentSessionId,
+    title: chat.title || 'Untitled Session',
+    repo: chat.projectId || '—',
+    branch: chat.modelProvider || 'unknown',
+    status: chat.isActive ? 'running' : 'completed',
+    lastMessage: chat.title || 'AI Engineering Session',
+    messageCount: 0,
+    createdAt: chat.createdAt,
+    updatedAt: chat.updatedAt,
+  };
+}
 
 const STATUS_CONFIG = {
   completed: {
@@ -210,10 +165,26 @@ function ConversationCard({ conversation, onClick }) {
    ═══════════════════════════════════════════════════ */
 export default function ConversationsPage() {
   const router = useRouter();
-  const [conversations] = useState(MOCK_CONVERSATIONS);
+  const [conversations, setConversations] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [showFilters, setShowFilters] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/chats')
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.chats) {
+          setConversations(data.chats.map(mapChat));
+        } else {
+          setFetchError('Failed to load conversations.');
+        }
+      })
+      .catch(() => setFetchError('Could not reach the AI service.'))
+      .finally(() => setLoading(false));
+  }, []);
 
   // Filter conversations
   const filteredConversations = conversations.filter(conv => {
@@ -344,7 +315,17 @@ export default function ConversationsPage() {
       <div className="flex-1 overflow-y-auto px-8 pb-8">
         <div className="max-w-5xl mx-auto">
           <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-            {filteredConversations.length === 0 ? (
+            {loading ? (
+              <div className="flex flex-col items-center justify-center p-16 text-center">
+                <Loader2 className="w-8 h-8 text-blue-500 animate-spin mb-4" />
+                <p className="text-sm text-slate-400 font-medium">Loading conversations...</p>
+              </div>
+            ) : fetchError ? (
+              <div className="flex flex-col items-center justify-center p-16 text-center">
+                <AlertCircle className="w-8 h-8 text-red-400 mb-4" />
+                <p className="text-sm text-red-500 font-medium">{fetchError}</p>
+              </div>
+            ) : filteredConversations.length === 0 ? (
               <div className="flex flex-col items-center justify-center p-16 text-center">
                 <div className="w-20 h-20 bg-slate-50 rounded-3xl flex items-center justify-center mb-6 relative group">
                   <div className="absolute inset-0 bg-blue-100/50 rounded-3xl scale-0 group-hover:scale-110 transition-transform duration-500" />
