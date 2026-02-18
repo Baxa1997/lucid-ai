@@ -134,7 +134,7 @@ Creates the FastAPI app with all its configuration.
 - **Startup:** Checks if Docker daemon is accessible. Cleans up any orphaned containers from crashed previous runs. Logs warnings if SDK or LLM keys are missing.
 - **Shutdown:** Destroys all active sessions (stops agent, removes Docker containers). Destroys any remaining containers. Closes the database connection pool.
 
-**CORS middleware** — Allows the frontend (different origin) to call the API. Currently `allow_origins=["*"]` which is fine for development but should be restricted in production.
+**CORS middleware** — Allows the frontend (different origin) to call the API. Origins are restricted via the `ALLOWED_ORIGINS` env var (default: `http://localhost:3000`). In docker-compose this is set to `http://localhost:3000,http://frontend:3000`. Change it to your production domain before deploying.
 
 **Router registration** — Attaches all endpoint groups: health, sessions, ws, chat, files.
 
@@ -160,6 +160,7 @@ Every environment variable is read once at import time. The `Settings` class gro
 | `SANDBOX_CPU_LIMIT` | Max CPUs per container (`1.0`) |
 | `DOCKER_NETWORK` | Optional Docker network for containers |
 | `INTERNAL_API_KEY` | Secret for server-to-server auth between frontend and ai_engine |
+| `ALLOWED_ORIGINS` | Comma-separated allowed CORS origins. Defaults to `http://localhost:3000`. Set to your frontend URL in production. |
 
 **MODEL_CONFIGS** — Maps provider names to LiteLLM model strings. LiteLLM is a library that gives a unified API across all LLM providers.
 
@@ -341,7 +342,7 @@ The core session lifecycle.
 
 Why in-memory and not in the database? Because sessions hold live Python objects (the OpenHands Conversation, Workspace, Agent). These can't be serialized to a database. The database stores the *history* (chats); memory stores the *live state* (sessions).
 
-**`create_session()`** — The main factory function:
+**`create_session()`** — The main factory function. Requires a non-empty `user_id` — raises `ValueError` immediately if missing. This prevents any edge case where sessions could be assigned to a shared `"anonymous"` owner (which would allow cross-user data access). Since all endpoints enforce authentication before calling `create_session()`, `user_id` is always a real value in practice.
 
 1. **Mock mode** — If SDK not installed: creates a bare AgentSession with no workspace. The WebSocket handler will run the mock loop.
 2. **Real mode with Docker** — If Docker available: creates a container via `docker_manager`, wraps it in an SDK Workspace, creates an Agent and Conversation with event callbacks.
@@ -577,3 +578,65 @@ JWT is the secure path for browser-to-backend communication. X-User-ID exists be
 ### Why Alembic alongside Prisma?
 
 Both the frontend and AI engine need database access, but they're written in different languages (JavaScript/Prisma and Python/SQLAlchemy). Rather than force one ORM on both, each service manages its own tables with its own migration tool. The `include_object` filter in `alembic/env.py` prevents them from stepping on each other.
+
+---
+
+## Frontend Proxy Routes (Next.js API)
+
+The browser never talks to the ai_engine directly. All requests go through Next.js server-side API routes that add proper auth headers.
+
+### Why proxy routes?
+
+The ai_engine uses server-to-server auth (`X-User-ID` + `X-Internal-Key`). These headers must come from the trusted Next.js server — if the browser sent them directly, any user could spoof them. Each proxy route:
+
+1. Verifies the user is logged in via NextAuth (returns 401 if not)
+2. Adds `X-User-ID: <user's id>` and `X-Internal-Key: <shared secret>`
+3. Forwards the request to the ai_engine
+4. Returns the response to the browser
+
+### Routes
+
+| Route | Purpose |
+|-------|---------|
+| `GET /api/agent/token` | Issues a short-lived JWT (2h) signed with `SESSION_SECRET` for the current user. The workspace WebSocket uses this to authenticate. |
+| `POST /api/agent/start` | Creates a new agent session. Decrypts the git token from Prisma, forwards all fields to ai_engine `/api/v1/sessions`. |
+| `GET /api/chats` | Lists the user's chat history from ai_engine `/api/v1/chats`. Used by the conversations page. |
+| `GET /api/files/read` | Reads a file from the agent's workspace via ai_engine `/api/v1/files/read`. Used by the file viewer panel. |
+
+### WebSocket token flow
+
+The workspace page authenticates the WebSocket by fetching a token from the proxy:
+
+1. Page loads → `GET /api/agent/token` → receives a JWT
+2. JWT passed to `useAgentSession({ token })`
+3. Hook appends `?token=<JWT>` to the WebSocket URL
+4. ai_engine validates the JWT signature → extracts `userId` → authenticates the session
+
+The token has a 2-hour lifetime. The `SESSION_SECRET` is shared between Next.js (signs the JWT) and ai_engine (validates the JWT) via the same env var.
+
+---
+
+## Workspace Layout (Frontend)
+
+The workspace page (`/dashboard/engineer/workspace/[projectId]`) uses a three-pane layout:
+
+```
+┌──────────────┬────────────────────────────┬────────────────────┐
+│ FileExplorer │        Chat                │ Terminal           │
+│   (240px)    │  (flex-1, scrollable)      │ OR                 │
+│              │                            │ FileViewer         │
+│ Collapsible  │  Agent messages,           │   (400px)          │
+│ file tree    │  user input textarea,      │                    │
+│              │  suggestion chips          │ Toggled by buttons │
+└──────────────┴────────────────────────────┴────────────────────┘
+```
+
+**Left — FileExplorer:** Receives the `files` array from `useAgentSession`. The hook populates this from WebSocket `file_tree` events sent by the ai_engine whenever the agent changes the workspace. Clicking a file fetches its content from `/api/files/read`.
+
+**Center — Chat:** The main agent conversation. Welcome screen with suggestion chips when empty. Messages from user (right-aligned) and agent (left-aligned). Auto-scrolls, with a "scroll to latest" button when the user scrolls up.
+
+**Right — Terminal or FileViewer:** A single collapsible panel with two tab modes:
+- **Terminal tab:** Streams all agent logs from `useAgentSession.terminalLogs`. Has a command input at the bottom.
+- **FileViewer tab:** Shows the content of the selected file in a monospace `<pre>` block with a copy button. Appears automatically when a file is clicked in the explorer.
+
+**Token:** On mount, the page fetches `GET /api/agent/token` to get a JWT, which is passed to `useAgentSession`. This fixes the previous bug where the WebSocket connected with an empty token and was immediately rejected.

@@ -139,7 +139,9 @@ async def create_session(
     session_id = str(uuid.uuid4())
     provider = (model_provider or settings.DEFAULT_PROVIDER).lower()
 
-    effective_user_id = user_id or project_id or "anonymous"
+    if not user_id:
+        raise ValueError("create_session requires a non-empty user_id")
+    effective_user_id = user_id
 
     # ── Mock path ────────────────────────────────────────
     if not sdk.OPENHANDS_AVAILABLE:

@@ -4,7 +4,7 @@
 
 **Backend (ai_engine):** Functional. Per-session Docker sandboxing, git clone/push, WebSocket streaming, chat history, auth, file tree API — all implemented.
 
-**Frontend:** Chat + terminal split-pane UI works. WebSocket integration works. Auth works. But missing the core IDE experience (code editor, file viewer, git UI, real terminal).
+**Frontend:** Workspace now has 3-pane layout (FileExplorer + Chat + Terminal/FileViewer). Conversations page shows real chat history from the backend. WebSocket token auth fixed. File content viewer works (read files directly from agent workspace).
 
 **What makes Devin special:** User points at a bug → agent clones repo in a sandbox → reads code, makes changes, runs tests → user sees the file changes in real-time → agent pushes fix and creates a PR. The user can intervene at any point, view files, edit code, and guide the agent.
 
@@ -28,9 +28,10 @@
 
 | # | Task | Priority | Description |
 |---|------|----------|-------------|
-| F1 | **Integrate FileExplorer into workspace** | P0 | The FileExplorer component exists but isn't in the workspace layout. Add it as a collapsible left sidebar that loads real file tree from `/api/v1/files/list`. |
+| F1 | ✅ **Integrate FileExplorer into workspace** | P0 | FileExplorer integrated into workspace as collapsible left sidebar (240px), shows live file tree from WebSocket file_tree events. |
 | F2 | **Code viewer/editor with Monaco** | P0 | When user clicks a file in the explorer, open it in a Monaco Editor pane (read from `/api/v1/files/read`). Syntax highlighting, line numbers, minimap. |
-| F3 | **Three-pane workspace layout** | P0 | Redesign workspace: File Explorer (left) | Code Editor (center) | Chat + Terminal (right). Resizable panes. This is the core Devin layout. |
+| F3 | ✅ **Three-pane workspace layout** | P0 | Three-pane workspace layout is done: [FileExplorer 240px] | [Chat center] | [Terminal OR FileViewer right panel 400px, toggled by buttons]. |
+| F3b | ✅ **Conversations page wired to real API** | P0 | Conversations page was using mock data; now fetches live chat history from `/api/chats`. |
 | F4 | **Real terminal with xterm.js** | P1 | Replace the textarea terminal with xterm.js (already in dependencies). Proper terminal emulation, colors, scrollback. Connect to agent terminal output. |
 | F5 | **Git status panel** | P1 | Show current branch, changed files list, staged/unstaged status below the file explorer. Click a changed file → opens diff view. |
 | F6 | **Diff viewer** | P1 | Monaco diff editor showing before/after for changed files. User can see exactly what the agent modified. |
@@ -92,9 +93,10 @@
 This is the critical path — each step unlocks visible progress:
 
 ```
-Week 1:  F1 + F3 + B1         → File explorer + 3-pane layout + file write API
+Week 1:  ✅ F1 + F3 + F3b     → File explorer + 3-pane layout + real conversations API (DONE)
+          B1                   → File write API (remaining from Week 1)
 Week 2:  F2 + F4              → Monaco editor + xterm terminal
-Week 3:  B2 + B3 + F5         → Git endpoints + git status panel
+Week 3:  B1 + B2 + B3 + F5   → File write API + git endpoints + git status panel
 Week 4:  F6 + F9 + B4         → Diff viewer + commit/push UI + PR endpoint
 Week 5:  B5 + B6 + F11        → Streaming + session resume + agent controls
 Week 6:  F10 + F12 + B8       → Create PR UI + session history + task queue

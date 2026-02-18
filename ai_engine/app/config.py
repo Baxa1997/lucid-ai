@@ -60,6 +60,15 @@ class Settings:
     # This prevents external callers from impersonating users.
     INTERNAL_API_KEY: str = os.getenv("INTERNAL_API_KEY", "")
 
+    # CORS — restrict which origins may call the REST API.
+    # In production this should be set to the frontend URL only.
+    # Multiple origins can be specified as a comma-separated list.
+    ALLOWED_ORIGINS: list = [
+        o.strip()
+        for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+        if o.strip()
+    ]
+
     # Docker sandbox (per-session containers)
     SANDBOX_CONTAINER_PREFIX: str = os.getenv("SANDBOX_CONTAINER_PREFIX", "lucid-sandbox-")
     SANDBOX_MEMORY_LIMIT: str = os.getenv("SANDBOX_MEMORY_LIMIT", "2g")

@@ -34,16 +34,14 @@ Use these throughout all tests. Copy-paste this block into your terminal:
 BASE=http://localhost:8000
 USER_A="test-user-alice"
 USER_B="test-user-bob"
-```
-
-**Dev mode (no INTERNAL_API_KEY):** Use `X-User-ID` header directly.
-
-**Production mode (INTERNAL_API_KEY set):** Add the internal key header:
-
-```bash
 INTERNAL_KEY="lucid_internal_k8s_2f9a7e3c1d4b6e8a0f2c5d7e9b1a3c5d"
-# Then add to every curl: -H "X-Internal-Key: $INTERNAL_KEY"
 ```
+
+`INTERNAL_KEY` matches the value set in `docker-compose.yml`. When `INTERNAL_API_KEY` is configured (it is by default in docker-compose), every curl that uses `X-User-ID` also needs `-H "X-Internal-Key: $INTERNAL_KEY"`.
+
+**Dev mode (no `INTERNAL_API_KEY` set):** `X-User-ID` is accepted without the key (server logs a warning).
+
+**Production / docker-compose mode:** Both `X-User-ID` and `X-Internal-Key` are required — requests missing `X-Internal-Key` return `HTTP 401`.
 
 ---
 
@@ -644,6 +642,44 @@ curl -s -w "\nHTTP %{http_code}\n" \
 
 ---
 
+## Test 12 — Frontend Proxy Routes
+
+These routes run inside Next.js (port 3000) and proxy to the ai_engine with server-side auth headers. Test them from a browser console while logged in to `http://localhost:3000`.
+
+### 12.1 Get WebSocket JWT token
+
+```js
+// Run in browser console while logged in
+const res = await fetch('/api/agent/token');
+const { token } = await res.json();
+console.log('JWT:', token);
+// Use this token: wscat -c "ws://localhost:8000/api/v1/ws?token=<token>"
+```
+
+**Expected:** `{ "token": "<JWT>" }` — a signed 2-hour token for the current user.
+
+### 12.2 List chats via proxy
+
+```js
+const res = await fetch('/api/chats?limit=10&offset=0');
+const data = await res.json();
+console.log(data.chats);
+```
+
+**Expected:** Same response as `GET /api/v1/chats` — Next.js adds `X-User-ID` and `X-Internal-Key` server-side; no auth headers needed from the browser.
+
+### 12.3 Read a workspace file via proxy
+
+```js
+const res = await fetch('/api/files/read?session_id=<SESSION_ID>&path=/workspace/hello.py');
+const { content } = await res.json();
+console.log(content);
+```
+
+**Expected:** `{ "content": "..." }` if the file exists. `401` if not logged in, `403` if session belongs to another user.
+
+---
+
 ## Endpoint Reference
 
 | # | Method | Path | Auth | Test |
@@ -660,3 +696,7 @@ curl -s -w "\nHTTP %{http_code}\n" \
 | 10 | `GET` | `/api/v1/files/list` | Yes | Test 8.1 |
 | 11 | `GET` | `/api/v1/files/read` | Yes | Test 8.2 |
 | 12 | `WS` | `/api/v1/ws` | Yes | Test 6 |
+| 13 | `POST` | `/api/agent/start` *(Next.js)* | Session cookie | — |
+| 14 | `GET` | `/api/agent/token` *(Next.js)* | Session cookie | Test 12.1 |
+| 15 | `GET` | `/api/chats` *(Next.js)* | Session cookie | Test 12.2 |
+| 16 | `GET` | `/api/files/read` *(Next.js)* | Session cookie | Test 12.3 |

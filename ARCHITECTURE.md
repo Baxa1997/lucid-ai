@@ -68,6 +68,7 @@ npm run dev
 | `SANDBOX_MEMORY_LIMIT` | No | `2g` | Memory limit per sandbox container |
 | `SANDBOX_CPU_LIMIT` | No | `1.0` | CPU limit per sandbox container |
 | `DOCKER_NETWORK` | No | — | Docker network for sandbox containers |
+| `ALLOWED_ORIGINS` | No | `http://localhost:3000` | Comma-separated list of allowed CORS origins |
 
 \* At least one LLM key required for real agent execution. Without it, runs in mock mode.
 
@@ -91,6 +92,21 @@ X-Internal-Key: <INTERNAL_API_KEY>
 When `INTERNAL_API_KEY` is set, the `X-Internal-Key` header **must** match or the request is rejected with 401. This prevents external callers from impersonating users. Without `INTERNAL_API_KEY` (dev mode), X-User-ID is accepted with a warning.
 
 **WebSocket** authenticates via `?token=<JWT>` query param or `token` field in the first message. **Anonymous connections are rejected** — a valid JWT is required.
+
+---
+
+## Frontend Proxy Routes
+
+The Next.js frontend exposes server-side proxy routes that add `X-User-ID` and `X-Internal-Key` headers before forwarding to the ai_engine. The browser never handles `INTERNAL_API_KEY` directly.
+
+| Route | Method | Forwards to | Purpose |
+|-------|--------|-------------|---------|
+| `/api/agent/start` | POST | `POST /api/v1/sessions` | Start agent session |
+| `/api/agent/token` | GET | — | Issue a 2h JWT for WebSocket auth |
+| `/api/chats` | GET | `GET /api/v1/chats` | List chat history |
+| `/api/files/read` | GET | `GET /api/v1/files/read` | Read workspace file |
+
+All proxy routes authenticate via NextAuth session cookie and add server-side auth headers.
 
 ---
 
@@ -180,6 +196,8 @@ curl -X POST http://localhost:8000/api/v1/sessions \
 ```
 
 Without OpenHands SDK: `"status": "mock"`.
+
+> **Note:** `user_id` is required — a missing or empty `X-User-ID` raises a `ValueError` (HTTP 500). The frontend always provides this via the server-side proxy, so this should never happen in production.
 
 **Errors:** `400` (invalid provider/key), `401` (bad LLM key), `500` (creation failed)
 

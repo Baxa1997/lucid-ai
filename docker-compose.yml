@@ -47,6 +47,7 @@ services:
       - SANDBOX_MEMORY_LIMIT=2g
       - SANDBOX_CPU_LIMIT=1.0
       - INTERNAL_API_KEY=lucid_internal_k8s_2f9a7e3c1d4b6e8a0f2c5d7e9b1a3c5d
+      - ALLOWED_ORIGINS=http://localhost:3000,http://frontend:3000
     depends_on:
       - db
 
