@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────
-//  u-code — GET /api/agent/socket
+//  Lucid AI — GET /api/agent/socket
 //  WebSocket Proxy — Session-Validated Upgrade
 // ─────────────────────────────────────────────────────────
 
@@ -28,10 +28,10 @@ export async function GET(req) {
   const agentSession = await prisma.agentSession.findFirst({
     where: {
       id: sessionId,
-      userId: ctx.userId,         // must own the session
-      status: 'ACTIVE',           // must be active
+      userId: ctx.userId,
+      status: 'ACTIVE',
       project: {
-        orgId: ctx.orgId,         // tenant isolation
+        orgId: ctx.orgId,
       },
     },
     select: {
@@ -56,7 +56,7 @@ export async function GET(req) {
 
   // ── 4. Build the WebSocket URL ─────────────────────────
   const aiWsBase = (process.env.AI_SERVICE_WS_URL || 'ws://localhost:8000');
-  const wsUrl = `${aiWsBase}/ws/${agentSession.agentSessionId}?userId=${ctx.userId}&orgId=${ctx.orgId}`;
+  const wsUrl = `${aiWsBase}/api/v1/ws?token=${agentSession.agentSessionId}`;
 
   // ── 5. Return the connection details ───────────────────
   return NextResponse.json({

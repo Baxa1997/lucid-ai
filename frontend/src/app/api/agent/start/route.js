@@ -19,7 +19,7 @@ if (!SESSION_SECRET) {
 export async function POST(req) {
   // ── 1. Auth Check ──────────────────────────────────────
   const session = await auth();
-  
+
   if (!session?.user) {
     return NextResponse.json(
       { error: 'Unauthorized', message: 'You must be logged in.' },
@@ -58,19 +58,18 @@ export async function POST(req) {
 
   // ── Special Case: Scratch / Demo Session ────────────────
   if (projectId === 'scratch-session') {
-    // Skip DB lookups and create a dummy project context
     project = {
       id: 'scratch-session',
-      repoUrl: null, // No repo for scratch session
+      repoUrl: null,
       provider: null,
-      orgId: orgId, // Assume ownership
+      orgId: orgId,
     };
-    decryptedToken = null; // No git token needed
+    decryptedToken = null;
   } else {
     // ── 3. Database Lookup: Project ────────────────────────
     project = await prisma.project.findUnique({
       where: { id: projectId },
-      include: { org: true }, 
+      include: { org: true },
     });
 
     if (!project) {
@@ -118,28 +117,29 @@ export async function POST(req) {
     }
   }
 
-  // ── 6. Agent Handoff: POST to Python Backend ───────────
-  // Construct the payload for the Python service
-  // SandboxId format: user_[ID] (as requested)
-  // Ensure we sanitize or use the user ID directly.
-  const sandboxId = `user_${userId.replace(/[^a-zA-Z0-9]/g, '')}`; 
-
+  // ── 6. Agent Handoff: POST to Python AI Engine ─────────
   const remotePayload = {
-    userId,
-    repoUrl: project.repoUrl,
-    gitToken: decryptedToken,
     task,
-    sandboxId,
-    // Optional: Pass project info if needed by backend
+    repoUrl: project.repoUrl || '',
+    gitToken: decryptedToken || '',
     projectId: project.id,
+    userId,
+    model_provider: body.modelProvider || body.model_provider || '',
+    api_key: body.apiKey || body.api_key || '',
+    gitUserName: session.user.name || '',
+    gitUserEmail: session.user.email || '',
+    branch: body.branch || '',
   };
 
   let agentResponseData;
 
   try {
-    const agentRes = await fetch(`${PYTHON_BACKEND_URL}/api/session/init`, {
+    const agentRes = await fetch(`${PYTHON_BACKEND_URL}/api/v1/sessions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-ID': userId,
+      },
       body: JSON.stringify(remotePayload),
     });
 
@@ -162,8 +162,7 @@ export async function POST(req) {
   }
 
   // ── 7. Token Generation (JWT) ──────────────────────────
-  // payload: { userId, projectId, sessionId }
-  const sessionId = agentResponseData.sessionId || agentResponseData.id; // Adjust based on actual Python response
+  const sessionId = agentResponseData.sessionId;
 
   if (!sessionId) {
     return NextResponse.json(
@@ -172,7 +171,7 @@ export async function POST(req) {
     );
   }
 
-  // Create local record too (optional but good practice)
+  // Create local record
   await prisma.agentSession.create({
     data: {
       userId,
@@ -180,7 +179,7 @@ export async function POST(req) {
       agentSessionId: sessionId,
       title: task.slice(0, 50),
       status: 'ACTIVE',
-      metadata: { sandboxId },
+      metadata: {},
     },
   });
 
@@ -191,11 +190,7 @@ export async function POST(req) {
   );
 
   // ── 8. Return Response ─────────────────────────────────
-  // Use simple WebSocket URL or proxy URL
-  // If running via Next.js proxy rewrite:
-  // const wsUrl = `ws://${req.headers.get('host')}/api/ws`; 
-  // But user requested direct: "ws://localhost:8000/ws"
-  const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws';
+  const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/api/v1/ws';
 
   return NextResponse.json({
     wsUrl,

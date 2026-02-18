@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────
-//  u-code — GET/DELETE /api/agent/[sessionId]
-//  Gatekeeper: Session Status + Stop
+//  Lucid AI — GET/DELETE /api/agent/[sessionId]
+//  Session Status + Stop
 // ─────────────────────────────────────────────────────────
 
 import { NextResponse } from 'next/server';
@@ -62,12 +62,12 @@ export async function DELETE(req, { params }) {
     );
   }
 
-  // Forward stop request to Python service
+  // Forward stop request to Python AI Engine
   if (session.agentSessionId) {
     try {
       await proxyToAI({
-        method: 'POST',
-        path: `/stop-session/${session.agentSessionId}`,
+        method: 'DELETE',
+        path: `/api/v1/sessions/${session.agentSessionId}`,
         ctx,
         timeoutMs: 15_000,
       });
