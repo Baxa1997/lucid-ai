@@ -114,4 +114,5 @@ class ChatService:
         )
         db.add(message)
         await db.commit()
+        await db.refresh(message)
         return message

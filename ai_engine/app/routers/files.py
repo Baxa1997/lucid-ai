@@ -35,18 +35,17 @@ async def read_file(
     """Read a file from the agent's workspace."""
     session = await _get_session_for_user(session_id, user.user_id)
 
-    # Prevent path traversal
-    if ".." in path:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Path traversal not allowed.",
-        )
-
     workspace = session.workspace
 
     if isinstance(workspace, str):
         # Local workspace — read from filesystem
-        full_path = os.path.join(workspace, path.lstrip("/"))
+        full_path = os.path.normpath(os.path.join(workspace, path.lstrip("/")))
+        # Prevent path traversal: resolved path must stay inside workspace
+        if not full_path.startswith(os.path.normpath(workspace)):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Path traversal not allowed.",
+            )
         if not os.path.isfile(full_path):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

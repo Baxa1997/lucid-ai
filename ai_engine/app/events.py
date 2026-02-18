@@ -155,7 +155,8 @@ async def stream_events_to_ws(
 
             except asyncio.TimeoutError:
                 pass
-            except Exception:
+            except Exception as exc:
+                logger.warning("Event stream error (session=%s): %s", getattr(session, "session_id", "?"), exc)
                 break
 
             # Flush on time interval even if batch isn't full

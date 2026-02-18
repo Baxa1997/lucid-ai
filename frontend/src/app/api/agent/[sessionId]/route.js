@@ -20,7 +20,6 @@ export async function GET(req, { params }) {
     where: {
       id: params.sessionId,
       userId: ctx.userId,
-      project: { orgId: ctx.orgId },
     },
     include: {
       project: { select: { id: true, name: true, repoUrl: true } },
@@ -51,7 +50,6 @@ export async function DELETE(req, { params }) {
       id: params.sessionId,
       userId: ctx.userId,
       status: 'ACTIVE',
-      project: { orgId: ctx.orgId },
     },
   });
 

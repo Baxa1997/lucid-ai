@@ -29,8 +29,7 @@ config.set_main_option("sqlalchemy.url", _db_url)
 # Tables managed by Prisma — Alembic must never touch these
 PRISMA_TABLES = frozenset({
     "users", "accounts", "sessions", "verification_tokens",
-    "organizations", "memberships", "projects", "integrations",
-    "agent_sessions", "_prisma_migrations",
+    "projects", "integrations", "agent_sessions", "_prisma_migrations",
 })
 
 

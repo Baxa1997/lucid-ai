@@ -30,9 +30,6 @@ export async function GET(req) {
       id: sessionId,
       userId: ctx.userId,
       status: 'ACTIVE',
-      project: {
-        orgId: ctx.orgId,
-      },
     },
     select: {
       id: true,

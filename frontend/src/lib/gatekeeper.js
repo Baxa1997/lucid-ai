@@ -1,25 +1,23 @@
 // ─────────────────────────────────────────────────────────
-//  u-code — Gatekeeper Utilities
+//  Lucid AI — Gatekeeper Utilities
 //  Shared auth-check + forwarding helpers for API routes
 // ─────────────────────────────────────────────────────────
 
 import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 
-/**
- * The base URL of the Python AI microservice.
- * Override via env var in production.
- */
 export const AI_SERVICE_URL =
   process.env.PYTHON_BACKEND_URL || 'http://localhost:8000';
+
+const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || '';
 
 // ═══════════════════════════════════════════════════════════
 //  Auth Guard
 // ═══════════════════════════════════════════════════════════
 
 /**
- * Validate the current session and extract userId + orgId.
- * Returns either { ok: true, ctx: { userId, orgId } } or { ok: false, response: NextResponse }.
+ * Validate the current session and extract userId.
+ * Returns either { ok: true, ctx: { userId } } or { ok: false, response: NextResponse }.
  */
 export async function requireAuth() {
   const session = await auth();
@@ -34,25 +32,9 @@ export async function requireAuth() {
     };
   }
 
-  if (!session.user.orgId) {
-    return {
-      ok: false,
-      response: NextResponse.json(
-        {
-          error: 'NoOrganization',
-          message: 'User does not belong to any organization.',
-        },
-        { status: 403 }
-      ),
-    };
-  }
-
   return {
     ok: true,
-    ctx: {
-      userId: session.user.id,
-      orgId: session.user.orgId,
-    },
+    ctx: { userId: session.user.id },
   };
 }
 
@@ -62,14 +44,7 @@ export async function requireAuth() {
 
 /**
  * Forward a request to the Python AI service with injected
- * identity headers (X-User-ID, X-Org-ID).
- *
- * @param {Object} options
- * @param {string} options.method
- * @param {string} options.path
- * @param {{userId: string, orgId: string}} options.ctx
- * @param {Object} [options.body]
- * @param {number} [options.timeoutMs=30000]
+ * identity headers (X-User-ID, X-Internal-Key).
  */
 export async function proxyToAI({
   method,
@@ -89,7 +64,7 @@ export async function proxyToAI({
       headers: {
         'Content-Type': 'application/json',
         'X-User-ID': ctx.userId,
-        'X-Org-ID': ctx.orgId,
+        'X-Internal-Key': INTERNAL_API_KEY,
       },
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal,

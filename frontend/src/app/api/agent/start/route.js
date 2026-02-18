@@ -21,21 +21,14 @@ export async function POST(req) {
   // ── 1. Auth Check ──────────────────────────────────────
   const session = await auth();
 
-  if (!session?.user) {
+  if (!session?.user?.id) {
     return NextResponse.json(
       { error: 'Unauthorized', message: 'You must be logged in.' },
       { status: 401 }
     );
   }
 
-  const { id: userId, orgId } = session.user;
-
-  if (!orgId) {
-    return NextResponse.json(
-      { error: 'NoOrganization', message: 'User does not belong to an organization.' },
-      { status: 403 }
-    );
-  }
+  const userId = session.user.id;
 
   // ── 2. Input Validation ────────────────────────────────
   let body;
@@ -47,30 +40,21 @@ export async function POST(req) {
 
   const { projectId, task } = body;
 
-  if (!projectId || !task) {
+  if (!task) {
     return NextResponse.json(
-      { error: 'MissingFields', message: 'projectId and task are required.' },
+      { error: 'MissingFields', message: 'task is required.' },
       { status: 400 }
     );
   }
 
   let project = null;
   let decryptedToken = null;
+  let resolvedProjectId = null;
 
-  // ── Special Case: Scratch / Demo Session ────────────────
-  if (projectId === 'scratch-session') {
-    project = {
-      id: 'scratch-session',
-      repoUrl: null,
-      provider: null,
-      orgId: orgId,
-    };
-    decryptedToken = null;
-  } else {
+  if (projectId && projectId !== 'scratch-session') {
     // ── 3. Database Lookup: Project ────────────────────────
     project = await prisma.project.findUnique({
       where: { id: projectId },
-      include: { org: true },
     });
 
     if (!project) {
@@ -80,20 +64,22 @@ export async function POST(req) {
       );
     }
 
-    // ── 4. Security Check: Tenant Isolation ────────────────
-    if (project.orgId !== orgId) {
+    // ── 4. Security Check: User Isolation ─────────────────
+    if (project.userId !== userId) {
       return NextResponse.json(
         { error: 'Forbidden', message: 'Access denied to this project.' },
         { status: 403 }
       );
     }
 
+    resolvedProjectId = project.id;
+
     // ── 5. Fetch Integration & Decrypt Token ───────────────
     if (project.provider) {
       const integration = await prisma.integration.findUnique({
         where: {
-          orgId_provider: {
-            orgId,
+          userId_provider: {
+            userId,
             provider: project.provider,
           },
         },
@@ -121,9 +107,9 @@ export async function POST(req) {
   // ── 6. Agent Handoff: POST to Python AI Engine ─────────
   const remotePayload = {
     task,
-    repoUrl: project.repoUrl || '',
-    gitToken: decryptedToken || '',
-    projectId: project.id,
+    repoUrl: project?.repoUrl || body.repoUrl || '',
+    gitToken: decryptedToken || body.gitToken || '',
+    projectId: resolvedProjectId || '',
     userId,
     model_provider: body.modelProvider || body.model_provider || '',
     api_key: body.apiKey || body.api_key || '',
@@ -163,7 +149,7 @@ export async function POST(req) {
     );
   }
 
-  // ── 7. Token Generation (JWT) ──────────────────────────
+  // ── 7. Save session record & generate JWT ──────────────
   const sessionId = agentResponseData.sessionId;
 
   if (!sessionId) {
@@ -173,11 +159,10 @@ export async function POST(req) {
     );
   }
 
-  // Create local record
   await prisma.agentSession.create({
     data: {
       userId,
-      projectId,
+      projectId: resolvedProjectId,
       agentSessionId: sessionId,
       title: task.slice(0, 50),
       status: 'ACTIVE',
@@ -186,13 +171,12 @@ export async function POST(req) {
   });
 
   const sessionToken = jwt.sign(
-    { userId, projectId, sessionId },
+    { userId, projectId: resolvedProjectId, sessionId },
     SESSION_SECRET || 'fallback_secret_do_not_use_in_prod',
     { expiresIn: '1h' }
   );
 
-  // ── 8. Return Response ─────────────────────────────────
-  const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/api/v1/ws';
+  const wsUrl = process.env.NEXT_PUBLIC_AGENT_WS_URL || 'ws://localhost:8000/api/v1/ws';
 
   return NextResponse.json({
     wsUrl,

@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────
-//  Lucid AI — Multi-Tenant SaaS Prisma Schema
+//  Lucid AI — Prisma Schema
 //  Stack: Next.js 14 · PostgreSQL · NextAuth v5
 // ─────────────────────────────────────────────────────────
 
@@ -21,37 +21,10 @@ enum GitProvider {
   GITLAB
 }
 
-enum Role {
-  OWNER
-  ADMIN
-  MEMBER
-}
-
 enum SessionStatus {
   ACTIVE
   COMPLETED
   FAILED
-}
-
-// ═══════════════════════════════════════════════════════════
-//  ORGANIZATION — Multi-Tenancy Root
-// ═══════════════════════════════════════════════════════════
-
-model Organization {
-  id        String   @id @default(cuid())
-  name      String
-  slug      String   @unique
-  logo      String?
-  plan      String   @default("free") // free | pro | enterprise
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // Relations
-  members      Membership[]
-  projects     Project[]
-  integrations Integration[]
-
-  @@map("organizations")
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -66,38 +39,16 @@ model User {
   image         String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
-  
-  // Default/Active organization for simple multi-tenancy
-  orgId         String?
 
   // NextAuth relations
   accounts Account[]
 
-  // Multi-tenancy: user can belong to multiple orgs
-  memberships  Membership[]
+  // User's resources
+  integrations  Integration[]
+  projects      Project[]
   agentSessions AgentSession[]
 
   @@map("users")
-}
-
-// ═══════════════════════════════════════════════════════════
-//  MEMBERSHIP — Join table: User ↔ Organization
-// ═══════════════════════════════════════════════════════════
-
-model Membership {
-  id     String @id @default(cuid())
-  role   Role   @default(MEMBER)
-
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  orgId  String
-  org    Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
-
-  createdAt DateTime @default(now())
-
-  @@unique([userId, orgId])
-  @@map("memberships")
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -125,53 +76,54 @@ model Account {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  PROJECT — Linked to Organization
+//  PROJECT — User's git repositories
 // ═══════════════════════════════════════════════════════════
 
 model Project {
-  id        String      @id @default(cuid())
+  id        String       @id @default(cuid())
   name      String
   repoUrl   String?
   provider  GitProvider?
-  branch    String      @default("main")
-  isActive  Boolean     @default(true)
+  branch    String       @default("main")
+  isActive  Boolean      @default(true)
 
-  orgId     String
-  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   agentSessions AgentSession[]
 
+  @@index([userId])
   @@map("projects")
 }
 
 // ═══════════════════════════════════════════════════════════
-//  INTEGRATION — Encrypted Git Provider Tokens
+//  INTEGRATION — Encrypted Git Provider Tokens (per user)
 // ═══════════════════════════════════════════════════════════
 
 model Integration {
   id       String      @id @default(cuid())
   provider GitProvider
-  label    String?     // e.g. "Work GitHub", "Personal GitLab"
+  label    String?
 
   // Encrypted access token (AES-256-CBC)
-  accessTokenEncrypted String @db.Text
-  iv                   String // Initialization vector (hex)
+  accessTokenEncrypted String  @db.Text
+  iv                   String
 
   // Optional metadata
   externalUsername String?
-  scopes           String?  // comma-separated scopes
+  scopes           String?
   expiresAt        DateTime?
 
-  orgId String
-  org   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([orgId, provider]) // one integration per provider per org
+  @@unique([userId, provider])
   @@map("integrations")
 }
 
@@ -180,21 +132,18 @@ model Integration {
 // ═══════════════════════════════════════════════════════════
 
 model AgentSession {
-  id        String        @id @default(cuid())
-  title     String?
-  status    SessionStatus @default(ACTIVE)
+  id             String        @id @default(cuid())
+  title          String?
+  status         SessionStatus @default(ACTIVE)
+  agentSessionId String?       @unique
 
-  // External session identifier from the AI agent runtime
-  agentSessionId String?  @unique
-
-  userId    String
-  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   projectId String?
   project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
 
-  metadata  Json?    // flexible metadata (model used, tokens, etc.)
-
+  metadata    Json?
   startedAt   DateTime  @default(now())
   completedAt DateTime?
 

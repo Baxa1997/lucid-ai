@@ -1,204 +1,195 @@
-# Lucid AI — Roadmap to Devin-Like Product
+# Lucid AI — Roadmap
+
+## Product Vision
+
+A chat interface like Devin. User connects their GitHub or GitLab account, describes a task in chat, and the agent clones the repo in a Docker sandbox, writes code, runs tests, commits, pushes, and opens a PR — fully autonomously. The user watches it happen via chat and a read-only file explorer. No IDE, no manual editing.
+
+**Core loop:**
+```
+User connects repo → describes task in chat
+→ Agent clones repo in Docker sandbox
+→ Agent writes code, runs tests, commits
+→ Agent pushes branch and opens PR automatically
+→ User gets PR link
+```
+
+---
 
 ## Current State
 
-**Backend (ai_engine):** Functional. Per-session Docker sandboxing, git clone/push, WebSocket streaming, chat history, auth, file tree API — all implemented.
+### ✅ What's working
 
-**Frontend:** Workspace now has 3-pane layout (FileExplorer + Chat + Terminal/FileViewer). Conversations page shows real chat history from the backend. WebSocket token auth fixed. File content viewer works (read files directly from agent workspace).
+| Area | Status |
+|------|--------|
+| Docker sandbox per session | ✅ Done |
+| Git clone on session start | ✅ Done |
+| WebSocket agent communication | ✅ Done |
+| Chat message history (PostgreSQL) | ✅ Done |
+| Read-only file explorer (live from agent) | ✅ Done |
+| Terminal output panel | ✅ Done |
+| Conversations list page | ✅ Done |
+| Auth (login with email in dev, Google OAuth in prod) | ✅ Done |
+| Per-user session isolation | ✅ Done |
 
-**What makes Devin special:** User points at a bug → agent clones repo in a sandbox → reads code, makes changes, runs tests → user sees the file changes in real-time → agent pushes fix and creates a PR. The user can intervene at any point, view files, edit code, and guide the agent.
+### ❌ What's missing (blocking the core loop)
+
+| Area | Status |
+|------|--------|
+| GitHub OAuth — connect account, store token | ❌ Not built |
+| GitLab OAuth — connect account, store token | ❌ Not built |
+| Auto PR creation after agent pushes | ❌ Not built |
+| Session resume after browser refresh | ❌ Not built |
+| Agent streaming (token-by-token output) | ❌ Not built |
+
+### 🗑️ Removed from scope
+
+These were planned but don't belong in a chat product:
+- Monaco code editor — not an IDE
+- File write/edit by user — agent does the editing
+- Diff viewer — agent handles diffs
+- Git status panel — not needed in chat UI
+- Commit & push UI — agent does this automatically
+- Organization/team logic — single-user for now, remove from codebase
 
 ---
 
-## Phase 1 — Core IDE Experience (Must Have)
+## Phase 1 — Full Agent Cycle (Priority)
+
+Get the complete loop working: connect repo → chat → agent codes → push → PR.
 
 ### Backend
 
 | # | Task | Priority | Description |
 |---|------|----------|-------------|
-| B1 | **File write/edit endpoint** | P0 | `POST /api/v1/files/write` — let users edit files in the agent's workspace (Docker exec or local fs). Enables the user to intervene and fix code while agent works. |
-| B2 | **Git status endpoint** | P0 | `GET /api/v1/git/status?session_id=X` — returns current branch, changed files, staged/unstaged diff. Powers the git panel in the UI. |
-| B3 | **Git operations endpoints** | P0 | `POST /api/v1/git/commit`, `POST /api/v1/git/push`, `POST /api/v1/git/create-branch`, `POST /api/v1/git/checkout` — all execute inside the session's Docker container. |
-| B4 | **Create PR endpoint** | P1 | `POST /api/v1/git/pull-request` — uses the git token to call GitHub/GitLab API from the backend. Returns PR URL. |
-| B5 | **Stream agent output token-by-token** | P1 | Currently events are batched. Add partial content streaming so the user sees the agent "thinking" in real-time (like Devin's streaming). |
-| B6 | **Session resume/reconnect** | P1 | Allow reconnecting to an existing session's WebSocket. Currently if the browser refreshes, the session is lost. Store session state so user can resume. |
-| B7 | **File diff endpoint** | P2 | `GET /api/v1/git/diff?session_id=X&path=file.py` — returns unified diff for a specific file. Powers the diff viewer. |
+| B1 | **GitHub OAuth** | P0 | OAuth 2.0 flow: `GET /api/integrations/github/auth` → `GET /api/integrations/github/callback`. Store encrypted GitHub access token per user in DB. |
+| B2 | **GitLab OAuth** | P0 | Same flow for GitLab. `GET /api/integrations/gitlab/auth` → callback. Same encrypted token storage. |
+| B3 | **List user repos** | P0 | `GET /api/integrations/github/repos` and `/gitlab/repos` — returns the user's repos (name, url, private/public). Used in the "start session" flow to pick a repo. |
+| B4 | **Auto PR creation** | P0 | After agent pushes a branch, backend calls GitHub/GitLab API to open a PR automatically. PR title and description auto-generated from agent's task. Returns PR URL. Triggered at end of agent session or on agent decision. |
+| B5 | **Session resume** | P1 | Reconnect WebSocket to an existing session after browser refresh. Session state (messages, files) already in DB — just re-attach. Currently a refresh loses the session. |
+| B6 | **Token-by-token streaming** | P1 | Stream agent output as it's generated, not in batches. User sees agent "thinking" in real-time like Devin. |
+| B7 | **Remove org logic from DB** | P1 | Drop `Organization` and `Membership` tables from Prisma schema. Remove org creation from auth flow. Users are standalone — no teams needed yet. |
 
 ### Frontend
 
 | # | Task | Priority | Description |
 |---|------|----------|-------------|
-| F1 | ✅ **Integrate FileExplorer into workspace** | P0 | FileExplorer integrated into workspace as collapsible left sidebar (240px), shows live file tree from WebSocket file_tree events. |
-| F2 | **Code viewer/editor with Monaco** | P0 | When user clicks a file in the explorer, open it in a Monaco Editor pane (read from `/api/v1/files/read`). Syntax highlighting, line numbers, minimap. |
-| F3 | ✅ **Three-pane workspace layout** | P0 | Three-pane workspace layout is done: [FileExplorer 240px] | [Chat center] | [Terminal OR FileViewer right panel 400px, toggled by buttons]. |
-| F3b | ✅ **Conversations page wired to real API** | P0 | Conversations page was using mock data; now fetches live chat history from `/api/chats`. |
-| F4 | **Real terminal with xterm.js** | P1 | Replace the textarea terminal with xterm.js (already in dependencies). Proper terminal emulation, colors, scrollback. Connect to agent terminal output. |
-| F5 | **Git status panel** | P1 | Show current branch, changed files list, staged/unstaged status below the file explorer. Click a changed file → opens diff view. |
-| F6 | **Diff viewer** | P1 | Monaco diff editor showing before/after for changed files. User can see exactly what the agent modified. |
-| F7 | **File tabs** | P2 | Open multiple files in tabs above the editor. Close, reorder, dirty indicator (unsaved changes). |
-| F8 | **Save file from editor** | P2 | Ctrl+S in Monaco → calls `POST /api/v1/files/write` to save changes to the agent's workspace. User can manually fix code. |
+| F1 | ✅ **Chat + file explorer + terminal** | P0 | Done. 3-pane layout: file explorer (left) + chat (center) + terminal (right). Read-only. |
+| F2 | ✅ **Conversations list** | P0 | Done. Shows real chat history from backend. |
+| F3 | **Connect GitHub/GitLab page** | P0 | Settings page: "Connect GitHub" and "Connect GitLab" buttons. Shows connected account name/avatar. Disconnect button. OAuth redirect flow. |
+| F4 | **Repo picker in new session flow** | P0 | When starting a new session, user picks a repo from their connected GitHub/GitLab account (dropdown list from B3). Pre-fills repoUrl + gitToken. |
+| F5 | **Stop agent button** | P1 | Button in chat to stop the agent mid-task. Calls `DELETE /api/v1/sessions/{id}`. |
+| F6 | **PR link notification** | P1 | When agent creates a PR, show a banner in chat: "PR opened → [link]". Also update the conversation card in the list. |
 
 ---
 
-## Phase 2 — Git Workflow & Agent Control
+## Phase 2 — Notion Integration
+
+After Phase 1 is complete and the full cycle works reliably.
+
+User connects Notion, picks a task from a database, Lucid runs the agent, pushes code, opens a PR, and writes the PR link back to the Notion task.
 
 ### Backend
 
 | # | Task | Priority | Description |
 |---|------|----------|-------------|
-| B8 | **Agent task queue** | P1 | Allow queuing multiple tasks for the agent. User sends "fix this bug, then add tests, then push" — agent works through them sequentially. |
-| B9 | **Agent pause/resume** | P1 | Let user pause the agent mid-task, make manual edits, then resume. Requires conversation state management. |
-| B10 | **Test execution endpoint** | P2 | `POST /api/v1/exec/run-tests?session_id=X` — runs test suite in the container, streams output. Agent can also trigger this automatically. |
-| B11 | **Sandbox image management** | P2 | Support custom Docker images per project (Node.js, Python, Go, Rust). Store image preference in project config. |
-| B12 | **Cost tracking** | P2 | Track LLM token usage per session/user. Store in DB. Expose via `GET /api/v1/usage`. |
+| N1 | **Notion OAuth** | P0 | OAuth 2.0 flow to connect Notion workspace. Store encrypted Notion access token per user in DB. |
+| N2 | **List Notion databases** | P0 | `GET /api/notion/databases` — returns databases the user has access to. |
+| N3 | **List Notion tasks** | P0 | `GET /api/notion/tasks?database_id=X` — fetches pages with title, status, assignee. |
+| N4 | **Get Notion task detail** | P0 | `GET /api/notion/tasks/{page_id}` — full page content used as the agent's task prompt. |
+| N5 | **Write back to Notion** | P1 | Update task status to "In Progress" when agent starts. Add PR URL and set status to "In Review" when done. |
+| N6 | **Store Notion config** | P1 | Save database ID and field mappings (status field, PR field) per user so they don't reconfigure each time. |
 
 ### Frontend
 
 | # | Task | Priority | Description |
 |---|------|----------|-------------|
-| F9 | **Commit & push UI** | P1 | Button: "Commit & Push" → shows changed files, commit message input, branch selection. Calls git endpoints. |
-| F10 | **Create PR button** | P1 | After push, show "Create Pull Request" button → opens form with title, description (auto-generated from agent's changes), base branch. |
-| F11 | **Agent control bar** | P1 | Pause/resume/stop buttons. Task progress indicator. Current step label ("Cloning repo...", "Reading files...", "Writing fix..."). |
-| F12 | **Session history** | P2 | List past sessions from `/api/v1/chats`. Click to view full conversation, files changed, and outcome. Resume if session is still alive. |
-| F13 | **Notification system** | P2 | Toast notifications for: agent completed, agent error, PR created, push successful. |
+| NF1 | **Notion connect page** | P0 | Settings → "Connect Notion". OAuth flow. Shows connected workspace on success. |
+| NF2 | **Task picker** | P0 | "Start from Notion" → pick database → pick task → auto-fills agent prompt and starts session. |
+| NF3 | **Notion task card in workspace** | P1 | Small card showing the linked Notion task title, status, and link — visible during the session. |
+| NF4 | **Auto-update banner** | P1 | After PR is created, show "Notion updated — PR link added" with link to Notion page. |
+
+### Notion flow
+
+```
+User → Settings → Connect Notion (OAuth)
+     → "New Session" → "From Notion" → picks database → picks task
+     → Agent starts, Notion task status → "In Progress"
+     → Agent clones repo, writes code, pushes branch
+     → PR created automatically via GitHub/GitLab API
+     → Notion task status → "In Review", PR URL added
+     → User sees PR link + Notion task link in chat
+```
 
 ---
 
 ## Phase 3 — Polish & Production
 
-### Backend
-
 | # | Task | Priority | Description |
 |---|------|----------|-------------|
-| B13 | **Rate limiting** | P2 | Limit sessions per user, API calls per minute. Prevent abuse. |
-| B14 | **Container timeout & auto-cleanup** | P2 | Containers that idle for >30min are auto-destroyed. Background task checks periodically. |
-| B15 | **Webhook support** | P3 | GitHub webhooks → auto-trigger agent on new issues, PR comments, CI failures. |
-| B16 | **Multi-model routing** | P3 | Let agent use different models for different tasks (fast model for code search, powerful model for complex reasoning). |
-| B17 | **Redis session store** | P3 | Replace in-memory SessionStore with Redis for multi-instance deployment. |
-
-### Frontend
-
-| # | Task | Priority | Description |
-|---|------|----------|-------------|
-| F14 | **Keyboard shortcuts** | P2 | Cmd+K command palette, Cmd+P file finder, Cmd+Shift+P actions. |
-| F15 | **Dark/light theme** | P2 | Theme toggle. Monaco + chat + terminal all switch together. |
-| F16 | **Responsive layout** | P3 | Mobile-friendly views (stack panes vertically on small screens). |
-| F17 | **Onboarding flow** | P3 | First-time user guide: connect GitHub → create project → launch first agent session. |
-| F18 | **Team collaboration** | P3 | Share sessions with teammates. Multiple users watch/interact with same agent. |
+| P1 | **Rate limiting** | P2 | Limit sessions per user, requests per minute. |
+| P2 | **Container auto-cleanup** | P2 | Destroy idle containers after 30 min. |
+| P3 | **Cost tracking** | P2 | Track LLM token usage per session. Expose via `/api/v1/usage`. |
+| P4 | **Multi-model routing** | P3 | Choose model per session or let agent pick based on task complexity. |
+| P5 | **Redis session store** | P3 | Replace in-memory store for multi-instance deployment. |
+| P6 | **GitHub webhook trigger** | P3 | Auto-trigger agent when a new issue is opened or a comment asks for it. |
 
 ---
 
-## Phase 4 — Notion Integration
-
-The goal: user connects Notion, picks a task from a database, Lucid runs the agent, pushes code, opens a PR, and writes the PR link back to the Notion task — exactly like Devin.
-
-### Backend
-
-| # | Task | Priority | Description |
-|---|------|----------|-------------|
-| N1 | **Notion OAuth** | P0 | OAuth 2.0 flow to connect a user's Notion workspace. Store encrypted Notion access token in DB (per user/org). Endpoints: `GET /api/notion/auth/url`, `GET /api/notion/auth/callback`. |
-| N2 | **List Notion databases** | P0 | `GET /api/notion/databases` — returns all databases the user has granted access to. Used to let the user pick which DB contains their tasks. |
-| N3 | **List Notion tasks** | P0 | `GET /api/notion/tasks?database_id=X` — fetches pages from a Notion database, returns title, status, assignee, description. Supports filtering (e.g. status = "To Do"). |
-| N4 | **Get Notion task detail** | P0 | `GET /api/notion/tasks/{page_id}` — returns full page content (title + body blocks) to use as the agent's task prompt. |
-| N5 | **Write back to Notion** | P1 | `POST /api/notion/tasks/{page_id}/update` — updates the Notion page: set status to "In Progress" when agent starts, add PR URL as a property when agent finishes, add a comment with a summary. |
-| N6 | **Store Notion config per org** | P1 | Save selected database ID and field mappings (which Notion property = status, which = PR link) in the DB so user doesn't have to reconfigure each time. |
-
-### Frontend
-
-| # | Task | Priority | Description |
-|---|------|----------|-------------|
-| NF1 | **Notion connect page** | P0 | Settings → Integrations → "Connect Notion" button. Starts OAuth flow, shows connected workspace name and avatar on success. Disconnect button to revoke. |
-| NF2 | **Task picker UI** | P0 | New flow: "Start from Notion" → pick database → browse tasks list (title, status, assignee) → select task → auto-fills the agent prompt and starts the session. |
-| NF3 | **Task context panel** | P1 | In the workspace, show a sidebar card with the linked Notion task: title, description, status. Link opens Notion page. |
-| NF4 | **Auto-update indicator** | P1 | After the agent creates a PR, show a banner: "Notion task updated — PR link added" with a link to the Notion page. |
-
-### Flow
+## Build Order
 
 ```
-User → Settings → Connect Notion (OAuth)
-     → "New Session" → "From Notion" → picks database → picks task
-     → Lucid sets task status = "In Progress" in Notion
-     → Agent clones repo, reads code, makes changes
-     → Agent pushes branch, Lucid creates PR via GitHub API
-     → Lucid sets task status = "In Review", adds PR URL to Notion task
-     → User gets notification with Notion task link + PR link
+Now:     B1 + B2 + B3        → GitHub + GitLab OAuth, repo listing
+         F3 + F4              → Connect page + repo picker in new session flow
+Next:    B4 + F6              → Auto PR creation + PR link in chat
+Then:    B5 + B6 + F5         → Session resume + streaming + stop button
+         B7                   → Remove org logic from DB/auth
+Later:   Phase 2 (Notion)     → N1→N6, NF1→NF4
+Last:    Phase 3 (Polish)      → Rate limiting, cost tracking, cleanup
 ```
+
+After "Now + Next" you have the complete working cycle:
+- User connects GitHub → picks repo → describes task in chat
+- Agent clones repo, writes code, commits, pushes
+- PR opened automatically — user gets the link
 
 ---
 
-## Suggested Build Order
-
-This is the critical path — each step unlocks visible progress:
+## Architecture (Target State)
 
 ```
-Week 1:  ✅ F1 + F3 + F3b     → File explorer + 3-pane layout + real conversations API (DONE)
-          B1                   → File write API (remaining from Week 1)
-Week 2:  F2 + F4              → Monaco editor + xterm terminal
-Week 3:  B1 + B2 + B3 + F5   → File write API + git endpoints + git status panel
-Week 4:  F6 + F9 + B4         → Diff viewer + commit/push UI + PR endpoint
-Week 5:  B5 + B6 + F11        → Streaming + session resume + agent controls
-Week 6:  F10 + F12 + B8       → Create PR UI + session history + task queue
-Week 7:  N1 + N2 + N3 + NF1   → Notion OAuth + database/task listing + connect page
-Week 8:  N4 + N5 + NF2        → Task detail fetch + write-back + task picker UI
-Week 9:  N6 + NF3 + NF4       → Notion config storage + task context panel + auto-update indicator
-Week 10: B10 + B12 + F13      → Test runner + cost tracking + notifications
-Week 11: Phase 3 polish        → Rate limiting, shortcuts, themes
-```
-
-After Week 4, you have a working Devin-like product:
-- User connects a repo → agent clones it in Docker
-- Agent reads code, makes changes, runs tests
-- User sees file tree, views code in editor, watches diffs
-- User commits, pushes, and creates a PR — all from the UI
-
-After Week 9, you have the full Notion-integrated flow:
-- User connects Notion workspace via OAuth
-- User picks a task directly from their Notion database
-- Agent runs, pushes code, creates PR
-- Notion task is auto-updated with PR link and status change
-
----
-
-## Architecture Diagram (Target State)
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  Notion                                                           │
-│  Databases · Tasks · Status · PR links                           │
-└─────────────────────┬────────────────────────────────────────────┘
-                       │ OAuth + API (read tasks / write back)
-┌──────────────────────▼───────────────────────────────────────────┐
-│  Browser                                                          │
-│ ┌────────────┬──────────────────────┬──────────────────────────┐ │
-│ │ File       │  Code Editor         │  Chat          Terminal  │ │
-│ │ Explorer   │  (Monaco)            │  ───────────   ────────  │ │
-│ │            │                      │  Agent msgs    xterm.js  │ │
-│ │ Git        │  Diff Viewer         │  User input    Commands  │ │
-│ │ Status     │  (Monaco Diff)       │  Controls      Output    │ │
-│ │            │                      │                          │ │
-│ │ Notion     │                      │                          │ │
-│ │ Task card  │                      │                          │ │
-│ └────────────┴──────────────────────┴──────────────────────────┘ │
-│          ↕ REST + WebSocket                                       │
-├───────────────────────────────────────────────────────────────────┤
-│  Next.js (Frontend)                                               │
-│  Auth · API Routes · Prisma · Zustand                            │
-│          ↕ HTTP                                                   │
-├───────────────────────────────────────────────────────────────────┤
-│  FastAPI (ai_engine)                                              │
-│  Sessions · WebSocket · Chat · Files · Git · Auth · Notion       │
-│          ↕ Docker SDK                          ↕ Notion API      │
-├───────────────────────────────────────────────────────────────────┤
-│  Docker Containers (per session)                                  │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
-│  │ Session A    │  │ Session B    │  │ Session C    │             │
-│  │ /workspace   │  │ /workspace   │  │ /workspace   │             │
-│  │ git, node,   │  │ git, python, │  │ git, go,     │             │
-│  │ npm, tests   │  │ pip, pytest  │  │ make, tests  │             │
-│  └─────────────┘  └─────────────┘  └─────────────┘             │
-├───────────────────────────────────────────────────────────────────┤
-│  PostgreSQL                                                       │
-│  Users · Orgs · Projects · ChatSessions · ChatMessages           │
-│  NotionTokens · NotionConfigs                                     │
-└───────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  GitHub / GitLab              Notion (Phase 2)                   │
+│  OAuth · Repos · PRs          Databases · Tasks · Write-back    │
+└────────────────┬──────────────────────────┬─────────────────────┘
+                 │ OAuth + API              │ OAuth + API
+┌────────────────▼──────────────────────────▼─────────────────────┐
+│  Browser                                                         │
+│ ┌─────────────────┬────────────────────┬──────────────────────┐ │
+│ │ File Explorer   │  Chat              │  Terminal            │ │
+│ │ (read-only,     │  ─────────────     │  ────────────────    │ │
+│ │  live from      │  Agent messages    │  Agent commands      │ │
+│ │  agent)         │  User input        │  & output            │ │
+│ │                 │  PR link banner    │                      │ │
+│ └─────────────────┴────────────────────┴──────────────────────┘ │
+│          ↕ REST + WebSocket                                      │
+├─────────────────────────────────────────────────────────────────┤
+│  Next.js (Frontend)                                              │
+│  Auth · API Routes · Prisma                                      │
+│          ↕ HTTP                                                  │
+├─────────────────────────────────────────────────────────────────┤
+│  FastAPI (ai_engine)                                             │
+│  Sessions · WebSocket · Chat · Files · Git · GitHub/GitLab API  │
+│          ↕ Docker SDK                                            │
+├─────────────────────────────────────────────────────────────────┤
+│  Docker Containers (per session)                                 │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │
+│  │ Session A    │  │ Session B    │  │ Session C    │            │
+│  │ /workspace   │  │ /workspace   │  │ /workspace   │            │
+│  │ git, node,   │  │ git, python, │  │ git, go,     │            │
+│  │ npm, tests   │  │ pip, pytest  │  │ make, tests  │            │
+│  └─────────────┘  └─────────────┘  └─────────────┘            │
+├─────────────────────────────────────────────────────────────────┤
+│  PostgreSQL                                                      │
+│  Users · GitTokens · ChatSessions · ChatMessages                │
+└─────────────────────────────────────────────────────────────────┘
 ```
