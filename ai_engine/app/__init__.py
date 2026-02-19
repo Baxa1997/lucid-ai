@@ -38,6 +38,11 @@ async def lifespan(_app: FastAPI):
         logger.warning("OpenHands SDK not installed: %s", import_error or "N/A")
     if not settings.LLM_API_KEY:
         logger.warning("LLM_API_KEY not set — agent will not function")
+    if settings.SESSION_SECRET == "change_me_in_prod":
+        logger.warning(
+            "SESSION_SECRET is using the insecure default value — "
+            "set a strong random secret in production to prevent JWT forgery"
+        )
 
     yield
 

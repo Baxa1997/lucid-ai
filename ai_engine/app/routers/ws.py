@@ -225,11 +225,11 @@ async def websocket_agent(websocket: WebSocket):
         except Exception:
             pass
     except Exception as exc:
-        logger.error("WebSocket error: %s", exc, exc_info=True)
+        logger.error("WebSocket error (session=%s): %s", getattr(session, "session_id", "?"), exc, exc_info=True)
         try:
             await websocket.send_json({
                 "type": "error",
-                "message": f"Internal error: {exc}",
+                "message": "An internal error occurred. Please try again.",
             })
         except Exception:
             pass

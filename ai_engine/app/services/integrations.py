@@ -79,56 +79,41 @@ async def upsert_integration(
     external_username: Optional[str] = None,
     scopes: Optional[str] = None,
 ) -> str:
-    """Encrypt and upsert an integration. Returns the row id."""
+    """Encrypt and upsert an integration atomically. Returns the row id.
+
+    Uses INSERT ... ON CONFLICT DO UPDATE to avoid a SELECT+INSERT race
+    condition when two concurrent requests arrive for the same user+provider.
+    """
     encrypted_hex, iv_hex = encrypt_token(token)
     now = datetime.now(timezone.utc)
+    integration_id = str(uuid.uuid4())
 
     result = await db.execute(
-        text('SELECT id FROM integrations WHERE "userId" = :uid AND provider::text = :prov'),
-        {"uid": user_id, "prov": provider},
+        text("""
+            INSERT INTO integrations
+                (id, provider, label, "accessTokenEncrypted", iv,
+                 "externalUsername", scopes, "userId", "createdAt", "updatedAt")
+            VALUES
+                (:id, :prov, :label, :enc, :iv, :username, :scopes, :uid, :now, :now)
+            ON CONFLICT ("userId", provider) DO UPDATE SET
+                "accessTokenEncrypted" = EXCLUDED."accessTokenEncrypted",
+                iv                     = EXCLUDED.iv,
+                label                  = EXCLUDED.label,
+                "externalUsername"     = EXCLUDED."externalUsername",
+                scopes                 = EXCLUDED.scopes,
+                "updatedAt"            = EXCLUDED."updatedAt"
+            RETURNING id
+        """),
+        {
+            "id": integration_id, "prov": provider, "label": label,
+            "enc": encrypted_hex, "iv": iv_hex,
+            "username": external_username, "scopes": scopes,
+            "uid": user_id, "now": now,
+        },
     )
     row = result.fetchone()
-
-    if row:
-        await db.execute(
-            text("""
-                UPDATE integrations
-                SET "accessTokenEncrypted" = :enc,
-                    iv = :iv,
-                    label = :label,
-                    "externalUsername" = :username,
-                    scopes = :scopes,
-                    "updatedAt" = :now
-                WHERE "userId" = :uid AND provider::text = :prov
-            """),
-            {
-                "enc": encrypted_hex, "iv": iv_hex,
-                "label": label, "username": external_username,
-                "scopes": scopes, "now": now,
-                "uid": user_id, "prov": provider,
-            },
-        )
-        integration_id = row[0]
-    else:
-        integration_id = str(uuid.uuid4())
-        await db.execute(
-            text("""
-                INSERT INTO integrations
-                    (id, provider, label, "accessTokenEncrypted", iv,
-                     "externalUsername", scopes, "userId", "createdAt", "updatedAt")
-                VALUES
-                    (:id, :prov, :label, :enc, :iv, :username, :scopes, :uid, :now, :now)
-            """),
-            {
-                "id": integration_id, "prov": provider, "label": label,
-                "enc": encrypted_hex, "iv": iv_hex,
-                "username": external_username, "scopes": scopes,
-                "uid": user_id, "now": now,
-            },
-        )
-
     await db.commit()
-    return integration_id
+    return row[0] if row else integration_id
 
 
 _GITLAB_URL_SEPARATOR = "||"

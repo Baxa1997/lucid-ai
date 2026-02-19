@@ -85,7 +85,7 @@ async def save_integration(
             external_username = user_info.get("login")
             scopes = "repo,workflow"
         else:
-            gitlab_url = payload.gitlabUrl or "https://gitlab.com"
+            gitlab_url = (payload.gitlabUrl or "https://gitlab.com").rstrip("/")
             user_info = await gitlab_get_user(payload.token, gitlab_url=gitlab_url)
             external_username = user_info.get("username")
             # Encode the custom GitLab URL into scopes using "||" as separator.

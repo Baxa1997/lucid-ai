@@ -165,7 +165,7 @@ async def create_session(
 
     # Workspace — Docker sandbox (preferred) or local directory (fallback)
     container_id = None
-    docker_available = docker_manager.is_docker_available()
+    docker_available = await asyncio.to_thread(docker_manager.is_docker_available)
 
     if docker_available:
         # Per-session Docker container

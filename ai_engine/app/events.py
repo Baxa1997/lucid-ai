@@ -17,6 +17,8 @@ from app.config import (
     logger,
 )
 from app import sdk
+from app.database import async_session as db_session_factory
+from app.services.chat import ChatService
 
 
 def now_iso() -> str:
@@ -86,9 +88,6 @@ async def _flush_batch(batch: list[dict], chat_session_id: str) -> None:
     if not batch:
         return
     try:
-        from app.database import async_session as db_session_factory
-        from app.services.chat import ChatService
-
         async with db_session_factory() as db:
             for event_data in batch:
                 await ChatService.add_message(
