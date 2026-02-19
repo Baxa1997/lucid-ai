@@ -11,6 +11,7 @@ python-multipart>=0.0.6
 
 # Authentication
 python-jose[cryptography]>=3.3.0
+cryptography>=41.0.0
 
 # Database
 sqlalchemy[asyncio]>=2.0.0

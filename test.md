@@ -28,20 +28,22 @@ brew install jq
 
 ### 3. Set up shell variables
 
-Use these throughout all tests. Copy-paste this block into your terminal:
+Copy-paste this block into your terminal once. All tests below use these variables.
 
 ```bash
 BASE=http://localhost:8000
 USER_A="test-user-alice"
 USER_B="test-user-bob"
 INTERNAL_KEY="lucid_internal_k8s_2f9a7e3c1d4b6e8a0f2c5d7e9b1a3c5d"
+
+# Replace with a real GitHub/GitLab PAT for integration tests (Test 13)
+GITHUB_TOKEN="ghp_your_token_here"
+GITLAB_TOKEN="glpat_your_token_here"
 ```
 
-`INTERNAL_KEY` matches the value set in `docker-compose.yml`. When `INTERNAL_API_KEY` is configured (it is by default in docker-compose), every curl that uses `X-User-ID` also needs `-H "X-Internal-Key: $INTERNAL_KEY"`.
+`INTERNAL_KEY` matches `INTERNAL_API_KEY` in `docker-compose.yml`. Every curl that uses `X-User-ID` must also include `X-Internal-Key` when running against docker-compose (which has `INTERNAL_API_KEY` set by default).
 
-**Dev mode (no `INTERNAL_API_KEY` set):** `X-User-ID` is accepted without the key (server logs a warning).
-
-**Production / docker-compose mode:** Both `X-User-ID` and `X-Internal-Key` are required — requests missing `X-Internal-Key` return `HTTP 401`.
+> **Dev mode only (no `INTERNAL_API_KEY` set):** `X-User-ID` works without the key — server logs a warning. Not applicable when using docker-compose.
 
 ---
 
@@ -99,20 +101,18 @@ curl -s -w "\nHTTP %{http_code}\n" $BASE/api/v1/sessions
 
 **Expected:** `HTTP 401` with `"Authentication required"`.
 
-### 2.2 X-User-ID with valid internal key → 200
+### 2.2 Valid auth → 200
 
 ```bash
-curl -s -H "X-User-ID: $USER_A" \
+curl -s \
+  -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   $BASE/api/v1/sessions | jq
 ```
 
-**Expected:** `HTTP 200` with `{"sessions": []}` (empty list).
+**Expected:** `HTTP 200` with `{"sessions": []}`.
 
-In dev mode (no INTERNAL_API_KEY), this works but the server logs a warning.
-
-### 2.3 X-User-ID with wrong internal key → 401 (production only)
-
-Only test this if `INTERNAL_API_KEY` is set:
+### 2.3 Wrong internal key → 401
 
 ```bash
 curl -s -w "\nHTTP %{http_code}\n" \
@@ -133,6 +133,7 @@ curl -s -w "\nHTTP %{http_code}\n" \
 curl -s -X POST $BASE/api/v1/sessions \
   -H "Content-Type: application/json" \
   -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   -d '{
     "task": "Build a hello world Express.js app"
   }' | jq
@@ -152,6 +153,7 @@ Save the session ID:
 SESSION_A=$(curl -s -X POST $BASE/api/v1/sessions \
   -H "Content-Type: application/json" \
   -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   -d '{"task": "Build a hello world app"}' | jq -r '.sessionId')
 echo "Session A: $SESSION_A"
 ```
@@ -162,6 +164,7 @@ echo "Session A: $SESSION_A"
 SESSION_B=$(curl -s -X POST $BASE/api/v1/sessions \
   -H "Content-Type: application/json" \
   -H "X-User-ID: $USER_B" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   -d '{"task": "Fix the login bug"}' | jq -r '.sessionId')
 echo "Session B: $SESSION_B"
 ```
@@ -172,10 +175,11 @@ echo "Session B: $SESSION_B"
 curl -s -X POST $BASE/api/v1/sessions \
   -H "Content-Type: application/json" \
   -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   -d '{
     "task": "Fix the authentication bug in login.js",
     "repoUrl": "https://github.com/your-user/your-repo",
-    "gitToken": "ghp_your_github_token",
+    "gitToken": "ghp_your_github_pat",
     "branch": "main",
     "gitUserName": "Alice",
     "gitUserEmail": "alice@example.com",
@@ -197,7 +201,9 @@ curl -s -X POST $BASE/api/v1/sessions \
 ### 4.1 User A sees only their sessions
 
 ```bash
-curl -s -H "X-User-ID: $USER_A" \
+curl -s \
+  -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   $BASE/api/v1/sessions | jq
 ```
 
@@ -206,7 +212,9 @@ curl -s -H "X-User-ID: $USER_A" \
 ### 4.2 User B sees only their sessions
 
 ```bash
-curl -s -H "X-User-ID: $USER_B" \
+curl -s \
+  -H "X-User-ID: $USER_B" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   $BASE/api/v1/sessions | jq
 ```
 
@@ -227,7 +235,9 @@ curl -s $BASE/ | jq '.active_sessions'
 ### 5.1 User A stops their own session → 200
 
 ```bash
-curl -s -X DELETE -H "X-User-ID: $USER_A" \
+curl -s -X DELETE \
+  -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   $BASE/api/v1/sessions/$SESSION_A | jq
 ```
 
@@ -244,7 +254,9 @@ curl -s -X DELETE -H "X-User-ID: $USER_A" \
 
 ```bash
 curl -s -w "\nHTTP %{http_code}\n" \
-  -X DELETE -H "X-User-ID: $USER_A" \
+  -X DELETE \
+  -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   $BASE/api/v1/sessions/$SESSION_B
 ```
 
@@ -254,7 +266,9 @@ curl -s -w "\nHTTP %{http_code}\n" \
 
 ```bash
 curl -s -w "\nHTTP %{http_code}\n" \
-  -X DELETE -H "X-User-ID: $USER_A" \
+  -X DELETE \
+  -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   $BASE/api/v1/sessions/fake-session-id
 ```
 
@@ -279,7 +293,7 @@ Once connected, send:
 
 ### 6.2 Connect with JWT token
 
-First, generate a test JWT (requires Node.js):
+Generate a test JWT (requires Node.js):
 
 ```bash
 TOKEN=$(node -e "
@@ -297,7 +311,7 @@ echo "Token: $TOKEN"
 
 > **Note:** You need `jsonwebtoken` installed: `npm install jsonwebtoken`
 
-Now connect with the token:
+Connect with the token:
 
 ```bash
 wscat -c "ws://localhost:8000/api/v1/ws?token=$TOKEN"
@@ -314,12 +328,12 @@ Once connected, send the initial config:
 3. Several `{"type": "agent_event", ...}` mock events
 4. `{"type": "status", "status": "completed", ...}`
 
-You can then send follow-ups:
+Send a follow-up:
 ```json
 {"type": "message", "content": "Now add unit tests"}
 ```
 
-Or stop:
+Stop the agent:
 ```json
 {"type": "stop", "content": "done"}
 ```
@@ -335,42 +349,28 @@ Send token in the first message:
 {"task": "Build a REST API", "token": "<paste-your-JWT-here>"}
 ```
 
-**Expected:** Same behavior as 6.2 — authenticated via handshake token.
+**Expected:** Same behavior as 6.2.
 
 ---
 
 ## Test 7 — Chat History
 
-Chat sessions are automatically created when a WebSocket session starts (from Test 6). Now query them.
+Chat sessions are created automatically when a WebSocket session starts (Test 6). Now query them.
 
 ### 7.1 List chats for User A
 
 ```bash
-curl -s -H "X-User-ID: $USER_A" \
+curl -s \
+  -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   "$BASE/api/v1/chats?limit=10&offset=0" | jq
-```
-
-**Expected:**
-```json
-{
-  "chats": [
-    {
-      "id": "uuid-...",
-      "agentSessionId": "...",
-      "projectId": "test-project",
-      "title": "Create a hello world Python script",
-      "modelProvider": "anthropic",
-      "isActive": false,
-      "createdAt": "...",
-      "updatedAt": "..."
-    }
-  ]
-}
 ```
 
 Save the chat ID:
 ```bash
-CHAT_ID=$(curl -s -H "X-User-ID: $USER_A" \
+CHAT_ID=$(curl -s \
+  -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   "$BASE/api/v1/chats" | jq -r '.chats[0].id')
 echo "Chat ID: $CHAT_ID"
 ```
@@ -378,21 +378,24 @@ echo "Chat ID: $CHAT_ID"
 ### 7.2 Get chat with messages
 
 ```bash
-curl -s -H "X-User-ID: $USER_A" \
+curl -s \
+  -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   $BASE/api/v1/chats/$CHAT_ID | jq
 ```
 
-**Expected:** Chat object with a `messages` array containing the initial task and agent responses.
+**Expected:** Chat object with a `messages` array.
 
-### 7.3 User B cannot see User A's chats
+### 7.3 User B cannot see User A's chats → 404
 
 ```bash
 curl -s -w "\nHTTP %{http_code}\n" \
   -H "X-User-ID: $USER_B" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   $BASE/api/v1/chats/$CHAT_ID
 ```
 
-**Expected:** `HTTP 404` — User B's request is scoped to their own chats.
+**Expected:** `HTTP 404`.
 
 ### 7.4 Rename a chat
 
@@ -400,30 +403,28 @@ curl -s -w "\nHTTP %{http_code}\n" \
 curl -s -X PATCH $BASE/api/v1/chats/$CHAT_ID \
   -H "Content-Type: application/json" \
   -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   -d '{"title": "My Hello World Project"}' | jq
 ```
 
-**Expected:**
-```json
-{ "status": "updated", "id": "...", "title": "My Hello World Project" }
-```
+**Expected:** `{ "status": "updated", "id": "...", "title": "My Hello World Project" }`
 
 ### 7.5 Delete a chat
 
 ```bash
-curl -s -X DELETE -H "X-User-ID: $USER_A" \
+curl -s -X DELETE \
+  -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   $BASE/api/v1/chats/$CHAT_ID | jq
 ```
 
-**Expected:**
-```json
-{ "status": "deleted", "id": "..." }
-```
+**Expected:** `{ "status": "deleted", "id": "..." }`
 
 Verify it's gone:
 ```bash
 curl -s -w "\nHTTP %{http_code}\n" \
   -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   $BASE/api/v1/chats/$CHAT_ID
 ```
 
@@ -433,12 +434,13 @@ curl -s -w "\nHTTP %{http_code}\n" \
 
 ## Test 8 — File Explorer (requires active session)
 
-These endpoints work on sessions that are still alive (not stopped). Create a fresh session first:
+Create a fresh session first:
 
 ```bash
 SESSION_FILES=$(curl -s -X POST $BASE/api/v1/sessions \
   -H "Content-Type: application/json" \
   -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   -d '{"task": "Test file explorer"}' | jq -r '.sessionId')
 echo "Session: $SESSION_FILES"
 ```
@@ -446,46 +448,50 @@ echo "Session: $SESSION_FILES"
 ### 8.1 List files in workspace
 
 ```bash
-curl -s -H "X-User-ID: $USER_A" \
+curl -s \
+  -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   "$BASE/api/v1/files/list?session_id=$SESSION_FILES" | jq
 ```
 
-**Expected:** A `tree` array showing the workspace file structure. May be empty for a fresh mock session or populated if Docker created a workspace.
+**Expected:** A `tree` array showing the workspace file structure.
 
 ### 8.2 Read a file
 
 ```bash
-curl -s -H "X-User-ID: $USER_A" \
+curl -s \
+  -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   "$BASE/api/v1/files/read?session_id=$SESSION_FILES&path=/workspace/hello.py" | jq
 ```
 
 **Expected:** `{"content": "..."}` if file exists, or `HTTP 404` if not.
 
-### 8.3 Path traversal blocked
+### 8.3 Path traversal blocked → 400
 
 ```bash
 curl -s -w "\nHTTP %{http_code}\n" \
   -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   "$BASE/api/v1/files/read?session_id=$SESSION_FILES&path=../../etc/passwd"
 ```
 
 **Expected:** `HTTP 400` with `"Path traversal not allowed."`.
 
-### 8.4 User B cannot access User A's files
+### 8.4 User B cannot access User A's files → 403
 
 ```bash
 curl -s -w "\nHTTP %{http_code}\n" \
   -H "X-User-ID: $USER_B" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   "$BASE/api/v1/files/list?session_id=$SESSION_FILES"
 ```
 
-**Expected:** `HTTP 403` with `"Not authorized to access this session."`.
+**Expected:** `HTTP 403`.
 
 ---
 
 ## Test 9 — Docker Sandbox Verification
-
-Check if Docker sandboxing is working (requires Docker daemon accessible).
 
 ### 9.1 Verify Docker is detected
 
@@ -495,22 +501,16 @@ curl -s $BASE/ | jq '.docker_available'
 
 **Expected:** `true`.
 
-### 9.2 Create session and check sandbox count
+### 9.2 Check sandbox count
 
 ```bash
-# Before
 curl -s $BASE/ | jq '.active_sandboxes'
-
-# Create session with SDK available (or check Docker containers manually)
 docker ps --filter "label=lucid.managed=true"
 ```
-
-**Expected:** Each active session with Docker should have a corresponding container.
 
 ### 9.3 Verify container isolation
 
 ```bash
-# List all Lucid sandbox containers
 docker ps --filter "label=lucid.managed=true" --format "table {{.Names}}\t{{.Status}}\t{{.Labels}}"
 ```
 
@@ -519,10 +519,11 @@ Each container should have a unique `lucid.session_id` label.
 ### 9.4 Stop session and verify cleanup
 
 ```bash
-curl -s -X DELETE -H "X-User-ID: $USER_A" \
+curl -s -X DELETE \
+  -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   $BASE/api/v1/sessions/$SESSION_FILES | jq
 
-# Check containers are gone
 docker ps --filter "label=lucid.managed=true"
 ```
 
@@ -532,52 +533,49 @@ docker ps --filter "label=lucid.managed=true"
 
 ## Test 10 — Multi-User Isolation (Full Flow)
 
-This is the end-to-end test that verifies multiple users can work simultaneously without seeing each other's data.
-
 ### Step 1: Create sessions for both users
 
 ```bash
-# User A
 SESSION_A2=$(curl -s -X POST $BASE/api/v1/sessions \
   -H "Content-Type: application/json" \
   -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   -d '{"task": "Fix bug in auth module"}' | jq -r '.sessionId')
 
-# User B
 SESSION_B2=$(curl -s -X POST $BASE/api/v1/sessions \
   -H "Content-Type: application/json" \
   -H "X-User-ID: $USER_B" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   -d '{"task": "Add dark mode support"}' | jq -r '.sessionId')
 
 echo "A: $SESSION_A2"
 echo "B: $SESSION_B2"
 ```
 
-### Step 2: Verify each user only sees their own
+### Step 2: Each user only sees their own
 
 ```bash
 echo "=== User A sessions ==="
-curl -s -H "X-User-ID: $USER_A" $BASE/api/v1/sessions | jq '.sessions[].task'
+curl -s -H "X-User-ID: $USER_A" -H "X-Internal-Key: $INTERNAL_KEY" \
+  $BASE/api/v1/sessions | jq '.sessions[].task'
 
 echo "=== User B sessions ==="
-curl -s -H "X-User-ID: $USER_B" $BASE/api/v1/sessions | jq '.sessions[].task'
+curl -s -H "X-User-ID: $USER_B" -H "X-Internal-Key: $INTERNAL_KEY" \
+  $BASE/api/v1/sessions | jq '.sessions[].task'
 ```
 
-**Expected:**
-- User A sees `"Fix bug in auth module"` only
-- User B sees `"Add dark mode support"` only
-
-### Step 3: Cross-access blocked
+### Step 3: Cross-access blocked → 403
 
 ```bash
-# User A tries to stop User B's session
 curl -s -w "\nHTTP %{http_code}\n" \
-  -X DELETE -H "X-User-ID: $USER_A" \
+  -X DELETE \
+  -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   $BASE/api/v1/sessions/$SESSION_B2
 
-# User B tries to read User A's files
 curl -s -w "\nHTTP %{http_code}\n" \
   -H "X-User-ID: $USER_B" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   "$BASE/api/v1/files/list?session_id=$SESSION_A2"
 ```
 
@@ -586,25 +584,31 @@ curl -s -w "\nHTTP %{http_code}\n" \
 ### Step 4: Clean up
 
 ```bash
-curl -s -X DELETE -H "X-User-ID: $USER_A" $BASE/api/v1/sessions/$SESSION_A2 | jq
-curl -s -X DELETE -H "X-User-ID: $USER_B" $BASE/api/v1/sessions/$SESSION_B2 | jq
+curl -s -X DELETE \
+  -H "X-User-ID: $USER_A" -H "X-Internal-Key: $INTERNAL_KEY" \
+  $BASE/api/v1/sessions/$SESSION_A2 | jq
+
+curl -s -X DELETE \
+  -H "X-User-ID: $USER_B" -H "X-Internal-Key: $INTERNAL_KEY" \
+  $BASE/api/v1/sessions/$SESSION_B2 | jq
 ```
 
 ---
 
 ## Test 11 — Error Cases
 
-### 11.1 Missing required field (task)
+### 11.1 Missing required field (task) → 422
 
 ```bash
 curl -s -w "\nHTTP %{http_code}\n" \
   -X POST $BASE/api/v1/sessions \
   -H "Content-Type: application/json" \
   -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   -d '{}'
 ```
 
-**Expected:** `HTTP 422` — validation error for missing `task` field.
+**Expected:** `HTTP 422`.
 
 ### 11.2 Invalid model provider
 
@@ -613,28 +617,30 @@ curl -s -w "\nHTTP %{http_code}\n" \
   -X POST $BASE/api/v1/sessions \
   -H "Content-Type: application/json" \
   -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   -d '{"task": "test", "model_provider": "openai"}'
 ```
 
-**Expected:** `HTTP 400` or `HTTP 500` (depends on whether SDK is available — in mock mode this may succeed since LLM is not actually called).
+**Expected:** `HTTP 400` or `HTTP 500` (mock mode may succeed since LLM is not called).
 
 ### 11.3 Chat pagination
 
 ```bash
-# Page 1
-curl -s -H "X-User-ID: $USER_A" "$BASE/api/v1/chats?limit=2&offset=0" | jq '.chats | length'
+curl -s -H "X-User-ID: $USER_A" -H "X-Internal-Key: $INTERNAL_KEY" \
+  "$BASE/api/v1/chats?limit=2&offset=0" | jq '.chats | length'
 
-# Page 2
-curl -s -H "X-User-ID: $USER_A" "$BASE/api/v1/chats?limit=2&offset=2" | jq '.chats | length'
+curl -s -H "X-User-ID: $USER_A" -H "X-Internal-Key: $INTERNAL_KEY" \
+  "$BASE/api/v1/chats?limit=2&offset=2" | jq '.chats | length'
 ```
 
-### 11.4 Rename with missing title
+### 11.4 Rename with missing title → 400
 
 ```bash
 curl -s -w "\nHTTP %{http_code}\n" \
   -X PATCH $BASE/api/v1/chats/some-chat-id \
   -H "Content-Type: application/json" \
   -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
   -d '{}'
 ```
 
@@ -644,16 +650,15 @@ curl -s -w "\nHTTP %{http_code}\n" \
 
 ## Test 12 — Frontend Proxy Routes
 
-These routes run inside Next.js (port 3000) and proxy to the ai_engine with server-side auth headers. Test them from a browser console while logged in to `http://localhost:3000`.
+These routes run inside Next.js (port 3000). Test from a browser console while logged in to `http://localhost:3000`.
 
 ### 12.1 Get WebSocket JWT token
 
 ```js
-// Run in browser console while logged in
 const res = await fetch('/api/agent/token');
 const { token } = await res.json();
 console.log('JWT:', token);
-// Use this token: wscat -c "ws://localhost:8000/api/v1/ws?token=<token>"
+// Use: wscat -c "ws://localhost:8000/api/v1/ws?token=<token>"
 ```
 
 **Expected:** `{ "token": "<JWT>" }` — a signed 2-hour token for the current user.
@@ -666,7 +671,7 @@ const data = await res.json();
 console.log(data.chats);
 ```
 
-**Expected:** Same response as `GET /api/v1/chats` — Next.js adds `X-User-ID` and `X-Internal-Key` server-side; no auth headers needed from the browser.
+**Expected:** Same as `GET /api/v1/chats` — auth headers added server-side by Next.js.
 
 ### 12.3 Read a workspace file via proxy
 
@@ -676,7 +681,149 @@ const { content } = await res.json();
 console.log(content);
 ```
 
-**Expected:** `{ "content": "..." }` if the file exists. `401` if not logged in, `403` if session belongs to another user.
+**Expected:** `{ "content": "..." }` if file exists. `401` if not logged in, `403` if wrong user.
+
+---
+
+---
+
+## Test 13 — Git Integrations (PAT save, repo listing, PR creation)
+
+**Requires a real GitHub or GitLab PAT.** Set `GITHUB_TOKEN` / `GITLAB_TOKEN` in your shell variables.
+
+> **Note:** The `ENCRYPTION_KEY` env var must be set in both the ai_engine container and the frontend container with the **same value** — the ai_engine encrypts with it and the frontend decrypts with it.
+
+### 13.1 Save a GitHub PAT (validates token against GitHub API)
+
+```bash
+curl -s -X POST $BASE/api/v1/integrations \
+  -H "Content-Type: application/json" \
+  -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
+  -d "{\"provider\": \"github\", \"token\": \"$GITHUB_TOKEN\"}" | jq
+```
+
+**Expected:**
+```json
+{
+  "status": "connected",
+  "provider": "github",
+  "username": "your-github-username",
+  "message": "Connected as your-github-username"
+}
+```
+
+### 13.2 Save a GitLab PAT
+
+```bash
+curl -s -X POST $BASE/api/v1/integrations \
+  -H "Content-Type: application/json" \
+  -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
+  -d "{\"provider\": \"gitlab\", \"token\": \"$GITLAB_TOKEN\"}" | jq
+```
+
+For self-hosted GitLab, add `"gitlabUrl": "https://gitlab.example.com"` to the body.
+
+### 13.3 Invalid token → 422
+
+```bash
+curl -s -w "\nHTTP %{http_code}\n" \
+  -X POST $BASE/api/v1/integrations \
+  -H "Content-Type: application/json" \
+  -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
+  -d '{"provider": "github", "token": "bad_token"}'
+```
+
+**Expected:** `HTTP 422` with `"Token validation failed"`.
+
+### 13.4 List connected integrations
+
+```bash
+curl -s \
+  -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
+  $BASE/api/v1/integrations | jq
+```
+
+**Expected:** Array with one entry per connected provider. Tokens are never returned.
+
+### 13.5 List repos (B2)
+
+```bash
+curl -s \
+  -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
+  $BASE/api/v1/integrations/github/repos | jq '.repos[0:3]'
+```
+
+**Expected:** Array of repos with `name`, `fullName`, `cloneUrl`, `defaultBranch`, `private`.
+
+### 13.6 List repos with no token saved → 404
+
+```bash
+curl -s -w "\nHTTP %{http_code}\n" \
+  -H "X-User-ID: $USER_B" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
+  $BASE/api/v1/integrations/github/repos
+```
+
+**Expected:** `HTTP 404` with `"No github token saved"`.
+
+### 13.7 Create a PR (B3)
+
+After the agent pushes a branch, call this to open the PR:
+
+```bash
+curl -s -X POST $BASE/api/v1/integrations/github/pr \
+  -H "Content-Type: application/json" \
+  -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
+  -d '{
+    "repoUrl": "https://github.com/your-user/your-repo",
+    "branch": "fix/auth-bug",
+    "baseBranch": "main",
+    "title": "Fix authentication bug",
+    "body": "Agent fixed the auth module as requested."
+  }' | jq
+```
+
+**Expected:**
+```json
+{
+  "status": "created",
+  "provider": "github",
+  "prUrl": "https://github.com/your-user/your-repo/pull/42",
+  "prNumber": 42,
+  "title": "Fix authentication bug",
+  "state": "open"
+}
+```
+
+### 13.8 Unsupported provider → 400
+
+```bash
+curl -s -w "\nHTTP %{http_code}\n" \
+  -X POST $BASE/api/v1/integrations \
+  -H "Content-Type: application/json" \
+  -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
+  -d '{"provider": "bitbucket", "token": "abc"}'
+```
+
+**Expected:** `HTTP 400` with `"Unsupported provider"`.
+
+### 13.9 Remove an integration
+
+```bash
+curl -s -X DELETE \
+  -H "X-User-ID: $USER_A" \
+  -H "X-Internal-Key: $INTERNAL_KEY" \
+  $BASE/api/v1/integrations/github | jq
+```
+
+**Expected:** `{"status": "disconnected", "provider": "github"}`.
 
 ---
 
@@ -686,17 +833,22 @@ console.log(content);
 |---|--------|------|------|------|
 | 1 | `GET` | `/` | No | Test 1.1 |
 | 2 | `GET` | `/health` | No | Test 1.2 |
-| 3 | `POST` | `/api/v1/sessions` | Yes | Test 3 |
-| 4 | `GET` | `/api/v1/sessions` | Yes | Test 4 |
-| 5 | `DELETE` | `/api/v1/sessions/{id}` | Yes | Test 5 |
-| 6 | `GET` | `/api/v1/chats` | Yes | Test 7.1 |
-| 7 | `GET` | `/api/v1/chats/{id}` | Yes | Test 7.2 |
-| 8 | `DELETE` | `/api/v1/chats/{id}` | Yes | Test 7.5 |
-| 9 | `PATCH` | `/api/v1/chats/{id}` | Yes | Test 7.4 |
-| 10 | `GET` | `/api/v1/files/list` | Yes | Test 8.1 |
-| 11 | `GET` | `/api/v1/files/read` | Yes | Test 8.2 |
-| 12 | `WS` | `/api/v1/ws` | Yes | Test 6 |
-| 13 | `POST` | `/api/agent/start` *(Next.js)* | Session cookie | — |
-| 14 | `GET` | `/api/agent/token` *(Next.js)* | Session cookie | Test 12.1 |
-| 15 | `GET` | `/api/chats` *(Next.js)* | Session cookie | Test 12.2 |
-| 16 | `GET` | `/api/files/read` *(Next.js)* | Session cookie | Test 12.3 |
+| 3 | `POST` | `/api/v1/sessions` | X-User-ID + X-Internal-Key | Test 3 |
+| 4 | `GET` | `/api/v1/sessions` | X-User-ID + X-Internal-Key | Test 4 |
+| 5 | `DELETE` | `/api/v1/sessions/{id}` | X-User-ID + X-Internal-Key | Test 5 |
+| 6 | `GET` | `/api/v1/chats` | X-User-ID + X-Internal-Key | Test 7.1 |
+| 7 | `GET` | `/api/v1/chats/{id}` | X-User-ID + X-Internal-Key | Test 7.2 |
+| 8 | `DELETE` | `/api/v1/chats/{id}` | X-User-ID + X-Internal-Key | Test 7.5 |
+| 9 | `PATCH` | `/api/v1/chats/{id}` | X-User-ID + X-Internal-Key | Test 7.4 |
+| 10 | `GET` | `/api/v1/files/list` | X-User-ID + X-Internal-Key | Test 8.1 |
+| 11 | `GET` | `/api/v1/files/read` | X-User-ID + X-Internal-Key | Test 8.2 |
+| 12 | `WS` | `/api/v1/ws` | JWT (`?token=`) | Test 6 |
+| 13 | `POST` | `/api/v1/integrations` | X-User-ID + X-Internal-Key | Test 13.1 |
+| 14 | `GET` | `/api/v1/integrations` | X-User-ID + X-Internal-Key | Test 13.4 |
+| 15 | `DELETE` | `/api/v1/integrations/{provider}` | X-User-ID + X-Internal-Key | Test 13.9 |
+| 16 | `GET` | `/api/v1/integrations/{provider}/repos` | X-User-ID + X-Internal-Key | Test 13.5 |
+| 17 | `POST` | `/api/v1/integrations/{provider}/pr` | X-User-ID + X-Internal-Key | Test 13.7 |
+| 18 | `POST` | `/api/agent/start` *(Next.js)* | Session cookie | — |
+| 19 | `GET` | `/api/agent/token` *(Next.js)* | Session cookie | Test 12.1 |
+| 20 | `GET` | `/api/chats` *(Next.js)* | Session cookie | Test 12.2 |
+| 21 | `GET` | `/api/files/read` *(Next.js)* | Session cookie | Test 12.3 |

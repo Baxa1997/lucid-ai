@@ -401,7 +401,7 @@ Resolves which language model to use.
 
 The frontend (Prisma) and ai_engine (SQLAlchemy + Alembic) share the **same PostgreSQL database**. But they own different tables:
 
-- **Prisma owns:** `users`, `accounts`, `organizations`, `memberships`, `projects`, `integrations`, `agent_sessions`, `_prisma_migrations`
+- **Prisma owns:** `users`, `accounts`, `projects`, `integrations`, `agent_sessions`, `_prisma_migrations`
 - **Alembic owns:** `chat_sessions`, `chat_messages`
 
 The `alembic/env.py` file has a `PRISMA_TABLES` set that tells Alembic to ignore all Prisma-managed tables. This prevents conflicts — `alembic revision --autogenerate` won't try to create or modify Prisma's tables.
@@ -618,25 +618,32 @@ The token has a 2-hour lifetime. The `SESSION_SECRET` is shared between Next.js 
 
 ## Workspace Layout (Frontend)
 
-The workspace page (`/dashboard/engineer/workspace/[projectId]`) uses a three-pane layout:
+The workspace is a **chat-first interface** — not an IDE. Everything the agent does streams into the chat as structured event cards. There is no separate code editor pane.
 
 ```
-┌──────────────┬────────────────────────────┬────────────────────┐
-│ FileExplorer │        Chat                │ Terminal           │
-│   (240px)    │  (flex-1, scrollable)      │ OR                 │
-│              │                            │ FileViewer         │
-│ Collapsible  │  Agent messages,           │   (400px)          │
-│ file tree    │  user input textarea,      │                    │
-│              │  suggestion chips          │ Toggled by buttons │
-└──────────────┴────────────────────────────┴────────────────────┘
+┌──────────────┬──────────────────────────────────────┬───────────────┐
+│ FileExplorer │  Chat (center, flex-1)               │ Terminal      │
+│   (240px)    │                                      │  (400px)      │
+│              │  💭 Thought: "Checking auth.js..."   │               │
+│ Read-only    │  $ npm install (+ output)            │ Agent command │
+│ file tree,   │  📝 Edit: src/auth.js                │ output stream │
+│ live from    │     +12 / -3  (inline diff)          │               │
+│ agent        │  $ git commit && git push            │               │
+│              │  ✅ PR opened → github.com/...       │               │
+│              │                                      │               │
+│              │  [User input textarea]               │               │
+└──────────────┴──────────────────────────────────────┴───────────────┘
 ```
 
-**Left — FileExplorer:** Receives the `files` array from `useAgentSession`. The hook populates this from WebSocket `file_tree` events sent by the ai_engine whenever the agent changes the workspace. Clicking a file fetches its content from `/api/files/read`.
+**Left — FileExplorer (read-only):** Shows the agent's workspace file tree, populated live from WebSocket `file_tree` events. Clicking a file shows its content but the user cannot edit it — the agent does all editing.
 
-**Center — Chat:** The main agent conversation. Welcome screen with suggestion chips when empty. Messages from user (right-aligned) and agent (left-aligned). Auto-scrolls, with a "scroll to latest" button when the user scrolls up.
+**Center — Chat:** The core of the product. All agent actions stream in as structured cards:
+- 💭 **Thought** — Agent reasoning ("I need to look at the login module first")
+- **`$` Command** — Terminal commands run by the agent, with their output
+- **📝 File edit** — Inline unified diff showing exactly what changed (+/- lines)
+- **✅ Status** — Session started, completed, PR created (with link)
+- **User messages** — The user's task and follow-ups
 
-**Right — Terminal or FileViewer:** A single collapsible panel with two tab modes:
-- **Terminal tab:** Streams all agent logs from `useAgentSession.terminalLogs`. Has a command input at the bottom.
-- **FileViewer tab:** Shows the content of the selected file in a monospace `<pre>` block with a copy button. Appears automatically when a file is clicked in the explorer.
+**Right — Terminal:** Raw agent command output stream for debugging. Separate from the chat for cleaner UX.
 
-**Token:** On mount, the page fetches `GET /api/agent/token` to get a JWT, which is passed to `useAgentSession`. This fixes the previous bug where the WebSocket connected with an empty token and was immediately rejected.
+**Token:** On mount, the page fetches `GET /api/agent/token` to get a JWT, which is passed to `useAgentSession`. This JWT authenticates the WebSocket connection to the ai_engine.

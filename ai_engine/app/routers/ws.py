@@ -6,8 +6,10 @@ import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from sqlalchemy import update
 
 from app.auth import AuthenticatedUser, authenticate_websocket, authenticate_from_handshake
+from app.models import ChatSession as ChatSessionModel
 from app.config import (
     logger,
     settings,
@@ -245,8 +247,6 @@ async def websocket_agent(websocket: WebSocket):
         if chat_session_id:
             try:
                 async with async_session() as db:
-                    from sqlalchemy import update
-                    from app.models import ChatSession as ChatSessionModel
                     await db.execute(
                         update(ChatSessionModel)
                         .where(ChatSessionModel.id == chat_session_id)
@@ -344,10 +344,13 @@ _MOCK_STEPS: list[dict] = [
 async def _run_mock_loop(websocket: WebSocket, session: AgentSession) -> None:
     """Simulate agent behaviour when the SDK is not installed."""
     for step in _MOCK_STEPS:
-        step["timestamp"] = now_iso()
-        if step.get("eventType") == "ThinkAction":
-            step["content"] = f'Analyzing task: "{session.task}"'
-        await websocket.send_json(step)
+        # Copy before mutating — _MOCK_STEPS is module-level; concurrent
+        # WebSocket connections would overwrite each other's timestamp/content.
+        step_copy = dict(step)
+        step_copy["timestamp"] = now_iso()
+        if step_copy.get("eventType") == "ThinkAction":
+            step_copy["content"] = f'Analyzing task: "{session.task}"'
+        await websocket.send_json(step_copy)
         await asyncio.sleep(MOCK_STEP_DELAY_SECONDS)
 
     try:

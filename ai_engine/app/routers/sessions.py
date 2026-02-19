@@ -93,14 +93,14 @@ async def stop_session(
     user: AuthenticatedUser = Depends(get_current_user),
 ):
     """Stop and destroy an agent session."""
-    if not await store.contains(session_id):
+    session = await store.get_or_none(session_id)
+    if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session {session_id} not found.",
         )
 
     # Verify the session belongs to the authenticated user
-    session = await store.get(session_id)
     if session.user_id != user.user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

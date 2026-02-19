@@ -85,6 +85,11 @@ class SessionStore:
             raise SessionNotFoundError(session_id)
         return session
 
+    async def get_or_none(self, session_id: str) -> AgentSession | None:
+        """Return the session or None — single lock acquisition avoids TOCTOU."""
+        async with self._lock:
+            return self._sessions.get(session_id)
+
     async def pop(self, session_id: str) -> AgentSession | None:
         async with self._lock:
             return self._sessions.pop(session_id, None)

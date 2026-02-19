@@ -2,54 +2,108 @@
 
 ## Product Vision
 
-A chat interface like Devin. User connects their GitHub or GitLab account, describes a task in chat, and the agent clones the repo in a Docker sandbox, writes code, runs tests, commits, pushes, and opens a PR — fully autonomously. The user watches it happen via chat and a read-only file explorer. No IDE, no manual editing.
+A chat interface like OpenHands/Devin — not an IDE. Everything happens in the chat. The user describes a task, and the agent's actions stream into the chat as structured events: thoughts, terminal commands and their output, file edits shown as inline diffs. The user watches the agent work in real-time, can send follow-up messages, and gets a PR link at the end.
+
+**There is no code editor pane.** Code changes are visible as diff blocks inside the chat stream, exactly like OpenHands.
 
 **Core loop:**
 ```
-User connects repo → describes task in chat
+User connects GitHub/GitLab → describes task in chat
 → Agent clones repo in Docker sandbox
-→ Agent writes code, runs tests, commits
-→ Agent pushes branch and opens PR automatically
-→ User gets PR link
+→ Agent actions stream into chat:
+    💭 Thought: "I'll look at the auth module first..."
+    $ git clone ... / npm install ... (+ output)
+    📝 Edit: src/auth.js  (+12 / -3 lines, shown as diff)
+    $ npm test (+ output)
+    $ git commit -m "Fix auth bug" && git push
+→ PR opened automatically
+→ PR link appears in chat
 ```
 
 ---
 
-## Current State
+## Current State — Full Picture
 
-### ✅ What's working
+### Backend API (ai_engine — port 8000)
 
-| Area | Status |
-|------|--------|
-| Docker sandbox per session | ✅ Done |
-| Git clone on session start | ✅ Done |
-| WebSocket agent communication | ✅ Done |
-| Chat message history (PostgreSQL) | ✅ Done |
-| Read-only file explorer (live from agent) | ✅ Done |
-| Terminal output panel | ✅ Done |
-| Conversations list page | ✅ Done |
-| Auth (login with email in dev, Google OAuth in prod) | ✅ Done |
-| Per-user session isolation | ✅ Done |
+Every endpoint is behind `X-User-ID` + `X-Internal-Key` headers (or a JWT for WebSocket). The frontend proxy (`gatekeeper.js`) adds these automatically.
 
-### ❌ What's missing (blocking the core loop)
+| Endpoint | Status | Notes |
+|----------|--------|-------|
+| `GET /` | ✅ Working | System health — Docker status, SDK status, active sessions |
+| `GET /health` | ✅ Working | Minimal `{"status":"ok"}` for load balancers |
+| `POST /api/v1/sessions` | ✅ Working | Create Docker-sandboxed agent session; returns sessionId |
+| `GET /api/v1/sessions` | ✅ Working | List active in-memory sessions for caller |
+| `DELETE /api/v1/sessions/{id}` | ✅ Working | Stop + clean up session and Docker container |
+| `WS /api/v1/ws` | ✅ Working | Real-time agent communication; JWT auth via `?token=` |
+| `GET /api/v1/chats` | ✅ Working | Paginated chat session list from PostgreSQL |
+| `GET /api/v1/chats/{id}` | ✅ Working | Full chat with all messages |
+| `DELETE /api/v1/chats/{id}` | ✅ Working | Delete chat + cascade messages |
+| `PATCH /api/v1/chats/{id}` | ✅ Working | Rename chat |
+| `GET /api/v1/files/list` | ✅ Working | Live workspace file tree (Docker or local) |
+| `GET /api/v1/files/read` | ✅ Working | Read a file from the agent's workspace |
+| `POST /api/v1/integrations` | ✅ Working | Save/update GitHub or GitLab PAT — validates against API, encrypts with AES-256-CBC |
+| `GET /api/v1/integrations` | ✅ Working | List connected providers; tokens never returned |
+| `DELETE /api/v1/integrations/{provider}` | ✅ Working | Disconnect GitHub or GitLab |
+| `GET /api/v1/integrations/{provider}/repos` | ✅ Working | List repos via stored PAT (paginated, all pages) |
+| `POST /api/v1/integrations/{provider}/pr` | ✅ Working | Open GitHub PR or GitLab MR using stored PAT |
+| Session resume after refresh | ❌ Not built | Sessions are in-memory; browser refresh = session lost |
+| Token-by-token streaming | ❌ Not built | Events are batched (every 20 or every 2 s); no SSE/chunked streaming |
 
-| Area | Status |
-|------|--------|
-| GitHub OAuth — connect account, store token | ❌ Not built |
-| GitLab OAuth — connect account, store token | ❌ Not built |
-| Auto PR creation after agent pushes | ❌ Not built |
-| Session resume after browser refresh | ❌ Not built |
-| Agent streaming (token-by-token output) | ❌ Not built |
+**What the backend can do right now:** Start an agent, clone a repo, run code in Docker, stream events, save/query chat history, manage git tokens, list repos, create PRs. The core loop is complete at the API level.
+
+**What the backend cannot do yet:** Resume a session after the connection drops, or stream tokens as they are generated (agent outputs arrive in chunks, not word-by-word).
+
+---
+
+### Frontend (Next.js — port 3000)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Auth — dev email login | ✅ Working | Any email creates a user automatically (dev credentials provider) |
+| Auth — Google OAuth | ⚠️ Config needed | Works once `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` are set in `.env` |
+| Conversations list page | ✅ Working | Shows past chat sessions from DB |
+| Chat UI — send message, receive events | ✅ Working | WebSocket connected; basic message display |
+| Read-only file explorer | ✅ Working | Live workspace tree from agent; updates on file changes |
+| Terminal output panel | ✅ Working | Agent command output visible |
+| Git token settings page | ❌ Not built | No UI to paste a GitHub/GitLab PAT — must call API directly |
+| Repo picker in new session flow | ❌ Not built | User cannot pick a repo from a dropdown; must type the URL manually or hardcode it |
+| Inline agent events as structured cards | ❌ Not built | Agent events (thoughts, commands, diffs) arrive via WebSocket but are likely displayed as raw/flat text, not as styled thought bubbles / command blocks / diff cards |
+| Stop agent button | ❌ Not built | No button to interrupt the agent mid-task |
+| PR link card in chat | ❌ Not built | No card appears when agent creates a PR |
+| Notion connect / task picker | ❌ Not built | Phase 2 — not started |
+
+---
+
+### What you can do end-to-end right now
+
+✅ **Fully testable via curl / wscat (no frontend needed):**
+- Connect a GitHub/GitLab PAT → list your repos → start an agent session on a repo → watch mock events stream → create a PR
+
+⚠️ **Partially works in the browser:**
+- Log in, view past conversations, see the chat UI and file explorer
+- Cannot connect GitHub/GitLab from the UI (no settings page)
+- Cannot pick a repo from a dropdown (no repo picker)
+- Events appear in chat but without structured formatting
+
+❌ **Core loop is broken from the browser because:**
+1. There is no settings page to paste a PAT — users have no way to connect GitHub/GitLab from the UI
+2. New session flow has no repo picker — user can't select which repo to work on
+3. Agent events in chat show as flat messages, not as styled thought/command/diff cards
+
+**In short:** The backend is feature-complete for Phase 1. The frontend is missing the three pieces that expose those backend features to a real user: token settings (F3), repo picker (F4), and structured event rendering (F5).
+
+---
 
 ### 🗑️ Removed from scope
 
 These were planned but don't belong in a chat product:
-- Monaco code editor — not an IDE
-- File write/edit by user — agent does the editing
-- Diff viewer — agent handles diffs
-- Git status panel — not needed in chat UI
+- Monaco code editor as a separate pane — not an IDE; code is visible as inline diffs in chat
+- File write/edit by user — agent does all editing
+- Separate git status panel — agent commits/pushes autonomously
 - Commit & push UI — agent does this automatically
-- Organization/team logic — single-user for now, remove from codebase
+- GitHub/GitLab OAuth flow — replaced with PAT input (OpenHands style)
+- Organization/team logic — single-user, removed from codebase and DB schema
 
 ---
 
@@ -57,28 +111,35 @@ These were planned but don't belong in a chat product:
 
 Get the complete loop working: connect repo → chat → agent codes → push → PR.
 
+### How GitHub/GitLab connection works (OpenHands style)
+
+No OAuth. User pastes a **Personal Access Token (PAT)** directly — copied from GitHub/GitLab → Settings → Developer tokens. Token is encrypted (AES-256-CBC) and stored in the `integrations` table. This is the same approach OpenHands uses.
+
+**GitHub PAT scopes needed:** `repo`, `workflow`
+**GitLab PAT scopes needed:** `api`, `read_repository`, `write_repository`
+
 ### Backend
 
 | # | Task | Priority | Description |
 |---|------|----------|-------------|
-| B1 | **GitHub OAuth** | P0 | OAuth 2.0 flow: `GET /api/integrations/github/auth` → `GET /api/integrations/github/callback`. Store encrypted GitHub access token per user in DB. |
-| B2 | **GitLab OAuth** | P0 | Same flow for GitLab. `GET /api/integrations/gitlab/auth` → callback. Same encrypted token storage. |
-| B3 | **List user repos** | P0 | `GET /api/integrations/github/repos` and `/gitlab/repos` — returns the user's repos (name, url, private/public). Used in the "start session" flow to pick a repo. |
-| B4 | **Auto PR creation** | P0 | After agent pushes a branch, backend calls GitHub/GitLab API to open a PR automatically. PR title and description auto-generated from agent's task. Returns PR URL. Triggered at end of agent session or on agent decision. |
-| B5 | **Session resume** | P1 | Reconnect WebSocket to an existing session after browser refresh. Session state (messages, files) already in DB — just re-attach. Currently a refresh loses the session. |
-| B6 | **Token-by-token streaming** | P1 | Stream agent output as it's generated, not in batches. User sees agent "thinking" in real-time like Devin. |
-| B7 | **Remove org logic from DB** | P1 | Drop `Organization` and `Membership` tables from Prisma schema. Remove org creation from auth flow. Users are standalone — no teams needed yet. |
+| B1 | ✅ **Save/update git token** | P0 | `POST /api/v1/integrations` — validates PAT against provider API, encrypts with AES-256-CBC (matching frontend key), upserts into `integrations` table. `GET` lists, `DELETE /{provider}` removes. |
+| B2 | ✅ **List user repos** | P0 | `GET /api/v1/integrations/{provider}/repos` — decrypts stored token, calls GitHub/GitLab API, returns repos list. Self-hosted GitLab URL encoded in scopes field. |
+| B3 | ✅ **Auto PR creation** | P0 | `POST /api/v1/integrations/{provider}/pr` — opens GitHub PR or GitLab MR using stored PAT. Frontend calls this after agent pushes a branch. Returns PR URL. |
+| B4 | **Session resume** | P1 | Reconnect WebSocket to an existing session after browser refresh. Session state (messages, files) already in DB — just re-attach. Currently a refresh loses the session. |
+| B5 | **Token-by-token streaming** | P1 | Stream agent output as it's generated, not in batches. User sees agent "thinking" in real-time. |
+| B6 | **Remove org tables from DB** | P1 | Run `prisma db push` to drop `organizations` and `memberships` tables (schema already updated). |
 
 ### Frontend
 
 | # | Task | Priority | Description |
 |---|------|----------|-------------|
-| F1 | ✅ **Chat + file explorer + terminal** | P0 | Done. 3-pane layout: file explorer (left) + chat (center) + terminal (right). Read-only. |
-| F2 | ✅ **Conversations list** | P0 | Done. Shows real chat history from backend. |
-| F3 | **Connect GitHub/GitLab page** | P0 | Settings page: "Connect GitHub" and "Connect GitLab" buttons. Shows connected account name/avatar. Disconnect button. OAuth redirect flow. |
-| F4 | **Repo picker in new session flow** | P0 | When starting a new session, user picks a repo from their connected GitHub/GitLab account (dropdown list from B3). Pre-fills repoUrl + gitToken. |
-| F5 | **Stop agent button** | P1 | Button in chat to stop the agent mid-task. Calls `DELETE /api/v1/sessions/{id}`. |
-| F6 | **PR link notification** | P1 | When agent creates a PR, show a banner in chat: "PR opened → [link]". Also update the conversation card in the list. |
+| F1 | ✅ **Chat + file explorer + terminal** | P0 | Done. |
+| F2 | ✅ **Conversations list** | P0 | Done. |
+| F3 | **Git token settings page** | P0 | Settings page with two fields: "GitHub Token" and "GitLab Token". User pastes PAT, hits Save. Shows masked token + connected username if valid. Clear button to remove. Same UX as OpenHands settings. |
+| F4 | **Repo picker in new session flow** | P0 | When starting a new session, user types or picks a repo URL. If a token is saved, repos are listed in a dropdown (from B2). Pre-fills repoUrl + passes token to agent. |
+| F5 | **Inline agent events in chat** | P0 | Render agent WebSocket events as structured chat messages: thought bubbles, command blocks with output, file edit diffs (unified diff format), status updates. This is the core of the OpenHands-like UX. |
+| F6 | **Stop agent button** | P1 | Button in chat to stop the agent mid-task. |
+| F7 | **PR link in chat** | P1 | When agent creates a PR, a card appears in chat with the PR link, branch name, and title. |
 
 ---
 
@@ -138,16 +199,16 @@ User → Settings → Connect Notion (OAuth)
 ## Build Order
 
 ```
-Now:     B1 + B2 + B3        → GitHub + GitLab OAuth, repo listing
-         F3 + F4              → Connect page + repo picker in new session flow
-Next:    B4 + F6              → Auto PR creation + PR link in chat
-Then:    B5 + B6 + F5         → Session resume + streaming + stop button
-         B7                   → Remove org logic from DB/auth
+Done:    B1 + B2 + B3        ✅ Save GitHub/GitLab PAT + repo listing + auto PR
+Now:     F3 + F4              → Token settings page + repo picker in new session flow
+Then:    B4 + B5 + F5 + F6   → Session resume + streaming + inline events + stop button
+         B6                   → Run prisma db push (drop org tables)
+         F7                   → PR link card in chat
 Later:   Phase 2 (Notion)     → N1→N6, NF1→NF4
 Last:    Phase 3 (Polish)      → Rate limiting, cost tracking, cleanup
 ```
 
-After "Now + Next" you have the complete working cycle:
+After "Now" (F3 + F4) you have the complete working cycle:
 - User connects GitHub → picks repo → describes task in chat
 - Agent clones repo, writes code, commits, pushes
 - PR opened automatically — user gets the link
@@ -159,9 +220,9 @@ After "Now + Next" you have the complete working cycle:
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  GitHub / GitLab              Notion (Phase 2)                   │
-│  OAuth · Repos · PRs          Databases · Tasks · Write-back    │
+│  PAT · Repos · PRs            Databases · Tasks · Write-back    │
 └────────────────┬──────────────────────────┬─────────────────────┘
-                 │ OAuth + API              │ OAuth + API
+                 │ PAT + API                │ OAuth + API
 ┌────────────────▼──────────────────────────▼─────────────────────┐
 │  Browser                                                         │
 │ ┌─────────────────┬────────────────────┬──────────────────────┐ │

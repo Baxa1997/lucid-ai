@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import asyncio
 from typing import Any
 
@@ -39,9 +40,12 @@ async def read_file(
 
     if isinstance(workspace, str):
         # Local workspace — read from filesystem
+        workspace_norm = os.path.normpath(workspace)
         full_path = os.path.normpath(os.path.join(workspace, path.lstrip("/")))
-        # Prevent path traversal: resolved path must stay inside workspace
-        if not full_path.startswith(os.path.normpath(workspace)):
+        # Require the resolved path to equal the workspace root OR be a proper
+        # sub-path. Plain startswith() is not sufficient: /workspace/abc would
+        # pass the check for workspace /workspace/abcdef.
+        if not (full_path == workspace_norm or full_path.startswith(workspace_norm + os.sep)):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Path traversal not allowed.",
@@ -60,10 +64,11 @@ async def read_file(
                 detail=f"Failed to read file: {exc}",
             )
     elif session.container_id:
-        # Docker workspace — exec cat inside container
-        safe_path = path.replace('"', '\\"')
+        # Docker workspace — exec cat inside container.
+        # shlex.quote() wraps the path in single quotes, preventing $() and
+        # variable expansion that would occur inside double-quoted strings.
         exit_code, content = await docker_manager.exec_command(
-            session_id, f'cat "{safe_path}"',
+            session_id, f'cat {shlex.quote(path)}',
         )
         if exit_code != 0:
             raise HTTPException(
@@ -93,13 +98,17 @@ async def list_files(
 # ── Shared helpers ───────────────────────────────────────────
 
 async def _get_session_for_user(session_id: str, user_id: str):
-    """Get session, verifying ownership."""
-    if not await store.contains(session_id):
+    """Get session and verify ownership.
+
+    Uses get_or_none() — a single lock acquisition — instead of the
+    two-step contains() + get() that has a TOCTOU window between them.
+    """
+    session = await store.get_or_none(session_id)
+    if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session {session_id} not found.",
         )
-    session = await store.get(session_id)
     if session.user_id != user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -158,7 +167,11 @@ def _build_local_file_tree(root_dir: str) -> list[dict]:
 
 
 async def _build_docker_file_tree(session_id: str) -> list[dict]:
-    """Build a file tree by running `find` inside the Docker container."""
+    """Build a file tree by running `find` inside the Docker container.
+
+    Uses a single find call with -printf '%y\\t%p\\n' to get both the
+    entry type (d/f) and path in one Docker exec round-trip.
+    """
     root = settings.WORKSPACE_MOUNT_PATH
 
     exclude = (
@@ -170,55 +183,43 @@ async def _build_docker_file_tree(session_id: str) -> list[dict]:
         "-name venv -prune -o "
     )
 
-    # Get all paths
+    # Single call: output "<type>\t<path>" per entry (GNU find, available on Debian/Ubuntu images)
     exit_code, raw_output = await docker_manager.exec_command(
         session_id,
-        f"find {root} {exclude}-print 2>/dev/null | sort",
+        f"find {root} {exclude}-printf '%y\\t%p\\n' 2>/dev/null | sort -t'\\t' -k2",
     )
     if exit_code != 0:
         return []
 
-    lines = [l.strip() for l in raw_output.strip().split("\n") if l.strip()]
-    lines = [l for l in lines if l and l != root]
+    dir_set: set[str] = set()
+    lines: list[str] = []
+
+    for raw_line in raw_output.splitlines():
+        raw_line = raw_line.strip()
+        if not raw_line or "\t" not in raw_line:
+            continue
+        entry_type, entry_path = raw_line.split("\t", 1)
+        if entry_path == root:
+            continue
+        rel = entry_path[len(root):].lstrip("/") if entry_path.startswith(root) else entry_path.lstrip("/")
+        if not rel:
+            continue
+        lines.append(rel)
+        if entry_type == "d":
+            dir_set.add(rel)
 
     if not lines:
         return []
 
-    # Get directories
-    dir_exit, dir_output = await docker_manager.exec_command(
-        session_id,
-        f"find {root} {exclude}-type d -print 2>/dev/null",
-    )
-    dir_set = set()
-    if dir_exit == 0:
-        for d in dir_output.strip().split("\n"):
-            d = d.strip()
-            if d.startswith(root):
-                dir_set.add(d[len(root):].lstrip("/"))
-            elif d:
-                dir_set.add(d.lstrip("/"))
-
-    # Build tree from flat paths
+    # Build tree from flat relative paths
     tree_root: dict[str, Any] = {"children": {}}
 
-    for line in lines:
-        if line.startswith(root):
-            rel = line[len(root):].lstrip("/")
-        else:
-            rel = line.lstrip("/")
-
-        if not rel:
-            continue
-
+    for rel in lines:
         parts = rel.split("/")
         current = tree_root
-
         for part in parts:
             if part not in current["children"]:
-                current["children"][part] = {
-                    "name": part,
-                    "children": {},
-                }
+                current["children"][part] = {"name": part, "children": {}}
             current = current["children"][part]
 
     def convert(node: dict, parent_path: str = "") -> list[dict]:
@@ -226,7 +227,6 @@ async def _build_docker_file_tree(session_id: str) -> list[dict]:
         for name, child in sorted(node["children"].items()):
             rel_path = f"{parent_path}/{name}" if parent_path else name
             full_path = f"{root}/{rel_path}"
-
             if child["children"] or rel_path in dir_set:
                 result_list.append({
                     "name": name,

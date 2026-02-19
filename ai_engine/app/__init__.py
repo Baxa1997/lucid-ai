@@ -13,7 +13,7 @@ from app.sdk import OPENHANDS_AVAILABLE, import_error
 from app.services.sessions import store, destroy_session
 from app.services.docker_workspace import docker_manager
 from app.database import dispose_engine
-from app.routers import health, sessions, ws, chat, files
+from app.routers import health, sessions, ws, chat, files, integrations
 
 
 @asynccontextmanager
@@ -76,6 +76,7 @@ def create_app() -> FastAPI:
     application.include_router(ws.router)
     application.include_router(chat.router)
     application.include_router(files.router)
+    application.include_router(integrations.router)
 
     return application
 

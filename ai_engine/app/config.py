@@ -75,6 +75,10 @@ class Settings:
     SANDBOX_CPU_LIMIT: float = float(os.getenv("SANDBOX_CPU_LIMIT", "1.0"))
     DOCKER_NETWORK: str = os.getenv("DOCKER_NETWORK", "")
 
+    # Encryption key for git tokens — must match frontend ENCRYPTION_KEY.
+    # The raw value is SHA-256 hashed to produce a 32-byte AES-256 key.
+    ENCRYPTION_KEY: str = os.getenv("ENCRYPTION_KEY", "")
+
 settings = Settings()
 
 # Provider-specific model configs (LiteLLM naming convention)
