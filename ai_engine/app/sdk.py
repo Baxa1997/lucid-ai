@@ -9,7 +9,9 @@ Other modules import from ``app.sdk`` — never directly from
 
 from __future__ import annotations
 
-# ── Sentinels (set below) ───────────────────────────────────
+from app.config import logger
+
+# ── Sentinels ───────────────────────────────────────────────
 
 OPENHANDS_AVAILABLE: bool = False
 import_error: str | None = None
@@ -18,35 +20,29 @@ import_error: str | None = None
 
 LLM = None
 Agent = None
-Conversation = None
 Tool = None
-Workspace = None
-get_logger = None
+LocalWorkspace = None
+LocalConversation = None
 RemoteConversation = None
-ConversationStateUpdateEvent = None
-FileEditorTool = None
-TaskTrackerTool = None
-TerminalTool = None
 get_default_agent = None
+get_logger = None
 
 # ── Attempt import ──────────────────────────────────────────
 
 try:
-    from openhands.sdk import (                          # noqa: F811
+    from openhands.sdk import (          # noqa: F811
         LLM,
         Agent,
-        Conversation,
         Tool,
-        Workspace,
+        LocalWorkspace,
+        LocalConversation,
+        RemoteConversation,
         get_logger,
     )
-    from openhands.sdk.conversation import RemoteConversation   # noqa: F811
-    from openhands.sdk.event import ConversationStateUpdateEvent  # noqa: F811
-    from openhands.tools.file_editor import FileEditorTool      # noqa: F811
-    from openhands.tools.task_tracker import TaskTrackerTool    # noqa: F811
-    from openhands.tools.terminal import TerminalTool           # noqa: F811
-    from openhands.tools.preset.default import get_default_agent  # noqa: F811
+    from openhands.tools import get_default_agent  # noqa: F811
 
     OPENHANDS_AVAILABLE = True
+    logger.info("OpenHands SDK is available")
+
 except ImportError as exc:
     import_error = str(exc)

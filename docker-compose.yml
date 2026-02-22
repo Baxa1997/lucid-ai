@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   frontend:
     build: ./frontend
@@ -35,16 +33,17 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - lucid_user_workspaces:/app/storage
     environment:
+      - PYTHONPATH=.
       - SESSION_SECRET=6977c6e899b6846aee73922de6ac653ddf41e5074cb904816eb2d3c5f5cd9325
       - PORT=8000
       - DATABASE_URL=postgresql+asyncpg://lucid_user:lucid_password@db:5432/lucid_db
       - WORKSPACE_BASE_PATH=/app/storage
-      - LLM_MODEL=${LLM_MODEL:-anthropic/claude-3-5-sonnet-20241022}
+      - LLM_MODEL=${LLM_MODEL:-gemini/gemini-2.0-flash}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_BASE_URL=${LLM_BASE_URL}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-      - DEFAULT_MODEL_PROVIDER=${DEFAULT_MODEL_PROVIDER:-anthropic}
+      - DEFAULT_MODEL_PROVIDER=${DEFAULT_MODEL_PROVIDER:-google}
       - MAX_ITERATIONS=50
       - SANDBOX_IMAGE=nikolaik/python-nodejs:python3.11-nodejs20
       - SANDBOX_CONTAINER_PREFIX=lucid-sandbox-

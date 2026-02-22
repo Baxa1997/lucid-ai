@@ -52,7 +52,7 @@ class AgentSession:
         self.agent: Any = None
         self.llm: Any = None
 
-        # Docker container ID (if using Docker sandbox)
+        # Docker container ID (unused now, kept for compatibility)
         self.container_id: Optional[str] = None
 
         # Queue for streaming events to the WebSocket handler
@@ -62,13 +62,7 @@ class AgentSession:
 # ── In-memory session store ─────────────────────────────────
 
 class SessionStore:
-    """Thread-safe, in-memory session registry.
-
-    Every public method acquires the lock so callers never see
-    partially-mutated state.  Swap this class for a Redis-backed
-    implementation when you need persistence or multi-process
-    deployments.
-    """
+    """Thread-safe, in-memory session registry."""
 
     def __init__(self) -> None:
         self._sessions: dict[str, AgentSession] = {}
@@ -86,7 +80,6 @@ class SessionStore:
         return session
 
     async def get_or_none(self, session_id: str) -> AgentSession | None:
-        """Return the session or None — single lock acquisition avoids TOCTOU."""
         async with self._lock:
             return self._sessions.get(session_id)
 
@@ -107,7 +100,6 @@ class SessionStore:
             return len(self._sessions)
 
     async def snapshot_ids(self) -> list[str]:
-        """Return a snapshot of all session IDs (safe to iterate)."""
         async with self._lock:
             return list(self._sessions.keys())
 
@@ -133,12 +125,10 @@ async def create_session(
 ) -> AgentSession:
     """Create and register a fully-initialised agent session.
 
-    Supports three degradation modes:
-    1. Full mode (SDK + Docker): Per-session Docker containers
-    2. Local mode (SDK, no Docker): Local workspace directories
-    3. Mock mode (no SDK): Simulated agent responses
+    Two modes:
+    1. Real mode (SDK installed): LocalConversation with a local workspace dir
+    2. Mock mode (no SDK): Simulated agent responses
     """
-    from app.services.docker_workspace import docker_manager
     from app.events import format_sdk_event
 
     session_id = str(uuid.uuid4())
@@ -146,65 +136,39 @@ async def create_session(
 
     if not user_id:
         raise ValueError("create_session requires a non-empty user_id")
-    effective_user_id = user_id
 
-    # ── Mock path ────────────────────────────────────────
+    # ── Mock path ────────────────────────────────────────────
     if not sdk.OPENHANDS_AVAILABLE:
         session = AgentSession(
             session_id=session_id,
-            user_id=effective_user_id,
+            user_id=user_id,
             task=task,
             repo_url=repo_url,
         )
         await store.add(session)
         return session
 
-    # ── Real path ────────────────────────────────────────
+    # ── Real path ────────────────────────────────────────────
     llm = resolve_llm(provider, api_key)
+
+    # get_default_agent registers all tools before creating the agent
     agent = sdk.get_default_agent(llm=llm, cli_mode=True)
 
-    # Workspace — Docker sandbox (preferred) or local directory (fallback)
-    container_id = None
-    docker_available = await asyncio.to_thread(docker_manager.is_docker_available)
+    # Create local workspace directory
+    workspace_dir = os.path.join(settings.WORKSPACE_BASE_PATH, user_id, session_id)
+    os.makedirs(workspace_dir, exist_ok=True)
+    logger.info("Using LocalWorkspace at %s", workspace_dir)
 
-    if docker_available:
-        # Per-session Docker container
-        container_id = await docker_manager.create_workspace(
-            session_id=session_id,
-            user_id=effective_user_id,
-            repo_url=repo_url,
-            git_token=git_token,
-            branch=branch,
-            git_user_name=git_user_name,
-            git_user_email=git_user_email,
-        )
-        workspace = sdk.Workspace(container_id=container_id)
-        logger.info(
-            "Using DockerWorkspace — container %s for session %s",
-            container_id[:12], session_id,
-        )
-    else:
-        # Local fallback
-        workspace_dir = os.path.join(
-            settings.WORKSPACE_BASE_PATH, effective_user_id, session_id,
-        )
-        os.makedirs(workspace_dir, exist_ok=True)
-        workspace = workspace_dir
-        logger.info("Docker unavailable — using LocalWorkspace at %s", workspace_dir)
-
-    # Build session
     session = AgentSession(
         session_id=session_id,
-        user_id=effective_user_id,
+        user_id=user_id,
         task=task,
         repo_url=repo_url,
     )
     session.llm = llm
     session.agent = agent
-    session.workspace = workspace
-    session.container_id = container_id
+    session.workspace = workspace_dir
 
-    # Event callback → pushes into the async queue
     def on_event(event):
         try:
             event_data = format_sdk_event(event)
@@ -216,9 +180,9 @@ async def create_session(
         except Exception as exc:
             logger.error("Event callback error: %s", exc)
 
-    conversation = sdk.Conversation(
+    conversation = sdk.LocalConversation(
         agent=agent,
-        workspace=workspace,
+        workspace=workspace_dir,
         callbacks=[on_event],
     )
     session.conversation = conversation
@@ -230,8 +194,6 @@ async def create_session(
 
 async def destroy_session(session_id: str) -> None:
     """Stop and clean up an agent session."""
-    from app.services.docker_workspace import docker_manager
-
     session = await store.pop(session_id)
     if not session:
         return
@@ -246,10 +208,6 @@ async def destroy_session(session_id: str) -> None:
         except Exception as exc:
             logger.error("Error closing conversation: %s", exc)
 
-    # Clean up Docker container
-    if session.container_id:
-        await docker_manager.destroy_workspace(session_id)
-
-    # Clean up local workspace directory (if used)
+    # Clean up local workspace directory
     if isinstance(session.workspace, str) and os.path.isdir(session.workspace):
         shutil.rmtree(session.workspace, ignore_errors=True)

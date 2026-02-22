@@ -39,19 +39,6 @@ def format_sdk_event(event) -> Optional[dict]:
             content = str(getattr(event, attr))
             break
 
-    # Special-case: conversation state update
-    if (
-        sdk.OPENHANDS_AVAILABLE
-        and sdk.ConversationStateUpdateEvent
-        and isinstance(event, sdk.ConversationStateUpdateEvent)
-    ):
-        return {
-            "type": "agent_event",
-            "event": "state_update",
-            "content": content or str(event),
-            "timestamp": now_iso(),
-        }
-
     # Determine category from the class name
     if "Action" in event_type:
         event_category = "action"

@@ -34,51 +34,27 @@ async def read_file(
     user: AuthenticatedUser = Depends(get_current_user),
 ):
     """Read a file from the agent's workspace."""
-    session = await _get_session_for_user(session_id, user.user_id)
+    workspace = await _resolve_workspace(session_id, user.user_id)
 
-    workspace = session.workspace
-
-    if isinstance(workspace, str):
-        # Local workspace — read from filesystem
-        workspace_norm = os.path.normpath(workspace)
-        full_path = os.path.normpath(os.path.join(workspace, path.lstrip("/")))
-        # Require the resolved path to equal the workspace root OR be a proper
-        # sub-path. Plain startswith() is not sufficient: /workspace/abc would
-        # pass the check for workspace /workspace/abcdef.
-        if not (full_path == workspace_norm or full_path.startswith(workspace_norm + os.sep)):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Path traversal not allowed.",
-            )
-        if not os.path.isfile(full_path):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"File not found: {path}",
-            )
-        try:
-            with open(full_path, "r", errors="replace") as f:
-                content = f.read()
-        except Exception as exc:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to read file: {exc}",
-            )
-    elif session.container_id:
-        # Docker workspace — exec cat inside container.
-        # shlex.quote() wraps the path in single quotes, preventing $() and
-        # variable expansion that would occur inside double-quoted strings.
-        exit_code, content = await docker_manager.exec_command(
-            session_id, f'cat {shlex.quote(path)}',
-        )
-        if exit_code != 0:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"File not found or unreadable: {path}",
-            )
-    else:
+    workspace_norm = os.path.normpath(workspace)
+    full_path = os.path.normpath(os.path.join(workspace, path.lstrip("/")))
+    if not (full_path == workspace_norm or full_path.startswith(workspace_norm + os.sep)):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Session has no workspace.",
+            detail="Path traversal not allowed.",
+        )
+    if not os.path.isfile(full_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File not found: {path}",
+        )
+    try:
+        with open(full_path, "r", errors="replace") as f:
+            content = f.read()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to read file: {exc}",
         )
 
     return {"content": content}
@@ -90,19 +66,42 @@ async def list_files(
     user: AuthenticatedUser = Depends(get_current_user),
 ):
     """List all files in the agent's workspace as a recursive tree."""
-    session = await _get_session_for_user(session_id, user.user_id)
-    tree = await build_file_tree(session)
+    workspace = await _resolve_workspace(session_id, user.user_id)
+    tree = _build_local_file_tree(workspace)
     return {"tree": tree}
 
 
 # ── Shared helpers ───────────────────────────────────────────
 
-async def _get_session_for_user(session_id: str, user_id: str):
-    """Get session and verify ownership.
+async def _resolve_workspace(session_id: str, user_id: str) -> str:
+    """Return the workspace directory for a session.
 
-    Uses get_or_none() — a single lock acquisition — instead of the
-    two-step contains() + get() that has a TOCTOU window between them.
+    First checks the live session store. If the session is gone (completed/
+    destroyed), falls back to constructing the expected on-disk path so that
+    file reads still work after the WebSocket closes.
     """
+    session = await store.get_or_none(session_id)
+    if session is not None:
+        if session.user_id != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to access this session.",
+            )
+        if isinstance(session.workspace, str):
+            return session.workspace
+
+    # Session gone — reconstruct path from disk convention
+    workspace_dir = os.path.join(settings.WORKSPACE_BASE_PATH, user_id, session_id)
+    if not os.path.isdir(workspace_dir):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {session_id} not found.",
+        )
+    return workspace_dir
+
+
+# Kept for backwards compatibility (used by events.py)
+async def _get_session_for_user(session_id: str, user_id: str):
     session = await store.get_or_none(session_id)
     if session is None:
         raise HTTPException(

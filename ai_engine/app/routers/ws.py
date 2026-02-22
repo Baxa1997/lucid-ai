@@ -272,17 +272,23 @@ async def _run_conversation_with_timeout(
             asyncio.to_thread(session.conversation.run),
             timeout=CONVERSATION_TIMEOUT_SECONDS,
         )
-        await websocket.send_json({
-            "type": "status",
-            "status": "completed",
-            "message": "Agent task completed.",
-        })
+        try:
+            await websocket.send_json({
+                "type": "status",
+                "status": "completed",
+                "message": "Agent task completed.",
+            })
+        except (RuntimeError, Exception):
+            pass  # Client already disconnected — normal race condition
     except asyncio.TimeoutError:
         logger.warning("Session %s timed out after %ds", session.session_id, CONVERSATION_TIMEOUT_SECONDS)
-        await websocket.send_json({
-            "type": "error",
-            "message": f"Agent timed out after {CONVERSATION_TIMEOUT_SECONDS}s.",
-        })
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "message": f"Agent timed out after {CONVERSATION_TIMEOUT_SECONDS}s.",
+            })
+        except (RuntimeError, Exception):
+            pass  # Client already disconnected
 
 
 # ── Mock agent loop ──────────────────────────────────────────
