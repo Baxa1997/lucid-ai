@@ -32,8 +32,8 @@ Copy-paste this block into your terminal once. All tests below use these variabl
 
 ```bash
 BASE=http://localhost:8000
-USER_A="test-user-alice"
-USER_B="test-user-bob"
+USER_A="00000000-0000-0000-0000-000000000001"
+USER_B="00000000-0000-0000-0000-000000000002"
 INTERNAL_KEY="lucid_internal_k8s_2f9a7e3c1d4b6e8a0f2c5d7e9b1a3c5d"
 
 # Replace with a real GitHub/GitLab PAT for integration tests (Test 13)

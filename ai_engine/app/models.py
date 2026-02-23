@@ -1,8 +1,8 @@
 """SQLAlchemy models for chat persistence.
 
-The ``User`` model is a read-only reference to the Prisma-managed ``users``
-table — Alembic migrations will NOT touch it.  Only ``ChatSession`` and
-``ChatMessage`` are owned by the ai_engine.
+Previously, the ``User`` model was a read-only reference to an external
+table. Now, the ai_engine owns the ``users`` table as well as
+``ChatSession`` and ``ChatMessage``. All IDs are primary keys of type UUID.
 """
 
 import uuid
@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     func,
 )
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -27,12 +28,12 @@ def _uuid() -> str:
 
 
 class User(Base):
-    """Read-only mirror of Prisma's ``users`` table (for FK relationships)."""
+    """The ``users`` table is now managed by the ai_engine."""
 
     __tablename__ = "users"
 
-    id = Column(String, primary_key=True)
-    email = Column(String, unique=True)
+    id = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    email = Column(String, unique=True, nullable=False)
     name = Column(String, nullable=True)
 
     chat_sessions = relationship("ChatSession", back_populates="user", passive_deletes=True)
@@ -41,8 +42,8 @@ class User(Base):
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
 
-    id = Column(String, primary_key=True, default=_uuid)
-    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    id = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    user_id = Column(UUID(as_uuid=False), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     agent_session_id = Column(String, index=True)
     project_id = Column(String, nullable=True)
     title = Column(String(255), nullable=True)
@@ -64,8 +65,8 @@ class ChatSession(Base):
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
 
-    id = Column(String, primary_key=True, default=_uuid)
-    session_id = Column(String, ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False)
+    id = Column(UUID(as_uuid=False), primary_key=True, default=_uuid)
+    session_id = Column(UUID(as_uuid=False), ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False)
     role = Column(String(20), nullable=False)      # "user" | "assistant" | "system"
     content = Column(Text, nullable=False)
     event_type = Column(String(100), nullable=True)  # e.g. "CmdRunAction"

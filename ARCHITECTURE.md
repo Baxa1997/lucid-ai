@@ -164,7 +164,7 @@ Create a new agent session.
 ```bash
 curl -X POST http://localhost:8000/api/v1/sessions \
   -H "Content-Type: application/json" \
-  -H "X-User-ID: test-user-123" \
+  -H "X-User-ID: 00000000-0000-0000-0000-000000000001" \
   -d '{
     "task": "Create a REST API with Express.js",
     "repoUrl": "https://github.com/user/repo",
@@ -206,7 +206,7 @@ Without OpenHands SDK: `"status": "mock"`.
 List the authenticated user's active (in-memory) agent sessions.
 
 ```bash
-curl -H "X-User-ID: test-user-123" http://localhost:8000/api/v1/sessions
+curl -H "X-User-ID: 00000000-0000-0000-0000-000000000001" http://localhost:8000/api/v1/sessions
 ```
 
 ```json
@@ -214,7 +214,7 @@ curl -H "X-User-ID: test-user-123" http://localhost:8000/api/v1/sessions
   "sessions": [
     {
       "sessionId": "a1b2c3d4-...",
-      "userId": "test-user-123",
+      "userId": "00000000-0000-0000-0000-000000000001",
       "task": "Create a REST API with Express.js",
       "isAlive": true,
       "createdAt": "2026-02-17T10:30:00+00:00"
@@ -228,7 +228,7 @@ curl -H "X-User-ID: test-user-123" http://localhost:8000/api/v1/sessions
 Stop and destroy an agent session. Only the session owner can do this.
 
 ```bash
-curl -X DELETE -H "X-User-ID: test-user-123" \
+curl -X DELETE -H "X-User-ID: 00000000-0000-0000-0000-000000000001" \
   http://localhost:8000/api/v1/sessions/a1b2c3d4-...
 ```
 
@@ -253,7 +253,7 @@ All endpoints scoped to the authenticated user.
 Paginated list of chats, newest first.
 
 ```bash
-curl -H "X-User-ID: test-user-123" \
+curl -H "X-User-ID: 00000000-0000-0000-0000-000000000001" \
   "http://localhost:8000/api/v1/chats?limit=10&offset=0"
 ```
 
@@ -284,7 +284,7 @@ curl -H "X-User-ID: test-user-123" \
 Get a chat with all messages.
 
 ```bash
-curl -H "X-User-ID: test-user-123" \
+curl -H "X-User-ID: 00000000-0000-0000-0000-000000000001" \
   http://localhost:8000/api/v1/chats/uuid-...
 ```
 
@@ -325,7 +325,7 @@ curl -H "X-User-ID: test-user-123" \
 Delete a chat and all its messages.
 
 ```bash
-curl -X DELETE -H "X-User-ID: test-user-123" \
+curl -X DELETE -H "X-User-ID: 00000000-0000-0000-0000-000000000001" \
   http://localhost:8000/api/v1/chats/uuid-...
 ```
 
@@ -340,7 +340,7 @@ Rename a chat.
 ```bash
 curl -X PATCH http://localhost:8000/api/v1/chats/uuid-... \
   -H "Content-Type: application/json" \
-  -H "X-User-ID: test-user-123" \
+  -H "X-User-ID: 00000000-0000-0000-0000-000000000001" \
   -d '{ "title": "Express API Project" }'
 ```
 
@@ -359,7 +359,7 @@ curl -X PATCH http://localhost:8000/api/v1/chats/uuid-... \
 List all files in the agent's workspace as a recursive tree.
 
 ```bash
-curl -H "X-User-ID: test-user-123" \
+curl -H "X-User-ID: 00000000-0000-0000-0000-000000000001" \
   "http://localhost:8000/api/v1/files/list?session_id=a1b2c3d4-..."
 ```
 
@@ -384,7 +384,7 @@ curl -H "X-User-ID: test-user-123" \
 Read a file from the agent's workspace.
 
 ```bash
-curl -H "X-User-ID: test-user-123" \
+curl -H "X-User-ID: 00000000-0000-0000-0000-000000000001" \
   "http://localhost:8000/api/v1/files/read?session_id=a1b2c3d4-...&path=/workspace/repo/package.json"
 ```
 
@@ -472,7 +472,23 @@ Client                              Server
   "exitCode": 0,
   "path": "optional",
   "thought": "optional (max 1000 chars)"
-}
+}"status": str
+    sessionId: str
+    message: str
+
+
+class SessionStatus(BaseModel):
+    sessionId: str
+    userId: str
+    task: str
+    isAlive: bool
+    createdAt: str
+    totalEvents: int
+
+
+class ErrorResponse(BaseModel):
+    status: str = "error"
+    message: str
 ```
 
 **Error:** `{ "type": "error", "message": "..." }`
@@ -522,12 +538,20 @@ alembic revision --autogenerate -m "description"  # new migration
 
 ### Tables (owned by ai_engine)
 
+**`users`** (now managed by ai_engine)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | uuid | PK, auto-generated |
+| `email` | varchar | unique, required |
+| `name` | varchar | nullable |
+
 **`chat_sessions`**
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `id` | varchar | PK, UUID |
-| `user_id` | varchar | FK → `users.id` |
+| `id` | uuid | PK, auto-generated |
+| `user_id` | uuid | FK → `users.id` |
 | `agent_session_id` | varchar | Runtime session UUID |
 | `project_id` | varchar | nullable |
 | `title` | varchar(255) | From first message |
@@ -540,15 +564,13 @@ alembic revision --autogenerate -m "description"  # new migration
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `id` | varchar | PK, UUID |
-| `session_id` | varchar | FK → `chat_sessions.id` |
+| `id` | uuid | PK, auto-generated |
+| `session_id` | uuid | FK → `chat_sessions.id` |
 | `role` | varchar(20) | `"user"`, `"assistant"`, `"system"` |
 | `content` | text | |
 | `event_type` | varchar(100) | e.g. `"ThinkAction"`, `"CmdRunAction"` |
 | `metadata_json` | text | Optional JSON |
 | `created_at` | timestamptz | |
-
-Prisma-managed tables (`users`, `accounts`, `organizations`, etc.) are excluded from Alembic migrations.
 
 ---
 
@@ -604,22 +626,22 @@ curl http://localhost:8000/
 curl http://localhost:8000/api/v1/chats
 
 # 4. List chats (empty)
-curl -H "X-User-ID: test-user" http://localhost:8000/api/v1/chats
+curl -H "X-User-ID: 00000000-0000-0000-0000-000000000001" http://localhost:8000/api/v1/chats
 
 # 5. Create agent session (mock mode)
 curl -X POST http://localhost:8000/api/v1/sessions \
   -H "Content-Type: application/json" \
-  -H "X-User-ID: test-user" \
+  -H "X-User-ID: 00000000-0000-0000-0000-000000000001" \
   -d '{ "task": "Build a hello world app" }'
 
 # 6. List active sessions
-curl -H "X-User-ID: test-user" http://localhost:8000/api/v1/sessions
+curl -H "X-User-ID: 00000000-0000-0000-0000-000000000001" http://localhost:8000/api/v1/sessions
 
 # 7. Stop session
-curl -X DELETE -H "X-User-ID: test-user" \
+curl -X DELETE -H "X-User-ID: 00000000-0000-0000-0000-000000000001" \
   http://localhost:8000/api/v1/sessions/<sessionId>
 
 # 8. WebSocket (use wscat)
-npx wscat -c "ws://localhost:8000/api/v1/ws"
-> { "task": "Hello agent", "userId": "test-user" }
+wscat -c "ws://localhost:8000/api/v1/ws?token=<JWT>"
+> { "task": "Hello agent" }
 ```
