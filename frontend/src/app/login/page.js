@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { Github, Zap, Eye, EyeOff } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-
+import ThemeModeSelector from '@/components/ThemeModeSelector';
 import { signIn } from 'next-auth/react';
 
 export default function LoginPage() {
@@ -45,7 +45,12 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#f0f4f9] flex flex-col items-center justify-center p-4 relative overflow-hidden">
+    <div className="min-h-screen bg-[#f0f4f9] dark:bg-slate-950 flex flex-col items-center justify-center p-4 relative overflow-hidden transition-colors duration-200">
+
+      {/* Theme Toggle */}
+      <div className="absolute top-5 right-5 z-20">
+        <ThemeModeSelector />
+      </div>
 
       {/* Main Container */}
       <div className="w-full max-w-[400px] flex flex-col items-center relative z-10 animate-slide-up">
@@ -57,22 +62,22 @@ export default function LoginPage() {
               <Zap className="w-7 h-7 text-white fill-current" />
             </div>
           </div>
-          <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">Welcome back</h1>
-          <p className="text-slate-500 text-sm mt-1.5 font-medium">Log in to your Lucid AI workspace</p>
+          <h1 className="text-2xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight">Welcome back</h1>
+          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1.5 font-medium">Log in to your Lucid AI workspace</p>
         </div>
 
         {/* Login Card */}
-        <div className="w-full bg-white rounded-2xl shadow-soft border border-slate-200 p-6 sm:p-8">
+        <div className="w-full bg-white dark:bg-slate-900 rounded-2xl shadow-soft border border-slate-200 dark:border-slate-800 p-6 sm:p-8">
 
           {/* Social Buttons */}
           <div className="flex gap-3 mb-6">
-            <button className="flex-1 flex items-center justify-center gap-2.5 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 text-slate-700 font-bold py-2.5 rounded-xl transition-all text-xs group active:scale-[0.98]">
-              <Github className="w-4 h-4 text-slate-900" />
+            <button className="flex-1 flex items-center justify-center gap-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-slate-300 dark:hover:border-slate-600 text-slate-700 dark:text-slate-300 font-bold py-2.5 rounded-xl transition-all text-xs group active:scale-[0.98]">
+              <Github className="w-4 h-4 text-slate-900 dark:text-slate-100" />
               <span>GitHub</span>
             </button>
             <button 
               onClick={handleGoogleLogin}
-              className="flex-1 flex items-center justify-center gap-2.5 bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 text-slate-700 font-bold py-2.5 rounded-xl transition-all text-xs group active:scale-[0.98]"
+              className="flex-1 flex items-center justify-center gap-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-slate-300 dark:hover:border-slate-600 text-slate-700 dark:text-slate-300 font-bold py-2.5 rounded-xl transition-all text-xs group active:scale-[0.98]"
             >
               <svg className="w-4 h-4" viewBox="0 0 24 24">
                 <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
@@ -86,36 +91,36 @@ export default function LoginPage() {
 
           <div className="relative mb-6">
             <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-slate-100"></div>
+              <div className="w-full border-t border-slate-100 dark:border-slate-800"></div>
             </div>
             <div className="relative flex justify-center text-[11px] uppercase tracking-wider font-bold">
-              <span className="bg-white px-3 text-slate-400">Or continue with Dev Account</span>
+              <span className="bg-white dark:bg-slate-900 px-3 text-slate-400 dark:text-slate-500">Or continue with Dev Account</span>
             </div>
           </div>
 
           {error && (
-            <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-100 text-red-600 text-xs font-medium text-center">
+            <div className="mb-4 p-3 rounded-lg bg-red-50 dark:bg-red-500/10 border border-red-100 dark:border-red-500/20 text-red-600 dark:text-red-400 text-xs font-medium text-center">
               {error}
             </div>
           )}
 
           <form className="space-y-4" onSubmit={handleSubmit}>
             <div>
-              <label htmlFor="email" className="block text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-1.5 pl-0.5">Email Address (Dev)</label>
+              <label htmlFor="email" className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-1.5 pl-0.5">Email Address (Dev)</label>
               <input
                 type="text"
                 id="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all text-sm font-medium"
+                className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all text-sm font-medium"
                 placeholder="dev@lucid.ai"
               />
-              <p className="text-[10px] text-slate-400 mt-1 pl-1">For dev, any email will create an account automatically.</p>
+              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 pl-1">For dev, any email will create an account automatically.</p>
             </div>
 
             <div>
               <div className="flex items-center justify-between mb-1.5 pl-0.5">
-                <label htmlFor="password" className="block text-[11px] font-bold text-slate-500 uppercase tracking-wide">Password (Optional)</label>
+                <label htmlFor="password" className="block text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Password (Optional)</label>
               </div>
               <div className="relative">
                 <input
@@ -123,13 +128,13 @@ export default function LoginPage() {
                   id="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full px-4 py-3 rounded-xl border border-slate-200 text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all text-sm font-medium pr-10"
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all text-sm font-medium pr-10"
                   placeholder="Any password"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
@@ -152,18 +157,18 @@ export default function LoginPage() {
             </button>
           </form>
 
-          <div className="mt-8 text-center pt-6 border-t border-slate-50">
-            <p className="text-xs text-slate-500">
-              New to Lucid AI? <Link href="#" className="font-bold text-blue-600 hover:text-blue-700 transition-colors">Create an account</Link>
+          <div className="mt-8 text-center pt-6 border-t border-slate-50 dark:border-slate-800">
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              New to Lucid AI? <Link href="#" className="font-bold text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 transition-colors">Create an account</Link>
             </p>
           </div>
         </div>
 
         {/* Bottom Footer Links */}
-        <div className="mt-8 flex gap-8 text-[11px] font-bold tracking-widest text-slate-400 uppercase">
-          <Link href="#" className="hover:text-slate-600 transition-colors">Privacy</Link>
-          <Link href="#" className="hover:text-slate-600 transition-colors">Terms</Link>
-          <Link href="#" className="hover:text-slate-600 transition-colors">Support</Link>
+        <div className="mt-8 flex gap-8 text-[11px] font-bold tracking-widest text-slate-400 dark:text-slate-500 uppercase">
+          <Link href="#" className="hover:text-slate-600 dark:hover:text-slate-300 transition-colors">Privacy</Link>
+          <Link href="#" className="hover:text-slate-600 dark:hover:text-slate-300 transition-colors">Terms</Link>
+          <Link href="#" className="hover:text-slate-600 dark:hover:text-slate-300 transition-colors">Support</Link>
         </div>
       </div>
     </div>

@@ -3,13 +3,14 @@
 import { 
   GitBranch, Plus, ChevronDown, Check, 
   Github, Rocket, Clock, Sparkles, MessageSquare, 
-  ArrowRight, Folder, Search, X, Moon,
+  ArrowRight, Folder, Search, X,
   CircleDot
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import useFlowStore from '@/store/useFlowStore';
+import ThemeModeSelector from '@/components/ThemeModeSelector';
 
 export default function EngineerDashboardPage() {
   const router = useRouter();
@@ -67,7 +68,12 @@ export default function EngineerDashboardPage() {
   };
 
   return (
-    <div className="h-full bg-[#f0f4f9] relative flex flex-col">
+    <div className="h-full bg-[#f0f4f9] dark:bg-slate-950 relative flex flex-col transition-colors duration-200">
+
+      {/* ── Theme Selector (top right) ── */}
+      <div className="absolute top-4 right-6 z-30">
+        <ThemeModeSelector />
+      </div>
 
       {/* ── Main Content ── */}
       <div className="max-w-3xl mx-auto px-8 py-8 flex-1 flex flex-col justify-center w-full">
@@ -87,14 +93,14 @@ export default function EngineerDashboardPage() {
         
         {/* Title */}
         <div className="text-center mb-2">
-          <h1 className="text-4xl sm:text-[44px] font-extrabold text-slate-900 tracking-tight leading-tight">
+          <h1 className="text-4xl sm:text-[44px] font-extrabold text-slate-900 dark:text-slate-100 tracking-tight leading-tight">
             Let&apos;s Start Building!
           </h1>
         </div>
 
         {/* Subtitle */}
         <div className="text-center mb-10">
-          <p className="text-[15px] text-slate-400 max-w-xl mx-auto leading-relaxed">
+          <p className="text-[15px] text-slate-400 dark:text-slate-500 max-w-xl mx-auto leading-relaxed">
             Select a repository to begin an autonomous engineering session or start a fresh environment from scratch.
           </p>
         </div>
@@ -103,7 +109,7 @@ export default function EngineerDashboardPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-14 relative z-30">
           
           {/* LEFT: Open Repository */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-soft relative z-30">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-soft relative z-30">
             <div className="flex items-center gap-3 mb-1">
               <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-100 flex items-center justify-center">
                 <GitBranch className="w-4 h-4 text-blue-600" />
@@ -339,7 +345,7 @@ export default function EngineerDashboardPage() {
           </div>
 
           {/* RIGHT: Start from Scratch */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-soft flex flex-col">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-soft flex flex-col">
             <div className="flex items-center gap-3 mb-3">
               <div className="w-8 h-8 rounded-lg bg-violet-50 border border-violet-100 flex items-center justify-center">
                 <Plus className="w-4 h-4 text-violet-600" />
@@ -375,10 +381,6 @@ export default function EngineerDashboardPage() {
         </div>
       </div>
 
-      {/* ── Dark mode toggle (bottom right) ── */}
-      <button className="fixed bottom-6 right-6 w-10 h-10 bg-white border border-slate-200 rounded-full flex items-center justify-center shadow-soft hover:shadow-md transition-all z-30">
-        <Moon className="w-4.5 h-4.5 text-slate-400" />
-      </button>
     </div>
   );
 }
