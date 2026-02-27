@@ -36,7 +36,7 @@ Every endpoint is behind `X-User-ID` + `X-Internal-Key` headers (or a JWT for We
 | `GET /api/v1/sessions` | ✅ Working | List active in-memory sessions for caller |
 | `DELETE /api/v1/sessions/{id}` | ✅ Working | Stop + clean up session and Docker container |
 | `WS /api/v1/ws` | ✅ Working | Real-time agent communication; JWT auth via `?token=` |
-| `GET /api/v1/chats` | ✅ Working | Paginated chat session list from PostgreSQL |
+| `GET /api/v1/chats` | ✅ Working | Paginated chat session list from Supabase |
 | `GET /api/v1/chats/{id}` | ✅ Working | Full chat with all messages |
 | `DELETE /api/v1/chats/{id}` | ✅ Working | Delete chat + cascade messages |
 | `PATCH /api/v1/chats/{id}` | ✅ Working | Rename chat |
@@ -127,7 +127,7 @@ No OAuth. User pastes a **Personal Access Token (PAT)** directly — copied from
 | B3 | ✅ **Auto PR creation** | P0 | `POST /api/v1/integrations/{provider}/pr` — opens GitHub PR or GitLab MR using stored PAT. Frontend calls this after agent pushes a branch. Returns PR URL. |
 | B4 | **Session resume** | P1 | Reconnect WebSocket to an existing session after browser refresh. Session state (messages, files) already in DB — just re-attach. Currently a refresh loses the session. |
 | B5 | **Token-by-token streaming** | P1 | Stream agent output as it's generated, not in batches. User sees agent "thinking" in real-time. |
-| B6 | **Remove org tables from DB** | P1 | Run `prisma db push` to drop `organizations` and `memberships` tables (schema already updated). |
+| B6 | **Remove org tables from DB** | P1 | Run `prisma db push` against Supabase to drop `organizations` and `memberships` tables (schema already updated). |
 
 ### Frontend
 
@@ -250,7 +250,9 @@ After "Now" (F3 + F4) you have the complete working cycle:
 │  │ npm, tests   │  │ pip, pytest  │  │ make, tests  │            │
 │  └─────────────┘  └─────────────┘  └─────────────┘            │
 ├─────────────────────────────────────────────────────────────────┤
-│  PostgreSQL                                                      │
-│  Users · GitTokens · ChatSessions · ChatMessages                │
+│  Supabase (hosted PostgreSQL)                                    │
+│  users · integrations · chat_sessions · chat_messages           │
+│  Frontend → Prisma (DATABASE_URL)                               │
+│  ai_engine → supabase-py (SUPABASE_URL + SUPABASE_SERVICE_KEY)  │
 └─────────────────────────────────────────────────────────────────┘
 ```

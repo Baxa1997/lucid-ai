@@ -18,6 +18,7 @@ from app.config import logger, settings, EVENT_BUFFER_MAX_SIZE
 from app import sdk
 from app.exceptions import SessionNotFoundError
 from app.services.llm import resolve_llm
+from app.services.docker_workspace import docker_manager
 
 
 # ── Session dataclass ───────────────────────────────────────
@@ -52,8 +53,8 @@ class AgentSession:
         self.agent: Any = None
         self.llm: Any = None
 
-        # Docker container ID (unused now, kept for compatibility)
-        self.container_id: Optional[str] = None
+        # Docker sandbox container ID — set when a container is created
+        self.container_id: str | None = None
 
         # Queue for streaming events to the WebSocket handler
         self.event_buffer: asyncio.Queue = asyncio.Queue(maxsize=EVENT_BUFFER_MAX_SIZE)
@@ -152,12 +153,11 @@ async def create_session(
     llm = resolve_llm(provider, api_key)
 
     # get_default_agent registers all tools before creating the agent
-    agent = sdk.get_default_agent(llm=llm, cli_mode=True)
+    agent = sdk.get_default_agent(llm=llm, cli_mode=True, max_iterations=settings.MAX_ITERATIONS)
 
-    # Create local workspace directory
+    # Create the workspace directory on the host
     workspace_dir = os.path.join(settings.WORKSPACE_BASE_PATH, user_id, session_id)
     os.makedirs(workspace_dir, exist_ok=True)
-    logger.info("Using LocalWorkspace at %s", workspace_dir)
 
     session = AgentSession(
         session_id=session_id,
@@ -168,6 +168,37 @@ async def create_session(
     session.llm = llm
     session.agent = agent
     session.workspace = workspace_dir
+
+    # Spin up an isolated Docker sandbox for this session.
+    # The workspace directory is bind-mounted into the container at
+    # WORKSPACE_MOUNT_PATH so the agent operates inside the sandbox.
+    # Falls back gracefully if Docker is unavailable.
+    try:
+        container_id = await asyncio.to_thread(
+            docker_manager.create_sandbox,
+            session_id=session_id,
+            user_id=user_id,
+            workspace_dir=workspace_dir,
+        )
+        session.container_id = container_id
+        logger.info("Sandbox container %s ready for session %s", container_id[:12], session_id)
+    except Exception as exc:
+        logger.warning(
+            "Docker sandbox unavailable — agent runs without container isolation: %s", exc
+        )
+
+    # Build the SDK workspace object (LocalWorkspace wraps the directory path).
+    # If the SDK also exports DockerWorkspace and a container was created,
+    # prefer DockerWorkspace for full in-container command execution.
+    if sdk.DockerWorkspace is not None and session.container_id:
+        workspace_obj = sdk.DockerWorkspace(
+            container_id=session.container_id,
+            path=settings.WORKSPACE_MOUNT_PATH,
+        )
+        logger.info("Using DockerWorkspace for session %s", session_id)
+    else:
+        workspace_obj = sdk.LocalWorkspace(path=workspace_dir)
+        logger.info("Using LocalWorkspace for session %s", session_id)
 
     def on_event(event):
         try:
@@ -182,7 +213,7 @@ async def create_session(
 
     conversation = sdk.LocalConversation(
         agent=agent,
-        workspace=workspace_dir,
+        workspace=workspace_obj,
         callbacks=[on_event],
     )
     session.conversation = conversation
@@ -207,6 +238,13 @@ async def destroy_session(session_id: str) -> None:
             logger.info("Conversation closed for session %s", session_id)
         except Exception as exc:
             logger.error("Error closing conversation: %s", exc)
+
+    # Destroy the Docker sandbox container
+    if session.container_id:
+        try:
+            await docker_manager.destroy_container(session.container_id, session_id)
+        except Exception as exc:
+            logger.error("Error destroying sandbox for session %s: %s", session_id, exc)
 
     # Clean up local workspace directory
     if isinstance(session.workspace, str) and os.path.isdir(session.workspace):

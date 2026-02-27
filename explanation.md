@@ -8,8 +8,8 @@ This document explains every concept, file, and design decision in the `ai_engin
 
 The AI Engine is a Python backend that powers the Lucid AI platform. When a user says "fix this bug", the AI Engine:
 
-1. Creates an isolated Docker container for that user
-2. Clones the user's GitHub/GitLab repo inside the container
+1. Creates an isolated local workspace directory for that user
+2. Clones the user's GitHub/GitLab repo into the workspace
 3. Runs an AI agent (powered by OpenHands SDK) that reads code, writes fixes, runs commands
 4. Streams everything back to the user's browser in real-time via WebSocket
 5. The agent can commit and push changes back to the repo
@@ -29,8 +29,7 @@ ai_engine/
 │   ├── auth.py                      # JWT validation + user identity
 │   ├── sdk.py                       # OpenHands SDK imports (with fallback)
 │   ├── schemas.py                   # Request/response data shapes
-│   ├── models.py                    # Database table definitions
-│   ├── database.py                  # Database connection
+│   ├── supabase_client.py           # Async Supabase client context managers
 │   ├── events.py                    # Event formatting + WebSocket streaming
 │   ├── exceptions.py                # Custom error types
 │   ├── routers/
@@ -38,14 +37,14 @@ ai_engine/
 │   │   ├── sessions.py              # CRUD for agent sessions
 │   │   ├── ws.py                    # WebSocket endpoint
 │   │   ├── chat.py                  # Chat history endpoints
+│   │   ├── integrations.py          # PAT management + repo listing + PR creation
 │   │   └── files.py                 # File explorer endpoints
 │   └── services/
 │       ├── sessions.py              # Session lifecycle logic
-│       ├── docker_workspace.py      # Docker container management
-│       ├── chat.py                  # Chat database operations
+│       ├── docker_workspace.py      # Docker daemon health check + orphan cleanup
+│       ├── chat.py                  # Chat database operations (Supabase)
+│       ├── integrations.py          # Token encryption + GitHub/GitLab API
 │       └── llm.py                   # LLM provider resolution
-├── alembic/                         # Database migrations
-├── alembic.ini                      # Alembic config
 └── requirements.txt                 # Python dependencies
 ```
 
@@ -60,41 +59,38 @@ A **session** is a single agent work unit. When a user says "fix the login bug",
 - **session_id** — A UUID that identifies this work unit
 - **user_id** — Who started it (for isolation)
 - **task** — What the agent should do ("fix the login bug")
-- **workspace** — Where the code lives (a Docker container or local directory)
+- **workspace** — A local directory path where the code lives (`storage/{user_id}/{session_id}/`)
 - **conversation** — The OpenHands SDK object that talks to the AI
 - **llm** — The language model powering the agent (Claude, Gemini, etc.)
 - **event_buffer** — A queue of events the agent produces (actions, observations)
-- **container_id** — The Docker container running this session's sandbox
 
-Sessions are stored **in memory** (not in the database). They exist only while the agent is actively running. When the user disconnects or stops the session, it's destroyed and the Docker container is removed.
+Sessions are stored **in memory** (not in the database). They exist only while the agent is actively running. When the user disconnects or stops the session, it's destroyed and the workspace directory is removed.
 
 **File:** `app/services/sessions.py`
 
 ### What is a "Chat"?
 
-A **chat** is the persistent record of a session. While sessions are temporary (in memory), chats are saved to PostgreSQL so users can review their history later.
+A **chat** is the persistent record of a session. While sessions are temporary (in memory), chats are saved to Supabase so users can review their history later.
 
 A chat has:
-- **ChatSession** — Metadata: who, when, what project, which model, is it still running
-- **ChatMessage** — Individual messages: user messages, agent actions, agent observations
+- **chat_sessions** row — Metadata: who, when, what project, which model, is it still running
+- **chat_messages** rows — Individual messages: user messages, agent actions, agent observations
 
-When a WebSocket session starts, a ChatSession is created in the database. As the agent works, its events are batched and saved as ChatMessages. When the session ends, the ChatSession is marked `is_active = false`.
+When a WebSocket session starts, a `chat_sessions` row is created in Supabase. As the agent works, its events are batched and saved as `chat_messages` rows. When the session ends, the row is marked `is_active = false`.
 
-**Files:** `app/models.py`, `app/services/chat.py`, `app/routers/chat.py`
+**Files:** `app/services/chat.py`, `app/routers/chat.py`, `supabase/migrations/001_initial_schema.sql`
 
 ### What is a "Workspace"?
 
 A **workspace** is the isolated environment where the agent's code lives. It's where the agent runs commands, edits files, and executes tests.
 
-There are three modes:
+There are two modes:
 
-1. **Docker workspace** (production) — A real Docker container. The agent has a full Linux environment with git, node, python. Each session gets its own container. Containers are isolated from each other — User A's container cannot see User B's files.
+1. **Sandboxed workspace** (SDK installed) — A directory at `storage/{user_id}/{session_id}/` plus an isolated Docker container with the directory bind-mounted at `/workspace`. The container enforces memory and CPU limits per session. The OpenHands SDK `LocalConversation` executes agent commands against this workspace. When the SDK exports `DockerWorkspace`, all shell/bash commands run through `container.exec_run()` for full process isolation; until then they run on the ai_engine host while still sharing the workspace directory with the container. Docker unavailability falls back gracefully to local-only execution.
 
-2. **Local workspace** (fallback) — A directory on the host machine at `storage/{user_id}/{session_id}/`. Used when Docker is unavailable.
+2. **Mock workspace** (no SDK) — When the OpenHands SDK isn't installed. The agent sends fake responses. Used for frontend development.
 
-3. **No workspace** (mock mode) — When the OpenHands SDK isn't installed. The agent sends fake responses. Used for frontend development.
-
-**File:** `app/services/docker_workspace.py`
+**File:** `app/services/sessions.py`
 
 ### What is the "OpenHands SDK"?
 
@@ -102,7 +98,7 @@ There are three modes:
 
 - **Agent** — The AI that reads code, thinks, and acts
 - **Conversation** — Manages the back-and-forth between user and agent
-- **Workspace** — Abstraction over where code lives (local, Docker, remote)
+- **LocalConversation** — Runs the agent against a local workspace directory
 - **Tools** — File editor, terminal, task tracker that the agent can use
 - **LLM** — Connection to language models (Claude, GPT, Gemini)
 
@@ -131,12 +127,12 @@ The `if __name__ == "__main__"` block lets you also run it with `python main.py`
 Creates the FastAPI app with all its configuration.
 
 **Lifespan** — The `lifespan` function runs code on startup and shutdown:
-- **Startup:** Checks if Docker daemon is accessible. Cleans up any orphaned containers from crashed previous runs. Logs warnings if SDK or LLM keys are missing.
-- **Shutdown:** Destroys all active sessions (stops agent, removes Docker containers). Destroys any remaining containers. Closes the database connection pool.
+- **Startup:** Checks if Docker daemon is accessible (for orphan cleanup). Cleans up any orphaned sandbox containers from crashed previous runs. Logs warnings if SDK or LLM keys are missing.
+- **Shutdown:** Destroys all active sessions (stops agent, removes workspace directories). Cleans up any tracked Docker containers.
 
 **CORS middleware** — Allows the frontend (different origin) to call the API. Origins are restricted via the `ALLOWED_ORIGINS` env var (default: `http://localhost:3000`). In docker-compose this is set to `http://localhost:3000,http://frontend:3000`. Change it to your production domain before deploying.
 
-**Router registration** — Attaches all endpoint groups: health, sessions, ws, chat, files.
+**Router registration** — Attaches all endpoint groups: health, sessions, ws, chat, files, integrations.
 
 ### `app/config.py` — Configuration
 
@@ -144,21 +140,24 @@ Every environment variable is read once at import time. The `Settings` class gro
 
 | Setting | What it does |
 |---------|-------------|
+| `SUPABASE_URL` | Supabase project URL (e.g. `https://xxxx.supabase.co`) |
+| `SUPABASE_ANON_KEY` | **Publishable key** (Dashboard → API) — used with user JWT for RLS-enforced calls. Formerly called the anon key. |
+| `SUPABASE_JWT_SECRET` | Validates incoming Supabase Auth JWTs (HS256) |
+| `SUPABASE_SERVICE_KEY` | **Secret key** (Dashboard → API) — bypasses RLS for server-to-server calls. Formerly called the service_role key. Never expose to clients. |
+| `ENCRYPTION_KEY` | AES-256-CBC key for encrypting git provider tokens |
 | `ANTHROPIC_API_KEY` | Key for Claude models |
 | `GOOGLE_API_KEY` | Key for Gemini models |
 | `LLM_API_KEY` | Generic fallback key |
 | `LLM_BASE_URL` | Custom LLM endpoint (for proxies) |
 | `DEFAULT_PROVIDER` | Which model to use by default (`"anthropic"` or `"google"`) |
 | `MAX_ITERATIONS` | How many steps the agent can take before stopping |
-| `SANDBOX_IMAGE` | Docker image for agent containers |
-| `WORKSPACE_MOUNT_PATH` | Path inside the container where code lives (`/workspace`) |
-| `SESSION_SECRET` | Secret for signing/validating JWT tokens (must match frontend) |
-| `DATABASE_URL` | PostgreSQL connection string |
-| `WORKSPACE_BASE_PATH` | Local fallback workspace root |
-| `SANDBOX_CONTAINER_PREFIX` | Prefix for Docker container names (`lucid-sandbox-`) |
-| `SANDBOX_MEMORY_LIMIT` | Max RAM per container (`2g`) |
-| `SANDBOX_CPU_LIMIT` | Max CPUs per container (`1.0`) |
-| `DOCKER_NETWORK` | Optional Docker network for containers |
+| `SANDBOX_IMAGE` | Docker image for agent sandboxes (used by OpenHands SDK) |
+| `WORKSPACE_MOUNT_PATH` | Path inside the sandbox where code lives (`/workspace`) |
+| `WORKSPACE_BASE_PATH` | Local workspace root on the host (`./storage`) |
+| `SANDBOX_CONTAINER_PREFIX` | Prefix for sandbox container names (`lucid-sandbox-`) |
+| `SANDBOX_MEMORY_LIMIT` | Max RAM per sandbox (`2g`) |
+| `SANDBOX_CPU_LIMIT` | Max CPUs per sandbox (`1.0`) |
+| `DOCKER_NETWORK` | Optional Docker network for sandboxes |
 | `INTERNAL_API_KEY` | Secret for server-to-server auth between frontend and ai_engine |
 | `ALLOWED_ORIGINS` | Comma-separated allowed CORS origins. Defaults to `http://localhost:3000`. Set to your frontend URL in production. |
 
@@ -170,15 +169,15 @@ Every environment variable is read once at import time. The `Settings` class gro
 
 Three auth methods, checked in this order:
 
-**1. JWT (Bearer token)** — The frontend signs a JWT with `SESSION_SECRET` containing `{ userId, projectId, sessionId }`. The AI engine validates the signature and extracts the user identity. This is the most secure method.
+**1. JWT (Bearer token)** — The frontend passes a Supabase Auth JWT (`Authorization: Bearer <token>`). The AI engine validates the signature with `SUPABASE_JWT_SECRET` (HS256) and extracts the user identity from the `sub` claim. The raw token is stored on `AuthenticatedUser.raw_jwt` so services can forward it to the Supabase client for RLS enforcement.
 
-**2. X-User-ID header** — For server-to-server calls (Next.js → ai_engine). The frontend sends the user ID in a header. To prevent spoofing, the AI engine also checks `X-Internal-Key` against `INTERNAL_API_KEY`. If the key doesn't match, the request is rejected. Without `INTERNAL_API_KEY` configured (dev mode), it's accepted with a warning.
+**2. X-User-ID header** — For server-to-server calls (Next.js → ai_engine). The frontend sends the user ID in a header. To prevent spoofing, the AI engine also checks `X-Internal-Key` against `INTERNAL_API_KEY` using constant-time comparison. `raw_jwt` is set to `None` on this path — services then use the admin (service_role) Supabase client which bypasses RLS while still filtering rows by `user_id` explicitly.
 
 **3. No auth → 401** — If neither method works, the request is rejected.
 
 **WebSocket auth** works differently: JWT comes via `?token=` query param or `token` field in the first WebSocket message. If neither provides a valid JWT, the connection is closed. There is no anonymous fallback — every WebSocket must be authenticated.
 
-**`AuthenticatedUser`** — A lightweight object holding `user_id`, `project_id`, `session_id`. Created by the auth functions and passed to endpoint handlers.
+**`AuthenticatedUser`** — A lightweight object holding `user_id`, `project_id`, `session_id`, and `raw_jwt`. The `raw_jwt` field drives which Supabase client is used in service calls (`str` → `managed_client` with RLS; `None` → `managed_admin_client` bypassing RLS).
 
 ### `app/sdk.py` — OpenHands SDK Facade
 
@@ -210,28 +209,15 @@ Pydantic models that define the shape of API requests and responses. FastAPI use
 | `model_provider` | No | `"anthropic"` or `"google"` |
 | `api_key` | No | User's own LLM API key |
 
-### `app/models.py` — Database Tables
+### `app/supabase_client.py` — Supabase Client Helpers
 
-SQLAlchemy ORM models that map to PostgreSQL tables.
+Three async context manager helpers for accessing Supabase. Each creates a fresh client, uses it, then closes it cleanly.
 
-**`User`** — Read-only reference to the `users` table (owned by Prisma/frontend). The AI engine never writes to this table. It only exists here so `ChatSession` can have a foreign key relationship.
+- **`managed_client(user_jwt)`** — Anon key + user JWT → RLS enforced via PostgREST auth header. Creates a fresh `AsyncClient` per call to avoid JWT cross-contamination between concurrent requests. Use for all user-facing DB operations.
+- **`managed_admin_client()`** — Service-role key → RLS bypassed. Use only for server-to-server calls (X-Internal-Key path) where no user JWT is available. Callers must filter by `user_id` explicitly.
+- **`db_client(user_jwt: str | None)`** — Dispatcher: yields `managed_client` when `user_jwt` is a non-empty string, `managed_admin_client` when it is `None`. Services import this instead of the two lower-level helpers.
 
-**`ChatSession`** — One row per agent session. Links to the user and stores metadata.
-
-**`ChatMessage`** — One row per message. `role` is either `"user"` (human), `"assistant"` (agent), or `"system"`. `event_type` records what kind of agent action it was (e.g., `"CmdRunAction"`, `"ThinkAction"`).
-
-Both tables have `ondelete="CASCADE"` — deleting a user deletes their chats, deleting a chat deletes its messages.
-
-### `app/database.py` — Database Connection
-
-Sets up the async database connection using SQLAlchemy's async engine.
-
-- **`engine`** — The connection pool. `pool_pre_ping=True` checks connections are alive before using them (handles DB restarts).
-- **`async_session`** — Factory that creates database sessions. Each session is a unit of work — you make queries, then commit or rollback.
-- **`get_db()`** — FastAPI dependency. Routers use `db: AsyncSession = Depends(get_db)` to get a session that auto-closes when the request ends.
-- **`dispose_engine()`** — Called on shutdown to close all connections cleanly.
-
-The URL is automatically converted from `postgresql://` to `postgresql+asyncpg://` so it works with the async driver.
+All tables (`users`, `chat_sessions`, `chat_messages`, `integrations`) are created by the migrations in `supabase/migrations/`.
 
 ### `app/events.py` — Event Formatting and Streaming
 
@@ -280,7 +266,7 @@ Routers catch these and convert them to appropriate HTTP status codes (400, 401,
 
 Two endpoints, no authentication required:
 
-- **`GET /`** — Returns full system status: service name, version, whether OpenHands SDK is available, whether Docker is accessible, how many active sessions and sandboxes exist, which LLM model is configured.
+- **`GET /`** — Returns full system status: service name, version, whether OpenHands SDK is available, whether Docker is accessible, how many active sessions exist, which LLM model is configured.
 
 - **`GET /health`** — Returns `{"status": "ok"}`. Used by load balancers and Docker health checks to verify the service is running.
 
@@ -288,11 +274,11 @@ Two endpoints, no authentication required:
 
 CRUD for agent sessions. All endpoints require authentication.
 
-- **`POST /api/v1/sessions`** — Creates a new agent session. Calls `create_session()` which either creates a Docker container (full mode), a local directory (local mode), or a mock object (mock mode). Returns the session ID.
+- **`POST /api/v1/sessions`** — Creates a new agent session. Calls `create_session()` which either creates a local workspace directory with an SDK `LocalConversation` (full mode) or a mock object (mock mode). Returns the session ID.
 
 - **`GET /api/v1/sessions`** — Lists the authenticated user's active sessions. Filters the in-memory store by `user_id` so users only see their own.
 
-- **`DELETE /api/v1/sessions/{id}`** — Stops a session. Checks that the session belongs to the requesting user (403 if not). Destroys the Docker container and removes from the store.
+- **`DELETE /api/v1/sessions/{id}`** — Stops a session. Checks that the session belongs to the requesting user (403 if not). Destroys the workspace directory and removes from the store.
 
 ### `app/routers/ws.py`
 
@@ -303,9 +289,9 @@ The WebSocket endpoint — the heart of the real-time agent experience.
 1. **Accept** — Browser opens WebSocket connection
 2. **Authenticate** — JWT from query param or handshake message. If neither is valid, connection is closed (no anonymous access).
 3. **Receive config** — Client sends JSON with `task`, `repoUrl`, `gitToken`, etc.
-4. **Create session** — Spins up Docker container, clones repo, configures git
-5. **Create chat** — Saves a ChatSession record in PostgreSQL
-6. **Start agent** — If SDK available: creates a Conversation, sends the task, starts streaming events. If not: runs mock loop with simulated events.
+4. **Create session** — Creates a local workspace directory, spins up a Docker sandbox container, and initialises the SDK agent
+5. **Create chat** — Saves a ChatSession record in Supabase
+6. **Start agent** — If SDK available: creates a `LocalConversation`, sends the task, starts streaming events. If not: runs mock loop with simulated events.
 7. **Follow-up loop** — Client can send additional messages, stop commands, etc.
 8. **Cleanup** — On disconnect or error: cancel streaming, destroy session, mark chat inactive
 
@@ -324,9 +310,9 @@ CRUD for chat history. All endpoints filter by the authenticated user's ID.
 
 File explorer endpoints for viewing the agent's workspace.
 
-- **`GET /api/v1/files/list?session_id=X`** — Returns the file tree as nested JSON. Works by running `find` inside the Docker container (for Docker sessions) or `os.listdir` (for local sessions). Excludes `.git`, `node_modules`, `__pycache__`, etc.
+- **`GET /api/v1/files/list?session_id=X`** — Returns the workspace file tree as nested JSON. Uses `os.listdir` to walk the local workspace directory. Excludes `.git`, `node_modules`, `__pycache__`, etc.
 
-- **`GET /api/v1/files/read?session_id=X&path=/workspace/file.py`** — Reads a file's content. Runs `cat` inside the Docker container or reads from the filesystem. Path traversal (`..`) is blocked.
+- **`GET /api/v1/files/read?session_id=X&path=/workspace/file.py`** — Reads a file's content from the local workspace. Path traversal (`..`) is blocked.
 
 **`should_refresh_file_tree()`** — Helper used by the event streamer. When the agent does something that might change the file tree (writes a file, runs `git clone`, installs packages), this returns `True` and the streamer sends an updated file tree to the frontend automatically.
 
@@ -340,49 +326,42 @@ The core session lifecycle.
 
 **`SessionStore`** — An in-memory dictionary protected by an asyncio lock. Every method acquires the lock so concurrent requests don't see partial state. Methods: `add`, `get`, `pop`, `contains`, `list_all`, `count`, `snapshot_ids`.
 
-Why in-memory and not in the database? Because sessions hold live Python objects (the OpenHands Conversation, Workspace, Agent). These can't be serialized to a database. The database stores the *history* (chats); memory stores the *live state* (sessions).
+Why in-memory and not in the database? Because sessions hold live Python objects (the OpenHands Conversation, Agent). These can't be serialized to a database. The database stores the *history* (chats); memory stores the *live state* (sessions).
 
 **`create_session()`** — The main factory function. Requires a non-empty `user_id` — raises `ValueError` immediately if missing. This prevents any edge case where sessions could be assigned to a shared `"anonymous"` owner (which would allow cross-user data access). Since all endpoints enforce authentication before calling `create_session()`, `user_id` is always a real value in practice.
 
-1. **Mock mode** — If SDK not installed: creates a bare AgentSession with no workspace. The WebSocket handler will run the mock loop.
-2. **Real mode with Docker** — If Docker available: creates a container via `docker_manager`, wraps it in an SDK Workspace, creates an Agent and Conversation with event callbacks.
-3. **Real mode without Docker** — Creates a local directory, uses it as workspace.
+1. **Mock mode** — If SDK not installed: creates a bare `AgentSession` with no workspace. The WebSocket handler will run the mock loop.
+2. **Real mode** — Creates a local directory at `storage/{user_id}/{session_id}/`, spins up an isolated Docker sandbox container with the workspace bind-mounted (falling back gracefully if Docker is unavailable), creates an `LLM` and `Agent` via the SDK, then creates a `LocalConversation` (backed by `DockerWorkspace` if the SDK exports it, otherwise `LocalWorkspace`) with event callbacks. The `container_id` is stored on the session for lifecycle management.
 
 The event callback (`on_event`) converts SDK events and pushes them into the session's `event_buffer` queue. The WebSocket streamer reads from this queue.
 
-**`destroy_session()`** — Removes the session from the store, closes the Conversation, destroys the Docker container, and cleans up local files.
+**`destroy_session()`** — Removes the session from the store, closes the Conversation, destroys the Docker sandbox container (if one was created), and removes the local workspace directory with `shutil.rmtree`.
 
 ### `app/services/docker_workspace.py`
 
-Manages Docker containers — one per session.
+Manages Docker daemon interactions for sandbox lifecycle.
 
 **`DockerSessionManager`** — Singleton that talks to the Docker daemon via the Python Docker SDK.
 
-**Container creation:**
-- Image: `SANDBOX_IMAGE` (default: `nikolaik/python-nodejs:python3.11-nodejs20`)
-- Command: `sleep infinity` (keeps the container running)
-- Memory limit: `SANDBOX_MEMORY_LIMIT` (default: 2GB)
-- CPU limit: `SANDBOX_CPU_LIMIT` (default: 1 core)
-- Labels: `lucid.managed=true`, `lucid.session_id=<UUID>` (for cleanup)
-- Working directory: `/workspace`
+- **`create_sandbox(session_id, user_id, workspace_dir)`** — Creates an isolated Docker container for one agent session. The container runs `sleep infinity` to stay alive so the agent can exec commands into it. The workspace directory is bind-mounted at `/workspace` (configurable via `WORKSPACE_MOUNT_PATH`). Labels `lucid.managed=true` and `lucid.session_id=<id>` are applied for lifecycle tracking and orphan cleanup. Memory and CPU limits are applied from `SANDBOX_MEMORY_LIMIT` and `SANDBOX_CPU_LIMIT`. Returns the container ID.
+- **`destroy_container(container_id, session_id)`** — Stops and removes a specific sandbox container when its session ends.
+- **`is_docker_available()`** — Called on startup to check if the Docker daemon is reachable.
+- **`cleanup_orphaned_containers()`** — On startup, finds all containers with `lucid.managed=true` label and removes them. Handles crashes from previous runs.
+- **`destroy_all()`** — Called on shutdown to destroy all tracked containers.
 
-**Git setup inside the container:**
-1. Installs git if not present
-2. Sets `git config --global user.name` and `user.email`
-3. Configures `credential.helper store` and writes `~/.git-credentials`
-4. Clones the repo with `--depth 1` (shallow clone for speed)
-
-The credential store means the agent can later run `git push` without being prompted for a password.
-
-**`exec_command()`** — Runs any command inside a session's container. Used by the file explorer, and could be used for future features like running tests.
-
-**`cleanup_orphaned_containers()`** — On startup, finds all containers with `lucid.managed=true` label and removes them. This handles the case where the server crashed without cleaning up.
+**DinD path resolution** — When the ai_engine runs inside Docker, the workspace directory exists at an internal path (`/app/storage/{user}/{session}`). The Docker daemon sits on the host and needs the *host-side* path for the bind mount. `HOST_WORKSPACE_PATH` maps the internal workspace root to the host-side root so the correct path is passed to `containers.run(volumes=...)`.
 
 ### `app/services/chat.py`
 
-Database CRUD for chat sessions and messages. Every method is a `@staticmethod` that takes a `db: AsyncSession` — this makes it easy to test and keeps the service stateless.
+Database CRUD for chat sessions and messages via Supabase. Every method is a `@staticmethod` that takes `user_jwt: str | None`. Internally it uses `async with db_client(user_jwt) as client:` — `str` triggers `managed_client` (RLS enforced via anon key + JWT), `None` triggers `managed_admin_client` (service-role key, RLS bypassed, filters by `user_id` explicitly).
 
-All queries include `user_id` in the WHERE clause so users can only access their own data.
+All queries include `user_id` in the `.eq()` filter so users can only access their own data.
+
+Key methods:
+- `create_session` / `list_sessions` / `get_session` / `delete_session` / `rename_session` — standard CRUD on `chat_sessions`
+- `add_message` — single insert into `chat_messages`
+- `add_messages(events, session_id)` — **batch insert** used by `_flush_batch` in `events.py`; sends all events in one Supabase call instead of N individual inserts
+- `deactivate_session(session_id, user_id, user_jwt)` — sets `is_active = false`; called by `ws.py` on WebSocket disconnect. `user_id` is included as an explicit filter on the admin path (where RLS is bypassed)
 
 ### `app/services/llm.py`
 
@@ -395,27 +374,219 @@ Resolves which language model to use.
 
 ---
 
-## Database & Migrations
+## Database
 
-### How the Two Databases Coexist
+### Supabase (hosted PostgreSQL)
 
-The frontend (Prisma) and ai_engine (SQLAlchemy + Alembic) share the **same PostgreSQL database**. But they own different tables:
+All data lives in a single Supabase project. All tables are created by the migrations in `supabase/migrations/`:
 
-- **Prisma owns:** `users`, `accounts`, `projects`, `integrations`, `agent_sessions`, `_prisma_migrations`
-- **Alembic owns:** `chat_sessions`, `chat_messages`
+| Migration | Tables created |
+|-----------|---------------|
+| `001_initial_schema.sql` | `users`, `chat_sessions`, `chat_messages` + RLS policies + `handle_new_user()` trigger |
+| `002_integrations.sql` | Creates `integrations` table + RLS policies |
 
-The `alembic/env.py` file has a `PRISMA_TABLES` set that tells Alembic to ignore all Prisma-managed tables. This prevents conflicts — `alembic revision --autogenerate` won't try to create or modify Prisma's tables.
+There are no Alembic migrations and no SQLAlchemy ORM. The ai_engine accesses Supabase through the `supabase-py` async client (PostgREST API). Schema changes are made by creating a new numbered migration file and running it in the Supabase SQL editor.
 
-### Migration Flow
+### Connection methods
 
-When the server starts (in Docker), it runs `alembic upgrade head` before starting uvicorn. This applies any pending migrations. The first migration (`001_add_chat_tables.py`) creates the `chat_sessions` and `chat_messages` tables with proper indexes and foreign keys.
+- **ai_engine → Supabase (user JWT path):** `managed_client(user_jwt)` — anon key + user JWT, RLS enforced. Env vars: `SUPABASE_URL`, `SUPABASE_ANON_KEY`.
+- **ai_engine → Supabase (server-to-server path):** `managed_admin_client()` — service_role key, RLS bypassed. Env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`.
 
-To create a new migration:
-```bash
-cd ai_engine
-alembic revision --autogenerate -m "description"
-alembic upgrade head
+### Column naming
+
+All tables use snake_case (e.g. `user_id`, `access_token_encrypted`, `created_at`). The `integrations` table previously used camelCase (legacy from Prisma) but was normalised to snake_case in `002_integrations.sql`.
+
+---
+
+## Supabase Auth
+
+### What Supabase Auth Does
+
+Supabase Auth is a hosted authentication service that sits in front of your PostgreSQL database. It handles:
+
+- **Identity** — creates and stores user accounts in a private `auth.users` table that your application code cannot write to directly
+- **OAuth** — manages the full OAuth handshake with Google, GitHub, and GitLab on your behalf
+- **Sessions** — issues signed JWTs that prove who a user is; these tokens are what every API call carries
+
+Your application never touches passwords or OAuth tokens. Supabase handles all of that and hands you back a JWT.
+
+---
+
+### OAuth Sign-In Flow (Step by Step)
+
 ```
+1. User clicks "Sign in with GitHub" in the browser
+        │
+        ▼
+2. Frontend redirects to Supabase Auth:
+   https://<project>.supabase.co/auth/v1/authorize?provider=github
+        │
+        ▼
+3. Supabase redirects the user to GitHub's OAuth page
+   (GitHub asks: "Allow Lucid AI to access your account?")
+        │
+        ▼
+4. User approves → GitHub redirects back to:
+   https://<project>.supabase.co/auth/v1/callback?code=<auth_code>
+        │
+        ▼
+5. Supabase exchanges the auth code for a GitHub access token
+   (server-to-server, never seen by your app or the browser)
+        │
+        ▼
+6. Supabase fetches the user's profile from GitHub API:
+   { login, name, email, avatar_url }
+        │
+        ▼
+7. Supabase creates or updates a row in auth.users:
+   { id: <UUID>, email: "...", raw_user_meta_data: { name, avatar_url, ... } }
+        │
+        ▼
+8. Database trigger fires: handle_new_user()
+   → Creates a row in public.users with name and avatar_url
+   → ON CONFLICT (id) DO NOTHING (safe to re-run on repeat sign-ins)
+        │
+        ▼
+9. Supabase issues a JWT and redirects the browser back to your app
+   (the JWT is stored by the Supabase JS client in localStorage / a cookie)
+```
+
+The same flow happens for Google and GitLab — only the provider's metadata keys differ slightly, which is why `handle_new_user()` uses `COALESCE`:
+- Google sends `full_name` (not `name`) and sometimes `picture` (not `avatar_url`)
+- GitHub and GitLab both send `name` and `avatar_url`
+
+---
+
+### The JWT
+
+Every signed-in user carries a JWT. Here is what it looks like decoded:
+
+```json
+{
+  "sub": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "email": "user@example.com",
+  "role": "authenticated",
+  "aud": "authenticated",
+  "iss": "https://<project>.supabase.co/auth/v1",
+  "iat": 1740000000,
+  "exp": 1740003600,
+  "app_metadata": { "provider": "github" },
+  "user_metadata": { "name": "Alice", "avatar_url": "https://..." }
+}
+```
+
+Key fields:
+
+| Field | What it is |
+|-------|-----------|
+| `sub` | The user's UUID — this is `auth.uid()` in RLS policies and `user_id` throughout the app |
+| `role` | Always `"authenticated"` for logged-in users |
+| `aud` | Always `"authenticated"` — Supabase uses a non-standard audience value |
+| `exp` | Token expires 1 hour after issue by default |
+| `app_metadata.provider` | Which OAuth provider was used (`github`, `google`, `gitlab`) |
+
+The JWT is signed with **HS256** using the `SUPABASE_JWT_SECRET` (found in Dashboard → Settings → API → JWT Settings). This same secret is set as `SUPABASE_JWT_SECRET` in the ai_engine so it can verify the signature without calling Supabase's servers.
+
+---
+
+### Token Refresh
+
+The Supabase JS client (in the frontend) automatically refreshes the JWT before it expires using a long-lived **refresh token** stored separately. The browser always has a valid access JWT as long as the session is active. The ai_engine never needs to refresh tokens — it only validates them.
+
+---
+
+### The `public.users` Profile Table
+
+Supabase Auth owns `auth.users` — your application cannot write to it. So the project has a separate `public.users` table for application-level profile data:
+
+```sql
+CREATE TABLE public.users (
+    id         UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    email      TEXT UNIQUE NOT NULL,
+    name       TEXT,
+    avatar_url TEXT,
+    ...
+);
+```
+
+`id` is a foreign key into `auth.users` — the same UUID that appears as `sub` in the JWT. The `ON DELETE CASCADE` means if the user deletes their account from Supabase Auth, the profile row is automatically removed too.
+
+The row is created automatically by the `handle_new_user()` trigger:
+
+```sql
+CREATE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO public.users (id, email, name, avatar_url)
+    VALUES (
+        NEW.id,
+        NEW.email,
+        COALESCE(NEW.raw_user_meta_data ->> 'full_name',
+                 NEW.raw_user_meta_data ->> 'name'),
+        COALESCE(NEW.raw_user_meta_data ->> 'avatar_url',
+                 NEW.raw_user_meta_data ->> 'picture')
+    )
+    ON CONFLICT (id) DO NOTHING;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public;
+
+CREATE TRIGGER on_auth_user_created
+    AFTER INSERT ON auth.users
+    FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+```
+
+`SECURITY DEFINER` means the function runs with the privileges of its creator (superuser level) rather than the caller — this is required because the trigger fires in the `auth` schema context but needs to write to `public.users`.
+
+`SET search_path = public` pins the schema so a malicious user cannot shadow `public.users` with a function in another schema.
+
+---
+
+### How RLS Uses the JWT
+
+Row Level Security policies use `auth.uid()` — a Supabase function that reads the `sub` claim out of the JWT that was attached to the database connection:
+
+```sql
+-- Only the owner can read their own chat sessions
+CREATE POLICY "sessions_select" ON chat_sessions FOR SELECT
+    USING (user_id = auth.uid());
+```
+
+`auth.uid()` returns `NULL` if there is no JWT attached (unauthenticated connection), causing all policy checks to fail and returning zero rows instead of an error. This makes RLS a silent, automatic data isolation layer.
+
+When the ai_engine calls Supabase with `managed_client(user_jwt)`, it sets the JWT on the PostgREST connection via:
+```python
+client.postgrest.auth(user_jwt)
+```
+PostgREST attaches this JWT to every SQL statement it sends, so `auth.uid()` resolves to the correct user UUID for every query.
+
+---
+
+### How the ai_engine Validates the JWT
+
+The ai_engine never calls Supabase Auth to validate a token. It validates locally:
+
+```python
+jwt.decode(
+    token,
+    settings.SUPABASE_JWT_SECRET,   # same secret Supabase used to sign it
+    algorithms=["HS256"],
+    options={"verify_aud": False},   # skip audience check (Supabase uses non-standard "authenticated")
+)
+```
+
+`verify_aud: False` is intentional — Supabase sets `aud: "authenticated"` which `python-jose` would reject by default (it expects a URL, not a plain string). Signature and expiry are still fully verified.
+
+The `sub` claim becomes `user_id` inside the ai_engine. This is the UUID that links the JWT to the `public.users` row and all of their data.
+
+---
+
+### What SUPABASE_ANON_KEY Does
+
+The Publishable key (formerly "anon key") is a **pre-signed JWT** with `role: "anon"`. When you attach a user JWT on top (via `client.postgrest.auth(user_jwt)`), PostgREST uses the user JWT for `auth.uid()` resolution while the Publishable key acts as the API credential. RLS policies then enforce data isolation per user.
+
+The Secret key (formerly "service_role key") is a **pre-signed JWT** with `role: "service_role"`. It bypasses all RLS policies entirely — which is why it's only used in `managed_admin_client()` for the X-Internal-Key (server-to-server) path where no user JWT is available, and callers must filter by `user_id` explicitly.
 
 ---
 
@@ -424,60 +595,49 @@ alembic upgrade head
 ### Authentication Chain
 
 ```
-Browser → Next.js (Google OAuth) → JWT signed with SESSION_SECRET
+Browser → Supabase Auth (Google / GitHub / GitLab OAuth) → Supabase JWT
                                           ↓
                     ┌─── REST: X-User-ID + X-Internal-Key headers
                     │         (Next.js → ai_engine server-to-server)
+                    │         raw_jwt = None → managed_admin_client (service_role)
                     │
-                    └─── WebSocket: ?token=JWT query parameter
+                    └─── WebSocket / Bearer: Authorization: Bearer <JWT>
                                     (browser → ai_engine direct)
+                                    raw_jwt = <token> → managed_client (anon key + JWT, RLS)
                                           ↓
-                              ai_engine validates JWT signature
+                              ai_engine validates JWT with SUPABASE_JWT_SECRET
                                           ↓
-                              AuthenticatedUser(user_id=...)
+                              AuthenticatedUser(user_id=..., raw_jwt=...)
                                           ↓
-                              All queries filtered by user_id
+                              All queries filtered by user_id (+ RLS via JWT)
 ```
 
 ### Data Isolation
 
 Every database query includes `WHERE user_id = <authenticated_user>`:
-- `ChatService.list_sessions(db, user.user_id, ...)`
-- `ChatService.get_session(db, chat_id, user.user_id)`
-- `ChatService.delete_session(db, session_id, user.user_id)`
+- `ChatService.list_sessions(user_jwt, user.user_id, ...)`
+- `ChatService.get_session(user_jwt, chat_id, user.user_id)`
+- `ChatService.delete_session(user_jwt, session_id, user.user_id)`
 
-Every in-memory operation checks ownership:
+On the JWT path, Supabase RLS policies provide a second layer of isolation — the database itself rejects any query that tries to access another user's rows.
+
+Every in-memory operation also checks ownership:
 - `list_sessions` filters: `if s.user_id == user.user_id`
 - `stop_session` checks: `if session.user_id != user.user_id: raise 403`
 - `read_file` checks: `if session.user_id != user_id: raise 403`
 
-### Container Isolation
-
-Each Docker container is a separate process namespace. Container A cannot:
-- Read Container B's files
-- See Container B's processes
-- Access Container B's network (unless on the same Docker network)
-
-Containers have resource limits (memory, CPU) to prevent one user from consuming all resources.
-
 ---
 
-## Three Degradation Modes
+## Two Operating Modes
 
-The system is designed to work in three configurations:
+The system is designed to work in two configurations:
 
-### Full Mode (Production)
+### Full Mode (SDK installed)
 - OpenHands SDK installed
-- Docker daemon accessible
-- Each session gets a real Docker container
-- Agent reads, writes, and executes code
+- Sessions create a local workspace directory (`storage/{user_id}/{session_id}/`) **and** spin up an isolated Docker sandbox container with the workspace bind-mounted at `/workspace`
+- Agent reads, writes, and executes code via `LocalConversation` (using `DockerWorkspace` when the SDK exports it, `LocalWorkspace` otherwise)
+- Docker unavailability is non-fatal: session falls back to local-only execution with a warning
 - Git push works
-
-### Local Mode (No Docker)
-- OpenHands SDK installed
-- Docker NOT accessible (e.g., no Docker on the machine)
-- Sessions use local directories (`storage/{user_id}/{session_id}/`)
-- Agent works but without container isolation
 
 ### Mock Mode (Development)
 - OpenHands SDK NOT installed
@@ -488,12 +648,12 @@ The system is designed to work in three configurations:
 The mode is determined automatically at runtime:
 ```python
 if not sdk.OPENHANDS_AVAILABLE:
-    # Mock mode
-elif docker_manager.is_docker_available():
-    # Full mode (Docker)
+    # Mock mode — bare session, WebSocket runs fake event loop
 else:
-    # Local mode
+    # Full mode — LocalConversation with local directory workspace
 ```
+
+Docker availability affects session creation: if Docker is unavailable, sessions fall back to local-only execution without a sandbox container, and a warning is logged. Mock mode is determined solely by SDK availability, not by Docker availability.
 
 ---
 
@@ -517,8 +677,8 @@ stream_events_to_ws() (events.py) — background asyncio task
     │
     └──→ accumulate in pending[] batch
               │
-              ├── every 20 events → _flush_batch() → PostgreSQL
-              └── every 2 seconds → _flush_batch() → PostgreSQL
+              ├── every 20 events → _flush_batch() → Supabase (batch insert)
+              └── every 2 seconds → _flush_batch() → Supabase (batch insert)
 ```
 
 The queue has a max size of 1000. If the agent produces events faster than the WebSocket can send them, new events are silently dropped (`put_nowait` + `QueueFull` catch). This prevents memory issues if the browser is slow.
@@ -529,23 +689,22 @@ The queue has a max size of 1000. If the agent produces events faster than the W
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│    frontend      │────→│    ai_engine     │────→│       db        │
-│   (Next.js)      │     │   (FastAPI)      │     │  (PostgreSQL)   │
-│   :3000          │     │   :8000          │     │   :5432         │
-└─────────────────┘     └────────┬─────────┘     └─────────────────┘
-                                 │
-                        Docker Socket Mount
-                        /var/run/docker.sock
-                                 │
-                    ┌────────────┼────────────┐
-                    ↓            ↓            ↓
-              ┌──────────┐ ┌──────────┐ ┌──────────┐
-              │ sandbox-a │ │ sandbox-b │ │ sandbox-c │
-              │ (user A)  │ │ (user B)  │ │ (user A)  │
-              └──────────┘ └──────────┘ └──────────┘
+│    frontend      │     │    ai_engine     │     │    Supabase      │
+│   (Next.js)      │     │   (FastAPI)      │     │  (hosted PG)    │
+│   :3000          │     │   :8000          │     │   supabase.co    │
+│                  │     │                  │     │                  │
+│                  │     │  supabase-py ────┼────→│  users           │
+│                  │     │  (SUPABASE_URL)  │     │  integrations    │
+└─────────────────┘     │                  │     │  chat_sessions   │
+                         │  supabase-py ────┼────→│  chat_messages   │
+                         └────────┬─────────┘     └─────────────────┘
+                                  │
+                         Docker Socket Mount
+                         /var/run/docker.sock
+                         (sandbox creation + cleanup)
 ```
 
-The ai_engine creates sandbox containers by talking to the Docker daemon through the mounted socket. Each sandbox runs independently with its own filesystem, processes, and resource limits.
+The Docker socket is mounted so the ai_engine can create per-session sandbox containers, clean up orphaned containers on startup, and check Docker health. There is no local `db` container — Postgres is hosted on Supabase.
 
 ---
 
@@ -553,19 +712,11 @@ The ai_engine creates sandbox containers by talking to the Docker daemon through
 
 ### Why in-memory sessions instead of database?
 
-Agent sessions hold live Python objects (Conversation, Workspace, Agent) that can't be serialized. The database stores the history; memory stores the running state. If the server restarts, active sessions are lost — but the chat history survives.
+Agent sessions hold live Python objects (Conversation, Agent) that can't be serialized. The database stores the history; memory stores the running state. If the server restarts, active sessions are lost — but the chat history survives.
 
 ### Why batch event writes?
 
 The agent can produce dozens of events per second. Writing each one individually would create too many database round-trips. Batching (20 events or 2 seconds) reduces DB load while keeping persistence reasonably up-to-date.
-
-### Why a separate Docker container per session?
-
-Isolation. If two users run agents simultaneously, they shouldn't be able to see each other's code or interfere with each other's processes. Docker provides OS-level isolation. Container A literally cannot access Container B's filesystem.
-
-### Why `sleep infinity` as the container command?
-
-The container needs to stay running so we can `exec` commands into it. `sleep infinity` is a lightweight way to keep a container alive without consuming CPU. The agent runs commands via `container.exec_run()`, not as the main container process.
 
 ### Why the SDK facade pattern?
 
@@ -573,11 +724,19 @@ The OpenHands SDK isn't on PyPI yet. By wrapping all imports in `app/sdk.py` wit
 
 ### Why two auth methods (JWT + X-User-ID)?
 
-JWT is the secure path for browser-to-backend communication. X-User-ID exists because the frontend's server-side API routes (Next.js) call the AI engine on behalf of the user — they already validated the user via NextAuth and just need to pass the identity along. The `INTERNAL_API_KEY` ensures only the real frontend can use this path.
+JWT is the secure path for browser-to-backend communication. X-User-ID exists because the frontend's server-side API routes (Next.js) call the AI engine on behalf of the user — they already validated the user via Supabase Auth and just need to pass the identity along. The `INTERNAL_API_KEY` ensures only the real frontend can use this path.
 
-### Why Alembic alongside Prisma?
+### Why two Supabase client modes (anon + service_role)?
 
-Both the frontend and AI engine need database access, but they're written in different languages (JavaScript/Prisma and Python/SQLAlchemy). Rather than force one ORM on both, each service manages its own tables with its own migration tool. The `include_object` filter in `alembic/env.py` prevents them from stepping on each other.
+The anon key + user JWT path enforces Row Level Security at the database level — Supabase itself rejects queries that access another user's rows. The service_role key bypasses RLS for server-to-server calls (X-Internal-Key path) where no user JWT is available. These calls enforce isolation explicitly with `user_id` filters instead.
+
+### Why supabase-py instead of SQLAlchemy?
+
+`supabase-py` uses PostgREST under the hood — a REST API over PostgreSQL — which means no connection pool to manage, no ORM migrations, and a simpler async interface. For the relatively simple CRUD operations the ai_engine needs (insert, select with filter, update, delete) the PostgREST query builder is cleaner than SQLAlchemy's async session management.
+
+### Why Supabase instead of a local PostgreSQL container?
+
+Supabase gives a persistent, hosted PostgreSQL instance with zero local Docker dependency. Developers don't need to manage a `db` container — they point `SUPABASE_URL` at the remote project and the stack works immediately. Supabase Auth also handles Google/GitHub/GitLab OAuth and JWT issuance out of the box.
 
 ---
 
@@ -589,7 +748,7 @@ The browser never talks to the ai_engine directly. All requests go through Next.
 
 The ai_engine uses server-to-server auth (`X-User-ID` + `X-Internal-Key`). These headers must come from the trusted Next.js server — if the browser sent them directly, any user could spoof them. Each proxy route:
 
-1. Verifies the user is logged in via NextAuth (returns 401 if not)
+1. Verifies the user is logged in via Supabase Auth (returns 401 if not)
 2. Adds `X-User-ID: <user's id>` and `X-Internal-Key: <shared secret>`
 3. Forwards the request to the ai_engine
 4. Returns the response to the browser
@@ -598,8 +757,8 @@ The ai_engine uses server-to-server auth (`X-User-ID` + `X-Internal-Key`). These
 
 | Route | Purpose |
 |-------|---------|
-| `GET /api/agent/token` | Issues a short-lived JWT (2h) signed with `SESSION_SECRET` for the current user. The workspace WebSocket uses this to authenticate. |
-| `POST /api/agent/start` | Creates a new agent session. Decrypts the git token from Prisma, forwards all fields to ai_engine `/api/v1/sessions`. |
+| `GET /api/agent/token` | Issues a short-lived JWT for the current user. The workspace WebSocket uses this to authenticate. |
+| `POST /api/agent/start` | Creates a new agent session. Decrypts the git token, forwards all fields to ai_engine `/api/v1/sessions`. |
 | `GET /api/chats` | Lists the user's chat history from ai_engine `/api/v1/chats`. Used by the conversations page. |
 | `GET /api/files/read` | Reads a file from the agent's workspace via ai_engine `/api/v1/files/read`. Used by the file viewer panel. |
 
@@ -610,9 +769,7 @@ The workspace page authenticates the WebSocket by fetching a token from the prox
 1. Page loads → `GET /api/agent/token` → receives a JWT
 2. JWT passed to `useAgentSession({ token })`
 3. Hook appends `?token=<JWT>` to the WebSocket URL
-4. ai_engine validates the JWT signature → extracts `userId` → authenticates the session
-
-The token has a 2-hour lifetime. The `SESSION_SECRET` is shared between Next.js (signs the JWT) and ai_engine (validates the JWT) via the same env var.
+4. ai_engine validates the JWT signature with `SUPABASE_JWT_SECRET` → extracts `userId` → authenticates the session
 
 ---
 

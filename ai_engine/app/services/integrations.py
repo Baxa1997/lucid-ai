@@ -11,17 +11,16 @@ from __future__ import annotations
 
 import hashlib
 import os
-import uuid
-from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding as crypto_padding
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import HTTPException
+from postgrest.exceptions import APIError
 
 from app.config import logger, settings
+from app.supabase_client import db_client
 
 
 # ── Encryption ───────────────────────────────────────────────────────────
@@ -66,145 +65,163 @@ def decrypt_token(encrypted_hex: str, iv_hex: str) -> str:
 
 
 # ── Database helpers ─────────────────────────────────────────────────────
-# The integrations table is owned by Prisma; we access it via raw SQL.
-# Prisma column names are camelCase in PostgreSQL → must be double-quoted.
-
-async def upsert_integration(
-    db: AsyncSession,
-    *,
-    user_id: str,
-    provider: str,          # "GITHUB" | "GITLAB"
-    token: str,
-    label: Optional[str] = None,
-    external_username: Optional[str] = None,
-    scopes: Optional[str] = None,
-) -> str:
-    """Encrypt and upsert an integration atomically. Returns the row id.
-
-    Uses INSERT ... ON CONFLICT DO UPDATE to avoid a SELECT+INSERT race
-    condition when two concurrent requests arrive for the same user+provider.
-    """
-    encrypted_hex, iv_hex = encrypt_token(token)
-    now = datetime.now(timezone.utc)
-    integration_id = str(uuid.uuid4())
-
-    result = await db.execute(
-        text("""
-            INSERT INTO integrations
-                (id, provider, label, "accessTokenEncrypted", iv,
-                 "externalUsername", scopes, "userId", "createdAt", "updatedAt")
-            VALUES
-                (:id, :prov, :label, :enc, :iv, :username, :scopes, :uid, :now, :now)
-            ON CONFLICT ("userId", provider) DO UPDATE SET
-                "accessTokenEncrypted" = EXCLUDED."accessTokenEncrypted",
-                iv                     = EXCLUDED.iv,
-                label                  = EXCLUDED.label,
-                "externalUsername"     = EXCLUDED."externalUsername",
-                scopes                 = EXCLUDED.scopes,
-                "updatedAt"            = EXCLUDED."updatedAt"
-            RETURNING id
-        """),
-        {
-            "id": integration_id, "prov": provider, "label": label,
-            "enc": encrypted_hex, "iv": iv_hex,
-            "username": external_username, "scopes": scopes,
-            "uid": user_id, "now": now,
-        },
-    )
-    row = result.fetchone()
-    await db.commit()
-    return row[0] if row else integration_id
-
 
 _GITLAB_URL_SEPARATOR = "||"
 
 
+async def upsert_integration(
+    *,
+    user_id: str,
+    provider: str,          # "GITHUB" | "GITLAB"
+    token: str,
+    user_jwt: str | None,
+    label: Optional[str] = None,
+    external_username: Optional[str] = None,
+    scopes: Optional[str] = None,
+) -> str:
+    """Encrypt and upsert an integration atomically. Returns the row id."""
+    encrypted_hex, iv_hex = encrypt_token(token)
+
+    try:
+        async with db_client(user_jwt) as client:
+            result = await (
+                client.table("integrations")
+                .upsert(
+                    {
+                        "user_id": user_id,
+                        "provider": provider,
+                        "label": label,
+                        "access_token_encrypted": encrypted_hex,
+                        "iv": iv_hex,
+                        "external_username": external_username,
+                        "scopes": scopes,
+                    },
+                    on_conflict="user_id,provider",
+                )
+                .execute()
+            )
+        if result.data:
+            return result.data[0].get("id", "")
+        return ""
+    except APIError as exc:
+        logger.error("Supabase error in upsert_integration: code=%s msg=%s", exc.code, exc.message)
+        raise HTTPException(status_code=500, detail="Database error") from exc
+    except Exception as exc:
+        logger.error("Unexpected error in upsert_integration: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
+
+
 async def get_integration(
-    db: AsyncSession,
     *,
     user_id: str,
     provider: str,
+    user_jwt: str | None,
 ) -> Optional[dict]:
     """Retrieve and decrypt an integration. Returns None if not found.
 
     For GitLab, the gitlab_url is encoded in the scopes field after
     a ``||`` separator (e.g. ``api,read_repository||https://gitlab.example.com``).
     """
-    result = await db.execute(
-        text("""
-            SELECT id, provider::text, label, "accessTokenEncrypted", iv,
-                   "externalUsername", scopes, "createdAt"
-            FROM integrations
-            WHERE "userId" = :uid AND provider::text = :prov
-        """),
-        {"uid": user_id, "prov": provider},
-    )
-    row = result.fetchone()
+    try:
+        async with db_client(user_jwt) as client:
+            result = (
+                await client.table("integrations")
+                .select("id,provider,label,access_token_encrypted,iv,external_username,scopes,created_at")
+                .eq("user_id", user_id)
+                .eq("provider", provider)
+                .maybe_single()
+                .execute()
+            )
+    except APIError as exc:
+        logger.error("Supabase error in get_integration: code=%s msg=%s", exc.code, exc.message)
+        raise HTTPException(status_code=500, detail="Database error") from exc
+    except Exception as exc:
+        logger.error("Unexpected error in get_integration: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
+    row = result.data
     if not row:
         return None
 
-    token = decrypt_token(row[3], row[4])
+    token = decrypt_token(row["access_token_encrypted"], row["iv"])
 
     # Parse gitlab_url from the scopes field if present
-    raw_scopes = row[6] or ""
+    raw_scopes = row.get("scopes") or ""
     gitlab_url = "https://gitlab.com"
     scopes = raw_scopes
     if _GITLAB_URL_SEPARATOR in raw_scopes:
         scopes, gitlab_url = raw_scopes.split(_GITLAB_URL_SEPARATOR, 1)
 
     return {
-        "id": row[0],
-        "provider": row[1],
-        "label": row[2],
+        "id": row["id"],
+        "provider": row["provider"],
+        "label": row.get("label"),
         "token": token,
-        "externalUsername": row[5],
+        "externalUsername": row.get("external_username"),
         "scopes": scopes,
         "gitlabUrl": gitlab_url,
-        "createdAt": row[7],
+        "createdAt": row.get("created_at"),
     }
 
 
 async def delete_integration(
-    db: AsyncSession,
     *,
     user_id: str,
     provider: str,
+    user_jwt: str | None,
 ) -> bool:
     """Delete an integration. Returns True if a row was removed."""
-    result = await db.execute(
-        text('DELETE FROM integrations WHERE "userId" = :uid AND provider::text = :prov'),
-        {"uid": user_id, "prov": provider},
-    )
-    await db.commit()
-    return result.rowcount > 0
+    try:
+        async with db_client(user_jwt) as client:
+            result = (
+                await client.table("integrations")
+                .delete()
+                .eq("user_id", user_id)
+                .eq("provider", provider)
+                .select("id")          # ensures PostgREST returns deleted rows
+                .execute()
+            )
+        return bool(result.data)
+    except APIError as exc:
+        logger.error("Supabase error in delete_integration: code=%s msg=%s", exc.code, exc.message)
+        raise HTTPException(status_code=500, detail="Database error") from exc
+    except Exception as exc:
+        logger.error("Unexpected error in delete_integration: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
 async def list_integrations(
-    db: AsyncSession,
     *,
     user_id: str,
+    user_jwt: str | None,
 ) -> list[dict]:
     """List all integrations for a user (token is never returned)."""
-    result = await db.execute(
-        text("""
-            SELECT id, provider::text, label, "externalUsername", scopes, "createdAt"
-            FROM integrations
-            WHERE "userId" = :uid
-            ORDER BY "createdAt"
-        """),
-        {"uid": user_id},
-    )
+    try:
+        async with db_client(user_jwt) as client:
+            result = (
+                await client.table("integrations")
+                .select("id,provider,label,external_username,scopes,created_at")
+                .eq("user_id", user_id)
+                .order("created_at")
+                .execute()
+            )
+        rows = result.data or []
+    except APIError as exc:
+        logger.error("Supabase error in list_integrations: code=%s msg=%s", exc.code, exc.message)
+        raise HTTPException(status_code=500, detail="Database error") from exc
+    except Exception as exc:
+        logger.error("Unexpected error in list_integrations: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
     return [
         {
-            "id": r[0],
-            "provider": r[1].lower(),
-            "label": r[2],
-            "externalUsername": r[3],
-            "scopes": r[4],
-            "createdAt": r[5].isoformat() if r[5] else None,
+            "id": r["id"],
+            "provider": r["provider"].lower(),
+            "label": r.get("label"),
+            "externalUsername": r.get("external_username"),
+            "scopes": r.get("scopes"),
+            "createdAt": r.get("created_at"),
             "connected": True,
         }
-        for r in result.fetchall()
+        for r in rows
     ]
 
 

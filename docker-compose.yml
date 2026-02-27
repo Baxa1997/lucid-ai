@@ -9,20 +9,18 @@ services:
     env_file:
       - ./frontend/.env
     environment:
-      - DATABASE_URL=postgresql://lucid_user:lucid_password@db:5432/lucid_db
       - NEXT_PUBLIC_API_URL=http://ai_engine:8000
       - PYTHON_BACKEND_URL=http://ai_engine:8000
       - AI_SERVICE_URL=http://ai_engine:8000
       - AI_SERVICE_WS_URL=ws://ai_engine:8000
       - NEXT_PUBLIC_AGENT_WS_URL=ws://localhost:8000/api/v1/ws
-      - INTERNAL_API_KEY=lucid_internal_k8s_2f9a7e3c1d4b6e8a0f2c5d7e9b1a3c5d
-      - SESSION_SECRET=6977c6e899b6846aee73922de6ac653ddf41e5074cb904816eb2d3c5f5cd9325
-      - AUTH_SECRET=lucid_dev_auth_secret_please_change_in_production
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY}
+      - SESSION_SECRET=${SESSION_SECRET}
+      - AUTH_SECRET=${AUTH_SECRET}
       - AUTH_URL=http://localhost:3000
-      - ENCRYPTION_KEY=lucid_dev_encryption_key_change_in_production
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
     depends_on:
       - ai_engine
-      - db
 
   ai_engine:
     build: ./ai_engine
@@ -31,14 +29,23 @@ services:
     volumes:
       - ./ai_engine:/app
       - /var/run/docker.sock:/var/run/docker.sock
-      - lucid_user_workspaces:/app/storage
+      # Bind-mount (not named volume) so the Docker daemon can resolve
+      # the host-side path when creating per-session sandbox containers.
+      - ${PWD}/workspaces:/app/storage
     environment:
       - PYTHONPATH=.
-      - SESSION_SECRET=6977c6e899b6846aee73922de6ac653ddf41e5074cb904816eb2d3c5f5cd9325
       - PORT=8000
-      - DATABASE_URL=postgresql+asyncpg://lucid_user:lucid_password@db:5432/lucid_db
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      # JWT secret from Supabase Dashboard → Settings → API → JWT Settings
+      - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}
+      # service_role key — bypasses RLS; server-to-server use only
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      # Internal path where workspaces live inside the ai_engine container
       - WORKSPACE_BASE_PATH=/app/storage
-      - LLM_MODEL=${LLM_MODEL:-gemini/gemini-2.0-flash}
+      # Host-side path the Docker daemon uses for sandbox bind mounts.
+      # Must match the left-hand side of the volume mount above.
+      - HOST_WORKSPACE_PATH=${PWD}/workspaces
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_BASE_URL=${LLM_BASE_URL}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
@@ -49,25 +56,8 @@ services:
       - SANDBOX_CONTAINER_PREFIX=lucid-sandbox-
       - SANDBOX_MEMORY_LIMIT=2g
       - SANDBOX_CPU_LIMIT=1.0
-      - INTERNAL_API_KEY=lucid_internal_k8s_2f9a7e3c1d4b6e8a0f2c5d7e9b1a3c5d
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY}
       # Must match frontend ENCRYPTION_KEY — used to decrypt stored git tokens
-      - ENCRYPTION_KEY=lucid_dev_encryption_key_change_in_production
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - ALLOWED_ORIGINS=http://localhost:3000,http://frontend:3000
-    depends_on:
-      - db
 
-  db:
-    image: postgres:15-alpine
-    restart: always
-    environment:
-      POSTGRES_USER: lucid_user
-      POSTGRES_PASSWORD: lucid_password
-      POSTGRES_DB: lucid_db
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-
-volumes:
-  postgres_data:
-  lucid_user_workspaces:

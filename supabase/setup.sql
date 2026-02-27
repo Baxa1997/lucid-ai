@@ -1,0 +1,13 @@
+-- ─────────────────────────────────────────────────────────────────────────────
+--  Lucid AI — Supabase setup (pointer file)
+--
+--  The schema lives in versioned migration files.  Run them in order in
+--  the Supabase SQL editor (Dashboard → SQL Editor → New query):
+--
+--    1. migrations/001_initial_schema.sql
+--       Creates: users, chat_sessions, chat_messages tables + indexes +
+--                triggers + RLS policies.
+--
+--    2. migrations/002_integrations.sql
+--       Creates: integrations table + RLS policies.
+-- ─────────────────────────────────────────────────────────────────────────────

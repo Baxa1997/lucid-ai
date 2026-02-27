@@ -6,10 +6,8 @@ import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from sqlalchemy import update
 
 from app.auth import AuthenticatedUser, authenticate_websocket, authenticate_from_handshake
-from app.models import ChatSession as ChatSessionModel
 from app.config import (
     logger,
     settings,
@@ -18,7 +16,6 @@ from app.config import (
     CONVERSATION_TIMEOUT_SECONDS,
 )
 from app import sdk
-from app.database import async_session
 from app.events import now_iso, stream_events_to_ws
 from app.services.chat import ChatService
 from app.services.sessions import (
@@ -90,7 +87,7 @@ async def websocket_agent(websocket: WebSocket):
 
         user_id = ws_user.user_id
 
-        # ── 2. Create session (per-session Docker sandbox) ─
+        # ── 2. Create session ────────────────────────────
         session = await create_session(
             task=task,
             user_id=user_id,
@@ -107,30 +104,34 @@ async def websocket_agent(websocket: WebSocket):
             project_id=raw.get("projectId", ""),
         )
 
+        user_jwt = ws_user.raw_jwt
+
         # ── Persist chat session to DB ───────────────────
         try:
-            async with async_session() as db:
-                chat_sess = await ChatService.create_session(
-                    db,
-                    user_id=user_id,
-                    agent_session_id=session.session_id,
-                    project_id=raw.get("projectId"),
-                    title=task[:255],
-                    model_provider=raw.get("modelProvider", raw.get("model_provider")),
-                )
-                chat_session_id = chat_sess.id
-                logger.info("Chat session %s created for user %s", chat_session_id, user_id)
+            chat_sess = await ChatService.create_session(
+                user_id=user_id,
+                user_jwt=user_jwt,
+                agent_session_id=session.session_id,
+                project_id=raw.get("projectId"),
+                title=task[:255],
+                model_provider=raw.get(
+                    "modelProvider",
+                    raw.get("model_provider", settings.DEFAULT_PROVIDER),
+                ),
+            )
+            chat_session_id = chat_sess["id"]
+            logger.info("Chat session %s created for user %s", chat_session_id, user_id)
         except Exception as exc:
             logger.warning("Failed to create chat session in DB: %s", exc)
 
         # Save user's initial message
         if chat_session_id:
             try:
-                async with async_session() as db:
-                    await ChatService.add_message(
-                        db, session_id=chat_session_id, role="user",
-                        content=task, event_type="InitialTask",
-                    )
+                await ChatService.add_message(
+                    session_id=chat_session_id, role="user",
+                    content=task, event_type="InitialTask",
+                    user_jwt=user_jwt,
+                )
             except Exception as exc:
                 logger.warning("Failed to persist user message: %s", exc)
 
@@ -158,7 +159,11 @@ async def websocket_agent(websocket: WebSocket):
         })
 
         streaming_task = asyncio.create_task(
-            stream_events_to_ws(websocket, session, chat_session_id=chat_session_id),
+            stream_events_to_ws(
+                websocket, session,
+                chat_session_id=chat_session_id,
+                user_jwt=user_jwt,
+            ),
         )
 
         await websocket.send_json({
@@ -193,11 +198,11 @@ async def websocket_agent(websocket: WebSocket):
             # Persist follow-up message
             if chat_session_id:
                 try:
-                    async with async_session() as db:
-                        await ChatService.add_message(
-                            db, session_id=chat_session_id, role="user",
-                            content=content, event_type="FollowUp",
-                        )
+                    await ChatService.add_message(
+                        session_id=chat_session_id, role="user",
+                        content=content, event_type="FollowUp",
+                        user_jwt=user_jwt,
+                    )
                 except Exception as exc:
                     logger.warning("Failed to persist follow-up message: %s", exc)
 
@@ -244,15 +249,11 @@ async def websocket_agent(websocket: WebSocket):
             await destroy_session(session.session_id)
 
         # Mark chat session as inactive
-        if chat_session_id:
+        if chat_session_id and ws_user:
             try:
-                async with async_session() as db:
-                    await db.execute(
-                        update(ChatSessionModel)
-                        .where(ChatSessionModel.id == chat_session_id)
-                        .values(is_active=False)
-                    )
-                    await db.commit()
+                await ChatService.deactivate_session(
+                    chat_session_id, user_id=ws_user.user_id, user_jwt=ws_user.raw_jwt
+                )
             except Exception as exc:
                 logger.warning("Failed to mark chat session inactive: %s", exc)
 

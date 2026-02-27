@@ -1,30 +1,36 @@
-"""Per-session Docker container manager.
+"""Docker daemon helpers — sandbox creation, health check, and orphan cleanup.
 
-Each agent session gets its own isolated Docker container with:
-- A cloned git repo (if provided)
-- Git credentials configured for push
-- Memory/CPU limits
-- Automatic cleanup on session destroy
+Each agent session gets its own Docker container (the "sandbox") with:
+  - An isolated filesystem — user A cannot see user B's files
+  - Resource limits — memory and CPU caps per session
+  - A bind-mounted workspace directory at WORKSPACE_MOUNT_PATH (/workspace)
+  - Labels for lifecycle tracking and orphan cleanup
+
+This module owns the full container lifecycle:
+  - create_sandbox()               — spin up a fresh container for a session
+  - destroy_container()            — stop + remove a specific container
+  - cleanup_orphaned_containers()  — remove leftover containers on startup
+  - destroy_all()                  — remove all tracked containers on shutdown
 """
 
 from __future__ import annotations
 
 import asyncio
-import shlex
+import os
 from typing import Optional
 
 import docker
-from docker.errors import DockerException, NotFound
+from docker.errors import NotFound
 
 from app.config import logger, settings
 
 
 class DockerSessionManager:
-    """Creates and destroys per-session Docker containers."""
+    """Manages Docker daemon interaction for sandbox lifecycle."""
 
     def __init__(self) -> None:
         self._client: Optional[docker.DockerClient] = None
-        # session_id → container_id
+        # session_id → container_id for all live sandboxes this process created
         self._containers: dict[str, str] = {}
 
     @property
@@ -41,198 +47,85 @@ class DockerSessionManager:
         except Exception:
             return False
 
-    async def create_workspace(
+    def create_sandbox(
         self,
+        *,
         session_id: str,
         user_id: str,
-        repo_url: Optional[str] = None,
-        git_token: Optional[str] = None,
-        branch: Optional[str] = None,
-        git_user_name: Optional[str] = None,
-        git_user_email: Optional[str] = None,
+        workspace_dir: str,
     ) -> str:
-        """Create an isolated Docker container for an agent session.
+        """Create an isolated Docker sandbox container for one agent session.
 
-        Returns the container ID. The container has:
-        - /workspace as the working directory
-        - git configured for push (if credentials provided)
-        - The repo cloned (if repo_url provided)
+        The workspace directory is bind-mounted into the container at
+        ``WORKSPACE_MOUNT_PATH`` (``/workspace``) so the agent's file
+        operations are visible to the ai_engine's file API without exec
+        overhead.
+
+        DinD note
+        ---------
+        When the ai_engine itself runs inside Docker the workspace lives at
+        an internal path (``/app/storage/{user}/{session}``).  The Docker
+        daemon sits on the host and needs the **host-side** path for the
+        bind mount.  ``HOST_WORKSPACE_PATH`` maps the internal root to the
+        host root:
+
+            internal: /app/storage/{user}/{session}
+            host:     {HOST_WORKSPACE_PATH}/{user}/{session}
+
+        Set ``HOST_WORKSPACE_PATH`` to the left-hand side of the
+        ``docker-compose.yml`` volume mount (e.g. ``${PWD}/workspaces``).
+        For local development without Docker, leave it empty — the absolute
+        path of ``workspace_dir`` is used directly.
+
+        Returns the container ID.
         """
-        container_name = f"{settings.SANDBOX_CONTAINER_PREFIX}{session_id[:12]}"
+        # Resolve the host-side path the Docker daemon needs for the bind mount.
+        if settings.HOST_WORKSPACE_PATH:
+            rel = os.path.relpath(workspace_dir, settings.WORKSPACE_BASE_PATH)
+            host_path = os.path.join(settings.HOST_WORKSPACE_PATH, rel)
+        else:
+            host_path = os.path.abspath(workspace_dir)
 
-        container = await asyncio.to_thread(
-            self._create_container, container_name, session_id,
-        )
-        container_id = container.id
-        self._containers[session_id] = container_id
+        os.makedirs(host_path, exist_ok=True)
 
-        logger.info(
-            "Container %s created for session %s (user=%s)",
-            container_name, session_id, user_id,
-        )
-
-        # Configure git and clone repo inside the container
-        if repo_url or git_user_name:
-            await self.setup_git_push(
-                container_id=container_id,
-                repo_url=repo_url,
-                git_token=git_token,
-                branch=branch,
-                git_user_name=git_user_name,
-                git_user_email=git_user_email,
-            )
-
-        return container_id
-
-    def _create_container(self, container_name: str, session_id: str):
-        """Synchronous container creation (called via to_thread)."""
-        # Build container kwargs
-        kwargs = {
+        run_kwargs: dict = {
             "image": settings.SANDBOX_IMAGE,
-            "name": container_name,
+            # Keep the container alive so the agent can exec commands into it.
+            "command": "sleep infinity",
             "detach": True,
-            "tty": True,
-            "stdin_open": True,
-            "working_dir": settings.WORKSPACE_MOUNT_PATH,
+            "name": f"{settings.SANDBOX_CONTAINER_PREFIX}{session_id}",
             "labels": {
-                "lucid.session_id": session_id,
                 "lucid.managed": "true",
+                "lucid.session_id": session_id,
+                "lucid.user_id": user_id,
             },
             "mem_limit": settings.SANDBOX_MEMORY_LIMIT,
-            "nano_cpus": int(settings.SANDBOX_CPU_LIMIT * 1e9),
-            # Keep the container running
-            "command": "sleep infinity",
+            "nano_cpus": int(float(settings.SANDBOX_CPU_LIMIT) * 1e9),
+            "volumes": {
+                host_path: {
+                    "bind": settings.WORKSPACE_MOUNT_PATH,
+                    "mode": "rw",
+                }
+            },
+            "remove": False,
         }
 
         if settings.DOCKER_NETWORK:
-            kwargs["network"] = settings.DOCKER_NETWORK
+            run_kwargs["network"] = settings.DOCKER_NETWORK
 
-        return self.client.containers.run(**kwargs)
-
-    async def setup_git_push(
-        self,
-        container_id: str,
-        repo_url: Optional[str] = None,
-        git_token: Optional[str] = None,
-        branch: Optional[str] = None,
-        git_user_name: Optional[str] = None,
-        git_user_email: Optional[str] = None,
-    ) -> None:
-        """Configure git credentials and clone repo inside the container."""
-        commands = []
-
-        # Install git if not present (some images may not have it)
-        commands.append(
-            "which git || (apt-get update -qq && apt-get install -y -qq git > /dev/null 2>&1)"
+        container = self.client.containers.run(**run_kwargs)
+        self._containers[session_id] = container.id
+        logger.info(
+            "Sandbox %s (%s) created for session %s — host workspace: %s",
+            container.name, container.short_id, session_id, host_path,
         )
+        return container.id
 
-        # Configure git user identity
-        if git_user_name:
-            commands.append(
-                f"git config --global user.name {shlex.quote(git_user_name)}"
-            )
-        if git_user_email:
-            commands.append(
-                f"git config --global user.email {shlex.quote(git_user_email)}"
-            )
-
-        # Configure credential store for push
-        if git_token and repo_url:
-            commands.append("git config --global credential.helper store")
-
-            # Determine the host for credentials
-            if "github.com" in repo_url:
-                cred_line = f"https://x-access-token:{git_token}@github.com"
-            elif "gitlab" in repo_url:
-                cred_line = f"https://oauth2:{git_token}@gitlab.com"
-            else:
-                # Generic: extract host from URL
-                from urllib.parse import urlparse
-                parsed = urlparse(repo_url)
-                host = parsed.hostname or "github.com"
-                cred_line = f"https://x-access-token:{git_token}@{host}"
-
-            # Write credentials file (single echo, no token in command history)
-            commands.append(
-                f"echo {shlex.quote(cred_line)} > ~/.git-credentials"
-            )
-            commands.append("chmod 600 ~/.git-credentials")
-
-        # Clone the repo
-        if repo_url:
-            clone_url = _build_clone_url(repo_url, git_token)
-            safe_url = shlex.quote(clone_url)
-            branch_flag = f" -b {shlex.quote(branch)}" if branch else ""
-            commands.append(
-                f"git clone --depth 1{branch_flag} {safe_url} {settings.WORKSPACE_MOUNT_PATH}/repo "
-                f"&& cd {settings.WORKSPACE_MOUNT_PATH}/repo"
-            )
-
-        # Execute all commands sequentially in the container
-        full_cmd = " && ".join(commands)
-        exit_code, output = await asyncio.to_thread(
-            self._exec_in_container, container_id, full_cmd,
-        )
-
-        if exit_code != 0:
-            logger.warning(
-                "Git setup in container %s exited with code %d: %s",
-                container_id[:12], exit_code, output[:500],
-            )
-        else:
-            logger.info("Git configured in container %s", container_id[:12])
-
-    def _exec_in_container(self, container_id: str, cmd: str) -> tuple[int, str]:
-        """Run a command inside a container. Returns (exit_code, output)."""
-        try:
-            container = self.client.containers.get(container_id)
-            result = container.exec_run(
-                ["sh", "-c", cmd],
-                workdir=settings.WORKSPACE_MOUNT_PATH,
-            )
-            return result.exit_code, result.output.decode("utf-8", errors="replace")
-        except Exception as exc:
-            logger.error("exec_run failed in %s: %s", container_id[:12], exc)
-            return 1, str(exc)
-
-    async def exec_command(self, session_id: str, cmd: str) -> tuple[int, str]:
-        """Execute a command in the session's container."""
-        container_id = self._containers.get(session_id)
-        if not container_id:
-            return 1, f"No container for session {session_id}"
-        return await asyncio.to_thread(self._exec_in_container, container_id, cmd)
-
-    async def destroy_workspace(self, session_id: str) -> None:
-        """Stop and remove the Docker container for a session."""
-        container_id = self._containers.pop(session_id, None)
-        if not container_id:
-            return
-
-        try:
-            await asyncio.to_thread(self._remove_container, container_id)
-            logger.info("Container destroyed for session %s", session_id)
-        except Exception as exc:
-            logger.error(
-                "Failed to destroy container for session %s: %s",
-                session_id, exc,
-            )
-
-    def _remove_container(self, container_id: str) -> None:
-        """Synchronous container removal."""
-        try:
-            container = self.client.containers.get(container_id)
-            container.stop(timeout=5)
-            container.remove(force=True)
-        except NotFound:
-            pass  # Already removed
-        except Exception as exc:
-            logger.error("Container removal error: %s", exc)
-
-    async def destroy_all(self) -> None:
-        """Destroy all managed containers (used during shutdown)."""
-        session_ids = list(self._containers.keys())
-        for sid in session_ids:
-            await self.destroy_workspace(sid)
+    async def destroy_container(self, container_id: str, session_id: str) -> None:
+        """Stop and remove a specific sandbox container."""
+        self._containers.pop(session_id, None)
+        await asyncio.to_thread(self._remove_container, container_id)
+        logger.info("Sandbox container destroyed for session %s", session_id)
 
     def cleanup_orphaned_containers(self) -> int:
         """Remove any leftover containers from previous runs.
@@ -257,6 +150,28 @@ class DockerSessionManager:
             logger.error("Orphan cleanup failed: %s", exc)
             return 0
 
+    async def destroy_all(self) -> None:
+        """Destroy all tracked containers (called on shutdown)."""
+        for session_id in list(self._containers.keys()):
+            container_id = self._containers.pop(session_id, None)
+            if not container_id:
+                continue
+            try:
+                await asyncio.to_thread(self._remove_container, container_id)
+                logger.info("Container destroyed for session %s", session_id)
+            except Exception as exc:
+                logger.error("Failed to destroy container %s: %s", session_id, exc)
+
+    def _remove_container(self, container_id: str) -> None:
+        try:
+            container = self.client.containers.get(container_id)
+            container.stop(timeout=5)
+            container.remove(force=True)
+        except NotFound:
+            pass
+        except Exception as exc:
+            logger.error("Container removal error: %s", exc)
+
     @property
     def active_container_count(self) -> int:
         return len(self._containers)
@@ -264,14 +179,3 @@ class DockerSessionManager:
 
 # Module-level singleton
 docker_manager = DockerSessionManager()
-
-
-def _build_clone_url(repo_url: str, git_token: str | None) -> str:
-    """Inject credentials into the clone URL when a token is provided."""
-    if not git_token:
-        return repo_url
-    if "github.com" in repo_url:
-        return repo_url.replace("https://", f"https://x-access-token:{git_token}@")
-    if "gitlab" in repo_url:
-        return repo_url.replace("https://", f"https://oauth2:{git_token}@")
-    return repo_url

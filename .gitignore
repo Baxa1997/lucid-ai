@@ -33,3 +33,7 @@ dev.log
 
 # Docker
 .docker/
+
+# Supabase CLI
+supabase/.branches
+supabase/.temp

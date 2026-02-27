@@ -17,7 +17,6 @@ from app.config import (
     logger,
 )
 from app import sdk
-from app.database import async_session as db_session_factory
 from app.services.chat import ChatService
 
 
@@ -70,20 +69,16 @@ def format_sdk_event(event) -> Optional[dict]:
     return payload
 
 
-async def _flush_batch(batch: list[dict], chat_session_id: str) -> None:
-    """Write a batch of event dicts to the database in a single session."""
+async def _flush_batch(
+    batch: list[dict],
+    chat_session_id: str,
+    user_jwt: str | None,
+) -> None:
+    """Write a batch of event dicts to the database in a single insert."""
     if not batch:
         return
     try:
-        async with db_session_factory() as db:
-            for event_data in batch:
-                await ChatService.add_message(
-                    db,
-                    session_id=chat_session_id,
-                    role="assistant",
-                    content=event_data["content"],
-                    event_type=event_data.get("eventType", ""),
-                )
+        await ChatService.add_messages(batch, chat_session_id, user_jwt=user_jwt)
     except Exception as exc:
         logger.warning("Failed to flush %d events to DB: %s", len(batch), exc)
 
@@ -93,12 +88,13 @@ async def stream_events_to_ws(
     session,
     *,
     chat_session_id: str | None = None,
+    user_jwt: str | None = None,
 ) -> None:
     """Background task that drains the session's event buffer and
     forwards each item to the WebSocket client.
 
-    When ``chat_session_id`` is provided, meaningful agent events are
-    batched and flushed to the database periodically (every
+    When ``chat_session_id`` and ``user_jwt`` are provided, meaningful agent
+    events are batched and flushed to the database periodically (every
     ``DB_BATCH_SIZE`` events or ``DB_BATCH_INTERVAL`` seconds).
     """
     pending: list[dict] = []
@@ -125,9 +121,10 @@ async def stream_events_to_ws(
                     except Exception as tree_err:
                         logger.warning("File tree refresh failed: %s", tree_err)
 
-                # Accumulate persistable events
+                # Accumulate persistable events (only when JWT is available for RLS)
                 if (
                     chat_session_id
+                    and user_jwt
                     and event_data.get("content")
                     and event_data.get("event") in ("action", "observation", "error")
                 ):
@@ -135,7 +132,7 @@ async def stream_events_to_ws(
 
                 # Flush when batch is full
                 if len(pending) >= DB_BATCH_SIZE:
-                    await _flush_batch(pending, chat_session_id)
+                    await _flush_batch(pending, chat_session_id, user_jwt)
                     pending.clear()
                     last_flush = time.monotonic()
 
@@ -147,7 +144,7 @@ async def stream_events_to_ws(
 
             # Flush on time interval even if batch isn't full
             if pending and (time.monotonic() - last_flush) >= DB_BATCH_INTERVAL:
-                await _flush_batch(pending, chat_session_id)
+                await _flush_batch(pending, chat_session_id, user_jwt)
                 pending.clear()
                 last_flush = time.monotonic()
 
@@ -155,5 +152,5 @@ async def stream_events_to_ws(
         pass
     finally:
         # Flush remaining events on shutdown
-        if pending and chat_session_id:
-            await _flush_batch(pending, chat_session_id)
+        if pending and chat_session_id and user_jwt:
+            await _flush_batch(pending, chat_session_id, user_jwt)

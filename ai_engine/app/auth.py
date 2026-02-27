@@ -2,18 +2,21 @@
 
 Security model
 --------------
-- **JWT (preferred)**: ``Authorization: Bearer <token>`` validated against
-  ``SESSION_SECRET``.  This is the only fully trusted auth method.
-- **X-User-ID header**: Only trusted when accompanied by a valid
-  ``X-Internal-Key`` header matching ``INTERNAL_API_KEY``.  This is the
-  server-to-server path (Next.js → ai_engine).  When ``INTERNAL_API_KEY``
-  is not configured (dev mode), X-User-ID is accepted with a warning.
-- **WebSocket**: JWT via ``?token=`` query param or ``token`` field in the
-  first handshake message.  No anonymous fallback — auth is mandatory.
+- **JWT (preferred)**: ``Authorization: Bearer <token>`` issued by Supabase Auth
+  and validated against ``SUPABASE_JWT_SECRET`` (HS256).  The raw token is stored
+  on ``AuthenticatedUser.raw_jwt`` and forwarded to the Supabase client so that
+  Row Level Security (RLS) is enforced at the database level.
+- **X-User-ID + X-Internal-Key**: Server-to-server path (Next.js → ai_engine).
+  ``X-Internal-Key`` is compared in constant time.  On success ``raw_jwt`` is set
+  to ``None`` — callers use the admin (service_role) Supabase client which bypasses
+  RLS while still filtering rows by ``user_id`` in every query.
+- **WebSocket**: JWT via ``?token=`` query param or ``token`` field in the first
+  handshake message.  No anonymous fallback — auth is mandatory.
 """
 
 from __future__ import annotations
 
+import hmac
 from typing import Optional
 
 from fastapi import HTTPException, Request, WebSocket, status
@@ -23,82 +26,102 @@ from app.config import logger, settings
 
 
 class AuthenticatedUser:
-    """Lightweight container for the authenticated user's identity."""
+    """Lightweight container for the authenticated user's identity.
 
-    __slots__ = ("user_id", "project_id", "session_id")
+    ``raw_jwt`` is the original Supabase Auth Bearer token when the request
+    uses the JWT path, or ``None`` when authenticated via X-Internal-Key
+    (server-to-server).  Services check for ``None`` and switch to the admin
+    Supabase client (service_role key, RLS bypassed, filters by user_id).
+    """
 
-    def __init__(self, user_id: str, project_id: str | None = None, session_id: str | None = None):
+    __slots__ = ("user_id", "project_id", "session_id", "raw_jwt")
+
+    def __init__(
+        self,
+        user_id: str,
+        raw_jwt: str | None,
+        project_id: str | None = None,
+        session_id: str | None = None,
+    ):
         self.user_id = user_id
+        self.raw_jwt = raw_jwt
         self.project_id = project_id
         self.session_id = session_id
 
 
 def decode_jwt(token: str) -> dict:
-    """Decode and validate a JWT signed by the frontend (HS256)."""
-    return jwt.decode(token, settings.SESSION_SECRET, algorithms=["HS256"])
+    """Decode and validate a Supabase Auth JWT (HS256).
+
+    Audience verification is skipped because Supabase Auth sets
+    ``aud: "authenticated"`` which python-jose would reject unless the audience
+    is explicitly passed — we rely on signature + expiry validation instead.
+    """
+    return jwt.decode(
+        token,
+        settings.SUPABASE_JWT_SECRET,
+        algorithms=["HS256"],
+        options={"verify_aud": False},
+    )
 
 
 async def get_current_user(request: Request) -> AuthenticatedUser:
-    """FastAPI dependency — extracts authenticated user from the request.
+    """FastAPI dependency — extracts the authenticated user from the request.
 
     Resolution order:
-    1. ``Authorization: Bearer <JWT>`` header → decode JWT → extract userId
-    2. ``X-User-ID`` header → only if ``X-Internal-Key`` matches ``INTERNAL_API_KEY``
+    1. ``Authorization: Bearer <JWT>`` header → validate → extract sub
+    2. ``X-User-ID`` + ``X-Internal-Key`` (constant-time check) → admin mode
     3. Neither → HTTP 401
     """
-    # 1. Try Bearer JWT (always preferred)
+    # 1. Bearer JWT — preferred path; carries user identity directly.
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
         try:
             payload = decode_jwt(token)
-            user_id = payload.get("userId") or payload.get("sub")
+            user_id = payload.get("sub") or payload.get("userId")
             if not user_id:
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token missing userId")
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                                    detail="Token missing sub claim")
             return AuthenticatedUser(
                 user_id=user_id,
+                raw_jwt=token,
                 project_id=payload.get("projectId"),
                 session_id=payload.get("sessionId"),
             )
         except JWTError as exc:
             logger.warning("JWT decode failed: %s", exc)
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                                detail="Invalid token")
 
-    # 2. X-User-ID — trusted only with valid internal key
+    # 2. X-User-ID + X-Internal-Key — server-to-server calls from Next.js.
+    #    raw_jwt is set to None; services use the admin client (service_role key)
+    #    which bypasses RLS while still filtering rows by user_id explicitly.
     user_id = request.headers.get("x-user-id")
     if user_id:
         if settings.INTERNAL_API_KEY:
-            # Production mode: require matching internal key
             internal_key = request.headers.get("x-internal-key", "")
-            if internal_key != settings.INTERNAL_API_KEY:
-                logger.warning(
-                    "X-User-ID '%s' rejected — invalid or missing X-Internal-Key",
-                    user_id,
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid internal API key",
-                )
-            return AuthenticatedUser(user_id=user_id)
+            # Constant-time comparison prevents timing attacks.
+            if not hmac.compare_digest(internal_key, settings.INTERNAL_API_KEY):
+                logger.warning("X-User-ID '%s' rejected — X-Internal-Key mismatch", user_id)
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                                    detail="Invalid internal API key")
         else:
-            # Dev mode: accept but warn
             logger.warning(
                 "X-User-ID '%s' accepted WITHOUT internal key validation "
                 "(set INTERNAL_API_KEY to enforce)",
                 user_id,
             )
-            return AuthenticatedUser(user_id=user_id)
+        return AuthenticatedUser(user_id=user_id, raw_jwt=None)
 
-    # 3. No credentials
-    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Authentication required")
 
 
 async def authenticate_websocket(websocket: WebSocket) -> Optional[AuthenticatedUser]:
-    """Authenticate a WebSocket connection from query param.
+    """Authenticate a WebSocket connection from the query parameter.
 
-    Resolution order:
-    1. ``?token=<JWT>`` query parameter → decode → return user
-    2. No token → return None (caller should try handshake message)
+    1. ``?token=<JWT>`` → validate → return user
+    2. No token → return None (caller tries handshake message next)
     3. Invalid token → close with 4010
     """
     token = websocket.query_params.get("token")
@@ -107,12 +130,13 @@ async def authenticate_websocket(websocket: WebSocket) -> Optional[Authenticated
 
     try:
         payload = decode_jwt(token)
-        user_id = payload.get("userId") or payload.get("sub")
+        user_id = payload.get("sub") or payload.get("userId")
         if not user_id:
-            await websocket.close(code=4010, reason="Token missing userId")
+            await websocket.close(code=4010, reason="Token missing sub claim")
             return None
         return AuthenticatedUser(
             user_id=user_id,
+            raw_jwt=token,
             project_id=payload.get("projectId"),
             session_id=payload.get("sessionId"),
         )
@@ -123,21 +147,18 @@ async def authenticate_websocket(websocket: WebSocket) -> Optional[Authenticated
 
 
 def authenticate_from_handshake(raw: dict) -> Optional[AuthenticatedUser]:
-    """Try to authenticate from the WebSocket handshake message.
-
-    Looks for a ``token`` field containing a valid JWT.
-    Returns None if no token or invalid token.
-    """
+    """Authenticate from the WebSocket handshake message (``token`` field)."""
     token = raw.get("token")
     if not token:
         return None
 
     try:
         payload = decode_jwt(token)
-        user_id = payload.get("userId") or payload.get("sub")
+        user_id = payload.get("sub") or payload.get("userId")
         if user_id:
             return AuthenticatedUser(
                 user_id=user_id,
+                raw_jwt=token,
                 project_id=payload.get("projectId"),
                 session_id=payload.get("sessionId"),
             )

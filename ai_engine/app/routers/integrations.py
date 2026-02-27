@@ -17,7 +17,6 @@ from pydantic import BaseModel
 
 from app.auth import AuthenticatedUser, get_current_user
 from app.config import logger
-from app.database import async_session
 from app.services.integrations import (
     delete_integration,
     get_integration,
@@ -100,16 +99,15 @@ async def save_integration(
             detail=f"Token validation failed — check that the token is valid: {exc}",
         )
 
-    async with async_session() as db:
-        await upsert_integration(
-            db,
-            user_id=user.user_id,
-            provider=provider,
-            token=payload.token,
-            label=f"{external_username} ({provider.lower()})",
-            external_username=external_username,
-            scopes=scopes,
-        )
+    await upsert_integration(
+        user_id=user.user_id,
+        provider=provider,
+        token=payload.token,
+        user_jwt=user.raw_jwt,
+        label=f"{external_username} ({provider.lower()})",
+        external_username=external_username,
+        scopes=scopes,
+    )
 
     logger.info("Integration %s saved for user %s (%s)", provider, user.user_id, external_username)
     return {
@@ -125,8 +123,7 @@ async def save_integration(
 @router.get("")
 async def get_integrations(user: AuthenticatedUser = Depends(get_current_user)):
     """List the user's connected integrations. Tokens are never returned."""
-    async with async_session() as db:
-        rows = await list_integrations(db, user_id=user.user_id)
+    rows = await list_integrations(user_id=user.user_id, user_jwt=user.raw_jwt)
     return {"integrations": rows}
 
 
@@ -139,8 +136,7 @@ async def remove_integration(
 ):
     """Remove a GitHub or GitLab integration for the current user."""
     normalized = _normalize_provider(provider)
-    async with async_session() as db:
-        deleted = await delete_integration(db, user_id=user.user_id, provider=normalized)
+    deleted = await delete_integration(user_id=user.user_id, provider=normalized, user_jwt=user.raw_jwt)
 
     if not deleted:
         raise HTTPException(
@@ -159,9 +155,7 @@ async def list_repos(
 ):
     """Return repos accessible via the user's stored PAT."""
     normalized = _normalize_provider(provider)
-
-    async with async_session() as db:
-        integration = await get_integration(db, user_id=user.user_id, provider=normalized)
+    integration = await get_integration(user_id=user.user_id, provider=normalized, user_jwt=user.raw_jwt)
 
     if not integration:
         raise HTTPException(
@@ -201,9 +195,7 @@ async def create_pr(
     The frontend passes the repo URL, pushed branch name, and PR details.
     """
     normalized = _normalize_provider(provider)
-
-    async with async_session() as db:
-        integration = await get_integration(db, user_id=user.user_id, provider=normalized)
+    integration = await get_integration(user_id=user.user_id, provider=normalized, user_jwt=user.raw_jwt)
 
     if not integration:
         raise HTTPException(

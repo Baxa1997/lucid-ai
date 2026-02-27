@@ -12,7 +12,6 @@ from app.config import logger, settings
 from app.sdk import OPENHANDS_AVAILABLE, import_error
 from app.services.sessions import store, destroy_session
 from app.services.docker_workspace import docker_manager
-from app.database import dispose_engine
 from app.routers import health, sessions, ws, chat, files, integrations
 
 
@@ -38,12 +37,6 @@ async def lifespan(_app: FastAPI):
         logger.warning("OpenHands SDK not installed: %s", import_error or "N/A")
     if not settings.LLM_API_KEY:
         logger.warning("LLM_API_KEY not set — agent will not function")
-    if settings.SESSION_SECRET == "change_me_in_prod":
-        logger.warning(
-            "SESSION_SECRET is using the insecure default value — "
-            "set a strong random secret in production to prevent JWT forgery"
-        )
-
     yield
 
     logger.info("Shutting down — cleaning up sessions …")
@@ -51,7 +44,6 @@ async def lifespan(_app: FastAPI):
         await destroy_session(sid)
     # Destroy any remaining Docker containers
     await docker_manager.destroy_all()
-    await dispose_engine()
     logger.info("All resources cleaned up.")
 
 
@@ -61,7 +53,7 @@ def create_app() -> FastAPI:
         title="Lucid AI Engine",
         description=(
             "AI Agent microservice powered by the OpenHands Software Agent SDK V1. "
-            "Runs CodeActAgent in per-session Docker-sandboxed workspaces with "
+            "Runs CodeActAgent in local workspace directories with "
             "real-time WebSocket event streaming and git push support."
         ),
         version="1.0.0",

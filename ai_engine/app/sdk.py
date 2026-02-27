@@ -23,9 +23,8 @@ Agent = None
 Tool = None
 LocalWorkspace = None
 LocalConversation = None
-RemoteConversation = None
+DockerWorkspace = None
 get_default_agent = None
-get_logger = None
 
 # ── Attempt import ──────────────────────────────────────────
 
@@ -36,10 +35,14 @@ try:
         Tool,
         LocalWorkspace,
         LocalConversation,
-        RemoteConversation,
-        get_logger,
     )
     from openhands.tools import get_default_agent  # noqa: F811
+
+    # DockerWorkspace may not be present in all SDK builds — import separately.
+    try:
+        from openhands.sdk import DockerWorkspace  # noqa: F811
+    except ImportError:
+        pass  # SDK version does not export DockerWorkspace yet
 
     OPENHANDS_AVAILABLE = True
     logger.info("OpenHands SDK is available")

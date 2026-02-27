@@ -9,7 +9,6 @@ from app.exceptions import (
     SessionNotFoundError,
     ProviderError,
     APIKeyMissingError,
-    APIKeyInvalidError,
 )
 from app.sdk import OPENHANDS_AVAILABLE
 from app.services.sessions import create_session, destroy_session, store

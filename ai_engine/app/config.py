@@ -1,17 +1,20 @@
-"""
-Application configuration.
+"""Application configuration.
 
-All environment variables are read once at import time and exposed
-as module-level constants grouped by concern.  For structured access
-use the ``settings`` instance.
+All environment variables are read from the process environment (and
+optionally from a ``.env`` file in the working directory) by
+pydantic-settings at startup.  Required fields have **no default** — the
+application will refuse to start with an explicit error if they are absent,
+rather than silently operating with empty/invalid values.
+
+Settings are exposed to the rest of the codebase via the ``settings``
+singleton instance created at the bottom of this module.
 """
 
-import os
 import logging
 
-from dotenv import load_dotenv
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-load_dotenv()
 
 # ── Logging ─────────────────────────────────────────────────
 
@@ -24,60 +27,86 @@ logger = logging.getLogger("lucid.ai_engine")
 
 # ── Settings ────────────────────────────────────────────────
 
-class Settings:
-    """Typed, validated application settings."""
+class Settings(BaseSettings):
+    """Typed, validated application settings backed by environment variables.
 
-    # LLM provider keys
-    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
-    GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
-    LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
-    LLM_BASE_URL: str | None = os.getenv("LLM_BASE_URL")
+    Required fields (no default) cause the application to exit at startup
+    with a clear error message if the env var is not set — "fail fast" rather
+    than discovering a missing config at request time.
+    """
 
-    DEFAULT_PROVIDER: str = os.getenv("DEFAULT_MODEL_PROVIDER", "anthropic")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Agent / sandbox
-    MAX_ITERATIONS: int = int(os.getenv("MAX_ITERATIONS", "50"))
-    SANDBOX_IMAGE: str = os.getenv(
-        "SANDBOX_IMAGE", "nikolaik/python-nodejs:python3.11-nodejs20"
-    )
-    WORKSPACE_MOUNT_PATH: str = os.getenv("WORKSPACE_MOUNT_PATH", "/workspace")
+    # ── Required — app will not start without these ──────────
+    SUPABASE_URL: str
+    SUPABASE_ANON_KEY: str
+    # JWT secret from Supabase Dashboard → Settings → API → JWT Settings.
+    # Used to validate incoming Supabase Auth JWTs (HS256).
+    SUPABASE_JWT_SECRET: str
+    # service_role key — bypasses RLS; used only for server-to-server calls
+    # (X-Internal-Key path) where no user JWT is available.  Never expose to clients.
+    SUPABASE_SERVICE_KEY: str
+    ENCRYPTION_KEY: str
 
-    # Server
-    SESSION_SECRET: str = os.getenv("SESSION_SECRET", "change_me_in_prod")
-    PORT: int = int(os.getenv("PORT", "8000"))
+    # ── LLM provider keys ────────────────────────────────────
+    ANTHROPIC_API_KEY: str = ""
+    GOOGLE_API_KEY: str = ""
+    LLM_API_KEY: str = ""
+    LLM_BASE_URL: str | None = None
 
-    # Database
-    DATABASE_URL: str = os.getenv(
-        "DATABASE_URL",
-        "postgresql+asyncpg://lucid_user:lucid_password@localhost:5432/lucid_db",
-    )
+    # DEFAULT_MODEL_PROVIDER env var maps to DEFAULT_PROVIDER attribute
+    DEFAULT_PROVIDER: str = Field("anthropic", validation_alias="DEFAULT_MODEL_PROVIDER")
 
-    # Workspace isolation
-    WORKSPACE_BASE_PATH: str = os.getenv("WORKSPACE_BASE_PATH", "./storage")
+    # ── Agent / sandbox ──────────────────────────────────────
+    # MAX_ITERATIONS caps how many steps the agent takes per task.
+    # Passed to get_default_agent() once the OpenHands SDK is installed.
+    MAX_ITERATIONS: int = 50
+    SANDBOX_IMAGE: str = "nikolaik/python-nodejs:python3.11-nodejs20"
+    WORKSPACE_MOUNT_PATH: str = "/workspace"
 
-    # Internal API key — when set, X-User-ID header is only trusted
-    # if the request also includes a matching X-Internal-Key header.
-    # This prevents external callers from impersonating users.
-    INTERNAL_API_KEY: str = os.getenv("INTERNAL_API_KEY", "")
+    # ── Server ───────────────────────────────────────────────
+    PORT: int = 8000
+    WORKSPACE_BASE_PATH: str = "./storage"
+    # Host-side workspace root used when creating sandbox container bind mounts.
+    # When running inside Docker the ai_engine sees workspaces at WORKSPACE_BASE_PATH
+    # but the Docker daemon needs the HOST path for the bind mount source.
+    # Set to the left-hand side of the volume mount in docker-compose.yml.
+    # Leave empty for local (non-Docker) development — abspath is used instead.
+    HOST_WORKSPACE_PATH: str = ""
 
-    # CORS — restrict which origins may call the REST API.
-    # In production this should be set to the frontend URL only.
-    # Multiple origins can be specified as a comma-separated list.
-    ALLOWED_ORIGINS: list = [
-        o.strip()
-        for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
-        if o.strip()
-    ]
+    # Internal API key — when set, X-User-ID is only trusted if the request
+    # also includes a matching X-Internal-Key header.
+    INTERNAL_API_KEY: str = ""
 
-    # Docker sandbox (per-session containers)
-    SANDBOX_CONTAINER_PREFIX: str = os.getenv("SANDBOX_CONTAINER_PREFIX", "lucid-sandbox-")
-    SANDBOX_MEMORY_LIMIT: str = os.getenv("SANDBOX_MEMORY_LIMIT", "2g")
-    SANDBOX_CPU_LIMIT: float = float(os.getenv("SANDBOX_CPU_LIMIT", "1.0"))
-    DOCKER_NETWORK: str = os.getenv("DOCKER_NETWORK", "")
+    # CORS — multiple origins as a comma-separated string.
+    # Parsed into a list by the validator below so callers get list[str].
+    ALLOWED_ORIGINS: list[str] = ["http://localhost:3000"]
 
-    # Encryption key for git tokens — must match frontend ENCRYPTION_KEY.
-    # The raw value is SHA-256 hashed to produce a 32-byte AES-256 key.
-    ENCRYPTION_KEY: str = os.getenv("ENCRYPTION_KEY", "")
+    # ── Docker sandbox ───────────────────────────────────────
+    SANDBOX_CONTAINER_PREFIX: str = "lucid-sandbox-"
+    SANDBOX_MEMORY_LIMIT: str = "2g"
+    SANDBOX_CPU_LIMIT: float = 1.0
+    DOCKER_NETWORK: str = ""
+
+    # CONVERSATION_TIMEOUT env var (seconds until an idle session is reaped)
+    CONVERSATION_TIMEOUT: int = 1800
+
+    # ── Validators ───────────────────────────────────────────
+
+    @field_validator("SUPABASE_URL")
+    @classmethod
+    def supabase_url_must_be_https(cls, v: str) -> str:
+        if not v.startswith("https://"):
+            raise ValueError("SUPABASE_URL must start with https://")
+        return v
+
+    @field_validator("ALLOWED_ORIGINS", mode="before")
+    @classmethod
+    def parse_allowed_origins(cls, v: object) -> list[str]:
+        if isinstance(v, list):
+            return v
+        return [o.strip() for o in str(v).split(",") if o.strip()]
+
 
 settings = Settings()
 
@@ -111,6 +140,6 @@ THOUGHT_MAX_CHARS = 1000
 WS_INIT_TIMEOUT_SECONDS = 30.0
 MOCK_STEP_DELAY_SECONDS = 1.5
 EVENT_BUFFER_MAX_SIZE = 1000
-CONVERSATION_TIMEOUT_SECONDS = int(os.getenv("CONVERSATION_TIMEOUT", "1800"))  # 30 min
+CONVERSATION_TIMEOUT_SECONDS: int = settings.CONVERSATION_TIMEOUT
 DB_BATCH_SIZE = 20          # flush events to DB after this many accumulate
 DB_BATCH_INTERVAL = 2.0     # … or after this many seconds, whichever comes first
