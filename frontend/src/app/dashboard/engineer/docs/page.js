@@ -213,34 +213,34 @@ export default function DocsPage() {
     : repos;
 
   return (
-    <div className="h-full flex flex-col bg-white relative overflow-hidden">
+    <div className="h-full flex flex-col bg-white dark:bg-slate-950 relative overflow-hidden transition-colors duration-200">
 
       {/* ── Gradient accent line at top ── */}
       <div className="h-[3px] bg-gradient-to-r from-cyan-400 via-blue-500 to-violet-500 shrink-0" />
 
       {/* ── Top Navigation Bar ── */}
-      <div className="h-14 border-b border-slate-100 flex items-center px-6 justify-between shrink-0 bg-white z-20">
+      <div className="h-14 border-b border-slate-100 dark:border-slate-800 flex items-center px-6 justify-between shrink-0 bg-white dark:bg-slate-950 z-20 transition-colors duration-200">
         <div className="flex items-center gap-3">
           {step !== 'choose-source' && step !== 'generating' && (
             <button
               onClick={handleBack}
-              className="w-8 h-8 rounded-lg border border-slate-200 flex items-center justify-center text-slate-500 hover:text-slate-700 hover:bg-slate-50 transition-all mr-1"
+              className="w-8 h-8 rounded-lg border border-slate-200 dark:border-slate-700 flex items-center justify-center text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all mr-1"
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
           )}
           {getBreadcrumb() && (
             <>
-              <span className="text-sm text-slate-300 font-medium">Sources</span>
-              <ChevronRight className="w-3.5 h-3.5 text-slate-300" />
-              <span className="text-sm font-semibold text-slate-700">{getBreadcrumb()}</span>
+              <span className="text-sm text-slate-300 dark:text-slate-600 font-medium">Sources</span>
+              <ChevronRight className="w-3.5 h-3.5 text-slate-300 dark:text-slate-600" />
+              <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">{getBreadcrumb()}</span>
             </>
           )}
         </div>
         {step !== 'choose-source' && step !== 'generating' && (
           <button
             onClick={handleCancel}
-            className="text-sm font-medium text-slate-500 hover:text-slate-700 transition-colors"
+            className="text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
           >
             Cancel
           </button>
@@ -250,7 +250,7 @@ export default function DocsPage() {
       {/* ── Main Content ── */}
       <div className="flex-1 overflow-y-auto relative">
         {/* Background grid */}
-        <div className="absolute inset-0 bg-dot-grid opacity-30 pointer-events-none" />
+        <div className="absolute inset-0 bg-dot-grid opacity-30 dark:opacity-10 pointer-events-none" />
 
         {/* ══════════════════════════════════════════
             STEP 1: Choose Source
@@ -258,15 +258,15 @@ export default function DocsPage() {
         {step === 'choose-source' && (
           <div className="relative flex flex-col items-center justify-center min-h-full px-6 py-16 animate-fade-in">
             {/* Badge */}
-            <div className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-cyan-50 to-teal-50 border border-cyan-200 rounded-full mb-6">
-              <Sparkles className="w-4 h-4 text-teal-500" />
-              <span className="text-xs font-bold text-teal-700 uppercase tracking-wider">Choose Your Source</span>
+            <div className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-cyan-50 to-teal-50 dark:from-cyan-500/10 dark:to-teal-500/10 border border-cyan-200 dark:border-cyan-500/20 rounded-full mb-6">
+              <Sparkles className="w-4 h-4 text-teal-500 dark:text-teal-400" />
+              <span className="text-xs font-bold text-teal-700 dark:text-teal-400 uppercase tracking-wider">Choose Your Source</span>
             </div>
 
-            <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight text-center mb-3">
+            <h1 className="text-4xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight text-center mb-3">
               Generate Documentation
             </h1>
-            <p className="text-slate-500 text-center max-w-lg leading-relaxed mb-12">
+            <p className="text-slate-500 dark:text-slate-400 text-center max-w-lg leading-relaxed mb-12">
               Select a source type and our AI will analyze, crawl, and auto-generate 
               comprehensive technical documentation in seconds.
             </p>
@@ -310,7 +310,7 @@ export default function DocsPage() {
                   <button
                     key={opt.id}
                     onClick={() => handleSourceSelect(opt.id)}
-                    className="bg-white rounded-2xl border border-slate-200 p-6 text-center transition-all duration-300 group hover:shadow-card hover:-translate-y-1 relative overflow-hidden"
+                    className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 text-center transition-all duration-300 group hover:shadow-card hover:-translate-y-1 relative overflow-hidden"
                   >
                     <div className={cn("absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r opacity-0 group-hover:opacity-100 transition-opacity duration-300", opt.gradient)} />
                     <div className={cn(
@@ -320,10 +320,10 @@ export default function DocsPage() {
                     )}>
                       <Icon className="w-7 h-7" />
                     </div>
-                    <h3 className="text-base font-bold text-slate-900 mb-1">{opt.label}</h3>
-                    <p className="text-xs text-slate-400 leading-relaxed">{opt.desc}</p>
-                    <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-center gap-1.5">
-                      <span className="text-xs font-semibold text-slate-400 group-hover:text-slate-600 transition-colors">Get started</span>
+                    <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 mb-1">{opt.label}</h3>
+                    <p className="text-xs text-slate-400 dark:text-slate-500 leading-relaxed">{opt.desc}</p>
+                    <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-center gap-1.5">
+                      <span className="text-xs font-semibold text-slate-400 dark:text-slate-500 group-hover:text-slate-600 dark:group-hover:text-slate-300 transition-colors">Get started</span>
                       <ChevronRight className="w-3.5 h-3.5 text-slate-300 group-hover:translate-x-0.5 group-hover:text-slate-500 transition-all" />
                     </div>
                   </button>
@@ -357,10 +357,10 @@ export default function DocsPage() {
               </span>
             </div>
 
-            <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight text-center mb-3">
+            <h1 className="text-4xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight text-center mb-3">
               Select Provider
             </h1>
-            <p className="text-slate-500 text-center max-w-lg leading-relaxed mb-12">
+            <p className="text-slate-500 dark:text-slate-400 text-center max-w-lg leading-relaxed mb-12">
               Choose the Git provider where your {selectedSource} repository is hosted.
             </p>
 
@@ -368,14 +368,14 @@ export default function DocsPage() {
               {/* GitHub */}
               <button
                 onClick={() => handleProviderSelect('github')}
-                className="bg-white rounded-2xl border border-slate-200 p-8 text-center transition-all duration-300 group hover:shadow-card hover:-translate-y-1 relative overflow-hidden"
+                className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-8 text-center transition-all duration-300 group hover:shadow-card hover:-translate-y-1 relative overflow-hidden"
               >
                 <div className="absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r from-slate-700 to-slate-900 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-                <div className="w-16 h-16 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center mx-auto mb-4 group-hover:scale-110 group-hover:shadow-lg transition-all duration-300">
-                  <Github className="w-9 h-9 text-slate-900" />
+                <div className="w-16 h-16 rounded-2xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center mx-auto mb-4 group-hover:scale-110 group-hover:shadow-lg transition-all duration-300">
+                  <Github className="w-9 h-9 text-slate-900 dark:text-slate-100" />
                 </div>
-                <h3 className="text-lg font-bold text-slate-900 mb-1">GitHub</h3>
-                <p className="text-xs text-slate-400 leading-relaxed mb-4">Connect to your GitHub repos</p>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-1">GitHub</h3>
+                <p className="text-xs text-slate-400 dark:text-slate-500 leading-relaxed mb-4">Connect to your GitHub repos</p>
                 <div className="flex items-center justify-center gap-1.5">
                   <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                   <span className="text-xs font-medium text-emerald-600">Connected</span>
@@ -385,14 +385,14 @@ export default function DocsPage() {
               {/* GitLab */}
               <button
                 onClick={() => handleProviderSelect('gitlab')}
-                className="bg-white rounded-2xl border border-slate-200 p-8 text-center transition-all duration-300 group hover:shadow-card hover:-translate-y-1 relative overflow-hidden"
+                className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-8 text-center transition-all duration-300 group hover:shadow-card hover:-translate-y-1 relative overflow-hidden"
               >
                 <div className="absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r from-orange-400 to-orange-600 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
                 <div className="w-16 h-16 rounded-2xl bg-orange-50 border border-orange-100 flex items-center justify-center mx-auto mb-4 group-hover:scale-110 group-hover:shadow-lg transition-all duration-300">
                   <GitLabIcon className="w-9 h-9 text-orange-500" />
                 </div>
-                <h3 className="text-lg font-bold text-slate-900 mb-1">GitLab</h3>
-                <p className="text-xs text-slate-400 leading-relaxed mb-4">Connect to your GitLab repos</p>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-1">GitLab</h3>
+                <p className="text-xs text-slate-400 dark:text-slate-500 leading-relaxed mb-4">Connect to your GitLab repos</p>
                 <div className="flex items-center justify-center gap-1.5">
                   <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                   <span className="text-xs font-medium text-emerald-600">Connected</span>
@@ -408,53 +408,53 @@ export default function DocsPage() {
         {step === 'choose-repo' && (
           <div className="relative flex flex-col items-center min-h-full px-6 py-12 animate-fade-in">
             {/* Badge */}
-            <div className="flex items-center gap-2 px-4 py-2 bg-slate-50 border border-slate-200 rounded-full mb-6">
+            <div className="flex items-center gap-2 px-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-full mb-6">
               {selectedProvider === 'github'
                 ? <Github className="w-4 h-4 text-slate-700" />
                 : <GitLabIcon className="w-4 h-4 text-orange-500" />
               }
-              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+              <span className="text-xs font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wider">
                 {selectedProvider === 'github' ? 'GitHub' : 'GitLab'} Repositories
               </span>
             </div>
 
-            <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight text-center mb-2">
+            <h1 className="text-3xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight text-center mb-2">
               Select Repository
             </h1>
-            <p className="text-slate-500 text-center max-w-md leading-relaxed mb-8">
+            <p className="text-slate-500 dark:text-slate-400 text-center max-w-md leading-relaxed mb-8">
               Choose the repository you want to generate documentation for.
             </p>
 
             {/* Repository list card */}
-            <div className="w-full max-w-2xl bg-white rounded-2xl border border-slate-200 shadow-soft overflow-hidden">
+            <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-soft overflow-hidden">
               {/* Search */}
-              <div className="px-5 py-3.5 border-b border-slate-100 flex items-center gap-3">
+              <div className="px-5 py-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center gap-3">
                 <Search className="w-4 h-4 text-slate-400" />
                 <input
                   type="text"
                   placeholder="Search repositories..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="flex-1 bg-transparent border-none outline-none text-sm text-slate-700 placeholder-slate-400"
+                  className="flex-1 bg-transparent border-none outline-none text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500"
                   autoFocus
                 />
-                <span className="text-[11px] text-slate-400 font-medium bg-slate-50 px-2 py-0.5 rounded-md">{filteredRepos.length} repos</span>
+                <span className="text-[11px] text-slate-400 dark:text-slate-500 font-medium bg-slate-50 dark:bg-slate-800 px-2 py-0.5 rounded-md">{filteredRepos.length} repos</span>
               </div>
 
               {/* Repo list */}
-              <div className="divide-y divide-slate-50 max-h-[380px] overflow-y-auto">
+              <div className="divide-y divide-slate-50 dark:divide-slate-800 max-h-[380px] overflow-y-auto">
                 {filteredRepos.map((repo) => (
                   <button
                     key={repo.name}
                     onClick={() => handleRepoSelect(repo)}
-                    className="w-full flex items-center gap-4 px-5 py-3.5 text-left hover:bg-blue-50/40 transition-all duration-200 group"
+                    className="w-full flex items-center gap-4 px-5 py-3.5 text-left hover:bg-blue-50/40 dark:hover:bg-blue-500/5 transition-all duration-200 group"
                   >
-                    <div className="w-9 h-9 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-center shrink-0 group-hover:bg-white group-hover:border-blue-200 transition-all">
+                    <div className="w-9 h-9 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center shrink-0 group-hover:bg-white dark:group-hover:bg-slate-700 group-hover:border-blue-200 dark:group-hover:border-blue-500/30 transition-all">
                       <Code2 className="w-4 h-4 text-slate-400 group-hover:text-blue-500 transition-colors" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <h4 className="text-sm font-semibold text-slate-900 group-hover:text-blue-600 transition-colors truncate">{repo.name}</h4>
+                        <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors truncate">{repo.name}</h4>
                         {repo.isDemo && (
                           <span className="px-1.5 py-0.5 bg-amber-50 border border-amber-200 rounded text-[9px] font-bold text-amber-600 uppercase">Demo</span>
                         )}
@@ -483,8 +483,8 @@ export default function DocsPage() {
               {filteredRepos.length === 0 && (
                 <div className="px-6 py-10 text-center">
                   <Search className="w-7 h-7 text-slate-300 mx-auto mb-2" />
-                  <p className="text-sm font-medium text-slate-500">No repositories found</p>
-                  <p className="text-xs text-slate-400 mt-0.5">Try a different search</p>
+                  <p className="text-sm font-medium text-slate-500 dark:text-slate-400">No repositories found</p>
+                  <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">Try a different search</p>
                 </div>
               )}
             </div>
@@ -497,15 +497,15 @@ export default function DocsPage() {
         {step === 'enter-url' && (
           <div className="relative flex flex-col items-center justify-center min-h-full px-6 py-16 animate-fade-in">
             {/* Badge */}
-            <div className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-cyan-50 to-teal-50 border border-cyan-200 rounded-full mb-6">
-              <Globe className="w-4 h-4 text-teal-500" />
-              <span className="text-xs font-bold text-teal-700 uppercase tracking-wider">Website to Documentation</span>
+            <div className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-cyan-50 to-teal-50 dark:from-cyan-500/10 dark:to-teal-500/10 border border-cyan-200 dark:border-cyan-500/20 rounded-full mb-6">
+              <Globe className="w-4 h-4 text-teal-500 dark:text-teal-400" />
+              <span className="text-xs font-bold text-teal-700 dark:text-teal-400 uppercase tracking-wider">Website to Documentation</span>
             </div>
 
-            <h1 className="text-4xl font-extrabold text-slate-900 tracking-tight text-center mb-3">
+            <h1 className="text-4xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight text-center mb-3">
               Generate Documentation
             </h1>
-            <p className="text-slate-500 text-center max-w-lg leading-relaxed mb-10">
+            <p className="text-slate-500 dark:text-slate-400 text-center max-w-lg leading-relaxed mb-10">
               Paste any live website URL and our AI will crawl, analyze, and auto-generate 
               comprehensive technical documentation in seconds.
             </p>
@@ -522,7 +522,7 @@ export default function DocsPage() {
                   onChange={(e) => setWebUrl(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleWebUrlGenerate()}
                   placeholder="https://docs.your-project.com"
-                  className="w-full pl-14 pr-5 py-4.5 bg-white border border-slate-200 rounded-full text-sm text-slate-700 placeholder-slate-400 focus:border-cyan-400 focus:ring-2 focus:ring-cyan-500/10 outline-none transition-all shadow-sm hover:shadow-md"
+                  className="w-full pl-14 pr-5 py-4.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-full text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-cyan-400 dark:focus:border-cyan-500 focus:ring-2 focus:ring-cyan-500/10 outline-none transition-all shadow-sm hover:shadow-md"
                   style={{ paddingTop: '18px', paddingBottom: '18px' }}
                   autoFocus
                 />
@@ -531,12 +531,12 @@ export default function DocsPage() {
 
             {/* Quick Try */}
             <div className="flex items-center gap-2.5 mb-8 flex-wrap justify-center">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Quick Try:</span>
+              <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Quick Try:</span>
               {['docs.github.com', 'nextjs.org/docs', 'tailwindcss.com'].map((url) => (
                 <button
                   key={url}
                   onClick={() => setWebUrl(`https://${url}`)}
-                  className="px-3 py-1.5 bg-white border border-slate-200 rounded-full text-xs text-slate-500 hover:bg-slate-50 hover:border-slate-300 hover:text-slate-700 transition-all shadow-sm"
+                  className="px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-full text-xs text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-slate-300 dark:hover:border-slate-600 hover:text-slate-700 dark:hover:text-slate-200 transition-all shadow-sm"
                 >
                   {url}
                 </button>
@@ -551,7 +551,7 @@ export default function DocsPage() {
                 "flex items-center justify-center gap-2.5 px-10 py-4 rounded-full text-sm font-bold transition-all duration-300 mb-5",
                 webUrl.trim()
                   ? "bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-lg shadow-blue-500/25 hover:shadow-xl hover:shadow-blue-500/30 hover:-translate-y-0.5 active:scale-[0.98]"
-                  : "bg-slate-100 text-slate-400 cursor-not-allowed"
+                  : "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed"
               )}
             >
               <Sparkles className="w-5 h-5" />
@@ -573,12 +573,12 @@ export default function DocsPage() {
           <div className="relative flex flex-col items-center justify-center min-h-full px-6 py-16 animate-fade-in">
             {/* Animated Spinner */}
             <div className="relative w-28 h-28 mx-auto mb-8">
-              <div className="absolute inset-0 rounded-full border-4 border-slate-100" />
+              <div className="absolute inset-0 rounded-full border-4 border-slate-100 dark:border-slate-800" />
               <div
                 className="absolute inset-0 rounded-full border-4 border-transparent border-t-cyan-500 border-r-blue-500 animate-spin"
                 style={{ animationDuration: '1.2s' }}
               />
-              <div className="absolute inset-3 rounded-full bg-white shadow-soft flex items-center justify-center">
+              <div className="absolute inset-3 rounded-full bg-white dark:bg-slate-900 shadow-soft flex items-center justify-center">
                 {generationProgress >= 100 ? (
                   <CheckCircle2 className="w-9 h-9 text-teal-500 animate-fade-in" />
                 ) : (
@@ -587,20 +587,20 @@ export default function DocsPage() {
               </div>
             </div>
 
-            <h2 className="text-2xl font-extrabold text-slate-900 mb-2 text-center">
+            <h2 className="text-2xl font-extrabold text-slate-900 dark:text-slate-100 mb-2 text-center">
               {generationProgress >= 100 ? 'Documentation Ready!' : 'Analyzing & Generating'}
             </h2>
-            <p className="text-sm text-slate-500 mb-8 text-center">{generationStep}</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-8 text-center">{generationStep}</p>
 
             {/* Progress bar */}
             <div className="w-full max-w-md">
-              <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden mb-2">
+              <div className="w-full bg-slate-100 dark:bg-slate-800 rounded-full h-2 overflow-hidden mb-2">
                 <div
                   className="h-full bg-gradient-to-r from-cyan-500 to-blue-600 rounded-full transition-all duration-500 ease-out"
                   style={{ width: `${generationProgress}%` }}
                 />
               </div>
-              <p className="text-xs font-semibold text-slate-400 text-center">{generationProgress}% complete</p>
+              <p className="text-xs font-semibold text-slate-400 dark:text-slate-500 text-center">{generationProgress}% complete</p>
             </div>
           </div>
         )}

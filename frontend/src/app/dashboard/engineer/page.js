@@ -10,7 +10,6 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import useFlowStore from '@/store/useFlowStore';
-import ThemeModeSelector from '@/components/ThemeModeSelector';
 
 export default function EngineerDashboardPage() {
   const router = useRouter();
@@ -70,22 +69,17 @@ export default function EngineerDashboardPage() {
   return (
     <div className="h-full bg-[#f0f4f9] dark:bg-slate-950 relative flex flex-col transition-colors duration-200">
 
-      {/* ── Theme Selector (top right) ── */}
-      <div className="absolute top-4 right-6 z-30">
-        <ThemeModeSelector />
-      </div>
-
       {/* ── Main Content ── */}
       <div className="max-w-3xl mx-auto px-8 py-8 flex-1 flex flex-col justify-center w-full">
 
         {/* Banner */}
         {showBanner && (
           <div className="flex items-center justify-center mb-6">
-            <div className="flex items-center gap-2 px-5 py-2 bg-white border border-slate-200 rounded-full shadow-soft">
-              <span className="text-sm text-slate-500">New around here? Not sure where to start?</span>
-              <button className="text-sm text-slate-800 font-bold underline underline-offset-2 hover:text-blue-600 transition-colors">Click here</button>
+            <div className="flex items-center gap-2 px-5 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-full shadow-soft">
+              <span className="text-sm text-slate-500 dark:text-slate-400">New around here? Not sure where to start?</span>
+              <button className="text-sm text-slate-800 dark:text-slate-200 font-bold underline underline-offset-2 hover:text-blue-600 dark:hover:text-blue-400 transition-colors">Click here</button>
             </div>
-            <button onClick={() => setShowBanner(false)} className="ml-3 text-slate-300 hover:text-slate-500 transition-colors">
+            <button onClick={() => setShowBanner(false)} className="ml-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400 transition-colors">
               <X className="w-4 h-4" />
             </button>
           </div>
@@ -111,24 +105,24 @@ export default function EngineerDashboardPage() {
           {/* LEFT: Open Repository */}
           <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-soft relative z-30">
             <div className="flex items-center gap-3 mb-1">
-              <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-100 flex items-center justify-center">
-                <GitBranch className="w-4 h-4 text-blue-600" />
+              <div className="w-8 h-8 rounded-lg bg-blue-50 dark:bg-blue-500/10 border border-blue-100 dark:border-blue-500/20 flex items-center justify-center">
+                <GitBranch className="w-4 h-4 text-blue-600 dark:text-blue-400" />
               </div>
-              <h2 className="text-[15px] font-bold text-slate-900">Open Repository</h2>
+              <h2 className="text-[15px] font-bold text-slate-900 dark:text-slate-100">Open Repository</h2>
             </div>
             
             {/* Select URL label */}
-            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mt-4 mb-3">Select or insert a URL</p>
+            <p className="text-[11px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider mt-4 mb-3">Select or insert a URL</p>
 
             <div className="space-y-2.5 mb-4">
               {/* Provider Dropdown */}
               <div className="relative">
                 <button
                   onClick={() => { setShowProviderDropdown(!showProviderDropdown); setShowRepoDropdown(false); setShowBranchDropdown(false); }}
-                  className="w-full flex items-center justify-between px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-600 hover:border-slate-300 transition-all"
+                  className="w-full flex items-center justify-between px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-600 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-600 transition-all"
                 >
                   <div className="flex items-center gap-2.5">
-                    <Github className="w-4 h-4 text-slate-700" />
+                    <Github className="w-4 h-4 text-slate-700 dark:text-slate-300" />
                     <span className="font-medium">{selectedProvider === 'github' ? 'GitHub' : 'GitLab'}</span>
                   </div>
                   <ChevronDown className={cn("w-4 h-4 text-slate-400 transition-transform", showProviderDropdown && "rotate-180")} />
@@ -137,17 +131,17 @@ export default function EngineerDashboardPage() {
                 {showProviderDropdown && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setShowProviderDropdown(false)} />
-                    <div className="absolute right-0 top-full mt-1.5 w-full bg-white rounded-xl border border-slate-200 overflow-hidden z-50 shadow-lg" style={{ backgroundColor: '#ffffff', zIndex: 50 }}>
+                    <div className="absolute right-0 top-full mt-1.5 w-full bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden z-50 shadow-lg">
                       <button
                         onClick={() => { setSelectedProvider('github'); setShowProviderDropdown(false); }}
-                        className={cn("w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-left hover:bg-slate-50 transition-colors", selectedProvider === 'github' && "bg-blue-50 text-blue-600")}
+                        className={cn("w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-left hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors", selectedProvider === 'github' && "bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400")}
                       >
                         <Github className="w-4 h-4" /> GitHub
                         {selectedProvider === 'github' && <Check className="w-3.5 h-3.5 ml-auto" />}
                       </button>
                       <button
                         onClick={() => { setSelectedProvider('gitlab'); setShowProviderDropdown(false); }}
-                        className={cn("w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-left hover:bg-slate-50 transition-colors", selectedProvider === 'gitlab' && "bg-blue-50 text-blue-600")}
+                        className={cn("w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-left hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors", selectedProvider === 'gitlab' && "bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400")}
                       >
                         <GitBranch className="w-4 h-4" /> GitLab
                         {selectedProvider === 'gitlab' && <Check className="w-3.5 h-3.5 ml-auto" />}
@@ -161,7 +155,7 @@ export default function EngineerDashboardPage() {
               <div className="relative">
                 <button
                   onClick={() => { setShowRepoDropdown(!showRepoDropdown); setShowBranchDropdown(false); setShowProviderDropdown(false); }}
-                  className="w-full flex items-center justify-between px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-600 hover:border-blue-300 transition-all"
+                  className="w-full flex items-center justify-between px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-600 dark:text-slate-300 hover:border-blue-300 dark:hover:border-blue-500/50 transition-all"
                 >
                   <div className="flex items-center gap-2.5 truncate">
                     <Folder className="w-4 h-4 text-slate-400 shrink-0" />
@@ -175,14 +169,14 @@ export default function EngineerDashboardPage() {
                 {showRepoDropdown && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setShowRepoDropdown(false)} />
-                    <div className="absolute top-full left-0 right-0 mt-1.5 bg-white rounded-xl border border-slate-200 overflow-hidden z-50 shadow-lg" style={{ backgroundColor: '#ffffff', zIndex: 50 }}>
-                      <div className="px-3 py-2 border-b border-slate-100">
+                    <div className="absolute top-full left-0 right-0 mt-1.5 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden z-50 shadow-lg">
+                      <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-700">
                         <div className="relative">
                           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
                           <input
                             value={repoSearch}
                             onChange={(e) => setRepoSearch(e.target.value)}
-                            className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-100 rounded-lg bg-slate-50 outline-none focus:border-blue-300 text-slate-700"
+                            className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-100 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700 outline-none focus:border-blue-300 dark:focus:border-blue-500 text-slate-700 dark:text-slate-200"
                             placeholder="Search repositories..."
                             autoFocus
                           />
@@ -194,8 +188,8 @@ export default function EngineerDashboardPage() {
                             key={repo.name}
                             onClick={() => { setLocalRepo(repo); setShowRepoDropdown(false); setRepoSearch(''); }}
                             className={cn(
-                              "w-full flex items-center gap-3 px-3.5 py-2.5 text-sm transition-all text-left hover:bg-slate-50",
-                              localRepo?.name === repo.name ? "bg-blue-50 text-blue-700" : "text-slate-600"
+                              "w-full flex items-center gap-3 px-3.5 py-2.5 text-sm transition-all text-left hover:bg-slate-50 dark:hover:bg-slate-700",
+                              localRepo?.name === repo.name ? "bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400" : "text-slate-600 dark:text-slate-300"
                             )}
                           >
                             <Github className="w-3.5 h-3.5 text-slate-400 shrink-0" />
@@ -213,7 +207,7 @@ export default function EngineerDashboardPage() {
               <div className="relative">
                 <button
                   onClick={() => { setShowBranchDropdown(!showBranchDropdown); setShowRepoDropdown(false); setShowProviderDropdown(false); }}
-                  className="w-full flex items-center justify-between px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-600 hover:border-blue-300 transition-all"
+                  className="w-full flex items-center justify-between px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-600 dark:text-slate-300 hover:border-blue-300 dark:hover:border-blue-500/50 transition-all"
                 >
                   <div className="flex items-center gap-2.5">
                     <GitBranch className="w-4 h-4 text-slate-400" />
@@ -225,15 +219,15 @@ export default function EngineerDashboardPage() {
                 {showBranchDropdown && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setShowBranchDropdown(false)} />
-                    <div className="absolute top-full left-0 right-0 mt-1.5 bg-white rounded-xl border border-slate-200 overflow-hidden z-50 shadow-lg" style={{ backgroundColor: '#ffffff', zIndex: 50 }}>
+                    <div className="absolute top-full left-0 right-0 mt-1.5 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden z-50 shadow-lg">
                       {branches.map((branch) => (
                         <button
                           key={branch}
                           onClick={() => { setLocalBranch(branch); setShowBranchDropdown(false); }}
-                          className={cn(
-                            "w-full flex items-center gap-3 px-3.5 py-2.5 text-sm transition-all text-left hover:bg-slate-50",
-                            localBranch === branch ? "bg-blue-50 text-blue-700" : "text-slate-600"
-                          )}
+                            className={cn(
+                              "w-full flex items-center gap-3 px-3.5 py-2.5 text-sm transition-all text-left hover:bg-slate-50 dark:hover:bg-slate-700",
+                              localBranch === branch ? "bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400" : "text-slate-600 dark:text-slate-300"
+                            )}
                         >
                           <GitBranch className="w-3.5 h-3.5 text-slate-400" />
                           <span className="font-medium">{branch}</span>
@@ -247,14 +241,14 @@ export default function EngineerDashboardPage() {
             </div>
 
             {/* ── AI Model Selector ── */}
-            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mt-1 mb-2">AI Model</p>
+            <p className="text-[11px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider mt-1 mb-2">AI Model</p>
 
             <div className="space-y-2.5 mb-4">
               {/* Model Dropdown */}
               <div className="relative">
                 <button
                   onClick={() => { setShowModelDropdown(!showModelDropdown); setShowRepoDropdown(false); setShowBranchDropdown(false); setShowProviderDropdown(false); }}
-                  className="w-full flex items-center justify-between px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-600 hover:border-slate-300 transition-all"
+                  className="w-full flex items-center justify-between px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-600 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-600 transition-all"
                 >
                   <div className="flex items-center gap-2.5">
                     {selectedModel === 'google' ? (
@@ -282,11 +276,11 @@ export default function EngineerDashboardPage() {
                 {showModelDropdown && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setShowModelDropdown(false)} />
-                    <div className="absolute right-0 top-full mt-1.5 w-full bg-white rounded-xl border border-slate-200 overflow-hidden z-50 shadow-lg" style={{ backgroundColor: '#ffffff', zIndex: 50 }}>
+                    <div className="absolute right-0 top-full mt-1.5 w-full bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden z-50 shadow-lg">
                       {/* Google Gemini */}
                       <button
                         onClick={() => { setSelectedModel('google'); setShowModelDropdown(false); }}
-                        className={cn("w-full flex items-center gap-2.5 px-3.5 py-3 text-sm text-left hover:bg-slate-50 transition-colors", selectedModel === 'google' && "bg-blue-50")}
+                        className={cn("w-full flex items-center gap-2.5 px-3.5 py-3 text-sm text-left hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors", selectedModel === 'google' && "bg-blue-50 dark:bg-blue-500/10")}
                       >
                         <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none">
                           <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4"/>
@@ -295,7 +289,7 @@ export default function EngineerDashboardPage() {
                           <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
                         </svg>
                         <div className="flex-1">
-                          <span className="font-semibold text-slate-900">Gemini 3 Flash Preview</span>
+                          <span className="font-semibold text-slate-900 dark:text-slate-100">Gemini 3 Flash Preview</span>
                           <span className="text-[10px] text-slate-500">Fast inference · Latest preview model</span>
                         </div>
                         {selectedModel === 'google' && <Check className="w-3.5 h-3.5 text-blue-600 shrink-0" />}
@@ -303,13 +297,13 @@ export default function EngineerDashboardPage() {
                       {/* Anthropic Claude */}
                       <button
                         onClick={() => { setSelectedModel('anthropic'); setShowModelDropdown(false); }}
-                        className={cn("w-full flex items-center gap-2.5 px-3.5 py-3 text-sm text-left hover:bg-slate-50 transition-colors border-t border-slate-100", selectedModel === 'anthropic' && "bg-blue-50")}
+                        className={cn("w-full flex items-center gap-2.5 px-3.5 py-3 text-sm text-left hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors border-t border-slate-100 dark:border-slate-700", selectedModel === 'anthropic' && "bg-blue-50 dark:bg-blue-500/10")}
                       >
                         <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none">
                           <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="#D97706" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                         </svg>
                         <div className="flex-1">
-                          <div className="font-medium text-slate-700">Claude 3.5 Sonnet</div>
+                          <div className="font-medium text-slate-700 dark:text-slate-200">Claude 3.5 Sonnet</div>
                           <div className="text-[11px] text-slate-400">Best for reasoning · Superior code quality</div>
                         </div>
                         {selectedModel === 'anthropic' && <Check className="w-3.5 h-3.5 text-blue-600 shrink-0" />}
@@ -330,7 +324,7 @@ export default function EngineerDashboardPage() {
                 "w-full py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all duration-300",
                 localRepo && !isLaunching
                   ? "bg-gradient-to-r from-blue-600 to-blue-700 text-white hover:from-blue-700 hover:to-blue-800 shadow-sm shadow-blue-600/15"
-                  : "bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200"
+                  : "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed border border-slate-200 dark:border-slate-700"
               )}
             >
               {isLaunching ? (
@@ -347,10 +341,10 @@ export default function EngineerDashboardPage() {
           {/* RIGHT: Start from Scratch */}
           <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-soft flex flex-col">
             <div className="flex items-center gap-3 mb-3">
-              <div className="w-8 h-8 rounded-lg bg-violet-50 border border-violet-100 flex items-center justify-center">
-                <Plus className="w-4 h-4 text-violet-600" />
+              <div className="w-8 h-8 rounded-lg bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 flex items-center justify-center">
+                <Plus className="w-4 h-4 text-violet-600 dark:text-violet-400" />
               </div>
-              <h2 className="text-[15px] font-bold text-slate-900">Start from Scratch</h2>
+              <h2 className="text-[15px] font-bold text-slate-900 dark:text-slate-100">Start from Scratch</h2>
             </div>
             <p className="text-sm text-slate-400 leading-relaxed flex-1">
               Start a new conversation that is not connected to an existing repository. Perfect for quick experiments, boilerplates, or prototyping new ideas.
@@ -369,14 +363,14 @@ export default function EngineerDashboardPage() {
 
         {/* ── Recent Projects ── */}
         <div>
-          <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-5">
+          <h3 className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-5">
             Recent Projects
           </h3>
           <div className="flex items-center gap-3 py-4">
-            <div className="w-9 h-9 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center">
-              <Clock className="w-4 h-4 text-slate-300" />
+            <div className="w-9 h-9 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center">
+              <Clock className="w-4 h-4 text-slate-300 dark:text-slate-600" />
             </div>
-            <span className="text-sm text-slate-400 italic">No recent conversations</span>
+            <span className="text-sm text-slate-400 dark:text-slate-500 italic">No recent conversations</span>
           </div>
         </div>
       </div>

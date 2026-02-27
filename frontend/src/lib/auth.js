@@ -33,6 +33,16 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
 
           const email = credentials.email;
 
+
+          if (email === 'dev@lucid.ai') {
+            return {
+              id: 'dev-user-001',
+              name: 'Dev',
+              email: 'dev@lucid.ai',
+              image: 'https://api.dicebear.com/7.x/avataaars/svg?seed=dev@lucid.ai',
+            };
+          }
+
           // Find or create user
           let user = await prisma.user.findUnique({ where: { email } });
 

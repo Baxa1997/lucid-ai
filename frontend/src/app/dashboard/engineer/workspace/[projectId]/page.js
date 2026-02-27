@@ -2,7 +2,7 @@
 
 // ─────────────────────────────────────────────────────────
 //  Lucid AI — Full Page Conversation Workspace
-//  Layout: [FileExplorer] | [Chat] | [Terminal / FileViewer]
+//  Layout: [Chat] | [Terminal / FileViewer]
 // ─────────────────────────────────────────────────────────
 
 import { useState, useRef, useEffect, useCallback, use } from 'react';
@@ -11,28 +11,27 @@ import { cn } from '@/lib/utils';
 import {
   ArrowLeft, Send, Terminal, Settings, Minimize2,
   Bot, User, Cpu, ArrowDown, Loader2,
-  FolderOpen, X, FileText, Copy, Check,
+  X, FileText, Copy, Check,
 } from 'lucide-react';
 import { useAgentSession } from '@/hooks/useAgentSession';
-import FileExplorer from '@/components/agent/FileExplorer';
 
 // ── Status Component ───────────────────────────────────────
 function ConnectionStatus({ status, error }) {
   const config = {
-    idle:       { color: 'text-slate-400', label: 'Idle' },
-    connecting: { color: 'text-blue-600',  label: 'Connecting...' },
-    connected:  { color: 'text-emerald-600', label: 'Connected' },
-    error:      { color: 'text-red-600',   label: 'Error' },
-    stopped:    { color: 'text-slate-400', label: 'Stopped' },
+    idle:       { color: 'text-slate-400 dark:text-slate-500', label: 'Idle' },
+    connecting: { color: 'text-blue-600 dark:text-blue-400',  label: 'Connecting...' },
+    connected:  { color: 'text-emerald-600 dark:text-emerald-400', label: 'Connected' },
+    error:      { color: 'text-red-600 dark:text-red-400',   label: 'Error' },
+    stopped:    { color: 'text-slate-400 dark:text-slate-500', label: 'Stopped' },
   };
   const current = config[status] || config.idle;
 
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 rounded-full shadow-sm">
+    <div className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-full shadow-sm">
       <div className={cn("w-2 h-2 rounded-full",
         status === 'connected' ? "bg-emerald-500" :
         status === 'connecting' ? "bg-blue-500 animate-pulse" :
-        status === 'error' ? "bg-red-500" : "bg-slate-300"
+        status === 'error' ? "bg-red-500" : "bg-slate-300 dark:bg-slate-600"
       )} />
       <span className={cn("text-xs font-semibold", current.color)}>
         {error || current.label}
@@ -127,7 +126,6 @@ export default function ConversationPage({ params }) {
   // ── Layout state ────────────────────────────────────────
   const [chatInput, setChatInput] = useState('');
   const [showScrollBtn, setShowScrollBtn] = useState(false);
-  const [showExplorer, setShowExplorer] = useState(true);
 
   // rightPanel: null | 'terminal' | 'file'
   const [rightPanel, setRightPanel] = useState(null);
@@ -200,21 +198,7 @@ export default function ConversationPage({ params }) {
 
   // ── Render ─────────────────────────────────────────────
   return (
-    <div className="flex h-screen bg-[#f5f7fa] overflow-hidden">
-
-      {/* ════════════════════════════════════════════════
-          LEFT — File Explorer Sidebar
-      ════════════════════════════════════════════════ */}
-      {showExplorer && (
-        <div className="w-60 shrink-0 border-r border-slate-200 overflow-hidden">
-          <FileExplorer
-            files={files}
-            selectedFile={selectedFile}
-            onFileSelect={handleFileSelect}
-            projectName={decodedProjectId}
-          />
-        </div>
-      )}
+    <div className="flex h-screen bg-[#f5f7fa] dark:bg-slate-950 overflow-hidden transition-colors duration-200">
 
       {/* ════════════════════════════════════════════════
           CENTER — Chat Area
@@ -222,41 +206,27 @@ export default function ConversationPage({ params }) {
       <div className="flex-1 flex flex-col min-w-0 relative">
 
         {/* Header */}
-        <header className="shrink-0 h-16 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-6 z-10">
+        <header className="shrink-0 h-16 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-6 z-10 transition-colors duration-200">
           <div className="flex items-center gap-3">
             <button
               onClick={() => router.push('/dashboard/engineer')}
-              className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors"
+              className="p-2 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-full transition-colors"
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-lg font-bold text-slate-900 truncate max-w-[200px]">{decodedProjectId}</h1>
-                <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 text-[10px] font-bold uppercase tracking-wide">
+                <h1 className="text-lg font-bold text-slate-900 dark:text-slate-100 truncate max-w-[200px]">{decodedProjectId}</h1>
+                <span className="px-2 py-0.5 rounded-md bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400 text-[10px] font-bold uppercase tracking-wide border border-blue-100 dark:border-blue-500/20">
                   AI Session
                 </span>
               </div>
-              <p className="text-xs text-slate-500 font-medium">AI Engineering Session</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">AI Engineering Session</p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
             <ConnectionStatus status={status} error={error} />
-
-            {/* Explorer toggle */}
-            <button
-              onClick={() => setShowExplorer(!showExplorer)}
-              className={cn(
-                "p-2 rounded-lg transition-all border",
-                showExplorer
-                  ? "bg-slate-100 text-slate-900 border-slate-300"
-                  : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"
-              )}
-              title="Toggle File Explorer"
-            >
-              <FolderOpen className="w-4 h-4" />
-            </button>
 
             {/* Terminal toggle */}
             <button
@@ -264,8 +234,8 @@ export default function ConversationPage({ params }) {
               className={cn(
                 "p-2 rounded-lg transition-all border",
                 rightPanel === 'terminal'
-                  ? "bg-slate-100 text-slate-900 border-slate-300"
-                  : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50"
+                  ? "bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 border-slate-300 dark:border-slate-600"
+                  : "bg-white dark:bg-slate-900 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800"
               )}
               title="Toggle Terminal"
             >
@@ -274,7 +244,7 @@ export default function ConversationPage({ params }) {
 
             <button
               onClick={() => router.push('/dashboard/engineer/settings')}
-              className="p-2 text-slate-400 hover:text-slate-900 transition-colors"
+              className="p-2 text-slate-400 dark:text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 transition-colors"
             >
               <Settings className="w-5 h-5" />
             </button>
@@ -283,7 +253,7 @@ export default function ConversationPage({ params }) {
 
         {/* Chat Stream */}
         <div
-          className="flex-1 overflow-y-auto px-4 md:px-0 py-6"
+          className="flex-1 overflow-y-auto px-4 md:px-0 py-6 bg-[#f5f7fa] dark:bg-slate-950 transition-colors duration-200"
           ref={chatContainerRef}
           onScroll={handleChatScroll}
         >
@@ -295,10 +265,10 @@ export default function ConversationPage({ params }) {
                 <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-3xl flex items-center justify-center shadow-xl shadow-blue-500/20 mb-8">
                   <Bot className="w-10 h-10 text-white" />
                 </div>
-                <h2 className="text-2xl font-bold text-slate-900 mb-3">
+                <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-3">
                   How can I help you build today?
                 </h2>
-                <p className="text-slate-500 max-w-md leading-relaxed mb-8">
+                <p className="text-slate-500 dark:text-slate-400 max-w-md leading-relaxed mb-8">
                   I can write code, run commands, and debug your application.
                   Just describe your task to get started.
                 </p>
@@ -312,7 +282,7 @@ export default function ConversationPage({ params }) {
                     <button
                       key={suggestion}
                       onClick={() => setChatInput(suggestion)}
-                      className="px-4 py-2 bg-white border border-slate-200 rounded-full text-sm font-medium text-slate-600 hover:border-blue-300 hover:text-blue-600 hover:shadow-sm transition-all"
+                      className="px-4 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-full text-sm font-medium text-slate-600 dark:text-slate-300 hover:border-blue-300 dark:hover:border-blue-500/50 hover:text-blue-600 dark:hover:text-blue-400 hover:shadow-sm transition-all"
                     >
                       {suggestion}
                     </button>
@@ -334,10 +304,10 @@ export default function ConversationPage({ params }) {
                 <div className={cn(
                   "w-9 h-9 rounded-xl flex items-center justify-center shrink-0 shadow-sm",
                   msg.role === 'user'
-                    ? "bg-slate-900 text-white"
+                    ? "bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900"
                     : msg.role === 'agent'
                     ? "bg-blue-600 text-white"
-                    : "bg-slate-100 text-slate-400"
+                    : "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500"
                 )}>
                   {msg.role === 'user' ? <User className="w-5 h-5" /> :
                    msg.role === 'agent' ? <Bot className="w-5 h-5" /> :
@@ -348,10 +318,10 @@ export default function ConversationPage({ params }) {
                 <div className={cn(
                   "flex-1 max-w-[85%] rounded-2xl p-4 shadow-sm",
                   msg.role === 'user'
-                    ? "bg-white border border-slate-200 text-slate-700"
+                    ? "bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200"
                     : msg.role === 'agent'
-                    ? "bg-white border border-blue-100 text-slate-800"
-                    : "bg-slate-50 border border-slate-100 text-slate-500 text-sm italic"
+                    ? "bg-white dark:bg-slate-900 border border-blue-100 dark:border-blue-500/20 text-slate-800 dark:text-slate-200"
+                    : "bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700 text-slate-500 dark:text-slate-400 text-sm italic"
                 )}>
                   <div className="whitespace-pre-wrap text-sm leading-6 font-sans">
                     {msg.content}
@@ -363,10 +333,10 @@ export default function ConversationPage({ params }) {
             {/* Loading Indicator */}
             {(status === 'working' || status === 'connecting') && (
               <div className="flex items-center gap-3 px-4 max-w-3xl mx-auto">
-                <div className="w-9 h-9 rounded-xl bg-white border border-slate-200 flex items-center justify-center shadow-sm">
-                  <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />
+                <div className="w-9 h-9 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center shadow-sm">
+                  <Loader2 className="w-4 h-4 text-blue-600 dark:text-blue-400 animate-spin" />
                 </div>
-                <span className="text-sm font-medium text-slate-400 animate-pulse">
+                <span className="text-sm font-medium text-slate-400 dark:text-slate-500 animate-pulse">
                   Agent is thinking...
                 </span>
               </div>
@@ -377,7 +347,7 @@ export default function ConversationPage({ params }) {
         </div>
 
         {/* Input Area */}
-        <div className="shrink-0 p-6 bg-[#f5f7fa]">
+        <div className="shrink-0 p-6 bg-[#f5f7fa] dark:bg-slate-950 transition-colors duration-200">
           <div className="max-w-3xl mx-auto relative">
             {showScrollBtn && (
               <button
@@ -391,19 +361,19 @@ export default function ConversationPage({ params }) {
 
             <form
               onSubmit={handleSend}
-              className="relative bg-white border border-slate-300 rounded-2xl shadow-sm focus-within:ring-4 focus-within:ring-blue-500/10 focus-within:border-blue-500 transition-all overflow-hidden"
+              className="relative bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-2xl shadow-sm focus-within:ring-4 focus-within:ring-blue-500/10 focus-within:border-blue-500 dark:focus-within:border-blue-500 transition-all overflow-hidden"
             >
               <textarea
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="Ask the agent to make changes..."
-                className="w-full px-5 py-4 min-h-[60px] max-h-[200px] outline-none text-slate-900 placeholder:text-slate-400 resize-none font-medium leading-relaxed"
+                className="w-full px-5 py-4 min-h-[60px] max-h-[200px] outline-none text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 resize-none font-medium leading-relaxed bg-transparent"
                 rows={1}
               />
               <div className="flex items-center justify-between px-3 pb-3">
-                <div className="flex items-center gap-1 text-xs font-semibold text-slate-400">
-                  <span className="px-2 py-1 rounded hover:bg-slate-100 cursor-pointer transition-colors">+ Add Context</span>
+                <div className="flex items-center gap-1 text-xs font-semibold text-slate-400 dark:text-slate-500">
+                  <span className="px-2 py-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer transition-colors">+ Add Context</span>
                 </div>
                 <button
                   type="submit"
@@ -412,16 +382,16 @@ export default function ConversationPage({ params }) {
                     "p-2.5 rounded-xl transition-all",
                     chatInput.trim()
                       ? "bg-blue-600 text-white shadow-md shadow-blue-600/20 hover:bg-blue-700 hover:scale-105"
-                      : "bg-slate-100 text-slate-300 cursor-not-allowed"
+                      : "bg-slate-100 dark:bg-slate-800 text-slate-300 dark:text-slate-600 cursor-not-allowed"
                   )}
                 >
                   <Send className="w-4 h-4" />
                 </button>
               </div>
             </form>
-            <p className="text-center text-[11px] font-medium text-slate-400 mt-3">
-              Press <kbd className="font-sans px-1 py-0.5 bg-white border border-slate-200 rounded text-slate-500">Enter</kbd> to send,{' '}
-              <kbd className="font-sans px-1 py-0.5 bg-white border border-slate-200 rounded text-slate-500">Shift + Enter</kbd> for new line
+            <p className="text-center text-[11px] font-medium text-slate-400 dark:text-slate-500 mt-3">
+              Press <kbd className="font-sans px-1 py-0.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded text-slate-500 dark:text-slate-400">Enter</kbd> to send,{' '}
+              <kbd className="font-sans px-1 py-0.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded text-slate-500 dark:text-slate-400">Shift + Enter</kbd> for new line
             </p>
           </div>
         </div>
