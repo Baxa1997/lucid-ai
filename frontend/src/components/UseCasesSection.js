@@ -263,10 +263,10 @@ export default function UseCasesSection() {
   return (
     <section className="px-6 sm:px-10 pb-24 max-w-[1400px] mx-auto w-full">
       <div className="mb-16">
-        <h2 className="text-4xl sm:text-5xl font-bold text-slate-900 mb-6">
-          Use <span className="text-blue-500">cases</span>
+        <h2 className="text-4xl sm:text-5xl font-bold text-slate-900 dark:text-slate-100 mb-6">
+          Use <span className="text-blue-500 dark:text-blue-400">cases</span>
         </h2>
-        <p className="text-lg text-slate-500 max-w-2xl leading-relaxed">
+        <p className="text-lg text-slate-500 dark:text-slate-400 max-w-2xl leading-relaxed">
           From implementing new features to fixing thousands of lint errors, 
           Lucid AI can clear your backlog, modernize your codebase, and 
           help you build more.
@@ -388,17 +388,17 @@ export default function UseCasesSection() {
       {/* ── BOTTOM 3 CARDS ── */}
       <div className="grid md:grid-cols-3 gap-4">
         {bottomCards.map((card, i) => (
-          <div key={i} className="bg-slate-100/80 rounded-2xl p-6 md:p-8 hover:bg-white hover:shadow-lg transition-all duration-300 cursor-default border border-slate-200/60 hover:border-slate-300">
+          <div key={i} className="bg-slate-100/80 dark:bg-slate-800/60 rounded-2xl p-6 md:p-8 hover:bg-white dark:hover:bg-slate-800 hover:shadow-lg dark:hover:shadow-black/20 transition-all duration-300 cursor-default border border-slate-200/60 dark:border-slate-700/60 hover:border-slate-300 dark:hover:border-slate-600">
             <div className="flex justify-between items-start mb-8">
-              <h4 className="text-xl font-bold text-slate-900 leading-tight">{card.title}</h4>
+              <h4 className="text-xl font-bold text-slate-900 dark:text-slate-100 leading-tight">{card.title}</h4>
               <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center shrink-0", card.iconBg)}>
                 {card.icon}
               </div>
             </div>
             <ul className="space-y-3">
               {card.items.map((item, j) => (
-                <li key={j} className="flex items-center gap-2.5 text-[14px] font-medium text-slate-500">
-                  <div className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+                <li key={j} className="flex items-center gap-2.5 text-[14px] font-medium text-slate-500 dark:text-slate-400">
+                  <div className="w-1.5 h-1.5 rounded-full bg-blue-500 dark:bg-blue-400 shrink-0" />
                   {item}
                 </li>
               ))}

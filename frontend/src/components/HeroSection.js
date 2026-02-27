@@ -17,11 +17,11 @@ export default function HeroSection() {
           <ChevronRight className="w-3 h-3 text-slate-500" />
         </div>
 
-        <h1 className="text-4xl sm:text-5xl lg:text-[3rem] font-bold tracking-tight text-slate-900 leading-[1.1] mb-6">
-          <span className="text-transparent bg-clip-text bg-gradient-to-r from-violet-600 to-indigo-600">LucidAI</span>: The AI Software engineer
+        <h1 className="text-4xl sm:text-5xl lg:text-[3rem] font-bold tracking-tight text-slate-900 dark:text-slate-100 leading-[1.1] mb-6">
+          <span className="text-transparent bg-clip-text bg-gradient-to-r from-violet-600 to-indigo-600 dark:from-violet-400 dark:to-indigo-400">LucidAI</span>: The AI Software engineer
         </h1>
         
-        <p className="text-lg text-slate-500 leading-relaxed mb-8 max-w-lg font-medium">
+        <p className="text-lg text-slate-500 dark:text-slate-400 leading-relaxed mb-8 max-w-lg font-medium">
           An autonomous engineering partner that understands your codebase, builds features, and fixes bugs.
         </p>
 
@@ -29,7 +29,7 @@ export default function HeroSection() {
           <Link href="/login" className="bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-[15px] font-semibold px-8 py-3.5 rounded-lg shadow-lg shadow-violet-500/25 hover:shadow-violet-600/40 hover:-translate-y-0.5 transition-all duration-200 inline-block text-center">
             Get Started
           </Link>
-          <button className="bg-white text-slate-700 text-[15px] font-bold px-8 py-3.5 rounded-lg border border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-all shadow-sm">
+          <button className="bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-[15px] font-bold px-8 py-3.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all shadow-sm">
             Book a Demo
           </button>
         </div>
@@ -37,31 +37,31 @@ export default function HeroSection() {
         {/* Feature Steps List */}
         <div className="flex flex-col gap-2 w-full max-w-lg">
           {/* Step 1 */}
-          <div className="flex items-center gap-4 p-4 rounded-xl bg-white border border-slate-200 shadow-md transform hover:-translate-y-0.5 transition-all cursor-pointer relative overflow-hidden group">
+          <div className="flex items-center gap-4 p-4 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-md transform hover:-translate-y-0.5 transition-all cursor-pointer relative overflow-hidden group">
             <div className="absolute left-0 top-0 bottom-0 w-1 bg-violet-600"></div>
-            <div className="w-6 h-6 rounded-lg bg-slate-900 text-white flex items-center justify-center text-sm font-bold shadow-sm shrink-0">1</div>
+            <div className="w-6 h-6 rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 flex items-center justify-center text-sm font-bold shadow-sm shrink-0">1</div>
             <div className="flex flex-col">
-              <span className="text-slate-900 font-bold text-[15px]">Planning</span>
-              <span className="text-slate-500 text-[13px]">Plan your roadmap and architecture</span>
+              <span className="text-slate-900 dark:text-slate-100 font-bold text-[15px]">Planning</span>
+              <span className="text-slate-500 dark:text-slate-400 text-[13px]">Plan your roadmap and architecture</span>
             </div>
-            <ChevronRight className="w-4 h-4 text-slate-300 ml-auto" />
+            <ChevronRight className="w-4 h-4 text-slate-300 dark:text-slate-600 ml-auto" />
           </div>
 
           {/* Step 2 */}
-          <div className="flex items-center gap-4 p-4 rounded-xl border border-transparent hover:bg-slate-50 transition-all cursor-pointer group">
-            <div className="w-6 h-6 rounded-lg bg-slate-100 text-slate-500 flex items-center justify-center text-sm font-bold shrink-0 group-hover:bg-white group-hover:shadow-sm transition-all border border-transparent group-hover:border-slate-200">2</div>
+          <div className="flex items-center gap-4 p-4 rounded-xl border border-transparent hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-all cursor-pointer group">
+            <div className="w-6 h-6 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 flex items-center justify-center text-sm font-bold shrink-0 group-hover:bg-white dark:group-hover:bg-slate-700 group-hover:shadow-sm transition-all border border-transparent group-hover:border-slate-200 dark:group-hover:border-slate-600">2</div>
             <div className="flex flex-col">
-              <span className="text-slate-600 font-bold text-[15px] group-hover:text-slate-900 transition-colors">Professional Documentation</span>
-              <span className="text-slate-400 text-[13px] group-hover:text-slate-500 transition-colors">Generate enterprise-grade docs</span>
+              <span className="text-slate-600 dark:text-slate-300 font-bold text-[15px] group-hover:text-slate-900 dark:group-hover:text-white transition-colors">Professional Documentation</span>
+              <span className="text-slate-400 dark:text-slate-500 text-[13px] group-hover:text-slate-500 dark:group-hover:text-slate-400 transition-colors">Generate enterprise-grade docs</span>
             </div>
           </div>
 
           {/* Step 3 */}
-          <div className="flex items-center gap-4 p-4 rounded-xl border border-transparent hover:bg-slate-50 transition-all cursor-pointer group">
-            <div className="w-6 h-6 rounded-lg bg-slate-100 text-slate-500 flex items-center justify-center text-sm font-bold shrink-0 group-hover:bg-white group-hover:shadow-sm transition-all border border-transparent group-hover:border-slate-200">3</div>
+          <div className="flex items-center gap-4 p-4 rounded-xl border border-transparent hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-all cursor-pointer group">
+            <div className="w-6 h-6 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 flex items-center justify-center text-sm font-bold shrink-0 group-hover:bg-white dark:group-hover:bg-slate-700 group-hover:shadow-sm transition-all border border-transparent group-hover:border-slate-200 dark:group-hover:border-slate-600">3</div>
             <div className="flex flex-col">
-              <span className="text-slate-600 font-bold text-[15px] group-hover:text-slate-900 transition-colors">Integrations</span>
-              <span className="text-slate-400 text-[13px] group-hover:text-slate-500 transition-colors">Connect with GitHub, Linear & Slack</span>
+              <span className="text-slate-600 dark:text-slate-300 font-bold text-[15px] group-hover:text-slate-900 dark:group-hover:text-white transition-colors">Integrations</span>
+              <span className="text-slate-400 dark:text-slate-500 text-[13px] group-hover:text-slate-500 dark:group-hover:text-slate-400 transition-colors">Connect with GitHub, Linear & Slack</span>
             </div>
           </div>
         </div>

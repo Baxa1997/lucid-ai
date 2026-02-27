@@ -8,12 +8,25 @@
   --background-end-rgb: 255, 255, 255;
 }
 
+.dark {
+  --foreground-rgb: 226, 232, 240;
+  --background-start-rgb: 2, 6, 23;
+  --background-end-rgb: 2, 6, 23;
+}
+
 body {
   color: rgb(var(--foreground-rgb));
   background: #ffffff;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.dark body,
+html.dark body {
+  background: #020617;
+  color: #e2e8f0;
 }
 
 /* ── Scrollbar ── */
@@ -32,10 +45,23 @@ body {
   background: rgba(0, 0, 0, 0.15);
 }
 
+/* Dark mode scrollbar */
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
 /* Selection Color */
 ::selection {
   background: #DBEAFE;
   color: #1e40af;
+}
+
+.dark ::selection {
+  background: #312e81;
+  color: #c7d2fe;
 }
 
 /* Grid Background */
@@ -132,3 +158,36 @@ body {
   }
 }
 .animate-page-enter { animation: page-enter 0.15s ease-out forwards; }
+
+/* ── Marquee / Infinite Scroll ── */
+@keyframes marquee-left {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+@keyframes marquee-right {
+  0% { transform: translateX(-50%); }
+  100% { transform: translateX(0); }
+}
+.animate-marquee-left {
+  animation: marquee-left linear infinite;
+}
+.animate-marquee-right {
+  animation: marquee-right linear infinite;
+}
+
+/* Documentation Utilities */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.docs-content h2 {
+  scroll-margin-top: 100px;
+}
+.docs-content h3 {
+  scroll-margin-top: 100px;
+}
+

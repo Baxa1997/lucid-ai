@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useRouter, usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
+import ThemeModeSelector from '@/components/ThemeModeSelector';
 
 const navItems = [
   { label: 'Conversations', icon: MessageSquare, href: '/dashboard/engineer/conversations' },
@@ -21,10 +22,10 @@ export default function EngineerLayout({ children }) {
   const isActive = (href) => pathname === href;
 
   return (
-    <div className="h-screen flex bg-[#f0f4f9] overflow-hidden">
+    <div className="h-screen flex bg-[#f0f4f9] dark:bg-slate-950 overflow-hidden transition-colors duration-200">
 
       {/* ══ SIDEBAR ══ */}
-      <aside className="w-[240px] h-full bg-white border-r border-slate-200/70 flex flex-col shrink-0">
+      <aside className="w-[240px] h-full bg-white dark:bg-slate-900 border-r border-slate-200/70 dark:border-slate-800 flex flex-col shrink-0 transition-colors duration-200">
         
 
         {/* Logo */}
@@ -37,7 +38,7 @@ export default function EngineerLayout({ children }) {
             <div className="w-8 h-8 bg-gradient-to-br from-blue-600 to-blue-700 rounded-lg flex items-center justify-center shadow-sm">
               <Zap className="w-4 h-4 text-white fill-current" />
             </div>
-            <span className="font-extrabold text-slate-900 text-base tracking-tight">Lucid AI</span>
+            <span className="font-extrabold text-slate-900 dark:text-slate-100 text-base tracking-tight">Lucid AI</span>
           </div>
           </button>
         </div>
@@ -79,15 +80,23 @@ export default function EngineerLayout({ children }) {
           })}
         </nav>
 
+        {/* Theme Selector */}
+        <div className="px-3.5 mb-2">
+          <div className="flex items-center justify-between px-3 py-2.5">
+            <span className="text-[12px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Theme</span>
+            <ThemeModeSelector />
+          </div>
+        </div>
+
         {/* Bottom User */}
-        <div className="p-3.5 border-t border-slate-100">
+        <div className="p-3.5 border-t border-slate-100 dark:border-slate-800">
           <div className="flex items-center gap-2.5 px-2 py-2">
             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-slate-700 to-slate-800 flex items-center justify-center shrink-0 shadow-sm">
               <span className="text-[12px] font-bold text-white">AR</span>
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-[15px] font-semibold text-slate-800 truncate leading-tight">Alex Rivard</p>
-              <p className="text-[12px] text-slate-400 truncate leading-tight">Pro Developer</p>
+              <p className="text-[15px] font-semibold text-slate-800 dark:text-slate-200 truncate leading-tight">Alex Rivard</p>
+              <p className="text-[12px] text-slate-400 dark:text-slate-500 truncate leading-tight">Pro Developer</p>
             </div>
             <button className="p-1 rounded-md text-slate-300 hover:text-slate-500 hover:bg-slate-50 transition-colors shrink-0">
               <LogOut className="w-3.5 h-3.5" />
