@@ -12,6 +12,7 @@ import Toast from '@/components/Toast';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 
 const navItems = [
+  { label: 'Usage Docs', icon: FileText, href: '/dashboard/engineer/usage-docs' },
   { label: 'Conversations', icon: MessageSquare, href: '/dashboard/engineer/conversations' },
   { label: 'Integrations', icon: Grid2X2, href: '/dashboard/engineer/integrations' },
   { label: 'Documentation', icon: FileText, href: '/dashboard/engineer/docs' },

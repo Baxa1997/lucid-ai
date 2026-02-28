@@ -79,9 +79,9 @@ export default function EngineerDashboardPage() {
               <span className="text-sm text-slate-500 dark:text-slate-400">New around here? Not sure where to start?</span>
               <button className="text-sm text-slate-800 dark:text-slate-200 font-bold underline underline-offset-2 hover:text-blue-600 dark:hover:text-blue-400 transition-colors">Click here</button>
             </div>
-            <button onClick={() => setShowBanner(false)} className="ml-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400 transition-colors">
+            {/* <button onClick={() => setShowBanner(false)} className="ml-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400 transition-colors">
               <X className="w-4 h-4" />
-            </button>
+            </button> */}
           </div>
         )}
         
@@ -100,7 +100,7 @@ export default function EngineerDashboardPage() {
         </div>
 
         {/* ── Two Cards ── */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-14 relative z-30">
+        <div className="grid grid-cols-1 md:grid-cols-[400px_400px] justify-center gap-5 mb-14 relative z-30">
           
           {/* LEFT: Open Repository */}
           <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-soft relative z-30">
@@ -339,7 +339,7 @@ export default function EngineerDashboardPage() {
           </div>
 
           {/* RIGHT: Start from Scratch */}
-          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-soft flex flex-col">
+          <div className="bg-white dark:bg-slate-900  rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-soft flex flex-col">
             <div className="flex items-center gap-3 mb-3">
               <div className="w-8 h-8 rounded-lg bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 flex items-center justify-center">
                 <Plus className="w-4 h-4 text-violet-600 dark:text-violet-400" />
@@ -362,7 +362,7 @@ export default function EngineerDashboardPage() {
         </div>
 
         {/* ── Recent Projects ── */}
-        <div>
+        {/* <div>
           <h3 className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-5">
             Recent Projects
           </h3>
@@ -372,7 +372,7 @@ export default function EngineerDashboardPage() {
             </div>
             <span className="text-sm text-slate-400 dark:text-slate-500 italic">No recent conversations</span>
           </div>
-        </div>
+        </div> */}
       </div>
 
     </div>
