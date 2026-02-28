@@ -1,34 +1,23 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { requireAuth, proxyToAI } from '@/lib/gatekeeper';
 import prisma from '@/lib/prisma';
 import { decrypt } from '@/lib/crypto';
-import jwt from 'jsonwebtoken';
 
 // ── Environment Variables ─────────────────────────────────
 const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://localhost:8000';
-const SESSION_SECRET = process.env.SESSION_SECRET;
 const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || '';
-
-if (!SESSION_SECRET) {
-  console.warn('⚠️ SESSION_SECRET is not set. WebSocket tokens will be insecure.');
-}
 
 /**
  * POST /api/agent/start
  * Initializes a new AI Agent session.
  */
 export async function POST(req) {
-  // ── 1. Auth Check ──────────────────────────────────────
-  const session = await auth();
+  // ── 1. Auth Check (Supabase) ──────────────────────────
+  const authResult = await requireAuth();
+  if (!authResult.ok) return authResult.response;
+  const { ctx } = authResult;
 
-  if (!session?.user?.id) {
-    return NextResponse.json(
-      { error: 'Unauthorized', message: 'You must be logged in.' },
-      { status: 401 }
-    );
-  }
-
-  const userId = session.user.id;
+  const userId = ctx.userId;
 
   // ── 2. Input Validation ────────────────────────────────
   let body;
@@ -113,34 +102,31 @@ export async function POST(req) {
     userId,
     model_provider: body.modelProvider || body.model_provider || '',
     api_key: body.apiKey || body.api_key || '',
-    gitUserName: session.user.name || '',
-    gitUserEmail: session.user.email || '',
+    gitUserName: ctx.user?.user_metadata?.full_name || ctx.user?.user_metadata?.name || '',
+    gitUserEmail: ctx.user?.email || '',
     branch: body.branch || '',
   };
 
   let agentResponseData;
 
   try {
-    const agentRes = await fetch(`${PYTHON_BACKEND_URL}/api/v1/sessions`, {
+    const res = await proxyToAI({
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-User-ID': userId,
-        'X-Internal-Key': INTERNAL_API_KEY,
-      },
-      body: JSON.stringify(remotePayload),
+      path: '/api/v1/sessions',
+      ctx,
+      body: remotePayload,
     });
 
-    if (!agentRes.ok) {
-      const errorText = await agentRes.text();
+    if (!res.ok) {
+      const errorText = await res.text();
       console.error('Python Backend Error:', errorText);
       return NextResponse.json(
         { error: 'AgentBackendError', message: 'Failed to initialize agent session.', details: errorText },
-        { status: agentRes.status }
+        { status: res.status }
       );
     }
 
-    agentResponseData = await agentRes.json();
+    agentResponseData = await res.json();
   } catch (error) {
     console.error('Failed to contact Python backend:', error);
     return NextResponse.json(
@@ -149,7 +135,7 @@ export async function POST(req) {
     );
   }
 
-  // ── 7. Save session record & generate JWT ──────────────
+  // ── 7. Save session record ─────────────────────────────
   const sessionId = agentResponseData.sessionId;
 
   if (!sessionId) {
@@ -170,17 +156,13 @@ export async function POST(req) {
     },
   });
 
-  const sessionToken = jwt.sign(
-    { userId, projectId: resolvedProjectId, sessionId },
-    SESSION_SECRET || 'fallback_secret_do_not_use_in_prod',
-    { expiresIn: '1h' }
-  );
-
+  // Return the Supabase access token as the WS token — the ai_engine
+  // validates it natively (same SUPABASE_JWT_SECRET).
   const wsUrl = process.env.NEXT_PUBLIC_AGENT_WS_URL || 'ws://localhost:8000/api/v1/ws';
 
   return NextResponse.json({
     wsUrl,
-    sessionToken,
+    sessionToken: ctx.accessToken,
     sessionId,
   });
 }

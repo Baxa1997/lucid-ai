@@ -60,8 +60,9 @@ Every endpoint is behind `X-User-ID` + `X-Internal-Key` headers (or a JWT for We
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Auth — dev email login | ✅ Working | Any email creates a user automatically (dev credentials provider) |
-| Auth — Google OAuth | ⚠️ Config needed | Works once `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` are set in `.env` |
+| Auth — Supabase OAuth (Google, GitHub, GitLab) | ✅ Working | Native Supabase Auth via `@supabase/ssr`. No NextAuth. Login page has all 3 providers. |
+| Auth — Supabase middleware (session refresh + route protection) | ✅ Working | `src/middleware.js` refreshes session cookies and redirects unauthenticated users |
+| Auth — Supabase callback (PKCE code exchange) | ✅ Working | `src/app/auth/callback/route.js` handles OAuth redirect |
 | Conversations list page | ✅ Working | Shows past chat sessions from DB |
 | Chat UI — send message, receive events | ✅ Working | WebSocket connected; basic message display |
 | Read-only file explorer | ✅ Working | Live workspace tree from agent; updates on file changes |
@@ -81,7 +82,7 @@ Every endpoint is behind `X-User-ID` + `X-Internal-Key` headers (or a JWT for We
 - Connect a GitHub/GitLab PAT → list your repos → start an agent session on a repo → watch mock events stream → create a PR
 
 ⚠️ **Partially works in the browser:**
-- Log in, view past conversations, see the chat UI and file explorer
+- Log in with Google/GitHub/GitLab (Supabase Auth), view past conversations, see the chat UI and file explorer
 - Cannot connect GitHub/GitLab from the UI (no settings page)
 - Cannot pick a repo from a dropdown (no repo picker)
 - Events appear in chat but without structured formatting
@@ -102,8 +103,40 @@ These were planned but don't belong in a chat product:
 - File write/edit by user — agent does all editing
 - Separate git status panel — agent commits/pushes autonomously
 - Commit & push UI — agent does this automatically
-- GitHub/GitLab OAuth flow — replaced with PAT input (OpenHands style)
+- GitHub/GitLab OAuth flow for git tokens — replaced with PAT input (OpenHands style)
 - Organization/team logic — single-user, removed from codebase and DB schema
+- **NextAuth.js** — replaced with native Supabase Auth (Google, GitHub, GitLab OAuth). Packages `next-auth`, `@auth/prisma-adapter`, `jsonwebtoken` removed.
+- **Dev email/password login** — removed; all auth now goes through Supabase OAuth providers
+
+### ✅ Auth Migration Completed (Feb 2026)
+
+**What changed:**
+- Replaced NextAuth v5 with native Supabase Auth (`@supabase/ssr` + `@supabase/supabase-js`)
+- Login page now supports Google, GitHub, and GitLab OAuth via Supabase
+- Added Next.js middleware for session refresh and route protection
+- API routes forward Supabase JWT as `Authorization: Bearer` to ai_engine
+- Backend (`ai_engine`) was NOT modified — it already validates Supabase JWTs
+- Per-user data isolation via Supabase RLS (`auth.uid()`) + Prisma `userId` filters
+
+**Files created:**
+- `src/lib/supabase/client.js` — Browser Supabase client
+- `src/lib/supabase/server.js` — Server-side Supabase client (API routes)
+- `src/lib/supabase/middleware.js` — Middleware Supabase client
+- `src/middleware.js` — Session refresh + route protection
+- `src/app/auth/callback/route.js` — OAuth PKCE code exchange
+
+**Files deleted:**
+- `src/lib/auth.js` — NextAuth config
+- `src/app/api/auth/[...nextauth]/route.js` — NextAuth route handler
+
+**Files updated:**
+- `src/app/login/page.js` — Supabase OAuth buttons (Google, GitHub, GitLab)
+- `src/lib/gatekeeper.js` — Supabase-based auth + Bearer JWT forwarding
+- `src/app/api/chats/route.js` — Uses new gatekeeper
+- `src/app/api/files/read/route.js` — Uses new gatekeeper
+- `src/app/api/agent/token/route.js` — Returns Supabase access_token
+- `src/app/api/agent/start/route.js` — Uses new gatekeeper + Supabase user metadata
+- `.env.example` — Supabase env vars replace NextAuth vars
 
 ---
 

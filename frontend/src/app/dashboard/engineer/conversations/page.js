@@ -1,10 +1,10 @@
 'use client';
 
 import {
-  MessageSquare, Search, Filter, MoreHorizontal, Clock,
-  ArrowUpDown, ChevronDown, Plus, Ghost, GitBranch,
+  MessageSquare, Search, Filter,
+  ArrowUpDown, Plus, GitBranch,
   CheckCircle2, Loader2, AlertCircle, Pause, ExternalLink,
-  Calendar, Hash, Bot
+  Clock, Hash
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
@@ -30,34 +30,34 @@ const STATUS_CONFIG = {
   completed: {
     label: 'Completed',
     icon: CheckCircle2,
-    bg: 'bg-emerald-50 dark:bg-emerald-500/10',
-    text: 'text-emerald-700 dark:text-emerald-400',
-    border: 'border-emerald-200 dark:border-emerald-500/20',
+    bg: 'bg-emerald-500/10',
+    text: 'text-emerald-400',
+    border: 'border-emerald-500/20',
     dot: 'bg-emerald-500',
   },
   running: {
     label: 'Running',
     icon: Loader2,
-    bg: 'bg-blue-50 dark:bg-blue-500/10',
-    text: 'text-blue-700 dark:text-blue-400',
-    border: 'border-blue-200 dark:border-blue-500/20',
+    bg: 'bg-blue-500/10',
+    text: 'text-blue-400',
+    border: 'border-blue-500/20',
     dot: 'bg-blue-500',
     animate: true,
   },
   paused: {
     label: 'Paused',
     icon: Pause,
-    bg: 'bg-amber-50 dark:bg-amber-500/10',
-    text: 'text-amber-700 dark:text-amber-400',
-    border: 'border-amber-200 dark:border-amber-500/20',
+    bg: 'bg-amber-500/10',
+    text: 'text-amber-400',
+    border: 'border-amber-500/20',
     dot: 'bg-amber-500',
   },
   error: {
     label: 'Error',
     icon: AlertCircle,
-    bg: 'bg-red-50 dark:bg-red-500/10',
-    text: 'text-red-700 dark:text-red-400',
-    border: 'border-red-200 dark:border-red-500/20',
+    bg: 'bg-red-500/10',
+    text: 'text-red-400',
+    border: 'border-red-500/20',
     dot: 'bg-red-500',
   },
 };
@@ -107,13 +107,13 @@ function ConversationCard({ conversation, onClick }) {
   return (
     <button
       onClick={onClick}
-      className="w-full text-left px-5 py-4 flex items-start gap-4 hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-all duration-200 group border-b border-slate-100 dark:border-slate-800 last:border-b-0"
+      className="w-full text-left px-5 py-4 flex items-start gap-4 hover:bg-white/[0.02] transition-all duration-200 group border-b border-slate-700/30 last:border-b-0"
     >
       {/* Status dot */}
       <div className="pt-1.5 shrink-0">
         <div className={cn(
-          "w-2.5 h-2.5 rounded-full ring-4 ring-white dark:ring-slate-900",
-          statusConfig?.dot || 'bg-slate-300',
+          "w-2.5 h-2.5 rounded-full ring-4 ring-[#151b23]",
+          statusConfig?.dot || 'bg-slate-500',
           conversation.status === 'running' && "animate-pulse"
         )} />
       </div>
@@ -122,24 +122,24 @@ function ConversationCard({ conversation, onClick }) {
       <div className="flex-1 min-w-0">
         {/* Title row */}
         <div className="flex items-center gap-3 mb-1.5">
-          <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+          <h3 className="text-sm font-semibold text-slate-100 truncate group-hover:text-blue-400 transition-colors">
             {conversation.title}
           </h3>
           <StatusBadge status={conversation.status} />
         </div>
 
         {/* Last message */}
-        <p className="text-sm text-slate-500 dark:text-slate-400 line-clamp-1 mb-2.5 leading-relaxed">
+        <p className="text-sm text-slate-400 line-clamp-1 mb-2.5 leading-relaxed">
           {conversation.lastMessage}
         </p>
 
         {/* Meta row */}
-        <div className="flex items-center gap-4 text-xs text-slate-400 dark:text-slate-500">
+        <div className="flex items-center gap-4 text-xs text-slate-500">
           <span className="inline-flex items-center gap-1.5 font-medium">
             <GitBranch className="w-3 h-3" />
-            <span className="text-slate-500 dark:text-slate-400">{conversation.repo}</span>
-            <span className="text-slate-300 dark:text-slate-600">/</span>
-            <span className="font-mono text-slate-400 dark:text-slate-500">{conversation.branch}</span>
+            <span className="text-slate-400">{conversation.repo}</span>
+            <span className="text-slate-600">/</span>
+            <span className="font-mono text-slate-500">{conversation.branch}</span>
           </span>
           <span className="inline-flex items-center gap-1">
             <Hash className="w-3 h-3" />
@@ -154,7 +154,7 @@ function ConversationCard({ conversation, onClick }) {
 
       {/* Arrow on hover */}
       <div className="pt-2 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-        <ExternalLink className="w-4 h-4 text-slate-400 dark:text-slate-500" />
+        <ExternalLink className="w-4 h-4 text-slate-500" />
       </div>
     </button>
   );
@@ -207,16 +207,16 @@ export default function ConversationsPage() {
   };
 
   return (
-    <div className="h-full flex flex-col bg-[#f5f7fa] dark:bg-slate-950 overflow-hidden transition-colors duration-200">
+    <div className="h-full flex flex-col bg-[#f5f7fa] dark:bg-[#0d1117] overflow-hidden transition-colors duration-200">
       
       {/* ── Sticky Header Section ── */}
-      <div className="shrink-0 bg-[#f5f7fa] dark:bg-slate-950 px-8 pt-10 pb-0 transition-colors duration-200">
+      <div className="shrink-0 bg-[#f5f7fa] dark:bg-[#0d1117] px-8 pt-10 pb-0 transition-colors duration-200">
         <div className="max-w-5xl mx-auto">
           
           {/* Page Header */}
           <div className="flex items-center justify-between mb-8">
             <div className="flex items-center gap-4">
-              <div className="w-12 h-12 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center shadow-sm">
+              <div className="w-12 h-12 rounded-2xl bg-white dark:bg-[#151b23] border border-slate-200 dark:border-slate-700/50 flex items-center justify-center shadow-sm">
                 <MessageSquare className="w-6 h-6 text-blue-600 dark:text-blue-400" />
               </div>
               <div>
@@ -233,21 +233,18 @@ export default function ConversationsPage() {
             </button>
           </div>
 
-          {/* Quick Stats */}
+          {/* Quick Stats — dark cards matching screenshot */}
           <div className="grid grid-cols-4 gap-3 mb-6">
             {[
-              { label: 'Total', value: stats.total, color: 'text-slate-900 dark:text-slate-100', bg: 'bg-white dark:bg-slate-900' },
-              { label: 'Running', value: stats.running, color: 'text-blue-600 dark:text-blue-400', bg: 'bg-blue-50 dark:bg-blue-500/10', dot: 'bg-blue-500' },
-              { label: 'Completed', value: stats.completed, color: 'text-emerald-600 dark:text-emerald-400', bg: 'bg-emerald-50 dark:bg-emerald-500/10', dot: 'bg-emerald-500' },
-              { label: 'Errors', value: stats.error, color: 'text-red-600 dark:text-red-400', bg: 'bg-red-50 dark:bg-red-500/10', dot: 'bg-red-500' },
+              { label: 'TOTAL', value: stats.total, color: 'text-slate-100', dotColor: null },
+              { label: 'RUNNING', value: stats.running, color: 'text-blue-400', dotColor: 'bg-blue-500' },
+              { label: 'COMPLETED', value: stats.completed, color: 'text-emerald-400', dotColor: 'bg-emerald-500' },
+              { label: 'ERRORS', value: stats.error, color: 'text-red-400', dotColor: 'bg-red-500' },
             ].map((stat) => (
-              <div key={stat.label} className={cn(
-                "px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm",
-                stat.bg
-              )}>
-                <div className="flex items-center gap-2 mb-1">
-                  {stat.dot && <div className={cn("w-1.5 h-1.5 rounded-full", stat.dot)} />}
-                  <span className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider">{stat.label}</span>
+              <div key={stat.label} className="px-4 py-3.5 rounded-xl bg-white dark:bg-[#151b23] border border-slate-200 dark:border-slate-700/50 shadow-sm">
+                <div className="flex items-center gap-2 mb-1.5">
+                  {stat.dotColor && <div className={cn("w-1.5 h-1.5 rounded-full", stat.dotColor)} />}
+                  <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-[0.1em]">{stat.label}</span>
                 </div>
                 <span className={cn("text-2xl font-extrabold", stat.color)}>{stat.value}</span>
               </div>
@@ -264,7 +261,7 @@ export default function ConversationsPage() {
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="block w-full pl-10 pr-3 py-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-sm placeholder-slate-400 dark:placeholder-slate-500 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-blue-500 dark:focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all shadow-sm"
+                className="block w-full pl-10 pr-3 py-3 bg-white dark:bg-[#151b23] border border-slate-200 dark:border-slate-700/50 rounded-xl text-sm placeholder-slate-400 dark:placeholder-slate-500 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-blue-500 dark:focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all shadow-sm"
                 placeholder="Search conversations..."
               />
             </div>
@@ -273,16 +270,16 @@ export default function ConversationsPage() {
               <button 
                 onClick={() => setShowFilters(!showFilters)}
                 className={cn(
-                  "flex items-center gap-2 px-4 py-3 bg-white dark:bg-slate-900 border rounded-xl text-sm font-semibold transition-all shadow-sm",
+                  "flex items-center gap-2 px-4 py-3 bg-white dark:bg-[#151b23] border rounded-xl text-sm font-semibold transition-all shadow-sm",
                   showFilters 
                     ? "border-blue-300 dark:border-blue-500 text-blue-600 dark:text-blue-400 ring-1 ring-blue-500/20" 
-                    : "border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-700"
+                    : "border-slate-200 dark:border-slate-700/50 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-[#1c2430] hover:border-slate-300 dark:hover:border-slate-600"
                 )}
               >
                 <Filter className="w-4 h-4" />
                 Filter
               </button>
-              <button className="flex items-center gap-2 px-4 py-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-700 transition-all shadow-sm">
+              <button className="flex items-center gap-2 px-4 py-3 bg-white dark:bg-[#151b23] border border-slate-200 dark:border-slate-700/50 rounded-xl text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-[#1c2430] hover:border-slate-300 dark:hover:border-slate-600 transition-all shadow-sm">
                 <ArrowUpDown className="w-4 h-4 text-slate-400" />
                 Sort
               </button>
@@ -300,7 +297,7 @@ export default function ConversationsPage() {
                     "px-3.5 py-1.5 rounded-lg text-xs font-bold capitalize transition-all border",
                     statusFilter === status
                       ? "bg-blue-600 text-white border-blue-600 shadow-sm shadow-blue-600/20"
-                      : "bg-white dark:bg-slate-900 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-700"
+                      : "bg-white dark:bg-[#151b23] text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-[#1c2430] hover:border-slate-300 dark:hover:border-slate-600"
                   )}
                 >
                   {status === 'all' ? 'All' : status}
@@ -314,7 +311,7 @@ export default function ConversationsPage() {
       {/* ── Scrollable Conversation List ── */}
       <div className="flex-1 overflow-y-auto px-8 pb-8">
         <div className="max-w-5xl mx-auto">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm overflow-hidden">
+          <div className="bg-white dark:bg-[#151b23] border border-slate-200 dark:border-slate-700/50 rounded-2xl shadow-sm overflow-hidden">
             {loading ? (
               <div className="flex flex-col items-center justify-center p-16 text-center">
                 <Loader2 className="w-8 h-8 text-blue-500 animate-spin mb-4" />
@@ -327,7 +324,7 @@ export default function ConversationsPage() {
               </div>
             ) : filteredConversations.length === 0 ? (
               <div className="flex flex-col items-center justify-center p-16 text-center">
-                <div className="w-20 h-20 bg-slate-50 dark:bg-slate-800 rounded-3xl flex items-center justify-center mb-6 relative group">
+                <div className="w-20 h-20 bg-slate-50 dark:bg-[#1c2430] rounded-3xl flex items-center justify-center mb-6 relative group">
                   <div className="absolute inset-0 bg-blue-100/50 dark:bg-blue-500/10 rounded-3xl scale-0 group-hover:scale-110 transition-transform duration-500" />
                   <MessageSquare className="w-10 h-10 text-slate-300 dark:text-slate-600 relative z-10 group-hover:text-blue-500 dark:group-hover:text-blue-400 transition-colors duration-300" />
                 </div>
@@ -345,7 +342,7 @@ export default function ConversationsPage() {
             ) : (
               <div>
                 {/* List Header */}
-                <div className="px-5 py-3 bg-slate-50/80 dark:bg-slate-800/50 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between sticky top-0 z-10">
+                <div className="px-5 py-3 bg-slate-50/80 dark:bg-[#1c2430]/50 border-b border-slate-100 dark:border-slate-700/30 flex items-center justify-between sticky top-0 z-10">
                   <span className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
                     {filteredConversations.length} conversation{filteredConversations.length !== 1 ? 's' : ''}
                   </span>

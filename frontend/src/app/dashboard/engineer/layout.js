@@ -2,11 +2,14 @@
 
 import { 
   Plus, MessageSquare, FileText, Settings, Zap,
-  LogOut, Grid2X2, ChevronRight
+  LogOut, Grid2X2
 } from 'lucide-react';
 import { useRouter, usePathname } from 'next/navigation';
+import { useState, useEffect, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import ThemeModeSelector from '@/components/ThemeModeSelector';
+import Toast from '@/components/Toast';
+import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 
 const navItems = [
   { label: 'Conversations', icon: MessageSquare, href: '/dashboard/engineer/conversations' },
@@ -18,14 +21,86 @@ const navItems = [
 export default function EngineerLayout({ children }) {
   const router = useRouter();
   const pathname = usePathname();
+  const supabase = getSupabaseBrowserClient();
+
+  // ── User state ──
+  const [user, setUser] = useState(null);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  // ── Toast state ──
+  const [toast, setToast] = useState(null);
+
+  // Fetch user on mount
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) {
+        setUser(user);
+      }
+    });
+
+    // Check for sign-in toast flag (one-time)
+    if (typeof window !== 'undefined') {
+      const justSignedIn = sessionStorage.getItem('lucid-just-signed-in');
+      if (justSignedIn) {
+        sessionStorage.removeItem('lucid-just-signed-in');
+        setToast({ message: 'Signed in successfully!', type: 'success' });
+      }
+
+      const justSignedOut = sessionStorage.getItem('lucid-just-signed-out');
+      if (justSignedOut) {
+        sessionStorage.removeItem('lucid-just-signed-out');
+        // Won't show here since we redirect to /login, but kept for safety
+      }
+    }
+  }, [supabase]);
+
+  // Derive display info from Supabase user
+  const displayName = user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split('@')[0] || 'User';
+  const displayEmail = user?.email || '';
+  const avatarUrl = user?.user_metadata?.avatar_url || null;
+  const initials = displayName
+    .split(' ')
+    .map((w) => w[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2);
+
+  // ── Logout handler ──
+  const handleLogout = useCallback(async () => {
+    setIsLoggingOut(true);
+    try {
+      await supabase.auth.signOut();
+
+      // Clear auth cookies
+      document.cookie = 'sb-access-token=; path=/; max-age=0';
+      document.cookie = 'sb-refresh-token=; path=/; max-age=0';
+
+      // Set flag for one-time logout toast on login page
+      sessionStorage.setItem('lucid-just-signed-out', 'true');
+
+      router.push('/login');
+    } catch (err) {
+      console.error('Logout failed:', err);
+      setIsLoggingOut(false);
+    }
+  }, [supabase, router]);
 
   const isActive = (href) => pathname === href;
 
   return (
-    <div className="h-screen flex bg-[#f0f4f9] dark:bg-slate-950 overflow-hidden transition-colors duration-200">
+    <div className="h-screen flex bg-[#f0f4f9] dark:bg-[#0d1117] overflow-hidden transition-colors duration-200">
+
+      {/* ══ TOAST ══ */}
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onDone={() => setToast(null)}
+        />
+      )}
 
       {/* ══ SIDEBAR ══ */}
-      <aside className="w-[240px] h-full bg-white dark:bg-[#0f1117] border-r border-slate-200 dark:border-slate-800/80 flex flex-col shrink-0 transition-colors duration-200">
+      <aside className="w-[240px] h-full bg-white dark:bg-[#0d1117] border-r border-slate-200 dark:border-slate-800/80 flex flex-col shrink-0 transition-colors duration-200">
 
         {/* Logo */}
         <div className="px-5 pt-5 pb-5 border-b border-slate-100 dark:border-slate-800/60">
@@ -87,21 +162,46 @@ export default function EngineerLayout({ children }) {
           })}
         </nav>
 
-        {/* Bottom User */}
+        {/* Bottom User + Logout */}
         <div className="p-3 border-t border-slate-100 dark:border-slate-800/60">
-          <div className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-slate-50 dark:hover:bg-white/[0.03] transition-colors cursor-pointer">
-            <div className="w-7 h-7 rounded-md bg-slate-800 dark:bg-slate-700 flex items-center justify-center shrink-0">
-              <span className="text-[10px] font-semibold text-white leading-none">AR</span>
-            </div>
+          <div className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg">
+            {/* Avatar */}
+            {avatarUrl ? (
+              <img 
+                src={avatarUrl} 
+                alt={displayName}
+                className="w-7 h-7 rounded-md shrink-0 object-cover"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <div className="w-7 h-7 rounded-md bg-slate-800 dark:bg-slate-700 flex items-center justify-center shrink-0">
+                <span className="text-[10px] font-semibold text-white leading-none">{initials}</span>
+              </div>
+            )}
+
+            {/* User info */}
             <div className="flex-1 min-w-0">
-              <p className="text-[13px] font-medium text-slate-700 dark:text-slate-200 truncate leading-tight">Alex Rivard</p>
-              <p className="text-[11px] text-slate-400 dark:text-slate-500 truncate leading-tight">Pro</p>
+              <p className="text-[13px] font-medium text-slate-700 dark:text-slate-200 truncate leading-tight">
+                {displayName}
+              </p>
+              <p className="text-[11px] text-slate-400 dark:text-slate-500 truncate leading-tight">
+                {displayEmail}
+              </p>
             </div>
+
+            {/* Logout button */}
             <button 
-              className="p-1 rounded text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400 transition-colors shrink-0"
+              id="logout-button"
+              onClick={handleLogout}
+              disabled={isLoggingOut}
+              className="p-1.5 rounded-md text-slate-300 dark:text-slate-600 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-all shrink-0 disabled:opacity-50"
               title="Sign out"
             >
-              <LogOut className="w-3.5 h-3.5" />
+              {isLoggingOut ? (
+                <div className="w-3.5 h-3.5 border-2 border-slate-300 border-t-slate-600 rounded-full animate-spin" />
+              ) : (
+                <LogOut className="w-3.5 h-3.5" />
+              )}
             </button>
           </div>
         </div>

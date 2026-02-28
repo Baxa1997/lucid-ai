@@ -17,7 +17,7 @@ export default function DashboardPage() {
   };
 
   return (
-    <div className="min-h-screen bg-white dark:bg-slate-950 relative overflow-hidden transition-colors duration-200">
+    <div className="min-h-screen bg-white dark:bg-[#0d1117] relative overflow-hidden transition-colors duration-200">
 
       {/* Subtle background pattern */}
       <div className="absolute inset-0 bg-grid-pattern opacity-50 dark:opacity-10" />
@@ -26,7 +26,7 @@ export default function DashboardPage() {
       <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-blue-500/40 dark:via-blue-400/30 to-transparent" />
 
       {/* Header */}
-      <header className="relative z-20 h-16 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between px-8 bg-white/80 dark:bg-slate-950/80 backdrop-blur-sm transition-colors duration-200">
+      <header className="relative z-20 h-16 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between px-8 bg-white/80 dark:bg-[#0d1117]/80 backdrop-blur-sm transition-colors duration-200">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shadow-sm">
             <Zap className="w-4 h-4 text-white fill-current" />

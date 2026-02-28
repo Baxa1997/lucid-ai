@@ -213,13 +213,13 @@ export default function DocsPage() {
     : repos;
 
   return (
-    <div className="h-full flex flex-col bg-white dark:bg-slate-950 relative overflow-hidden transition-colors duration-200">
+    <div className="h-full flex flex-col bg-white dark:bg-[#0d1117] relative overflow-hidden transition-colors duration-200">
 
       {/* ── Gradient accent line at top ── */}
       <div className="h-[3px] bg-gradient-to-r from-cyan-400 via-blue-500 to-violet-500 shrink-0" />
 
       {/* ── Top Navigation Bar ── */}
-      <div className="h-14 border-b border-slate-100 dark:border-slate-800 flex items-center px-6 justify-between shrink-0 bg-white dark:bg-slate-950 z-20 transition-colors duration-200">
+      <div className="h-14 border-b border-slate-100 dark:border-slate-800 flex items-center px-6 justify-between shrink-0 bg-white dark:bg-[#0d1117] z-20 transition-colors duration-200">
         <div className="flex items-center gap-3">
           {step !== 'choose-source' && step !== 'generating' && (
             <button

@@ -539,7 +539,7 @@ export default function IntegrationsPage() {
   const [gitEmail, setGitEmail] = useState('ai@lucid.ai');
 
   return (
-    <div className="min-h-full bg-[#f5f7fa] dark:bg-slate-950 transition-colors duration-200">
+    <div className="min-h-full bg-[#f5f7fa] dark:bg-[#0d1117] transition-colors duration-200">
       <div className="px-6 py-8">
         
         {/* Header */}

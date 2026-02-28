@@ -67,7 +67,7 @@ export default function EngineerDashboardPage() {
   };
 
   return (
-    <div className="h-full bg-[#f0f4f9] dark:bg-slate-950 relative flex flex-col transition-colors duration-200">
+    <div className="h-full bg-[#f0f4f9] dark:bg-[#0d1117] relative flex flex-col transition-colors duration-200">
 
       {/* ── Main Content ── */}
       <div className="max-w-3xl mx-auto px-8 py-8 flex-1 flex flex-col justify-center w-full">

@@ -1,26 +1,27 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
-import jwt from 'jsonwebtoken';
-
-const SESSION_SECRET = process.env.SESSION_SECRET;
+import { requireAuth } from '@/lib/gatekeeper';
 
 /**
  * GET /api/agent/token
- * Returns a short-lived JWT for the current user.
- * Used by the workspace page to authenticate WebSocket connections.
+ *
+ * Returns the current user's Supabase access token (JWT).
+ * Used by the workspace page to authenticate WebSocket connections
+ * directly to the ai_engine.
+ *
+ * The ai_engine already validates Supabase JWTs natively — no need
+ * to mint a separate token.
  */
 export async function GET() {
-  const session = await auth();
+  const authResult = await requireAuth();
+  if (!authResult.ok) return authResult.response;
+  const { ctx } = authResult;
 
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!ctx.accessToken) {
+    return NextResponse.json(
+      { error: 'NoToken', message: 'Could not retrieve access token from session.' },
+      { status: 500 }
+    );
   }
 
-  const token = jwt.sign(
-    { userId: session.user.id, sub: session.user.id },
-    SESSION_SECRET || 'fallback_secret_do_not_use_in_prod',
-    { expiresIn: '2h' }
-  );
-
-  return NextResponse.json({ token });
+  return NextResponse.json({ token: ctx.accessToken });
 }

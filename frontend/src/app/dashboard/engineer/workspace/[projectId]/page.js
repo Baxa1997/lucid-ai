@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils';
 import {
   ArrowLeft, Send, Terminal, Settings, Minimize2,
   Bot, User, Cpu, ArrowDown, Loader2,
-  X, FileText, Copy, Check,
+  X, FileText, Copy, Check, GitBranch, Clock,
 } from 'lucide-react';
 import { useAgentSession } from '@/hooks/useAgentSession';
 
@@ -198,7 +198,7 @@ export default function ConversationPage({ params }) {
 
   // ── Render ─────────────────────────────────────────────
   return (
-    <div className="flex h-screen bg-[#f5f7fa] dark:bg-slate-950 overflow-hidden transition-colors duration-200">
+    <div className="flex h-screen bg-[#f5f7fa] dark:bg-[#0d1117] overflow-hidden transition-colors duration-200">
 
       {/* ════════════════════════════════════════════════
           CENTER — Chat Area
@@ -253,7 +253,7 @@ export default function ConversationPage({ params }) {
 
         {/* Chat Stream */}
         <div
-          className="flex-1 overflow-y-auto px-4 md:px-0 py-6 bg-[#f5f7fa] dark:bg-slate-950 transition-colors duration-200"
+          className="flex-1 overflow-y-auto px-4 md:px-0 py-6 bg-[#f5f7fa] dark:bg-[#0d1117] transition-colors duration-200"
           ref={chatContainerRef}
           onScroll={handleChatScroll}
         >
@@ -261,30 +261,25 @@ export default function ConversationPage({ params }) {
 
             {/* Welcome State */}
             {messages.length === 0 && (
-              <div className="flex flex-col items-center justify-center py-20 text-center opacity-0 animate-in fade-in slide-in-from-bottom-4 duration-700 fill-mode-forwards">
-                <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-3xl flex items-center justify-center shadow-xl shadow-blue-500/20 mb-8">
-                  <Bot className="w-10 h-10 text-white" />
-                </div>
-                <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-3">
-                  How can I help you build today?
+              <div className="flex flex-col items-center justify-center py-24 text-center">
+                <div className="text-6xl mb-6">🔨</div>
+                <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-8">
+                  Let&apos;s start building!
                 </h2>
-                <p className="text-slate-500 dark:text-slate-400 max-w-md leading-relaxed mb-8">
-                  I can write code, run commands, and debug your application.
-                  Just describe your task to get started.
-                </p>
-                <div className="flex flex-wrap gap-2 justify-center">
+                <div className="grid grid-cols-2 gap-3 max-w-md">
                   {[
-                    "Create a login form",
-                    "Debug the API route",
-                    "Install Tailwind CSS",
-                    "Refactor the sidebar"
-                  ].map(suggestion => (
+                    { icon: '🔄', label: 'Increase test coverage' },
+                    { icon: '🔀', label: 'Auto-merge PRs' },
+                    { icon: '📄', label: 'Fix README' },
+                    { icon: '📦', label: 'Clean dependencies' },
+                  ].map((suggestion) => (
                     <button
-                      key={suggestion}
-                      onClick={() => setChatInput(suggestion)}
-                      className="px-4 py-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-full text-sm font-medium text-slate-600 dark:text-slate-300 hover:border-blue-300 dark:hover:border-blue-500/50 hover:text-blue-600 dark:hover:text-blue-400 hover:shadow-sm transition-all"
+                      key={suggestion.label}
+                      onClick={() => setChatInput(suggestion.label)}
+                      className="flex items-center gap-3 px-5 py-3 bg-white/5 dark:bg-white/[0.04] border border-slate-200 dark:border-slate-700/60 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-500 hover:bg-white/10 dark:hover:bg-white/[0.07] transition-all"
                     >
-                      {suggestion}
+                      <span className="text-base">{suggestion.icon}</span>
+                      {suggestion.label}
                     </button>
                   ))}
                 </div>
@@ -318,10 +313,10 @@ export default function ConversationPage({ params }) {
                 <div className={cn(
                   "flex-1 max-w-[85%] rounded-2xl p-4 shadow-sm",
                   msg.role === 'user'
-                    ? "bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200"
+                    ? "bg-white dark:bg-[#151b23] border border-slate-200 dark:border-slate-700/50 text-slate-700 dark:text-slate-200"
                     : msg.role === 'agent'
-                    ? "bg-white dark:bg-slate-900 border border-blue-100 dark:border-blue-500/20 text-slate-800 dark:text-slate-200"
-                    : "bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700 text-slate-500 dark:text-slate-400 text-sm italic"
+                    ? "bg-white dark:bg-[#151b23] border border-blue-100 dark:border-blue-500/20 text-slate-800 dark:text-slate-200"
+                    : "bg-slate-50 dark:bg-[#151b23]/50 border border-slate-100 dark:border-slate-700/50 text-slate-500 dark:text-slate-400 text-sm italic"
                 )}>
                   <div className="whitespace-pre-wrap text-sm leading-6 font-sans">
                     {msg.content}
@@ -333,7 +328,7 @@ export default function ConversationPage({ params }) {
             {/* Loading Indicator */}
             {(status === 'working' || status === 'connecting') && (
               <div className="flex items-center gap-3 px-4 max-w-3xl mx-auto">
-                <div className="w-9 h-9 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center shadow-sm">
+                <div className="w-9 h-9 rounded-xl bg-white dark:bg-[#151b23] border border-slate-200 dark:border-slate-700/50 flex items-center justify-center shadow-sm">
                   <Loader2 className="w-4 h-4 text-blue-600 dark:text-blue-400 animate-spin" />
                 </div>
                 <span className="text-sm font-medium text-slate-400 dark:text-slate-500 animate-pulse">
@@ -347,7 +342,7 @@ export default function ConversationPage({ params }) {
         </div>
 
         {/* Input Area */}
-        <div className="shrink-0 p-6 bg-[#f5f7fa] dark:bg-slate-950 transition-colors duration-200">
+        <div className="shrink-0 px-6 pb-4 pt-2 bg-[#f5f7fa] dark:bg-[#0d1117] transition-colors duration-200">
           <div className="max-w-3xl mx-auto relative">
             {showScrollBtn && (
               <button
@@ -361,38 +356,55 @@ export default function ConversationPage({ params }) {
 
             <form
               onSubmit={handleSend}
-              className="relative bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-2xl shadow-sm focus-within:ring-4 focus-within:ring-blue-500/10 focus-within:border-blue-500 dark:focus-within:border-blue-500 transition-all overflow-hidden"
+              className="relative bg-white dark:bg-[#151b23] border border-slate-300 dark:border-slate-700/60 rounded-2xl shadow-sm focus-within:ring-4 focus-within:ring-blue-500/10 focus-within:border-blue-500 dark:focus-within:border-blue-500 transition-all overflow-hidden"
             >
               <textarea
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Ask the agent to make changes..."
-                className="w-full px-5 py-4 min-h-[60px] max-h-[200px] outline-none text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 resize-none font-medium leading-relaxed bg-transparent"
+                placeholder="What do you want to build?"
+                className="w-full px-5 py-4 min-h-[56px] max-h-[200px] outline-none text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 resize-none font-medium leading-relaxed bg-transparent"
                 rows={1}
               />
-              <div className="flex items-center justify-between px-3 pb-3">
-                <div className="flex items-center gap-1 text-xs font-semibold text-slate-400 dark:text-slate-500">
-                  <span className="px-2 py-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer transition-colors">+ Add Context</span>
+              <div className="flex items-center justify-between px-4 pb-3">
+                <div className="flex items-center gap-2 text-xs font-semibold text-slate-400 dark:text-slate-500">
+                  <span className="flex items-center gap-1.5 px-2 py-1 rounded hover:bg-slate-100 dark:hover:bg-white/[0.04] cursor-pointer transition-colors">
+                    <Settings className="w-3.5 h-3.5" />
+                    Tools
+                  </span>
                 </div>
-                <button
-                  type="submit"
-                  disabled={!chatInput.trim()}
-                  className={cn(
-                    "p-2.5 rounded-xl transition-all",
-                    chatInput.trim()
-                      ? "bg-blue-600 text-white shadow-md shadow-blue-600/20 hover:bg-blue-700 hover:scale-105"
-                      : "bg-slate-100 dark:bg-slate-800 text-slate-300 dark:text-slate-600 cursor-not-allowed"
-                  )}
-                >
-                  <Send className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-slate-400 dark:text-slate-500 font-medium flex items-center gap-1.5">
+                    Waiting for task
+                    <Clock className="w-3.5 h-3.5" />
+                  </span>
+                  <button
+                    type="submit"
+                    disabled={!chatInput.trim()}
+                    className={cn(
+                      "p-2.5 rounded-xl transition-all",
+                      chatInput.trim()
+                        ? "bg-blue-600 text-white shadow-md shadow-blue-600/20 hover:bg-blue-700 hover:scale-105"
+                        : "bg-slate-100 dark:bg-white/[0.06] text-slate-300 dark:text-slate-600 cursor-not-allowed"
+                    )}
+                  >
+                    <Send className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
             </form>
-            <p className="text-center text-[11px] font-medium text-slate-400 dark:text-slate-500 mt-3">
-              Press <kbd className="font-sans px-1 py-0.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded text-slate-500 dark:text-slate-400">Enter</kbd> to send,{' '}
-              <kbd className="font-sans px-1 py-0.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded text-slate-500 dark:text-slate-400">Shift + Enter</kbd> for new line
-            </p>
+
+            {/* Bottom repo/branch bar */}
+            <div className="flex items-center gap-3 mt-3">
+              <span className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 dark:bg-white/[0.04] border border-slate-200 dark:border-slate-700/50 rounded-lg text-xs font-semibold text-slate-400 dark:text-slate-500">
+                <GitBranch className="w-3 h-3" />
+                No Repo Connected
+              </span>
+              <span className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 dark:bg-white/[0.04] border border-slate-200 dark:border-slate-700/50 rounded-lg text-xs font-semibold text-slate-400 dark:text-slate-500">
+                <GitBranch className="w-3 h-3" />
+                No Branch
+              </span>
+            </div>
           </div>
         </div>
 

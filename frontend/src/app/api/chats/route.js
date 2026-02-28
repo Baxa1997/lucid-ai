@@ -1,34 +1,25 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
-
-const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || 'http://localhost:8000';
-const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || '';
+import { requireAuth, proxyToAI, AI_SERVICE_URL } from '@/lib/gatekeeper';
 
 /**
  * GET /api/chats
- * Proxies to ai_engine GET /api/v1/chats with server-side auth.
+ * Proxies to ai_engine GET /api/v1/chats with Supabase auth.
  */
 export async function GET(req) {
-  const session = await auth();
-
-  if (!session?.user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  const authResult = await requireAuth();
+  if (!authResult.ok) return authResult.response;
+  const { ctx } = authResult;
 
   const { searchParams } = new URL(req.url);
   const limit = searchParams.get('limit') || '50';
   const offset = searchParams.get('offset') || '0';
 
   try {
-    const res = await fetch(
-      `${PYTHON_BACKEND_URL}/api/v1/chats?limit=${limit}&offset=${offset}`,
-      {
-        headers: {
-          'X-User-ID': session.user.id,
-          'X-Internal-Key': INTERNAL_API_KEY,
-        },
-      }
-    );
+    const res = await proxyToAI({
+      method: 'GET',
+      path: `/api/v1/chats?limit=${limit}&offset=${offset}`,
+      ctx,
+    });
 
     if (!res.ok) {
       const text = await res.text();

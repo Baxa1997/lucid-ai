@@ -751,7 +751,7 @@ export default function SettingsPage() {
   const activeColor = colorMap[activeTabData?.color || 'blue'];
 
   return (
-    <div className="min-h-full bg-[#f0f4f9] dark:bg-slate-950 transition-colors duration-200">
+    <div className="min-h-full bg-[#f0f4f9] dark:bg-[#0d1117] transition-colors duration-200">
       <div className="max-w-6xl mx-auto px-8 py-10">
 
         {/* Page Header */}

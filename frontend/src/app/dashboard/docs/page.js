@@ -13,10 +13,10 @@ export default function DocDashboardPage() {
   const [activePage, setActivePage] = useState('getting-started');
 
   return (
-    <div className="h-screen flex flex-col bg-white dark:bg-slate-950 overflow-hidden font-sans text-slate-900 dark:text-slate-100 transition-colors duration-200">
+    <div className="h-screen flex flex-col bg-white dark:bg-[#0d1117] overflow-hidden font-sans text-slate-900 dark:text-slate-100 transition-colors duration-200">
       
       {/* ── TOP NAVIGATION ── */}
-      <header className="h-16 border-b border-slate-100 dark:border-slate-800 flex items-center px-6 justify-between bg-white dark:bg-slate-950 shrink-0 z-30 relative transition-colors duration-200">
+      <header className="h-16 border-b border-slate-100 dark:border-slate-800 flex items-center px-6 justify-between bg-white dark:bg-[#0d1117] shrink-0 z-30 relative transition-colors duration-200">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white shadow-md shadow-indigo-500/20">
             <Book className="w-4 h-4 text-white" />
@@ -104,7 +104,7 @@ export default function DocDashboardPage() {
 
 
         {/* ── MAIN EDITOR CONTENT ── */}
-        <div className="flex-1 overflow-y-auto bg-white dark:bg-slate-950 relative transition-colors duration-200">
+        <div className="flex-1 overflow-y-auto bg-white dark:bg-[#0d1117] relative transition-colors duration-200">
           
           <div className="max-w-4xl mx-auto px-12 py-12">
             
