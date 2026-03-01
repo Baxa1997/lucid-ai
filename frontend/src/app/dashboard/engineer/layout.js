@@ -4,8 +4,9 @@ import {
   Plus, MessageSquare, FileText, Settings, Zap,
   LogOut, Grid2X2
 } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, memo } from 'react';
 import { cn } from '@/lib/utils';
 import ThemeModeSelector from '@/components/ThemeModeSelector';
 import Toast from '@/components/Toast';
@@ -18,6 +19,32 @@ const navItems = [
   { label: 'Documentation', icon: FileText, href: '/dashboard/engineer/docs' },
   { label: 'Settings', icon: Settings, href: '/dashboard/engineer/settings' },
 ];
+
+/* ── Memoized nav item to prevent re-renders ── */
+const NavItem = memo(function NavItem({ item, active }) {
+  const Icon = item.icon;
+  return (
+    <Link
+      href={item.href}
+      prefetch={true}
+      className={cn(
+        "w-full flex items-center gap-2.5 px-3 py-[9px] rounded-lg text-[13px] font-medium transition-colors duration-100",
+        active
+          ? "bg-slate-100 dark:bg-white/[0.06] text-slate-900 dark:text-white"
+          : "text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-white/[0.03] hover:text-slate-700 dark:hover:text-slate-300"
+      )}
+    >
+      <Icon className={cn(
+        "w-4 h-4 shrink-0",
+        active ? "text-slate-700 dark:text-slate-200" : "text-slate-400 dark:text-slate-500"
+      )} strokeWidth={active ? 2 : 1.75} />
+      <span className="flex-1 text-left">{item.label}</span>
+      {active && (
+        <div className="w-1 h-1 rounded-full bg-blue-600 dark:bg-blue-400 shrink-0" />
+      )}
+    </Link>
+  );
+});
 
 export default function EngineerLayout({ children }) {
   const router = useRouter();
@@ -50,7 +77,6 @@ export default function EngineerLayout({ children }) {
       const justSignedOut = sessionStorage.getItem('lucid-just-signed-out');
       if (justSignedOut) {
         sessionStorage.removeItem('lucid-just-signed-out');
-        // Won't show here since we redirect to /login, but kept for safety
       }
     }
   }, [supabase]);
@@ -105,26 +131,28 @@ export default function EngineerLayout({ children }) {
 
         {/* Logo */}
         <div className="px-5 pt-5 pb-5 border-b border-slate-100 dark:border-slate-800/60">
-          <button
-            onClick={() => router.push('/dashboard/engineer')}
+          <Link
+            href="/dashboard/engineer"
+            prefetch={true}
             className="flex items-center gap-2.5"
           >
             <div className="w-7 h-7 bg-blue-600 rounded-md flex items-center justify-center">
               <Zap className="w-3.5 h-3.5 text-white fill-current" />
             </div>
             <span className="font-bold text-slate-900 dark:text-white text-[15px] tracking-tight">Lucid AI</span>
-          </button>
+          </Link>
         </div>
 
         {/* + New Project Button */}
         <div className="px-3 pt-4 pb-2">
-          <button 
-            onClick={() => router.push('/dashboard/engineer')}
-            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-blue-600 dark:bg-white text-white dark:text-slate-900 rounded-lg text-[13px] font-semibold hover:bg-blue-700 dark:hover:bg-slate-100 transition-all active:scale-[0.98] shadow-sm shadow-blue-600/20 dark:shadow-none"
+          <Link 
+            href="/dashboard/engineer"
+            prefetch={true}
+            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-blue-600 dark:bg-white text-white dark:text-slate-900 rounded-lg text-[13px] font-semibold hover:bg-blue-700 dark:hover:bg-slate-100 transition-colors active:scale-[0.98] shadow-sm shadow-blue-600/20 dark:shadow-none"
           >
             <Plus className="w-3.5 h-3.5" strokeWidth={2.5} />
             New Project
-          </button>
+          </Link>
         </div>
 
         {/* Section Label */}
@@ -136,31 +164,9 @@ export default function EngineerLayout({ children }) {
 
         {/* Navigation */}
         <nav className="flex-1 px-3 space-y-px">
-          {navItems.map((item) => {
-            const active = isActive(item.href);
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.href}
-                onClick={() => router.push(item.href)}
-                className={cn(
-                  "w-full flex items-center gap-2.5 px-3 py-[9px] rounded-lg text-[13px] font-medium transition-all duration-150",
-                  active
-                    ? "bg-slate-100 dark:bg-white/[0.06] text-slate-900 dark:text-white"
-                    : "text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-white/[0.03] hover:text-slate-700 dark:hover:text-slate-300"
-                )}
-              >
-                <Icon className={cn(
-                  "w-4 h-4 shrink-0",
-                  active ? "text-slate-700 dark:text-slate-200" : "text-slate-400 dark:text-slate-500"
-                )} strokeWidth={active ? 2 : 1.75} />
-                <span className="flex-1 text-left">{item.label}</span>
-                {active && (
-                  <div className="w-1 h-1 rounded-full bg-blue-600 dark:bg-blue-400 shrink-0" />
-                )}
-              </button>
-            );
-          })}
+          {navItems.map((item) => (
+            <NavItem key={item.href} item={item} active={isActive(item.href)} />
+          ))}
         </nav>
 
         {/* Bottom User + Logout */}
@@ -195,7 +201,7 @@ export default function EngineerLayout({ children }) {
               id="logout-button"
               onClick={handleLogout}
               disabled={isLoggingOut}
-              className="p-1.5 rounded-md text-slate-300 dark:text-slate-600 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-all shrink-0 disabled:opacity-50"
+              className="p-1.5 rounded-md text-slate-300 dark:text-slate-600 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors shrink-0 disabled:opacity-50"
               title="Sign out"
             >
               {isLoggingOut ? (
@@ -210,12 +216,7 @@ export default function EngineerLayout({ children }) {
 
       {/* ══ MAIN CONTENT ══ */}
       <main className="flex-1 overflow-y-scroll">
-        <div
-          key={pathname}
-          className="animate-page-enter h-full"
-        >
-          {children}
-        </div>
+        {children}
       </main>
 
       {/* ══ FIXED FLOATING THEME TOGGLE ══ */}
