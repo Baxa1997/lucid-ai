@@ -4,12 +4,19 @@ import {
   GitBranch, Plus, ChevronDown, Check, 
   Github, Rocket, Clock, Sparkles, MessageSquare, 
   ArrowRight, Folder, Search, X,
-  CircleDot
+  CircleDot, Loader2
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import useFlowStore from '@/store/useFlowStore';
+import {
+  getIntegrations,
+  fetchGitHubRepos,
+  fetchGitHubBranches,
+  fetchGitLabRepos,
+  fetchGitLabBranches,
+} from '@/lib/integrations';
 
 export default function EngineerDashboardPage() {
   const router = useRouter();
@@ -17,7 +24,6 @@ export default function EngineerDashboardPage() {
     selectedRepo, setSelectedRepo,
     sourceBranch, setSourceBranch,
     setSessionActive,
-    mockRepos,
   } = useFlowStore();
 
   const [showRepoDropdown, setShowRepoDropdown] = useState(false);
@@ -32,12 +38,55 @@ export default function EngineerDashboardPage() {
   const [selectedModel, setSelectedModel] = useState('anthropic');
   const [showModelDropdown, setShowModelDropdown] = useState(false);
 
-  const branches = ['main', 'develop', 'staging', 'release/v2.0', 'feature/auth'];
-  
-  const allRepos = [
-    ...mockRepos.github.map(r => ({ ...r, provider: 'github' })),
-    ...mockRepos.demo.map(r => ({ ...r, provider: 'demo' })),
-  ];
+  // Real repos from integrations
+  const [allRepos, setAllRepos] = useState([]);
+  const [reposLoading, setReposLoading] = useState(true);
+  const [branches, setBranches] = useState([]);
+  const [branchesLoading, setBranchesLoading] = useState(false);
+  const [integrations, setIntegrations] = useState({ github: null, gitlab: null });
+
+  // Fetch repos on mount
+  useEffect(() => {
+    (async () => {
+      setReposLoading(true);
+      const intg = await getIntegrations();
+      setIntegrations(intg);
+
+      const repos = [];
+
+      // GitHub repos
+      if (intg.github?.connected && intg.github?.token) {
+        const ghRepos = await fetchGitHubRepos(intg.github.token);
+        repos.push(...ghRepos);
+      }
+
+      // GitLab repos
+      if (intg.gitlab?.connected && intg.gitlab?.token) {
+        const glRepos = await fetchGitLabRepos(intg.gitlab.host, intg.gitlab.token);
+        repos.push(...glRepos);
+      }
+
+      setAllRepos(repos);
+      setReposLoading(false);
+    })();
+  }, []);
+
+  // Fetch branches when a repo is selected
+  const loadBranches = useCallback(async (repo) => {
+    if (!repo) return;
+    setBranchesLoading(true);
+    setBranches([]);
+    let branchList = [];
+
+    if (repo.provider === 'github' && integrations.github?.token) {
+      branchList = await fetchGitHubBranches(integrations.github.token, repo.name);
+    } else if (repo.provider === 'gitlab' && integrations.gitlab?.token) {
+      branchList = await fetchGitLabBranches(integrations.gitlab.host, integrations.gitlab.token, repo.name);
+    }
+
+    setBranches(branchList.length > 0 ? branchList : [repo.defaultBranch || 'main']);
+    setBranchesLoading(false);
+  }, [integrations]);
 
   const filteredRepos = allRepos.filter(r => 
     r.name.toLowerCase().includes(repoSearch.toLowerCase())
@@ -183,20 +232,47 @@ export default function EngineerDashboardPage() {
                         </div>
                       </div>
                       <div className="max-h-48 overflow-y-auto">
-                        {filteredRepos.map((repo) => (
-                          <button
-                            key={repo.name}
-                            onClick={() => { setLocalRepo(repo); setShowRepoDropdown(false); setRepoSearch(''); }}
-                            className={cn(
-                              "w-full flex items-center gap-3 px-3.5 py-2.5 text-sm transition-all text-left hover:bg-slate-50 dark:hover:bg-slate-700",
-                              localRepo?.name === repo.name ? "bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400" : "text-slate-600 dark:text-slate-300"
+                        {reposLoading ? (
+                          <div className="flex items-center justify-center py-6">
+                            <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
+                          </div>
+                        ) : filteredRepos.length === 0 ? (
+                          <div className="py-6 text-center">
+                            <p className="text-xs text-slate-400 dark:text-slate-500">
+                              {allRepos.length === 0 ? 'No integrations connected' : 'No matching repositories'}
+                            </p>
+                            {allRepos.length === 0 && (
+                              <button
+                                onClick={() => { setShowRepoDropdown(false); router.push('/dashboard/engineer/integrations'); }}
+                                className="text-xs text-blue-600 dark:text-blue-400 font-medium mt-1 hover:underline"
+                              >
+                                Connect GitHub or GitLab →
+                              </button>
                             )}
-                          >
-                            <Github className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                            <span className="font-medium truncate">{repo.name}</span>
-                            {localRepo?.name === repo.name && <Check className="w-3.5 h-3.5 ml-auto text-blue-600 shrink-0" />}
-                          </button>
-                        ))}
+                          </div>
+                        ) : (
+                          filteredRepos.map((repo) => (
+                            <button
+                              key={`${repo.provider}-${repo.name}`}
+                              onClick={() => { setLocalRepo(repo); setLocalBranch(''); setShowRepoDropdown(false); setRepoSearch(''); loadBranches(repo); }}
+                              className={cn(
+                                "w-full flex items-center gap-3 px-3.5 py-2.5 text-sm transition-all text-left hover:bg-slate-50 dark:hover:bg-slate-700",
+                                localRepo?.name === repo.name ? "bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400" : "text-slate-600 dark:text-slate-300"
+                              )}
+                            >
+                              {repo.provider === 'github'
+                                ? <Github className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                : <GitBranch className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+                              }
+                              <div className="flex-1 min-w-0">
+                                <span className="font-medium truncate block">{repo.name}</span>
+                                {repo.language && <span className="text-[10px] text-slate-400">{repo.language}</span>}
+                              </div>
+                              {repo.private && <span className="text-[9px] px-1.5 py-0.5 bg-slate-100 dark:bg-white/[0.06] rounded text-slate-400 font-medium">Private</span>}
+                              {localRepo?.name === repo.name && <Check className="w-3.5 h-3.5 ml-auto text-blue-600 shrink-0" />}
+                            </button>
+                          ))
+                        )}
                       </div>
                     </div>
                   </>
@@ -219,8 +295,17 @@ export default function EngineerDashboardPage() {
                 {showBranchDropdown && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setShowBranchDropdown(false)} />
-                    <div className="absolute top-full left-0 right-0 mt-1.5 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden z-50 shadow-lg">
-                      {branches.map((branch) => (
+                    <div className="absolute top-full left-0 right-0 mt-1.5 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden z-50 shadow-lg max-h-48 overflow-y-auto">
+                      {branchesLoading ? (
+                        <div className="flex items-center justify-center py-6">
+                          <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
+                        </div>
+                      ) : branches.length === 0 ? (
+                        <div className="py-6 text-center text-xs text-slate-400 dark:text-slate-500">
+                          {localRepo ? 'No branches found' : 'Select a repository first'}
+                        </div>
+                      ) : (
+                      branches.map((branch) => (
                         <button
                           key={branch}
                           onClick={() => { setLocalBranch(branch); setShowBranchDropdown(false); }}
@@ -233,7 +318,8 @@ export default function EngineerDashboardPage() {
                           <span className="font-medium">{branch}</span>
                           {localBranch === branch && <Check className="w-3.5 h-3.5 ml-auto text-blue-600" />}
                         </button>
-                      ))}
+                      ))
+                      )}
                     </div>
                   </>
                 )}

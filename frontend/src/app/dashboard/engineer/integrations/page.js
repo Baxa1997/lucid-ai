@@ -1,12 +1,23 @@
 'use client';
 
-import { 
-  Github, ChevronDown, ChevronUp, ExternalLink, Check, 
-  AlertCircle, Settings2, User, Mail, Link2, X, Plus,
-  Trash2, Pencil
+import {
+  Github, ChevronDown, Check,
+  User, Mail, Loader2, ExternalLink,
+  Unlink, Eye, EyeOff, RefreshCw, AlertCircle
 } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { cn } from '@/lib/utils';
+import { getSupabaseBrowserClient } from '@/lib/supabase/client';
+import {
+  getIntegrations,
+  saveGitHubIntegration,
+  disconnectGitHub,
+  saveGitLabIntegration,
+  disconnectGitLab,
+  fetchGitHubRepos,
+  fetchGitLabRepos,
+} from '@/lib/integrations';
+import Toast from '@/components/Toast';
 
 /* GitLab SVG icon */
 function GitLabIcon({ className }) {
@@ -17,38 +28,70 @@ function GitLabIcon({ className }) {
   );
 }
 
-/* Notion SVG icon */
-function NotionIcon({ className }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
-      <path d="M4.459 4.208c.746.606 1.026.56 2.428.466l13.215-.793c.28 0 .047-.28-.046-.326L18.19 2.2c-.42-.28-.98-.606-2.052-.513l-12.8.93c-.466.047-.56.28-.373.466l1.494 1.125zm.793 3.08v13.904c0 .747.373 1.026 1.214.98l14.523-.84c.84-.046.933-.56.933-1.166V6.368c0-.606-.233-.886-.747-.84l-15.177.84c-.56.047-.746.28-.746.92zm14.337.745c.093.42 0 .84-.42.888l-.7.14v10.264c-.607.327-1.167.514-1.634.514-.746 0-.933-.234-1.493-.933l-4.571-7.178v6.952l1.447.327s0 .84-1.167.84l-3.219.187c-.093-.187 0-.653.327-.747l.84-.213V8.957l-1.166-.093c-.094-.42.14-1.026.793-1.073l3.453-.233 4.759 7.272V8.49l-1.213-.14c-.094-.514.28-.886.747-.933l3.22-.187z"/>
-    </svg>
-  );
-}
-
 /* ════════════════════════════════════════════════
-   GITHUB CARD
+   GITHUB CARD — Token-based
    ════════════════════════════════════════════════ */
-function GitHubCard() {
+function GitHubCard({ integration, onRefresh, onToast }) {
   const [expanded, setExpanded] = useState(false);
-  const [token, setToken] = useState('ghp_xxxxxxxxxxxxxxxxxxxx');
-  const [host, setHost] = useState('github.com');
+  const [token, setToken] = useState('');
   const [showToken, setShowToken] = useState(false);
-  const [tokenValid, setTokenValid] = useState(true);
-  const [connected, setConnected] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [error, setError] = useState('');
+  const [repoCount, setRepoCount] = useState(null);
+  const [testingConnection, setTestingConnection] = useState(false);
+
+  const connected = integration?.connected;
+
+  const testConnection = useCallback(async () => {
+    if (!integration?.token) return;
+    setTestingConnection(true);
+    const repos = await fetchGitHubRepos(integration.token);
+    setRepoCount(repos.length);
+    setTestingConnection(false);
+  }, [integration?.token]);
+
+  useEffect(() => {
+    if (connected && expanded && repoCount === null) {
+      testConnection();
+    }
+  }, [connected, expanded, repoCount, testConnection]);
+
+  const handleSave = async () => {
+    if (!token.trim()) return;
+    setSaving(true);
+    setError('');
+    const result = await saveGitHubIntegration(token.trim());
+    if (result.ok) {
+      setToken('');
+      onRefresh();
+      onToast('GitHub connected successfully!');
+    } else {
+      setError(result.error);
+    }
+    setSaving(false);
+  };
+
+  const handleDisconnect = async () => {
+    setDisconnecting(true);
+    await disconnectGitHub();
+    setRepoCount(null);
+    onRefresh();
+    onToast('GitHub disconnected.');
+    setDisconnecting(false);
+  };
 
   return (
     <div className={cn(
-      "bg-white dark:bg-slate-900 rounded-2xl border overflow-hidden transition-all duration-300",
-      connected ? "border-emerald-200 dark:border-emerald-500/20" : "border-slate-200 dark:border-slate-800",
-      expanded && "shadow-card"
+      "bg-white dark:bg-[#151b23] rounded-2xl border overflow-hidden transition-all duration-300",
+      connected ? "border-emerald-200 dark:border-emerald-500/20" : "border-slate-200 dark:border-slate-700/50",
+      expanded && "shadow-lg dark:shadow-black/20"
     )}>
-      {/* Header */}
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-4 px-5 py-4 text-left hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition-all"
+        className="w-full flex items-center gap-4 px-5 py-4 text-left hover:bg-slate-50/50 dark:hover:bg-white/[0.02] transition-all"
       >
-        <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center shrink-0">
+        <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-white/[0.06] border border-slate-200 dark:border-slate-700/50 flex items-center justify-center shrink-0">
           <Github className="w-6 h-6 text-slate-900 dark:text-slate-100" />
         </div>
         <div className="flex-1 min-w-0">
@@ -56,77 +99,128 @@ function GitHubCard() {
           <div className="flex items-center gap-1.5 mt-0.5">
             <div className={cn("w-1.5 h-1.5 rounded-full", connected ? "bg-emerald-500" : "bg-slate-300 dark:bg-slate-600")} />
             <span className={cn("text-xs font-medium", connected ? "text-emerald-600 dark:text-emerald-400" : "text-slate-400 dark:text-slate-500")}>
-              {connected ? 'Connected' : 'Not connected'}
+              {connected ? `Connected as ${integration.username}` : 'Not connected'}
             </span>
           </div>
         </div>
         <div className={cn(
-          "w-8 h-8 rounded-lg flex items-center justify-center bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shrink-0 transition-transform",
+          "w-8 h-8 rounded-lg flex items-center justify-center bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-slate-700/50 shrink-0 transition-transform",
           expanded && "rotate-180"
         )}>
           <ChevronDown className="w-4 h-4 text-slate-400" />
         </div>
       </button>
 
-      {/* Expanded Content */}
       <div className={cn(
         "overflow-hidden transition-all duration-300 ease-in-out",
         expanded ? "max-h-[500px] opacity-100" : "max-h-0 opacity-0"
       )}>
-        <div className="px-5 pb-5 pt-1 border-t border-slate-100 dark:border-slate-800 space-y-5">
-          {/* Token */}
-          <div>
-            <label className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200 mb-2">
-              {tokenValid && (
-                <span className="w-5 h-5 rounded-full bg-emerald-100 dark:bg-emerald-500/10 flex items-center justify-center">
-                  <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+        <div className="px-5 pb-5 pt-3 border-t border-slate-100 dark:border-slate-700/30 space-y-4">
+          {connected ? (
+            <>
+              {/* Connected State */}
+              <div className="flex items-center gap-4 p-4 bg-slate-50 dark:bg-white/[0.03] rounded-xl border border-slate-100 dark:border-slate-700/30">
+                {integration.avatar && (
+                  <img src={integration.avatar} alt="" className="w-10 h-10 rounded-full" />
+                )}
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{integration.username}</p>
+                  <p className="text-xs text-slate-400 dark:text-slate-500">github.com</p>
+                </div>
+                <span className="px-2.5 py-1 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 rounded-lg text-[10px] font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider">
+                  Connected
                 </span>
+              </div>
+
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-slate-500 dark:text-slate-400">Accessible repositories</span>
+                <div className="flex items-center gap-2">
+                  {testingConnection ? (
+                    <Loader2 className="w-3.5 h-3.5 text-blue-500 animate-spin" />
+                  ) : (
+                    <span className="font-bold text-slate-900 dark:text-slate-100">{repoCount ?? '—'}</span>
+                  )}
+                  <button onClick={testConnection} className="p-1 text-slate-400 hover:text-blue-500 transition-colors">
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-700/30">
+                <button
+                  onClick={handleDisconnect}
+                  disabled={disconnecting}
+                  className="flex items-center gap-2 px-4 py-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-xl text-sm font-bold transition-colors"
+                >
+                  {disconnecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unlink className="w-4 h-4" />}
+                  Disconnect
+                </button>
+                <a
+                  href={`https://github.com/${integration.username}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 text-sm text-blue-600 dark:text-blue-400 font-medium hover:underline"
+                >
+                  View Profile <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Token Input */}
+              <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">
+                Enter your GitHub Personal Access Token to connect. We&apos;ll validate it automatically.
+              </p>
+
+              <div>
+                <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5 block">Personal Access Token</label>
+                <div className="relative">
+                  <input
+                    type={showToken ? 'text' : 'password'}
+                    value={token}
+                    onChange={(e) => { setToken(e.target.value); setError(''); }}
+                    placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                    className="w-full px-4 py-2.5 pr-10 bg-white dark:bg-[#0d1117] border border-slate-200 dark:border-slate-700/50 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowToken(!showToken)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                  >
+                    {showToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <p className="text-xs text-slate-400 dark:text-slate-500 mt-2">
+                  Create at{' '}
+                  <a href="https://github.com/settings/tokens/new" target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline">
+                    github.com/settings/tokens
+                  </a>
+                  {' '}with <code className="text-[10px] px-1 py-0.5 bg-slate-100 dark:bg-white/[0.06] rounded font-mono">repo</code> scope.
+                </p>
+              </div>
+
+              {error && (
+                <div className="flex items-center gap-2 text-red-500 text-sm">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  {error}
+                </div>
               )}
-              GitHub Token
-            </label>
-            <input
-              type={showToken ? 'text' : 'password'}
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder="<hidden>"
-              className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
-            />
-          </div>
 
-          {/* Host */}
-          <div>
-            <label className="text-sm font-medium text-slate-700 dark:text-slate-200 mb-2 block">
-              GitHub Host <span className="text-slate-400 dark:text-slate-500 font-normal">(optional)</span>
-            </label>
-            <input
-              type="text"
-              value={host}
-              onChange={(e) => setHost(e.target.value)}
-              placeholder="github.com"
-              className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
-            />
-          </div>
-
-          {/* Help */}
-          <p className="text-xs text-slate-400 dark:text-slate-500">
-            Get your{' '}
-            <a href="#" className="text-blue-600 dark:text-blue-400 hover:text-blue-500 underline underline-offset-2">GitHub token</a>
-            {' '}or{' '}
-            <a href="#" className="text-blue-600 dark:text-blue-400 hover:text-blue-500 underline underline-offset-2">click here for instructions</a>
-          </p>
-
-          {/* Actions */}
-          <div className="flex items-center justify-between pt-2">
-            <button
-              onClick={() => setConnected(false)}
-              className="px-4 py-2 bg-red-500 text-white rounded-xl text-sm font-bold hover:bg-red-600 transition-colors"
-            >
-              Disconnect
-            </button>
-            <button className="px-5 py-2 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 transition-colors shadow-sm shadow-blue-600/15">
-              Save Changes
-            </button>
-          </div>
+              <button
+                onClick={handleSave}
+                disabled={!token.trim() || saving}
+                className={cn(
+                  "w-full flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold transition-all",
+                  token.trim() && !saving
+                    ? "bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-slate-100"
+                    : "bg-slate-100 dark:bg-white/[0.06] text-slate-400 cursor-not-allowed"
+                )}
+              >
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                {saving ? 'Validating & Saving...' : 'Connect GitHub'}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -134,27 +228,69 @@ function GitHubCard() {
 }
 
 /* ════════════════════════════════════════════════
-   GITLAB CARD
+   GITLAB CARD — Token + Host URL
    ════════════════════════════════════════════════ */
-function GitLabCard() {
+function GitLabCard({ integration, onRefresh, onToast }) {
   const [expanded, setExpanded] = useState(false);
-  const [token, setToken] = useState('glpat-xxxxxxxxxxxxxxxxxxxx');
-  const [host, setHost] = useState('https://gitlab.udevs.io/');
+  const [token, setToken] = useState('');
+  const [host, setHost] = useState('https://gitlab.com');
   const [showToken, setShowToken] = useState(false);
-  const [tokenValid, setTokenValid] = useState(true);
-  const [hostValid, setHostValid] = useState(true);
-  const [connected, setConnected] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [error, setError] = useState('');
+  const [repoCount, setRepoCount] = useState(null);
+  const [testingConnection, setTestingConnection] = useState(false);
+
+  const connected = integration?.connected;
+
+  const testConnection = useCallback(async () => {
+    if (!integration?.token || !integration?.host) return;
+    setTestingConnection(true);
+    const repos = await fetchGitLabRepos(integration.host, integration.token);
+    setRepoCount(repos.length);
+    setTestingConnection(false);
+  }, [integration?.token, integration?.host]);
+
+  useEffect(() => {
+    if (connected && expanded && repoCount === null) {
+      testConnection();
+    }
+  }, [connected, expanded, repoCount, testConnection]);
+
+  const handleSave = async () => {
+    if (!token.trim()) return;
+    setSaving(true);
+    setError('');
+    const result = await saveGitLabIntegration(token.trim(), host.trim());
+    if (result.ok) {
+      setToken('');
+      setHost('https://gitlab.com');
+      onRefresh();
+      onToast('GitLab connected successfully!');
+    } else {
+      setError(result.error);
+    }
+    setSaving(false);
+  };
+
+  const handleDisconnect = async () => {
+    setDisconnecting(true);
+    await disconnectGitLab();
+    setRepoCount(null);
+    onRefresh();
+    onToast('GitLab disconnected.');
+    setDisconnecting(false);
+  };
 
   return (
     <div className={cn(
-      "bg-white dark:bg-slate-900 rounded-2xl border overflow-hidden transition-all duration-300",
-      connected ? "border-emerald-200 dark:border-emerald-500/20" : "border-slate-200 dark:border-slate-800",
-      expanded && "shadow-card"
+      "bg-white dark:bg-[#151b23] rounded-2xl border overflow-hidden transition-all duration-300",
+      connected ? "border-emerald-200 dark:border-emerald-500/20" : "border-slate-200 dark:border-slate-700/50",
+      expanded && "shadow-lg dark:shadow-black/20"
     )}>
-      {/* Header */}
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-4 px-5 py-4 text-left hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition-all"
+        className="w-full flex items-center gap-4 px-5 py-4 text-left hover:bg-slate-50/50 dark:hover:bg-white/[0.02] transition-all"
       >
         <div className="w-10 h-10 rounded-xl bg-orange-50 dark:bg-orange-500/10 border border-orange-100 dark:border-orange-500/20 flex items-center justify-center shrink-0">
           <GitLabIcon className="w-6 h-6 text-orange-500" />
@@ -164,367 +300,136 @@ function GitLabCard() {
           <div className="flex items-center gap-1.5 mt-0.5">
             <div className={cn("w-1.5 h-1.5 rounded-full", connected ? "bg-emerald-500" : "bg-slate-300 dark:bg-slate-600")} />
             <span className={cn("text-xs font-medium", connected ? "text-emerald-600 dark:text-emerald-400" : "text-slate-400 dark:text-slate-500")}>
-              {connected ? 'Connected' : 'Not connected'}
+              {connected ? `Connected as ${integration.username} · ${integration.host}` : 'Not connected'}
             </span>
           </div>
         </div>
         <div className={cn(
-          "w-8 h-8 rounded-lg flex items-center justify-center bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shrink-0 transition-transform",
+          "w-8 h-8 rounded-lg flex items-center justify-center bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-slate-700/50 shrink-0 transition-transform",
           expanded && "rotate-180"
         )}>
           <ChevronDown className="w-4 h-4 text-slate-400" />
         </div>
       </button>
 
-      {/* Expanded Content */}
       <div className={cn(
         "overflow-hidden transition-all duration-300 ease-in-out",
-        expanded ? "max-h-[500px] opacity-100" : "max-h-0 opacity-0"
+        expanded ? "max-h-[600px] opacity-100" : "max-h-0 opacity-0"
       )}>
-        <div className="px-5 pb-5 pt-1 border-t border-slate-100 dark:border-slate-800 space-y-5">
-          {/* Token */}
-          <div>
-            <label className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200 mb-2">
-              {tokenValid && (
-                <span className="w-5 h-5 rounded-full bg-emerald-100 dark:bg-emerald-500/10 flex items-center justify-center">
-                  <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
-                </span>
-              )}
-              GitLab Token
-            </label>
-            <input
-              type={showToken ? 'text' : 'password'}
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder="<hidden>"
-              className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
-            />
-          </div>
-
-          {/* Host */}
-          <div>
-            <label className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200 mb-2">
-              {hostValid && (
-                <span className="w-5 h-5 rounded-full bg-emerald-100 dark:bg-emerald-500/10 flex items-center justify-center">
-                  <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
-                </span>
-              )}
-              GitLab Host <span className="text-slate-400 dark:text-slate-500 font-normal">(optional)</span>
-            </label>
-            <input
-              type="text"
-              value={host}
-              onChange={(e) => setHost(e.target.value)}
-              placeholder="https://gitlab.com"
-              className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
-            />
-          </div>
-
-          {/* Help */}
-          <p className="text-xs text-slate-400 dark:text-slate-500">
-            Get your{' '}
-            <a href="#" className="text-blue-600 dark:text-blue-400 hover:text-blue-500 underline underline-offset-2">GitLab token</a>
-            {' '}or{' '}
-            <a href="#" className="text-blue-600 dark:text-blue-400 hover:text-blue-500 underline underline-offset-2">click here for instructions</a>
-          </p>
-
-          {/* Actions */}
-          <div className="flex items-center justify-between pt-2">
-            <button
-              onClick={() => setConnected(false)}
-              className="px-4 py-2 bg-red-500 text-white rounded-xl text-sm font-bold hover:bg-red-600 transition-colors"
-            >
-              Disconnect
-            </button>
-            <button className="px-5 py-2 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 transition-colors shadow-sm shadow-blue-600/15">
-              Save Changes
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ════════════════════════════════════════════════
-   NOTION CARD (Multi-project)
-   ════════════════════════════════════════════════ */
-function NotionCard() {
-  const [expanded, setExpanded] = useState(false);
-  const [connected, setConnected] = useState(true);
-  const [showNewForm, setShowNewForm] = useState(false);
-
-  const [projects, setProjects] = useState([
-    { id: 1, name: 'Lucid AI', databaseId: '21593460...', active: true },
-    { id: 2, name: 'Lodify', databaseId: '2c505496...', active: false },
-  ]);
-
-  // New project form
-  const [newName, setNewName] = useState('');
-  const [newToken, setNewToken] = useState('');
-  const [newDbId, setNewDbId] = useState('');
-
-  // Edit mode
-  const [editingId, setEditingId] = useState(null);
-  const [editName, setEditName] = useState('');
-  const [editToken, setEditToken] = useState('');
-  const [editDbId, setEditDbId] = useState('');
-
-  const handleAddProject = () => {
-    if (!newName.trim() || !newToken.trim() || !newDbId.trim()) return;
-    setProjects([...projects, {
-      id: Date.now(),
-      name: newName,
-      databaseId: newDbId,
-      active: false,
-    }]);
-    setNewName('');
-    setNewToken('');
-    setNewDbId('');
-    setShowNewForm(false);
-  };
-
-  const handleDelete = (id) => {
-    setProjects(projects.filter(p => p.id !== id));
-  };
-
-  const handleSetActive = (id) => {
-    setProjects(projects.map(p => ({
-      ...p,
-      active: p.id === id,
-    })));
-  };
-
-  const startEdit = (project) => {
-    setEditingId(project.id);
-    setEditName(project.name);
-    setEditDbId(project.databaseId);
-    setEditToken('secret_...');
-  };
-
-  const handleSaveEdit = () => {
-    if (!editName.trim()) return;
-    setProjects(projects.map(p => p.id === editingId ? {
-      ...p,
-      name: editName,
-      databaseId: editDbId,
-    } : p));
-    setEditingId(null);
-  };
-
-  const projectCount = projects.length;
-
-  return (
-    <div className={cn(
-      "bg-white dark:bg-slate-900 rounded-2xl border overflow-hidden transition-all duration-300",
-      connected ? "border-emerald-200 dark:border-emerald-500/20" : "border-slate-200 dark:border-slate-800",
-      expanded && "shadow-card"
-    )}>
-      {/* Header */}
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-4 px-5 py-4 text-left hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition-all"
-      >
-        <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center shrink-0">
-          <NotionIcon className="w-6 h-6 text-slate-800 dark:text-slate-200" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">Notion</h3>
-          <div className="flex items-center gap-1.5 mt-0.5">
-            <div className={cn("w-1.5 h-1.5 rounded-full", connected ? "bg-emerald-500" : "bg-slate-300 dark:bg-slate-600")} />
-            <span className={cn("text-xs font-medium", connected ? "text-emerald-600 dark:text-emerald-400" : "text-slate-400 dark:text-slate-500")}>
-              {projectCount} Projects
-            </span>
-          </div>
-        </div>
-        <div className={cn(
-          "w-8 h-8 rounded-lg flex items-center justify-center bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shrink-0 transition-transform",
-          expanded && "rotate-180"
-        )}>
-          <ChevronDown className="w-4 h-4 text-slate-400" />
-        </div>
-      </button>
-
-      {/* Expanded Content */}
-      <div className={cn(
-        "overflow-hidden transition-all duration-300 ease-in-out",
-        expanded ? "max-h-[1200px] opacity-100" : "max-h-0 opacity-0"
-      )}>
-        <div className="px-5 pb-5 pt-3 border-t border-slate-100 dark:border-slate-800 space-y-4">
-          {/* Section Header */}
-          <div className="flex items-center justify-between">
-            <h4 className="text-base font-bold text-slate-900 dark:text-slate-100">Notion Projects</h4>
-            <button
-              onClick={() => { setShowNewForm(true); setEditingId(null); }}
-              className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 transition-colors shadow-sm shadow-blue-600/15"
-            >
-              <Plus className="w-4 h-4" />
-              New Project
-            </button>
-          </div>
-
-          {/* New Project Form */}
-          {showNewForm && (
-            <div className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 space-y-4 animate-slide-down">
-              <h5 className="text-sm font-bold text-slate-900 dark:text-slate-100">New Project</h5>
-              <div>
-                <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5 block">Project Name</label>
-                <input
-                  type="text"
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder="e.g. My Startup"
-                  className="w-full px-4 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
-                  autoFocus
-                />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5 block">Notion Integration Token</label>
-                <input
-                  type="text"
-                  value={newToken}
-                  onChange={(e) => setNewToken(e.target.value)}
-                  placeholder="secret_..."
-                  className="w-full px-4 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
-                />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5 block">Notion Database ID</label>
-                <input
-                  type="text"
-                  value={newDbId}
-                  onChange={(e) => setNewDbId(e.target.value)}
-                  placeholder="32-char ID from URL"
-                  className="w-full px-4 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
-                />
-              </div>
-              <div className="flex items-center gap-3 pt-1">
-                <button
-                  onClick={handleAddProject}
-                  disabled={!newName.trim() || !newToken.trim() || !newDbId.trim()}
-                  className={cn(
-                    "px-5 py-2 rounded-xl text-sm font-bold transition-all",
-                    newName.trim() && newToken.trim() && newDbId.trim()
-                      ? "bg-blue-600 text-white hover:bg-blue-700"
-                      : "bg-slate-100 dark:bg-slate-700 text-slate-400 dark:text-slate-500 cursor-not-allowed"
-                  )}
-                >
-                  Save Project
-                </button>
-                <button
-                  onClick={() => { setShowNewForm(false); setNewName(''); setNewToken(''); setNewDbId(''); }}
-                  className="px-4 py-2 text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Project List */}
-          <div className="space-y-2">
-            {projects.map((project) => (
-              <div key={project.id}>
-                {editingId === project.id ? (
-                  /* Edit Mode */
-                  <div className="bg-slate-50 dark:bg-slate-800 border border-blue-200 dark:border-blue-500/30 rounded-xl p-5 space-y-4 animate-fade-in">
-                    <h5 className="text-sm font-bold text-slate-900 dark:text-slate-100">Edit Project</h5>
-                    <div>
-                      <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5 block">Project Name</label>
-                      <input
-                        type="text"
-                        value={editName}
-                        onChange={(e) => setEditName(e.target.value)}
-                        className="w-full px-4 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
-                        autoFocus
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5 block">Notion Integration Token</label>
-                      <input
-                        type="text"
-                        value={editToken}
-                        onChange={(e) => setEditToken(e.target.value)}
-                        placeholder="secret_..."
-                        className="w-full px-4 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5 block">Notion Database ID</label>
-                      <input
-                        type="text"
-                        value={editDbId}
-                        onChange={(e) => setEditDbId(e.target.value)}
-                        className="w-full px-4 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
-                      />
-                    </div>
-                    <div className="flex items-center gap-3 pt-1">
-                      <button
-                        onClick={handleSaveEdit}
-                        className="px-5 py-2 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 transition-colors"
-                      >
-                        Save Changes
-                      </button>
-                      <button
-                        onClick={() => setEditingId(null)}
-                        className="px-4 py-2 text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  /* Display Mode */
-                  <div className={cn(
-                    "flex items-center gap-4 px-4 py-3.5 rounded-xl border transition-all",
-                    project.active
-                      ? "bg-blue-50 dark:bg-blue-500/10 border-blue-200 dark:border-blue-500/20"
-                      : "bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600"
-                  )}>
-                    <div className="w-9 h-9 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 flex items-center justify-center shrink-0">
-                      <NotionIcon className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">{project.name}</span>
-                        {project.active && (
-                          <span className="px-2 py-0.5 bg-emerald-100 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 rounded text-[10px] font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider">
-                            Active
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">Database ID: {project.databaseId}</p>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      {!project.active && (
-                        <button
-                          onClick={() => handleSetActive(project.id)}
-                          className="p-2 rounded-lg text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 transition-all"
-                          title="Set as active"
-                        >
-                          <Check className="w-4 h-4" />
-                        </button>
-                      )}
-                      <button
-                        onClick={() => startEdit(project)}
-                        className="p-2 rounded-lg text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-all"
-                        title="Edit"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(project.id)}
-                        className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition-all"
-                        title="Delete"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
+        <div className="px-5 pb-5 pt-3 border-t border-slate-100 dark:border-slate-700/30 space-y-4">
+          {connected ? (
+            <>
+              <div className="flex items-center gap-4 p-4 bg-slate-50 dark:bg-white/[0.03] rounded-xl border border-slate-100 dark:border-slate-700/30">
+                {integration.avatar && (
+                  <img src={integration.avatar} alt="" className="w-10 h-10 rounded-full" />
                 )}
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{integration.username}</p>
+                  <p className="text-xs text-slate-400 dark:text-slate-500 truncate">{integration.host}</p>
+                </div>
+                <span className="px-2.5 py-1 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 rounded-lg text-[10px] font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider">
+                  Connected
+                </span>
               </div>
-            ))}
-          </div>
+
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-slate-500 dark:text-slate-400">Accessible repositories</span>
+                <div className="flex items-center gap-2">
+                  {testingConnection ? (
+                    <Loader2 className="w-3.5 h-3.5 text-blue-500 animate-spin" />
+                  ) : (
+                    <span className="font-bold text-slate-900 dark:text-slate-100">{repoCount ?? '—'}</span>
+                  )}
+                  <button onClick={testConnection} className="p-1 text-slate-400 hover:text-blue-500 transition-colors">
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-700/30">
+                <button
+                  onClick={handleDisconnect}
+                  disabled={disconnecting}
+                  className="flex items-center gap-2 px-4 py-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-xl text-sm font-bold transition-colors"
+                >
+                  {disconnecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unlink className="w-4 h-4" />}
+                  Disconnect
+                </button>
+                <a
+                  href={`${integration.host}/${integration.username}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 text-sm text-blue-600 dark:text-blue-400 font-medium hover:underline"
+                >
+                  View Profile <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">
+                Enter your GitLab Personal Access Token and host URL. Works with gitlab.com and self-hosted instances.
+              </p>
+
+              <div>
+                <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5 block">GitLab Host URL</label>
+                <input
+                  type="url"
+                  value={host}
+                  onChange={(e) => setHost(e.target.value)}
+                  placeholder="https://gitlab.com"
+                  className="w-full px-4 py-2.5 bg-white dark:bg-[#0d1117] border border-slate-200 dark:border-slate-700/50 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
+                />
+                <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
+                  Use <code className="text-[10px] px-1 py-0.5 bg-slate-100 dark:bg-white/[0.06] rounded font-mono">https://gitlab.com</code> or your self-hosted URL
+                </p>
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5 block">Personal Access Token</label>
+                <div className="relative">
+                  <input
+                    type={showToken ? 'text' : 'password'}
+                    value={token}
+                    onChange={(e) => { setToken(e.target.value); setError(''); }}
+                    placeholder="glpat-xxxxxxxxxxxxxxxxxxxx"
+                    className="w-full px-4 py-2.5 pr-10 bg-white dark:bg-[#0d1117] border border-slate-200 dark:border-slate-700/50 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowToken(!showToken)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                  >
+                    {showToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <p className="text-xs text-slate-400 dark:text-slate-500 mt-2">
+                  Create at <strong>Settings → Access Tokens</strong> with <code className="text-[10px] px-1 py-0.5 bg-slate-100 dark:bg-white/[0.06] rounded font-mono">api</code> + <code className="text-[10px] px-1 py-0.5 bg-slate-100 dark:bg-white/[0.06] rounded font-mono">read_repository</code> scopes.
+                </p>
+              </div>
+
+              {error && (
+                <div className="flex items-center gap-2 text-red-500 text-sm">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  {error}
+                </div>
+              )}
+
+              <button
+                onClick={handleSave}
+                disabled={!token.trim() || saving}
+                className={cn(
+                  "w-full flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold transition-all",
+                  token.trim() && !saving
+                    ? "bg-orange-500 text-white hover:bg-orange-600"
+                    : "bg-slate-100 dark:bg-white/[0.06] text-slate-400 cursor-not-allowed"
+                )}
+              >
+                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                {saving ? 'Validating & Saving...' : 'Connect GitLab'}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -535,35 +440,79 @@ function NotionCard() {
    MAIN INTEGRATIONS PAGE
    ════════════════════════════════════════════════ */
 export default function IntegrationsPage() {
-  const [gitUsername, setGitUsername] = useState('AI Engineer');
-  const [gitEmail, setGitEmail] = useState('ai@lucid.ai');
+  const [integrations, setIntegrations] = useState({ github: null, gitlab: null });
+  const [loading, setLoading] = useState(true);
+  const [toast, setToast] = useState(null);
+  const [gitUsername, setGitUsername] = useState('');
+  const [gitEmail, setGitEmail] = useState('');
+
+  const loadIntegrations = useCallback(async () => {
+    const data = await getIntegrations();
+    setIntegrations(data);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    loadIntegrations();
+  }, [loadIntegrations]);
+
+  useEffect(() => {
+    const supabase = getSupabaseBrowserClient();
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) {
+        setGitUsername(user.user_metadata?.git_username || user.user_metadata?.name || '');
+        setGitEmail(user.user_metadata?.git_email || user.email || '');
+      }
+    });
+  }, []);
+
+  const saveGitSettings = async () => {
+    const supabase = getSupabaseBrowserClient();
+    await supabase.auth.updateUser({
+      data: { git_username: gitUsername, git_email: gitEmail },
+    });
+    setToast({ message: 'Git settings saved!', type: 'success' });
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-full bg-[#f5f7fa] dark:bg-[#0d1117] flex items-center justify-center">
+        <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-full bg-[#f5f7fa] dark:bg-[#0d1117] transition-colors duration-200">
+      {toast && <Toast message={toast.message} type={toast.type} onDone={() => setToast(null)} />}
+
       <div className="px-6 py-8">
-        
-        {/* Header */}
         <div className="mb-8">
           <h1 className="text-2xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight mb-1">
             Integrations
           </h1>
           <p className="text-sm text-slate-500 dark:text-slate-400">
-            Configure the username and email that OpenHands uses to commit changes.
+            Connect your Git providers to access repositories and push code changes.
           </p>
         </div>
 
-        {/* Integration Cards */}
         <div className="space-y-3 mb-8">
-          <GitHubCard />
-          <GitLabCard />
-          <NotionCard />
+          <GitHubCard
+            integration={integrations.github}
+            onRefresh={loadIntegrations}
+            onToast={(msg) => setToast({ message: msg, type: 'success' })}
+          />
+          <GitLabCard
+            integration={integrations.gitlab}
+            onRefresh={loadIntegrations}
+            onToast={(msg) => setToast({ message: msg, type: 'success' })}
+          />
         </div>
 
-        {/* Git Settings */}
-        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-soft">
+        <div className="bg-white dark:bg-[#151b23] rounded-2xl border border-slate-200 dark:border-slate-700/50 p-6">
           <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 mb-1">Git Settings</h3>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mb-5">Configure the username and email that OpenHands uses to commit changes.</p>
-          
+          <p className="text-xs text-slate-500 dark:text-slate-400 mb-5">Configure the username and email that Lucid AI uses to commit changes.</p>
+
           <div className="space-y-4">
             <div>
               <label className="text-[11px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1.5 block">Username</label>
@@ -572,7 +521,8 @@ export default function IntegrationsPage() {
                 <input
                   value={gitUsername}
                   onChange={(e) => setGitUsername(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
+                  placeholder="AI Engineer"
+                  className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-[#0d1117] border border-slate-200 dark:border-slate-700/50 rounded-xl text-sm text-slate-700 dark:text-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
                 />
               </div>
             </div>
@@ -583,11 +533,15 @@ export default function IntegrationsPage() {
                 <input
                   value={gitEmail}
                   onChange={(e) => setGitEmail(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
+                  placeholder="ai@lucid.ai"
+                  className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-[#0d1117] border border-slate-200 dark:border-slate-700/50 rounded-xl text-sm text-slate-700 dark:text-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
                 />
               </div>
             </div>
-            <button className="px-5 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 transition-colors shadow-sm shadow-blue-600/15">
+            <button
+              onClick={saveGitSettings}
+              className="px-5 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold hover:bg-blue-700 transition-colors shadow-sm shadow-blue-600/15"
+            >
               Save Changes
             </button>
           </div>
