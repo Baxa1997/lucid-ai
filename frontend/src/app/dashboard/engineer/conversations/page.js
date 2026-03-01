@@ -4,29 +4,31 @@ import {
   MessageSquare, Search, Filter,
   ArrowUpDown, Plus, GitBranch,
   CheckCircle2, Loader2, AlertCircle, Pause, ExternalLink,
-  Clock, Hash
+  Clock, Hash, Github, Trash2, X, AlertTriangle
 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import { useRouter } from 'next/navigation';
+import { listConversations, deleteConversation } from '@/lib/conversations';
 
-/** Map a chat from the ai_engine API to the shape the UI cards expect. */
-function mapChat(chat) {
-  return {
-    id: chat.id,
-    agentSessionId: chat.agentSessionId,
-    title: chat.title || 'Untitled Session',
-    repo: chat.projectId || '—',
-    branch: chat.modelProvider || 'unknown',
-    status: chat.isActive ? 'running' : 'completed',
-    lastMessage: chat.title || 'AI Engineering Session',
-    messageCount: 0,
-    createdAt: chat.createdAt,
-    updatedAt: chat.updatedAt,
-  };
+/* GitLab SVG icon */
+function GitLabIcon({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M22.65 14.39L12 22.13 1.35 14.39a.84.84 0 01-.3-.94l1.22-3.78 2.44-7.51a.42.42 0 01.82 0l2.44 7.51h8.06l2.44-7.51a.42.42 0 01.82 0l2.44 7.51 1.22 3.78a.84.84 0 01-.3.94z" />
+    </svg>
+  );
 }
 
 const STATUS_CONFIG = {
+  active: {
+    label: 'Active',
+    icon: Loader2,
+    bg: 'bg-emerald-500/10',
+    text: 'text-emerald-400',
+    border: 'border-emerald-500/20',
+    dot: 'bg-emerald-500',
+  },
   completed: {
     label: 'Completed',
     icon: CheckCircle2,
@@ -34,15 +36,6 @@ const STATUS_CONFIG = {
     text: 'text-emerald-400',
     border: 'border-emerald-500/20',
     dot: 'bg-emerald-500',
-  },
-  running: {
-    label: 'Running',
-    icon: Loader2,
-    bg: 'bg-blue-500/10',
-    text: 'text-blue-400',
-    border: 'border-blue-500/20',
-    dot: 'bg-blue-500',
-    animate: true,
   },
   paused: {
     label: 'Paused',
@@ -62,101 +55,184 @@ const STATUS_CONFIG = {
   },
 };
 
-/* ═══════════════════════════════════════════════════
-   STATUS BADGE
-   ═══════════════════════════════════════════════════ */
 function StatusBadge({ status }) {
-  const config = STATUS_CONFIG[status] || STATUS_CONFIG.completed;
-  const Icon = config.icon;
-
+  const config = STATUS_CONFIG[status] || STATUS_CONFIG.active;
   return (
     <span className={cn(
-      "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider border",
+      'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider border',
       config.bg, config.text, config.border
     )}>
-      <Icon className={cn("w-3 h-3", config.animate && "animate-spin")} />
+      <span className={cn('w-1.5 h-1.5 rounded-full', config.dot)} />
       {config.label}
     </span>
   );
 }
 
-/* ═══════════════════════════════════════════════════
-   TIME FORMATTING
-   ═══════════════════════════════════════════════════ */
 function formatRelativeTime(dateStr) {
-  const date = new Date(dateStr);
+  if (!dateStr) return '';
   const now = new Date();
-  const diffMs = now - date;
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
+  const date = new Date(dateStr);
+  const diff = Math.floor((now - date) / 1000);
 
-  if (diffMins < 1) return 'Just now';
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  if (diff < 60) return 'Just now';
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
+  return date.toLocaleDateString();
+}
+
+/* ═══════════════════════════════════════════════════
+   DELETE CONFIRMATION MODAL
+   ═══════════════════════════════════════════════════ */
+function DeleteModal({ conversation, onConfirm, onCancel, loading }) {
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" onClick={(e) => e.stopPropagation()}>
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        onClick={onCancel}
+      />
+
+      {/* Modal */}
+      <div className="relative w-full max-w-md bg-white dark:bg-[#151b23] rounded-2xl border border-slate-200 dark:border-slate-700/50 shadow-2xl dark:shadow-black/40 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 pt-6 pb-0">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 flex items-center justify-center">
+              <AlertTriangle className="w-5 h-5 text-red-500" />
+            </div>
+            <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100">Delete Conversation</h3>
+          </div>
+          <button
+            onClick={onCancel}
+            className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="px-6 py-5">
+          <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">
+            Are you sure you want to delete{' '}
+            <span className="font-semibold text-slate-700 dark:text-slate-200">
+              &ldquo;{conversation?.title || 'this conversation'}&rdquo;
+            </span>
+            ? This will permanently remove all messages and cannot be undone.
+          </p>
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-3 px-6 pb-6">
+          <button
+            onClick={onCancel}
+            disabled={loading}
+            className="px-4 py-2.5 text-sm font-semibold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-white/[0.06] hover:bg-slate-200 dark:hover:bg-white/[0.1] rounded-xl border border-slate-200 dark:border-slate-700/50 transition-all"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={loading}
+            className="flex items-center gap-2 px-4 py-2.5 text-sm font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl shadow-sm shadow-red-600/20 transition-all active:scale-[0.98] disabled:opacity-50"
+          >
+            {loading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Trash2 className="w-4 h-4" />
+            )}
+            {loading ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /* ═══════════════════════════════════════════════════
    CONVERSATION CARD
    ═══════════════════════════════════════════════════ */
-function ConversationCard({ conversation, onClick }) {
-  const statusConfig = STATUS_CONFIG[conversation.status];
+function ConversationCard({ conversation, onClick, onDelete }) {
+  const [deleting, setDeleting] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+
+  const handleDeleteClick = (e) => {
+    e.stopPropagation();
+    setShowDeleteModal(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    setDeleting(true);
+    await onDelete(conversation.id);
+    setShowDeleteModal(false);
+  };
 
   return (
-    <button
+    <div
       onClick={onClick}
-      className="w-full text-left px-5 py-4 flex items-start gap-4 hover:bg-white/[0.02] transition-all duration-200 group border-b border-slate-700/30 last:border-b-0"
+      className="group bg-white dark:bg-[#151b23] rounded-2xl border border-slate-200 dark:border-slate-700/50 px-5 py-4 hover:border-blue-300 dark:hover:border-blue-500/30 hover:shadow-md dark:hover:shadow-black/20 transition-all duration-200 cursor-pointer"
     >
-      {/* Status dot */}
-      <div className="pt-1.5 shrink-0">
-        <div className={cn(
-          "w-2.5 h-2.5 rounded-full ring-4 ring-[#151b23]",
-          statusConfig?.dot || 'bg-slate-500',
-          conversation.status === 'running' && "animate-pulse"
-        )} />
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 min-w-0">
-        {/* Title row */}
-        <div className="flex items-center gap-3 mb-1.5">
-          <h3 className="text-sm font-semibold text-slate-100 truncate group-hover:text-blue-400 transition-colors">
-            {conversation.title}
-          </h3>
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-9 h-9 rounded-xl bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-slate-700/50 flex items-center justify-center shrink-0">
+            {conversation.repo_provider === 'github'
+              ? <Github className="w-5 h-5 text-slate-700 dark:text-slate-300" />
+              : conversation.repo_provider === 'gitlab'
+                ? <GitLabIcon className="w-5 h-5 text-orange-500" />
+                : <MessageSquare className="w-5 h-5 text-blue-500" />
+            }
+          </div>
+          <div className="min-w-0">
+            <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
+              {conversation.title || conversation.repo_name || 'Conversation'}
+            </h3>
+            <div className="flex items-center gap-2 mt-0.5">
+              {conversation.branch && (
+                <span className="flex items-center gap-1 text-[11px] text-slate-400 dark:text-slate-500 font-medium">
+                  <GitBranch className="w-3 h-3" />
+                  {conversation.branch}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
           <StatusBadge status={conversation.status} />
-        </div>
-
-        {/* Last message */}
-        <p className="text-sm text-slate-400 line-clamp-1 mb-2.5 leading-relaxed">
-          {conversation.lastMessage}
-        </p>
-
-        {/* Meta row */}
-        <div className="flex items-center gap-4 text-xs text-slate-500">
-          <span className="inline-flex items-center gap-1.5 font-medium">
-            <GitBranch className="w-3 h-3" />
-            <span className="text-slate-400">{conversation.repo}</span>
-            <span className="text-slate-600">/</span>
-            <span className="font-mono text-slate-500">{conversation.branch}</span>
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <Hash className="w-3 h-3" />
-            {conversation.messageCount} messages
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <Clock className="w-3 h-3" />
-            {formatRelativeTime(conversation.updatedAt)}
-          </span>
+          {showDeleteModal && (
+            <DeleteModal
+              conversation={conversation}
+              onConfirm={handleConfirmDelete}
+              onCancel={() => setShowDeleteModal(false)}
+              loading={deleting}
+            />
+          )}
+          <button
+            onClick={handleDeleteClick}
+            disabled={deleting}
+            className="opacity-0 group-hover:opacity-100 p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-all"
+          >
+            {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+          </button>
         </div>
       </div>
 
-      {/* Arrow on hover */}
-      <div className="pt-2 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-        <ExternalLink className="w-4 h-4 text-slate-500" />
+      <div className="flex items-center gap-4 text-[11px] text-slate-400 dark:text-slate-500 font-medium">
+        <span className="flex items-center gap-1">
+          <Hash className="w-3 h-3" />
+          {conversation.message_count || 0} messages
+        </span>
+        <span className="flex items-center gap-1">
+          <Clock className="w-3 h-3" />
+          {formatRelativeTime(conversation.updated_at)}
+        </span>
+        {conversation.repo_name && (
+          <span className="flex items-center gap-1 truncate">
+            {conversation.repo_provider === 'github' ? <Github className="w-3 h-3" /> : <GitBranch className="w-3 h-3" />}
+            {conversation.repo_name}
+          </span>
+        )}
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -172,26 +248,32 @@ export default function ConversationsPage() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [showFilters, setShowFilters] = useState(false);
 
-  useEffect(() => {
-    fetch('/api/chats')
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.chats) {
-          setConversations(data.chats.map(mapChat));
-        } else {
-          setFetchError('Failed to load conversations.');
-        }
-      })
-      .catch(() => setFetchError('Could not reach the AI service.'))
-      .finally(() => setLoading(false));
+  const loadConversations = useCallback(async () => {
+    try {
+      const data = await listConversations();
+      setConversations(data);
+    } catch {
+      setFetchError('Failed to load conversations.');
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  // Filter conversations
-  const filteredConversations = conversations.filter(conv => {
+  useEffect(() => {
+    loadConversations();
+  }, [loadConversations]);
+
+  const handleDelete = async (id) => {
+    await deleteConversation(id);
+    setConversations(prev => prev.filter(c => c.id !== id));
+  };
+
+  // Filter
+  const filtered = conversations.filter(conv => {
     const matchesSearch = search === '' || 
-      conv.title.toLowerCase().includes(search.toLowerCase()) ||
-      conv.repo.toLowerCase().includes(search.toLowerCase()) ||
-      conv.lastMessage.toLowerCase().includes(search.toLowerCase());
+      (conv.title || '').toLowerCase().includes(search.toLowerCase()) ||
+      (conv.repo_name || '').toLowerCase().includes(search.toLowerCase()) ||
+      (conv.last_message || '').toLowerCase().includes(search.toLowerCase());
     
     const matchesStatus = statusFilter === 'all' || conv.status === statusFilter;
     
@@ -201,7 +283,7 @@ export default function ConversationsPage() {
   // Stats
   const stats = {
     total: conversations.length,
-    running: conversations.filter(c => c.status === 'running').length,
+    active: conversations.filter(c => c.status === 'active').length,
     completed: conversations.filter(c => c.status === 'completed').length,
     error: conversations.filter(c => c.status === 'error').length,
   };
@@ -233,135 +315,119 @@ export default function ConversationsPage() {
             </button>
           </div>
 
-          {/* Quick Stats — dark cards matching screenshot */}
+          {/* Quick Stats */}
           <div className="grid grid-cols-4 gap-3 mb-6">
             {[
               { label: 'TOTAL', value: stats.total, color: 'text-slate-100', dotColor: null },
-              { label: 'RUNNING', value: stats.running, color: 'text-blue-400', dotColor: 'bg-blue-500' },
+              { label: 'ACTIVE', value: stats.active, color: 'text-blue-400', dotColor: 'bg-blue-500' },
               { label: 'COMPLETED', value: stats.completed, color: 'text-emerald-400', dotColor: 'bg-emerald-500' },
               { label: 'ERRORS', value: stats.error, color: 'text-red-400', dotColor: 'bg-red-500' },
             ].map((stat) => (
-              <div key={stat.label} className="px-4 py-3.5 rounded-xl bg-white dark:bg-[#151b23] border border-slate-200 dark:border-slate-700/50 shadow-sm">
-                <div className="flex items-center gap-2 mb-1.5">
-                  {stat.dotColor && <div className={cn("w-1.5 h-1.5 rounded-full", stat.dotColor)} />}
-                  <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-[0.1em]">{stat.label}</span>
+              <div key={stat.label} className="bg-white dark:bg-[#151b23] rounded-xl px-4 py-3 border border-slate-200 dark:border-slate-700/50">
+                <div className="flex items-center gap-2">
+                  {stat.dotColor && <span className={cn('w-2 h-2 rounded-full', stat.dotColor)} />}
+                  <span className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">{stat.label}</span>
                 </div>
-                <span className={cn("text-2xl font-extrabold", stat.color)}>{stat.value}</span>
+                <span className={cn('text-2xl font-extrabold mt-1 block', stat.color)}>{stat.value}</span>
               </div>
             ))}
           </div>
 
           {/* Search & Filters */}
-          <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-4 mb-6">
-            <div className="relative group">
-              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-                <Search className="h-4 w-4 text-slate-400 group-focus-within:text-blue-500 transition-colors" />
-              </div>
+          <div className="flex items-center gap-3 mb-5">
+            <div className="relative flex-1">
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               <input
-                type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="block w-full pl-10 pr-3 py-3 bg-white dark:bg-[#151b23] border border-slate-200 dark:border-slate-700/50 rounded-xl text-sm placeholder-slate-400 dark:placeholder-slate-500 text-slate-900 dark:text-slate-100 focus:outline-none focus:border-blue-500 dark:focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all shadow-sm"
                 placeholder="Search conversations..."
+                className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-[#151b23] border border-slate-200 dark:border-slate-700/50 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 outline-none focus:border-blue-500 transition-all"
               />
             </div>
-            
-            <div className="flex items-center gap-3">
+            <div className="relative">
               <button 
                 onClick={() => setShowFilters(!showFilters)}
                 className={cn(
-                  "flex items-center gap-2 px-4 py-3 bg-white dark:bg-[#151b23] border rounded-xl text-sm font-semibold transition-all shadow-sm",
-                  showFilters 
-                    ? "border-blue-300 dark:border-blue-500 text-blue-600 dark:text-blue-400 ring-1 ring-blue-500/20" 
-                    : "border-slate-200 dark:border-slate-700/50 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-[#1c2430] hover:border-slate-300 dark:hover:border-slate-600"
+                  "flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium border transition-all",
+                  statusFilter !== 'all'
+                    ? "bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-500/20"
+                    : "bg-white dark:bg-[#151b23] text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700/50 hover:border-blue-300"
                 )}
               >
                 <Filter className="w-4 h-4" />
-                Filter
+                {statusFilter === 'all' ? 'Filter' : STATUS_CONFIG[statusFilter]?.label}
               </button>
-              <button className="flex items-center gap-2 px-4 py-3 bg-white dark:bg-[#151b23] border border-slate-200 dark:border-slate-700/50 rounded-xl text-sm font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-[#1c2430] hover:border-slate-300 dark:hover:border-slate-600 transition-all shadow-sm">
-                <ArrowUpDown className="w-4 h-4 text-slate-400" />
-                Sort
-              </button>
+              {showFilters && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowFilters(false)} />
+                  <div className="absolute right-0 top-full mt-1.5 w-40 bg-white dark:bg-[#151b23] rounded-xl border border-slate-200 dark:border-slate-700/50 overflow-hidden z-50 shadow-lg">
+                    {['all', 'active', 'completed', 'paused', 'error'].map(s => (
+                      <button
+                        key={s}
+                        onClick={() => { setStatusFilter(s); setShowFilters(false); }}
+                        className={cn(
+                          "w-full text-left px-3.5 py-2.5 text-sm hover:bg-slate-50 dark:hover:bg-white/[0.03] transition-colors",
+                          statusFilter === s ? "text-blue-600 dark:text-blue-400 font-medium" : "text-slate-600 dark:text-slate-300"
+                        )}
+                      >
+                        {s === 'all' ? 'All' : STATUS_CONFIG[s]?.label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           </div>
-
-          {/* Filter chips */}
-          {showFilters && (
-            <div className="flex items-center gap-2 mb-6 animate-in slide-in-from-top-2 fade-in duration-200">
-              {['all', 'running', 'completed', 'paused', 'error'].map((status) => (
-                <button
-                  key={status}
-                  onClick={() => setStatusFilter(status)}
-                  className={cn(
-                    "px-3.5 py-1.5 rounded-lg text-xs font-bold capitalize transition-all border",
-                    statusFilter === status
-                      ? "bg-blue-600 text-white border-blue-600 shadow-sm shadow-blue-600/20"
-                      : "bg-white dark:bg-[#151b23] text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-[#1c2430] hover:border-slate-300 dark:hover:border-slate-600"
-                  )}
-                >
-                  {status === 'all' ? 'All' : status}
-                </button>
-              ))}
-            </div>
-          )}
         </div>
       </div>
 
-      {/* ── Scrollable Conversation List ── */}
-      <div className="flex-1 overflow-y-auto px-8 pb-8">
+      {/* ── Scrollable Content ── */}
+      <div className="flex-1 overflow-y-auto px-8 pb-10 min-h-0">
         <div className="max-w-5xl mx-auto">
-          <div className="bg-white dark:bg-[#151b23] border border-slate-200 dark:border-slate-700/50 rounded-2xl shadow-sm overflow-hidden">
-            {loading ? (
-              <div className="flex flex-col items-center justify-center p-16 text-center">
-                <Loader2 className="w-8 h-8 text-blue-500 animate-spin mb-4" />
-                <p className="text-sm text-slate-400 dark:text-slate-500 font-medium">Loading conversations...</p>
+          {loading ? (
+            <div className="flex items-center justify-center py-20">
+              <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
+            </div>
+          ) : fetchError ? (
+            <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-2xl p-8 text-center">
+              <AlertCircle className="w-8 h-8 text-red-500 mx-auto mb-3" />
+              <p className="text-sm text-red-600 dark:text-red-400 font-medium">{fetchError}</p>
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="text-center py-20">
+              <div className="w-16 h-16 rounded-2xl bg-slate-100 dark:bg-white/[0.04] border border-slate-200 dark:border-slate-700/50 flex items-center justify-center mx-auto mb-4">
+                <MessageSquare className="w-8 h-8 text-slate-300 dark:text-slate-600" />
               </div>
-            ) : fetchError ? (
-              <div className="flex flex-col items-center justify-center p-16 text-center">
-                <AlertCircle className="w-8 h-8 text-red-400 mb-4" />
-                <p className="text-sm text-red-500 dark:text-red-400 font-medium">{fetchError}</p>
-              </div>
-            ) : filteredConversations.length === 0 ? (
-              <div className="flex flex-col items-center justify-center p-16 text-center">
-                <div className="w-20 h-20 bg-slate-50 dark:bg-[#1c2430] rounded-3xl flex items-center justify-center mb-6 relative group">
-                  <div className="absolute inset-0 bg-blue-100/50 dark:bg-blue-500/10 rounded-3xl scale-0 group-hover:scale-110 transition-transform duration-500" />
-                  <MessageSquare className="w-10 h-10 text-slate-300 dark:text-slate-600 relative z-10 group-hover:text-blue-500 dark:group-hover:text-blue-400 transition-colors duration-300" />
-                </div>
-                <h3 className="text-xl font-bold text-slate-900 dark:text-slate-100 mb-2">No conversations found</h3>
-                <p className="text-slate-400 dark:text-slate-500 max-w-sm mx-auto mb-8 leading-relaxed">
-                  Start a new conversation to begin working with the AI on your projects.
-                </p>
+              <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-1">
+                {conversations.length === 0 ? 'No conversations yet' : 'No matching conversations'}
+              </h3>
+              <p className="text-sm text-slate-400 dark:text-slate-500 mb-4">
+                {conversations.length === 0 
+                  ? 'Start a new conversation by selecting a repository.' 
+                  : 'Try adjusting your search or filters.'
+                }
+              </p>
+              {conversations.length === 0 && (
                 <button
                   onClick={() => router.push('/dashboard/engineer')}
-                  className="px-8 py-3 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-600/20 hover:shadow-xl hover:-translate-y-0.5"
+                  className="px-5 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 transition-all"
                 >
-                  + New Conversation
+                  Start First Conversation
                 </button>
-              </div>
-            ) : (
-              <div>
-                {/* List Header */}
-                <div className="px-5 py-3 bg-slate-50/80 dark:bg-[#1c2430]/50 border-b border-slate-100 dark:border-slate-700/30 flex items-center justify-between sticky top-0 z-10">
-                  <span className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
-                    {filteredConversations.length} conversation{filteredConversations.length !== 1 ? 's' : ''}
-                  </span>
-                  <span className="text-xs text-slate-400 dark:text-slate-500">
-                    Sorted by most recent
-                  </span>
-                </div>
-
-                {/* Conversation List */}
-                {filteredConversations.map((conv) => (
-                  <ConversationCard 
-                    key={conv.id}
-                    conversation={conv}
-                    onClick={() => router.push(`/dashboard/engineer/workspace/${conv.id}`)}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {filtered.map((conv) => (
+                <ConversationCard
+                  key={conv.id}
+                  conversation={conv}
+                  onClick={() => router.push(`/dashboard/engineer/workspace/${conv.id}`)}
+                  onDelete={handleDelete}
+                />
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -12,8 +12,15 @@ import {
   ArrowLeft, Send, Terminal, Settings, Minimize2,
   Bot, User, Cpu, ArrowDown, Loader2,
   X, FileText, Copy, Check, GitBranch, Clock,
+  Github,
 } from 'lucide-react';
 import { useAgentSession } from '@/hooks/useAgentSession';
+import {
+  getConversation,
+  getMessages,
+  addMessage as saveMessage,
+  updateConversation,
+} from '@/lib/conversations';
 
 // ── Status Component ───────────────────────────────────────
 function ConnectionStatus({ status, error }) {
@@ -97,7 +104,41 @@ function FileViewer({ path, content, loading }) {
 export default function ConversationPage({ params }) {
   const { projectId } = use(params);
   const router = useRouter();
-  const decodedProjectId = decodeURIComponent(projectId || 'unknown');
+  const conversationId = decodeURIComponent(projectId || 'unknown');
+
+  // ── Conversation data from Supabase ─────────────────────
+  const [conversation, setConversation] = useState(null);
+  const [savedMessages, setSavedMessages] = useState([]);
+  const [convLoading, setConvLoading] = useState(true);
+  const prevMessagesLenRef = useRef(0);
+
+  // Load conversation and messages on mount (with timeout)
+  useEffect(() => {
+    let cancelled = false;
+    const timeout = setTimeout(() => {
+      if (!cancelled) setConvLoading(false);
+    }, 5000); // 5s safety timeout
+
+    (async () => {
+      try {
+        const conv = await getConversation(conversationId);
+        if (!cancelled && conv) {
+          setConversation(conv);
+          const msgs = await getMessages(conversationId);
+          if (!cancelled) setSavedMessages(msgs);
+        }
+      } catch (err) {
+        console.error('Failed to load conversation:', err);
+      } finally {
+        if (!cancelled) {
+          clearTimeout(timeout);
+          setConvLoading(false);
+        }
+      }
+    })();
+
+    return () => { cancelled = true; clearTimeout(timeout); };
+  }, [conversationId]);
 
   // ── Auth token for WebSocket ────────────────────────────
   const [token, setToken] = useState('');
@@ -119,13 +160,27 @@ export default function ConversationPage({ params }) {
     error,
     sendMessage,
   } = useAgentSession({
-    projectId: decodedProjectId,
+    projectId: conversation?.repo_name || conversationId,
     token,
   });
 
   // ── Layout state ────────────────────────────────────────
   const [chatInput, setChatInput] = useState('');
   const [showScrollBtn, setShowScrollBtn] = useState(false);
+
+  // Save assistant messages to Supabase as they arrive
+  useEffect(() => {
+    if (!conversation?.id || !messages || messages.length === 0) return;
+
+    const newMessages = messages.slice(prevMessagesLenRef.current);
+    prevMessagesLenRef.current = messages.length;
+
+    for (const msg of newMessages) {
+      if (msg.role === 'assistant' && msg.content) {
+        saveMessage(conversation.id, { role: 'assistant', content: msg.content });
+      }
+    }
+  }, [messages, conversation?.id]);
 
   // rightPanel: null | 'terminal' | 'file'
   const [rightPanel, setRightPanel] = useState(null);
@@ -151,11 +206,44 @@ export default function ConversationPage({ params }) {
   }, [terminalLogs]);
 
   // ── Handlers ───────────────────────────────────────────
-  const handleSend = (e) => {
+  const handleSend = async (e) => {
     e.preventDefault();
     if (!chatInput.trim()) return;
-    sendMessage(chatInput.trim());
+    const text = chatInput.trim();
+    sendMessage(text);
     setChatInput('');
+
+    // Save user message to Supabase
+    if (conversation?.id) {
+      await saveMessage(conversation.id, { role: 'user', content: text });
+
+      // Auto-generate title from first message via Gemini
+      if (conversation.title === 'New Conversation') {
+        // Don't block the chat — generate title in background
+        (async () => {
+          try {
+            const res = await fetch('/api/generate-title', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                message: text,
+                repoName: conversation.repo_name || '',
+              }),
+            });
+            const { title } = await res.json();
+            if (title && title !== 'New Conversation') {
+              await updateConversation(conversation.id, { title });
+              setConversation(prev => ({ ...prev, title }));
+            }
+          } catch {
+            // Fallback: use truncated message
+            const fallback = text.length > 50 ? text.slice(0, 50).replace(/\s+\S*$/, '…') : text;
+            await updateConversation(conversation.id, { title: fallback });
+            setConversation(prev => ({ ...prev, title: fallback }));
+          }
+        })();
+      }
+    }
   };
 
   const handleKeyDown = (e) => {
@@ -215,13 +303,14 @@ export default function ConversationPage({ params }) {
               <ArrowLeft className="w-5 h-5" />
             </button>
             <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-lg font-bold text-slate-900 dark:text-slate-100 truncate max-w-[200px]">{decodedProjectId}</h1>
+              <h1 className="text-lg font-bold text-slate-900 dark:text-slate-100 truncate max-w-[300px]">
+                {conversation?.title || 'New Conversation'}
+              </h1>
+              <div className="flex items-center gap-2 mt-0.5">
                 <span className="px-2 py-0.5 rounded-md bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400 text-[10px] font-bold uppercase tracking-wide border border-blue-100 dark:border-blue-500/20">
-                  AI Session
+                  {status || 'Idle'}
                 </span>
               </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">AI Engineering Session</p>
             </div>
           </div>
 
@@ -266,7 +355,7 @@ export default function ConversationPage({ params }) {
                 <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-8">
                   Let&apos;s start building!
                 </h2>
-                <div className="grid grid-cols-2 gap-3 max-w-md">
+                <div className="grid grid-cols-2 gap-3 max-w-lg">
                   {[
                     { icon: '🔄', label: 'Increase test coverage' },
                     { icon: '🔀', label: 'Auto-merge PRs' },
@@ -397,12 +486,12 @@ export default function ConversationPage({ params }) {
             {/* Bottom repo/branch bar */}
             <div className="flex items-center gap-3 mt-3">
               <span className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 dark:bg-white/[0.04] border border-slate-200 dark:border-slate-700/50 rounded-lg text-xs font-semibold text-slate-400 dark:text-slate-500">
-                <GitBranch className="w-3 h-3" />
-                No Repo Connected
+                {conversation?.repo_provider === 'github' ? <Github className="w-3 h-3" /> : <GitBranch className="w-3 h-3" />}
+                {conversation?.repo_name || 'No Repo Connected'}
               </span>
               <span className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 dark:bg-white/[0.04] border border-slate-200 dark:border-slate-700/50 rounded-lg text-xs font-semibold text-slate-400 dark:text-slate-500">
                 <GitBranch className="w-3 h-3" />
-                No Branch
+                {conversation?.branch || 'No Branch'}
               </span>
             </div>
           </div>

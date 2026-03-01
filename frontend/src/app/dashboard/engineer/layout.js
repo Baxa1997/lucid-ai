@@ -120,7 +120,7 @@ export default function EngineerLayout({ children }) {
         <div className="px-3 pt-4 pb-2">
           <button 
             onClick={() => router.push('/dashboard/engineer')}
-            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-lg text-[13px] font-semibold hover:bg-slate-800 dark:hover:bg-slate-100 transition-all active:scale-[0.98]"
+            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-blue-600 dark:bg-white text-white dark:text-slate-900 rounded-lg text-[13px] font-semibold hover:bg-blue-700 dark:hover:bg-slate-100 transition-all active:scale-[0.98] shadow-sm shadow-blue-600/20 dark:shadow-none"
           >
             <Plus className="w-3.5 h-3.5" strokeWidth={2.5} />
             New Project

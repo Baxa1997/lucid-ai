@@ -17,6 +17,7 @@ import {
   fetchGitLabRepos,
   fetchGitLabBranches,
 } from '@/lib/integrations';
+import { createConversation } from '@/lib/conversations';
 
 export default function EngineerDashboardPage() {
   const router = useRouter();
@@ -93,20 +94,34 @@ export default function EngineerDashboardPage() {
   );
 
 
-  const handleLaunch = () => {
+  const handleLaunch = async () => {
     if (!localRepo) return;
     setIsLaunching(true);
     setSelectedRepo(localRepo);
-    setSourceBranch(localBranch || 'main');
+    setSourceBranch(localBranch || localRepo.defaultBranch || 'main');
     setSessionActive(true);
-    // Store model config for the workspace page to use
+
+    // Store model config
     if (typeof window !== 'undefined') {
       sessionStorage.setItem('lucid_model_provider', selectedModel);
       sessionStorage.removeItem('lucid_custom_api_key');
     }
-    setTimeout(() => {
+
+    // Create conversation in Supabase
+    const conversation = await createConversation({
+      repoName: localRepo.name,
+      repoProvider: localRepo.provider,
+      repoUrl: localRepo.url || '',
+      branch: localBranch || localRepo.defaultBranch || 'main',
+      title: 'New Conversation',
+    });
+
+    if (conversation) {
+      router.push(`/dashboard/engineer/workspace/${conversation.id}`);
+    } else {
+      // Fallback to old URL-based routing
       router.push(`/dashboard/engineer/workspace/${encodeURIComponent(localRepo.name)}`);
-    }, 1000);
+    }
   };
 
   const handleNewConversation = () => {

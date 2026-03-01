@@ -113,7 +113,7 @@ settings = Settings()
 # Provider-specific model configs (LiteLLM naming convention)
 MODEL_CONFIGS: dict[str, dict] = {
     "google": {
-        "model": "gemini/gemini-2.5-flash",
+        "model": "gemini-3-flash-preview",
         "env_key": "GOOGLE_API_KEY",
         "label": "Gemini 2.5 Flash",
     },
