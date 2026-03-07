@@ -22,7 +22,9 @@ from app.services.sessions import (
     AgentSession,
     create_session,
     destroy_session,
+    store as session_store,
 )
+from app.services.git_operations import push_changes, get_git_status
 
 router = APIRouter()
 
@@ -36,7 +38,7 @@ async def websocket_agent(websocket: WebSocket):
     1. Client sends initial config ``{ "task": "...", ... }``
     2. Server creates a session and streams agent events back
     3. Client may send follow-ups ``{ "type": "message", "content": "..." }``
-    4. On disconnect the sandbox is cleaned up
+    4. On disconnect the workspace is cleaned up
     """
     await websocket.accept()
     logger.info("WebSocket connection accepted")
@@ -70,14 +72,7 @@ async def websocket_agent(websocket: WebSocket):
             await websocket.close(code=4010, reason="Authentication required")
             return
 
-        task = raw.get("task", "")
-        if not task:
-            await websocket.send_json({
-                "type": "error",
-                "message": "Missing required field: 'task'",
-            })
-            await websocket.close(code=4001, reason="Missing task")
-            return
+        task = raw.get("task", "")  # Task is now OPTIONAL in handshake
 
         await websocket.send_json({
             "type": "status",
@@ -86,23 +81,40 @@ async def websocket_agent(websocket: WebSocket):
         })
 
         user_id = ws_user.user_id
+        project_id = raw.get("projectId", "")
+        explicit_stop = False  # track if user explicitly stopped
 
-        # ── 2. Create session ────────────────────────────
-        session = await create_session(
-            task=task,
-            user_id=user_id,
-            repo_url=raw.get("repoUrl", ""),
-            git_token=raw.get("gitToken", ""),
-            branch=raw.get("branch", ""),
-            git_user_name=raw.get("gitUserName", ""),
-            git_user_email=raw.get("gitUserEmail", ""),
-            model_provider=raw.get(
-                "modelProvider",
-                raw.get("model_provider", settings.DEFAULT_PROVIDER),
-            ),
-            api_key=raw.get("apiKey", raw.get("api_key", "")),
-            project_id=raw.get("projectId", ""),
-        )
+        # ── 2. Try to reconnect to existing session ───────
+        existing = await session_store.find_by_user_and_project(user_id, project_id) if project_id else None
+
+        if existing:
+            session = existing
+            session.touch()
+            logger.info("Reconnecting to existing session %s for project %s", session.session_id, project_id)
+            await websocket.send_json({
+                "type": "status",
+                "status": "ready",
+                "sessionId": session.session_id,
+                "reconnected": True,
+                "message": "Reconnected to existing workspace.",
+            })
+        else:
+            # ── Create new session (clone repo if provided) ──
+            session = await create_session(
+                task=task or "Workspace initialization",
+                user_id=user_id,
+                repo_url=raw.get("repoUrl", ""),
+                git_token=raw.get("gitToken", ""),
+                branch=raw.get("branch", ""),
+                git_user_name=raw.get("gitUserName", ""),
+                git_user_email=raw.get("gitUserEmail", ""),
+                model_provider=raw.get(
+                    "modelProvider",
+                    raw.get("model_provider", settings.DEFAULT_PROVIDER),
+                ),
+                api_key=raw.get("apiKey", raw.get("api_key", "")),
+                project_id=project_id,
+            )
 
         user_jwt = ws_user.raw_jwt
 
@@ -113,7 +125,7 @@ async def websocket_agent(websocket: WebSocket):
                 user_jwt=user_jwt,
                 agent_session_id=session.session_id,
                 project_id=raw.get("projectId"),
-                title=task[:255],
+                title=task[:255] if task else "New workspace session",
                 model_provider=raw.get(
                     "modelProvider",
                     raw.get("model_provider", settings.DEFAULT_PROVIDER),
@@ -123,17 +135,6 @@ async def websocket_agent(websocket: WebSocket):
             logger.info("Chat session %s created for user %s", chat_session_id, user_id)
         except Exception as exc:
             logger.warning("Failed to create chat session in DB: %s", exc)
-
-        # Save user's initial message
-        if chat_session_id:
-            try:
-                await ChatService.add_message(
-                    session_id=chat_session_id, role="user",
-                    content=task, event_type="InitialTask",
-                    user_jwt=user_jwt,
-                )
-            except Exception as exc:
-                logger.warning("Failed to persist user message: %s", exc)
 
         # ── 3. Mock path ─────────────────────────────────
         if not sdk.OPENHANDS_AVAILABLE:
@@ -150,12 +151,12 @@ async def websocket_agent(websocket: WebSocket):
             await _run_mock_loop(websocket, session)
             return
 
-        # ── 4. Real agent loop ───────────────────────────
+        # ── 4. Real agent — workspace is ready ───────────
         await websocket.send_json({
             "type": "status",
             "status": "ready",
             "sessionId": session.session_id,
-            "message": "Agent session ready. Starting task...",
+            "message": "Workspace ready. You can start giving tasks.",
         })
 
         streaming_task = asyncio.create_task(
@@ -166,14 +167,36 @@ async def websocket_agent(websocket: WebSocket):
             ),
         )
 
-        await websocket.send_json({
-            "type": "agent_event",
-            "event": "task_start",
-            "content": f"Agent starting task: {task}",
-        })
+        # ── If task was included in handshake, run it immediately ─
+        if task:
+            # Save user's initial message
+            if chat_session_id:
+                try:
+                    await ChatService.add_message(
+                        session_id=chat_session_id, role="user",
+                        content=task, event_type="InitialTask",
+                        user_jwt=user_jwt,
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to persist user message: %s", exc)
 
-        session.conversation.send_message(task)
-        await _run_conversation_with_timeout(websocket, session)
+            await websocket.send_json({
+                "type": "agent_event",
+                "event": "task_start",
+                "content": f"Agent starting task: {task}",
+            })
+
+            session.conversation.send_message(task)
+            await _run_conversation_with_timeout(websocket, session)
+
+            # Push changes if repo was cloned
+            await _auto_push_if_needed(websocket, session)
+
+            await websocket.send_json({
+                "type": "status",
+                "status": "ready",
+                "message": "Task completed. Ready for next instruction.",
+            })
 
         # ── 5. Follow-up loop ────────────────────────────
         while True:
@@ -182,16 +205,22 @@ async def websocket_agent(websocket: WebSocket):
             content = data.get("content", "")
 
             if not content:
-                await websocket.send_json({"type": "error", "message": "Empty content"})
+                # Skip empty messages (heartbeats, pongs, etc.) — don't send error
                 continue
 
             if msg_type == "stop":
+                explicit_stop = True
                 await websocket.send_json({
                     "type": "status",
                     "status": "stopping",
                     "message": "Stopping agent...",
                 })
                 break
+
+            if msg_type == "push":
+                # Explicit push request from client
+                await _auto_push_if_needed(websocket, session, content or "Manual push by user")
+                continue
 
             logger.info("[%s] Follow-up: %s", session.session_id, content[:80])
 
@@ -214,6 +243,15 @@ async def websocket_agent(websocket: WebSocket):
 
             session.conversation.send_message(content)
             await _run_conversation_with_timeout(websocket, session)
+
+            # Push after each follow-up task completes
+            await _auto_push_if_needed(websocket, session)
+
+            await websocket.send_json({
+                "type": "status",
+                "status": "ready",
+                "message": "Task completed. Ready for next instruction.",
+            })
 
     except WebSocketDisconnect:
         logger.info(
@@ -245,8 +283,14 @@ async def websocket_agent(websocket: WebSocket):
                 await streaming_task
             except asyncio.CancelledError:
                 pass
-        if session:
+
+        # Only destroy if user explicitly stopped — otherwise keep alive for reconnection
+        if session and explicit_stop:
             await destroy_session(session.session_id)
+            logger.info("Session %s destroyed (user stopped)", session.session_id)
+        elif session:
+            session.touch()
+            logger.info("Session %s kept alive for reconnection (TTL 24h)", session.session_id)
 
         # Mark chat session as inactive
         if chat_session_id and ws_user:
@@ -260,20 +304,81 @@ async def websocket_agent(websocket: WebSocket):
         logger.info("WebSocket session cleaned up")
 
 
+async def _get_change_summary(session: AgentSession) -> str:
+    """Generate a summary of file changes made by the agent."""
+    if not session.workspace_dir:
+        return ""
+    try:
+        import subprocess
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["git", "diff", "--stat", "HEAD"],
+            cwd=session.workspace_dir,
+            capture_output=True, text=True, timeout=10,
+        )
+        diff_stat = result.stdout.strip()
+        if not diff_stat:
+            # Check for untracked files
+            result2 = await asyncio.to_thread(
+                subprocess.run,
+                ["git", "status", "--porcelain"],
+                cwd=session.workspace_dir,
+                capture_output=True, text=True, timeout=10,
+            )
+            status = result2.stdout.strip()
+            if not status:
+                return ""
+            # Parse untracked/modified files
+            files = []
+            for line in status.split("\n"):
+                if line.strip():
+                    status_code = line[:2].strip()
+                    file_path = line[3:].strip()
+                    if status_code == "??":
+                        files.append(f"  + {file_path} (new)")
+                    elif status_code in ("M", "MM"):
+                        files.append(f"  ~ {file_path} (modified)")
+                    elif status_code in ("D",):
+                        files.append(f"  - {file_path} (deleted)")
+                    else:
+                        files.append(f"  {status_code} {file_path}")
+            if files:
+                return "📋 **Changes made:**\n" + "\n".join(files)
+            return ""
+        return "📋 **Changes made:**\n```\n" + diff_stat + "\n```"
+    except Exception as exc:
+        logger.warning("Failed to get change summary: %s", exc)
+        return ""
+
 async def _run_conversation_with_timeout(
     websocket: WebSocket,
     session: AgentSession,
 ) -> None:
     """Run ``conversation.run()`` with a timeout.
 
-    Sends a "completed" or "timeout" status to the client when done.
+    Catches all errors gracefully so the WebSocket stays alive
+    and the user can send follow-up tasks.
     """
     try:
         await asyncio.wait_for(
             asyncio.to_thread(session.conversation.run),
             timeout=CONVERSATION_TIMEOUT_SECONDS,
         )
+
+        # Give the streaming task time to drain remaining events
+        await asyncio.sleep(0.5)
+
+        # Generate a change summary
+        change_summary = await _get_change_summary(session)
+        
         try:
+            if change_summary:
+                await websocket.send_json({
+                    "type": "agent_event",
+                    "event": "action",
+                    "eventType": "ChangeSummary",
+                    "content": change_summary,
+                })
             await websocket.send_json({
                 "type": "status",
                 "status": "completed",
@@ -289,7 +394,96 @@ async def _run_conversation_with_timeout(
                 "message": f"Agent timed out after {CONVERSATION_TIMEOUT_SECONDS}s.",
             })
         except (RuntimeError, Exception):
-            pass  # Client already disconnected
+            pass
+    except Exception as exc:
+        # Catch ConversationRunError, LLM errors, etc.
+        # Do NOT re-raise — keep the WebSocket alive for follow-up tasks
+        error_msg = str(exc)
+        # Extract the readable part from ConversationRunError
+        if "ConversationRunError" in type(exc).__name__:
+            # e.g. "Conversation run failed for id=...: litellm.NotFoundError: ..."
+            parts = error_msg.split(": ", 1)
+            error_msg = parts[-1] if len(parts) > 1 else error_msg
+        logger.error(
+            "Conversation run error (session=%s): %s",
+            session.session_id, error_msg,
+        )
+        try:
+            await websocket.send_json({
+                "type": "agent_event",
+                "event": "error",
+                "eventType": "ConversationError",
+                "content": f"Agent error: {error_msg[:300]}",
+            })
+        except (RuntimeError, Exception):
+            pass
+
+
+async def _auto_push_if_needed(
+    websocket: WebSocket,
+    session: AgentSession,
+    commit_message: str | None = None,
+) -> None:
+    """Push changes to remote if the session has a repo and git_token."""
+    if not session.repo_url or not session.git_token or not session.workspace_dir:
+        logger.info(
+            "Auto-push skipped (repo=%s, token=%s, dir=%s)",
+            bool(session.repo_url), bool(session.git_token), bool(session.workspace_dir),
+        )
+        return
+
+    try:
+        # Check for changes first
+        status = await get_git_status(session.workspace_dir)
+        if not status:
+            await websocket.send_json({
+                "type": "agent_event",
+                "event": "observation",
+                "eventType": "GitStatus",
+                "content": "No changes to push.",
+                "timestamp": now_iso(),
+            })
+            return
+
+        await websocket.send_json({
+            "type": "agent_event",
+            "event": "action",
+            "eventType": "GitPushAction",
+            "content": f"Pushing changes to {session.repo_url}...\n\nFiles changed:\n{status}",
+            "timestamp": now_iso(),
+        })
+
+        result = await push_changes(
+            workspace_dir=session.workspace_dir,
+            token=session.git_token,
+            commit_message=commit_message or f"Lucid AI: {session.task[:100]}",
+            branch=session.branch,
+        )
+
+        await websocket.send_json({
+            "type": "agent_event",
+            "event": "observation",
+            "eventType": "GitPushObservation",
+            "content": (
+                f"✅ Changes pushed successfully!\n\n{result.get('summary', '')}"
+                if result.get("pushed")
+                else f"ℹ️ {result.get('summary', 'No changes to push')}"
+            ),
+            "timestamp": now_iso(),
+        })
+
+    except Exception as exc:
+        logger.error("Git push failed for session %s: %s", session.session_id, exc)
+        try:
+            await websocket.send_json({
+                "type": "agent_event",
+                "event": "error",
+                "eventType": "GitPushError",
+                "content": f"Failed to push changes: {exc}",
+                "timestamp": now_iso(),
+            })
+        except Exception:
+            pass
 
 
 # ── Mock agent loop ──────────────────────────────────────────

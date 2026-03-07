@@ -19,18 +19,8 @@ RUN apt-get update && apt-get install -y \
 
 COPY requirements.txt .
 
-# Install all Python dependencies from requirements.txt.
-# This is the single source of truth — never hardcode packages here.
+# Install all Python dependencies including OpenHands SDK (all in requirements.txt)
 RUN pip install --no-cache-dir -r requirements.txt
-
-# OpenHands SDK packages (not yet on PyPI — skip gracefully).
-# The app runs in mock mode when these are absent.
-RUN pip install --no-cache-dir \
-    openhands-sdk>=1.0.0 \
-    openhands-tools>=1.0.0 \
-    openhands-workspace>=1.0.0 \
-    openhands-agent-server>=1.0.0 \
-    2>/dev/null || echo "OpenHands SDK not available — running in mock mode"
 
 # Copy application source
 COPY . .
@@ -40,4 +30,4 @@ ENV PORT=8000
 
 EXPOSE 8000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

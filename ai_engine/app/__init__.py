@@ -10,40 +10,60 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import logger, settings
 from app.sdk import OPENHANDS_AVAILABLE, import_error
-from app.services.sessions import store, destroy_session
+from app.services.sessions import store, destroy_session, reap_expired_sessions
 from app.services.docker_workspace import docker_manager
 from app.routers import health, sessions, ws, chat, files, integrations
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Verify Docker access on boot; clean up on shutdown."""
+    """Verify dependencies on boot; clean up on shutdown."""
     logger.info("Lucid AI Engine starting …")
 
-    # Check Docker daemon availability
-    docker_available = await asyncio.to_thread(docker_manager.is_docker_available)
-    if docker_available:
-        logger.info("Docker daemon is accessible — per-session sandboxing enabled")
-        # Clean up orphaned containers from previous runs
-        cleaned = await asyncio.to_thread(docker_manager.cleanup_orphaned_containers)
-        if cleaned:
-            logger.info("Cleaned up %d orphaned sandbox containers", cleaned)
+    # Report SDK availability
+    if OPENHANDS_AVAILABLE:
+        logger.info("✅ OpenHands SDK is installed — real agent mode enabled")
     else:
         logger.warning(
-            "Docker daemon not accessible — falling back to local workspace mode"
+            "⚠️ OpenHands SDK not installed — running in mock mode: %s",
+            import_error or "N/A",
         )
 
-    if not OPENHANDS_AVAILABLE:
-        logger.warning("OpenHands SDK not installed: %s", import_error or "N/A")
-    if not settings.LLM_API_KEY:
-        logger.warning("LLM_API_KEY not set — agent will not function")
+    # Check Docker daemon availability (optional, mainly for cleanup)
+    try:
+        docker_available = await asyncio.to_thread(docker_manager.is_docker_available)
+        if docker_available:
+            logger.info("Docker daemon is accessible")
+            cleaned = await asyncio.to_thread(docker_manager.cleanup_orphaned_containers)
+            if cleaned:
+                logger.info("Cleaned up %d orphaned sandbox containers", cleaned)
+        else:
+            logger.info("Docker daemon not accessible — SDK will use local execution")
+    except Exception as exc:
+        logger.info("Docker check skipped: %s", exc)
+
+    if not settings.LLM_API_KEY and not settings.GOOGLE_API_KEY and not settings.ANTHROPIC_API_KEY:
+        logger.warning("No LLM API keys set — agent will not function")
+
+    # Start the background session reaper (cleans up inactive sessions after 24h)
+    reaper_task = asyncio.create_task(reap_expired_sessions())
+    logger.info("Session reaper started (TTL=24h, interval=5min)")
+
     yield
 
     logger.info("Shutting down — cleaning up sessions …")
+    reaper_task.cancel()
+    try:
+        await reaper_task
+    except asyncio.CancelledError:
+        pass
     for sid in await store.snapshot_ids():
         await destroy_session(sid)
     # Destroy any remaining Docker containers
-    await docker_manager.destroy_all()
+    try:
+        await docker_manager.destroy_all()
+    except Exception:
+        pass
     logger.info("All resources cleaned up.")
 
 
@@ -62,7 +82,7 @@ def create_app() -> FastAPI:
 
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.ALLOWED_ORIGINS,
+        allow_origins=settings.allowed_origins_list,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

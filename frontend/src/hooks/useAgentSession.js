@@ -21,11 +21,15 @@ const HEARTBEAT_INTERVAL_MS = 25_000;
  * @param {string}  opts.projectId  – project / workspace identifier
  * @param {string}  [opts.task]     – initial task (sent on connect if autoStart)
  * @param {string}  [opts.token]    – auth token (passed as query param)
+ * @param {string}  [opts.repoUrl]  – repository URL to clone
+ * @param {string}  [opts.gitToken] – git provider auth token (GitHub PAT / GitLab token)
+ * @param {string}  [opts.branch]   – branch to clone and work on
  * @param {boolean} [opts.autoStart] – automatically connect and start on mount
  */
-export function useAgentSession({ projectId, task = '', token = '', autoStart = false }) {
+export function useAgentSession({ projectId, task = '', token = '', repoUrl = '', gitToken = '', branch = '', autoStart = false }) {
   // ── State ────────────────────────────────────────────────
-  const [state, setState] = useState('idle'); // idle | starting | connecting | connected | error | stopped
+  // idle → connecting → preparing → ready → running → ready → ...
+  const [state, setState] = useState('idle');
   const [sessionId, setSessionId] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
   const [logs, setLogs] = useState([]);
@@ -38,6 +42,21 @@ export function useAgentSession({ projectId, task = '', token = '', autoStart = 
   const reconnectCount = useRef(0);
   const idCounter = useRef(0);
   const initialTaskRef = useRef(task);
+  const connectingRef = useRef(false);
+
+  // Store volatile props in refs so connect() doesn't get recreated
+  const tokenRef = useRef(token);
+  const projectIdRef = useRef(projectId);
+  const repoUrlRef = useRef(repoUrl);
+  const gitTokenRef = useRef(gitToken);
+  const branchRef = useRef(branch);
+
+  // Keep refs synced
+  tokenRef.current = token;
+  projectIdRef.current = projectId;
+  repoUrlRef.current = repoUrl;
+  gitTokenRef.current = gitToken;
+  branchRef.current = branch;
 
   const MAX_RECONNECTS = 3;
 
@@ -49,10 +68,11 @@ export function useAgentSession({ projectId, task = '', token = '', autoStart = 
   // ── Helpers ──────────────────────────────────────────────
   const uid = () => `evt_${Date.now()}_${++idCounter.current}`;
 
-  const pushChat = useCallback((role, content) => {
+  const pushChat = useCallback((role, content, meta = {}) => {
+    if (!content || !content.trim()) return; // Never push empty content
     setChatMessages((prev) => [
       ...prev,
-      { id: uid(), role, content, ts: Date.now() },
+      { id: uid(), role, content, ts: Date.now(), ...meta },
     ]);
   }, []);
 
@@ -94,56 +114,93 @@ export function useAgentSession({ projectId, task = '', token = '', autoStart = 
       switch (msg.type) {
         // ─── Status updates ───────────────────────────
         case 'status': {
-          pushLog(`[${msg.status}] ${msg.message || ''}`, 'system');
-
-          if (msg.sessionId) {
-            setSessionId(msg.sessionId);
-          }
-
-          if (msg.status === 'ready' || msg.status === 'mock_mode') {
-            setState('connected');
-            pushChat('system', msg.message || 'Agent is ready.');
-          } else if (msg.status === 'completed') {
-            pushChat('system', msg.message || 'Task completed.');
-          } else if (msg.status === 'initializing') {
-            setState('starting');
+          const st = msg.status;
+          if (['initializing', 'cloning', 'preparing'].includes(st)) {
+            setState('preparing');
+            if (msg.message) pushLog(msg.message, 'system');
+          } else if (st === 'ready' || st === 'mock_mode') {
+            setState('ready');
+            if (msg.sessionId) {
+              setSessionId(msg.sessionId);
+              try { sessionStorage.setItem(`ws_session_${projectIdRef.current}`, msg.sessionId); } catch (_) {}
+            }
+            if (msg.reconnected) {
+              pushLog('Reconnected to existing workspace.', 'system');
+            } else if (msg.message) {
+              pushLog(msg.message, 'system');
+            }
+            reconnectCount.current = 0;
+          } else if (st === 'completed') {
+            setState('ready');
+          } else {
+            if (msg.message) pushLog(`[${st}] ${msg.message}`, 'system');
           }
           break;
         }
 
-        // ─── Agent events (action / observation) ──────
+        // ─── Agent events (action / observation) ────
         case 'agent_event': {
           const content = msg.content || '';
           const eventType = msg.eventType || msg.event || '';
+          const thought = msg.thought || '';
+          const toolName = msg.toolName || '';
 
-          // Agent thought / message → chat panel
-          if (
-            eventType.includes('Message') ||
-            eventType.includes('Think')
-          ) {
-            pushChat('agent', content);
+          // ── 1. Thinking block (collapsed by default) ──
+          if (thought) {
+            pushChat('thinking', thought);
           }
 
-          // Command execution → terminal
-          if (msg.command) {
-            pushLog(`$ ${msg.command}`, 'cmd_output');
-          }
-          if (content) {
-            // Determine log type based on event
-            let logType = 'system';
-            if (eventType.includes('CmdOutput')) logType = 'cmd_output';
-            else if (eventType.includes('FileWrite') || eventType.includes('FileEdit')) logType = 'file_write';
-            else if (eventType.includes('Error')) logType = 'error';
-            else if (msg.event === 'agent_message' || eventType.includes('Message')) logType = 'agent_message';
-            pushLog(content, logType);
+          // ── Skip task_start echo (don't repeat user's task) ──
+          if (msg.event === 'task_start') {
+            setState('running');
+            pushLog(content, 'system');
+            break;
           }
 
-          // Agent message → also to chat
-          if (msg.event === 'agent_message' || msg.event === 'AgentMessageAction') {
-            pushChat('agent', content);
+          // ── 2. Tool calls ──
+          if (eventType === 'ActionEvent') {
+            if (toolName === 'finish') {
+              if (content && !thought) pushChat('agent', content);
+            } else if (content) {
+              // Backend marks exploration commands (ls, cat, view, etc.) as readOnly
+              if (msg.readOnly) {
+                // Just log — don't show in chat
+                pushLog(content, 'cmd_output');
+              } else {
+                // Real modification — show as tool step card
+                pushChat('tool', content, { toolName });
+                pushLog(content, toolName === 'terminal' ? 'cmd_output' : 'file_write');
+              }
+            }
           }
 
-          // File tree update attached to event
+          // ── 3. Agent message (direct response to user) ──
+          else if (eventType === 'MessageEvent') {
+            if (content) {
+              pushChat('agent', content);
+              pushLog(content, 'agent_message');
+            }
+          }
+
+          // ── 4. Change summary (end of task) ──
+          else if (eventType === 'ChangeSummary') {
+            if (content) pushChat('agent', content);
+          }
+
+          // ── 5. Error ──
+          else if (msg.event === 'error') {
+            if (content) {
+              pushChat('system', `⚠️ ${content}`);
+              pushLog(content, 'error');
+            }
+          }
+
+          // ── 6. Observation / other — log only, not chat ──
+          else if (content) {
+            pushLog(content, 'system');
+          }
+
+          // File tree update
           if (msg.fileTree && Array.isArray(msg.fileTree)) {
             setFiles(msg.fileTree);
           }
@@ -183,15 +240,15 @@ export function useAgentSession({ projectId, task = '', token = '', autoStart = 
           break;
         }
 
-        // ─── Agent chat message ─────────────────────
         case 'message': {
-          pushChat('agent', msg.content || '');
+          if (msg.content && msg.content.trim()) {
+            pushChat('agent', msg.content);
+          }
           break;
         }
 
-        // ─── Task complete ──────────────────────────
         case 'complete': {
-          pushChat('system', 'Agent task completed.');
+          setState('ready');
           pushLog('Task completed', 'system');
           break;
         }
@@ -199,10 +256,17 @@ export function useAgentSession({ projectId, task = '', token = '', autoStart = 
         // ─── Error ──────────────────────────────────
         case 'error': {
           const errMsg = msg.message || 'Unknown error';
-          setError(errMsg);
-          setState('error');
-          pushChat('system', errMsg);
+          pushChat('system', `⚠️ ${errMsg}`);
           pushLog(errMsg, 'error');
+          // Only set hard error state for auth/connection errors
+          // For agent errors, stay in 'ready' so user can retry
+          if (errMsg.includes('Authentication') || errMsg.includes('Timeout waiting')) {
+            setError(errMsg);
+            setState('error');
+          } else {
+            // Agent/LLM error — keep connection alive, go back to ready
+            setState('ready');
+          }
           break;
         }
 
@@ -222,6 +286,8 @@ export function useAgentSession({ projectId, task = '', token = '', autoStart = 
   // ── Connect WebSocket ────────────────────────────────────
   const connect = useCallback(
     (taskToSend) => {
+      // Guard against duplicate connections
+      if (connectingRef.current) return;
       if (
         wsRef.current &&
         (wsRef.current.readyState === WebSocket.OPEN ||
@@ -230,18 +296,22 @@ export function useAgentSession({ projectId, task = '', token = '', autoStart = 
         return;
       }
 
+      connectingRef.current = true;
       setState('connecting');
       setError(null);
       pushLog('Connecting to AI Engine…', 'system');
 
-      const url = token ? `${WS_BASE}?token=${token}` : WS_BASE;
+      // Read from refs (stable, not re-rendered values)
+      const currentToken = tokenRef.current;
+      const url = currentToken ? `${WS_BASE}?token=${currentToken}` : WS_BASE;
       const ws = new WebSocket(url);
       wsRef.current = ws;
 
       ws.onopen = () => {
-        setState('connected');
+        connectingRef.current = false;
+        setState('preparing');
         reconnectCount.current = 0;
-        pushLog('Connected', 'system');
+        pushLog('Connected — preparing workspace…', 'system');
         startHeartbeat();
 
         // Read model selection from sessionStorage
@@ -250,18 +320,20 @@ export function useAgentSession({ projectId, task = '', token = '', autoStart = 
             sessionStorage.getItem('lucid_model_provider')) ||
           'google';
 
-        // Send initial handshake
+        // Send handshake (task is optional — workspace setup first)
         const handshake = {
-          token: token || '',
-          projectId: projectId || '',
+          token: currentToken || '',
+          projectId: projectIdRef.current || '',
           modelProvider,
-          repoUrl: '',
+          repoUrl: repoUrlRef.current || '',
+          gitToken: gitTokenRef.current || '',
+          branch: branchRef.current || '',
           task: taskToSend || '',
         };
         ws.send(JSON.stringify(handshake));
 
         if (taskToSend) {
-          pushLog(`Task sent: ${taskToSend.slice(0, 80)}…`, 'user');
+          pushLog(`Task queued: ${taskToSend.slice(0, 80)}…`, 'user');
         }
       };
 
@@ -270,16 +342,24 @@ export function useAgentSession({ projectId, task = '', token = '', autoStart = 
       };
 
       ws.onerror = () => {
+        connectingRef.current = false;
         pushLog('WebSocket error', 'error');
       };
 
       ws.onclose = (event) => {
+        connectingRef.current = false;
         wsRef.current = null;
         stopHeartbeat();
 
         if ([1000, 4001, 4010].includes(event.code)) {
           setState('stopped');
           pushLog(`Session ended (${event.reason || event.code})`, 'system');
+          return;
+        }
+
+        // 4100 = navigating away — session stays alive on backend, don't reconnect
+        if (event.code === 4100) {
+          setState('idle');
           return;
         }
 
@@ -297,7 +377,7 @@ export function useAgentSession({ projectId, task = '', token = '', autoStart = 
         }
       };
     },
-    [token, projectId, handleEvent, pushLog, startHeartbeat, stopHeartbeat]
+    [handleEvent, pushLog, startHeartbeat, stopHeartbeat]  // NO token/projectId — read from refs
   );
 
   // ── Public API ───────────────────────────────────────────
@@ -383,20 +463,22 @@ export function useAgentSession({ projectId, task = '', token = '', autoStart = 
     pushLog('Session stopped', 'system');
   }, [stopHeartbeat, pushLog]);
 
-  // ── Auto-start on mount ──────────────────────────────────
+  // ── Auto-connect on mount when token is available ────────
   useEffect(() => {
-    if (autoStart && task) {
-      startSession(task);
+    if (token && state === 'idle') {
+      // Connect without a task — workspace will prepare
+      connect('');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoStart]);
+  }, [token]);
 
   // ── Cleanup on unmount ───────────────────────────────────
   useEffect(() => {
     return () => {
       stopHeartbeat();
       if (wsRef.current) {
-        wsRef.current.close(1000, 'Component unmount');
+        // Close with 4100 = "navigating away" — backend keeps session alive
+        wsRef.current.close(4100, 'Component navigating away');
         wsRef.current = null;
       }
     };
@@ -416,6 +498,9 @@ export function useAgentSession({ projectId, task = '', token = '', autoStart = 
     status: state,
     messages: chatMessages,
     terminalLogs: logs,
+    // isReady — true when the workspace is prepared and accepting tasks
+    isReady: state === 'ready',
+    isPreparing: state === 'preparing',
 
     // Actions
     startSession,

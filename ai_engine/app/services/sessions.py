@@ -10,16 +10,28 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 from app.config import logger, settings, EVENT_BUFFER_MAX_SIZE
+
+# Sessions expire after 24 hours of inactivity
+SESSION_TTL_SECONDS = 24 * 60 * 60  # 24 hours
+REAPER_INTERVAL_SECONDS = 5 * 60    # check every 5 minutes
 from app import sdk
 from app.exceptions import SessionNotFoundError
 from app.services.llm import resolve_llm
-from app.services.docker_workspace import docker_manager
+from app.services.git_operations import clone_repo
 
+
+def _safe_put(queue: asyncio.Queue, item) -> None:
+    """Thread-safe helper to put an item into an asyncio queue."""
+    try:
+        queue.put_nowait(item)
+    except asyncio.QueueFull:
+        pass  # Drop oldest? For now, just skip
 
 # ── Session dataclass ───────────────────────────────────────
 
@@ -28,9 +40,11 @@ class AgentSession:
 
     __slots__ = (
         "session_id", "user_id", "task", "repo_url",
-        "created_at", "is_alive",
-        "conversation", "workspace", "agent", "llm",
-        "event_buffer", "container_id",
+        "branch", "git_token",
+        "created_at", "last_active", "is_alive",
+        "conversation", "workspace", "workspace_dir",
+        "agent", "llm",
+        "event_buffer", "container_id", "project_id",
     )
 
     def __init__(
@@ -39,17 +53,24 @@ class AgentSession:
         user_id: str,
         task: str,
         repo_url: Optional[str] = None,
+        branch: Optional[str] = None,
+        git_token: Optional[str] = None,
     ):
         self.session_id = session_id
         self.user_id = user_id
         self.task = task
         self.repo_url = repo_url
+        self.branch = branch or "main"
+        self.git_token = git_token
         self.created_at = datetime.now(timezone.utc)
+        self.last_active = time.monotonic()
         self.is_alive = True
+        self.project_id: str = ""
 
         # SDK objects — populated by create_session()
         self.conversation: Any = None
-        self.workspace: Any = None
+        self.workspace: Any = None       # SDK Workspace object
+        self.workspace_dir: str = ""     # Local filesystem path
         self.agent: Any = None
         self.llm: Any = None
 
@@ -58,6 +79,14 @@ class AgentSession:
 
         # Queue for streaming events to the WebSocket handler
         self.event_buffer: asyncio.Queue = asyncio.Queue(maxsize=EVENT_BUFFER_MAX_SIZE)
+
+    def touch(self) -> None:
+        """Update last_active timestamp."""
+        self.last_active = time.monotonic()
+
+    def is_expired(self) -> bool:
+        """Check if this session has been inactive for longer than TTL."""
+        return (time.monotonic() - self.last_active) > SESSION_TTL_SECONDS
 
 
 # ── In-memory session store ─────────────────────────────────
@@ -104,6 +133,29 @@ class SessionStore:
         async with self._lock:
             return list(self._sessions.keys())
 
+    async def find_by_user_and_project(
+        self, user_id: str, project_id: str
+    ) -> AgentSession | None:
+        """Find an active session for a given user + project."""
+        async with self._lock:
+            for s in self._sessions.values():
+                if (
+                    s.user_id == user_id
+                    and s.project_id == project_id
+                    and s.is_alive
+                    and not s.is_expired()
+                ):
+                    return s
+        return None
+
+    async def expired_sessions(self) -> list[str]:
+        """Return IDs of all expired sessions."""
+        async with self._lock:
+            return [
+                sid for sid, s in self._sessions.items()
+                if s.is_expired()
+            ]
+
 
 # Module-level singleton — imported by routers and app factory
 store = SessionStore()
@@ -127,7 +179,8 @@ async def create_session(
     """Create and register a fully-initialised agent session.
 
     Two modes:
-    1. Real mode (SDK installed): LocalConversation with a local workspace dir
+    1. Real mode (SDK installed): Conversation with a local workspace
+       — clones repo, runs agent in workspace directory
     2. Mock mode (no SDK): Simulated agent responses
     """
     from app.events import format_sdk_event
@@ -146,17 +199,23 @@ async def create_session(
             task=task,
             repo_url=repo_url,
         )
+        session.project_id = project_id or ""
         await store.add(session)
         return session
 
     # ── Real path ────────────────────────────────────────────
     llm = resolve_llm(provider, api_key)
 
-    # get_default_agent registers all tools before creating the agent
-    agent = sdk.get_default_agent(llm=llm, cli_mode=True, max_iterations=settings.MAX_ITERATIONS)
+    # get_default_agent creates an agent with terminal, file_editor, etc.
+    agent = sdk.get_default_agent(
+        llm=llm,
+        cli_mode=True,
+    )
 
     # Create the workspace directory on the host
-    workspace_dir = os.path.join(settings.WORKSPACE_BASE_PATH, user_id, session_id)
+    workspace_dir = os.path.join(
+        settings.WORKSPACE_BASE_PATH, user_id, session_id
+    )
     os.makedirs(workspace_dir, exist_ok=True)
 
     session = AgentSession(
@@ -164,57 +223,64 @@ async def create_session(
         user_id=user_id,
         task=task,
         repo_url=repo_url,
+        branch=branch,
+        git_token=git_token,
     )
     session.llm = llm
     session.agent = agent
-    session.workspace = workspace_dir
+    session.workspace_dir = workspace_dir
+    session.project_id = project_id or ""
 
-    # Spin up an isolated Docker sandbox for this session.
-    # The workspace directory is bind-mounted into the container at
-    # WORKSPACE_MOUNT_PATH so the agent operates inside the sandbox.
-    # Falls back gracefully if Docker is unavailable.
-    try:
-        container_id = await asyncio.to_thread(
-            docker_manager.create_sandbox,
-            session_id=session_id,
-            user_id=user_id,
-            workspace_dir=workspace_dir,
-        )
-        session.container_id = container_id
-        logger.info("Sandbox container %s ready for session %s", container_id[:12], session_id)
-    except Exception as exc:
-        logger.warning(
-            "Docker sandbox unavailable — agent runs without container isolation: %s", exc
-        )
+    # ── Clone repo if provided ───────────────────────────────
+    if repo_url and repo_url.strip():
+        try:
+            await clone_repo(
+                repo_url=repo_url,
+                token=git_token or "",
+                branch=branch or "main",
+                workspace_dir=workspace_dir,
+                git_user_name=git_user_name,
+                git_user_email=git_user_email,
+            )
+            logger.info(
+                "Repo %s cloned into %s (branch=%s)",
+                repo_url, workspace_dir, branch,
+            )
+        except Exception as exc:
+            logger.error("Failed to clone repo %s: %s", repo_url, exc)
+            # Continue without the clone — the workspace dir still exists
+            # and the agent can work from scratch
 
-    # Build the SDK workspace object (LocalWorkspace wraps the directory path).
-    # If the SDK also exports DockerWorkspace and a container was created,
-    # prefer DockerWorkspace for full in-container command execution.
-    if sdk.DockerWorkspace is not None and session.container_id:
-        workspace_obj = sdk.DockerWorkspace(
-            container_id=session.container_id,
-            path=settings.WORKSPACE_MOUNT_PATH,
-        )
-        logger.info("Using DockerWorkspace for session %s", session_id)
-    else:
-        workspace_obj = sdk.LocalWorkspace(path=workspace_dir)
-        logger.info("Using LocalWorkspace for session %s", session_id)
+    # ── Create SDK Workspace ─────────────────────────────────
+    workspace_obj = sdk.Workspace(working_dir=workspace_dir)
+    session.workspace = workspace_obj
+    logger.info("Workspace created at %s for session %s", workspace_dir, session_id)
+
+    # ── Event callback (called from SDK thread — must be thread-safe) ──
+    loop = asyncio.get_event_loop()
 
     def on_event(event):
+        """Forward SDK events to the session's asyncio buffer.
+        
+        This is called from conversation.run() which runs in a thread
+        (via asyncio.to_thread), so we use call_soon_threadsafe to safely
+        enqueue to the asyncio Queue.
+        """
         try:
             event_data = format_sdk_event(event)
             if event_data:
-                try:
-                    session.event_buffer.put_nowait(event_data)
-                except asyncio.QueueFull:
-                    pass
+                # Thread-safe way to put into asyncio.Queue
+                loop.call_soon_threadsafe(_safe_put, session.event_buffer, event_data)
         except Exception as exc:
             logger.error("Event callback error: %s", exc)
 
-    conversation = sdk.LocalConversation(
-        agent=agent,
+    # ── Create SDK Conversation ──────────────────────────────
+    conversation = sdk.Conversation(
+        agent,
         workspace=workspace_obj,
         callbacks=[on_event],
+        max_iteration_per_run=settings.MAX_ITERATIONS,
+        visualizer=None,  # we stream via our own WebSocket
     )
     session.conversation = conversation
 
@@ -239,13 +305,23 @@ async def destroy_session(session_id: str) -> None:
         except Exception as exc:
             logger.error("Error closing conversation: %s", exc)
 
-    # Destroy the Docker sandbox container
-    if session.container_id:
-        try:
-            await docker_manager.destroy_container(session.container_id, session_id)
-        except Exception as exc:
-            logger.error("Error destroying sandbox for session %s: %s", session_id, exc)
-
     # Clean up local workspace directory
-    if isinstance(session.workspace, str) and os.path.isdir(session.workspace):
-        shutil.rmtree(session.workspace, ignore_errors=True)
+    if session.workspace_dir and os.path.isdir(session.workspace_dir):
+        shutil.rmtree(session.workspace_dir, ignore_errors=True)
+
+
+async def reap_expired_sessions() -> None:
+    """Background task: periodically destroy sessions older than TTL."""
+    while True:
+        try:
+            await asyncio.sleep(REAPER_INTERVAL_SECONDS)
+            expired = await store.expired_sessions()
+            for sid in expired:
+                logger.info("Reaping expired session %s", sid)
+                await destroy_session(sid)
+            if expired:
+                logger.info("Reaped %d expired sessions", len(expired))
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logger.error("Session reaper error: %s", exc)

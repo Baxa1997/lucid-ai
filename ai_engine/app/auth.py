@@ -50,18 +50,38 @@ class AuthenticatedUser:
 
 
 def decode_jwt(token: str) -> dict:
-    """Decode and validate a Supabase Auth JWT (HS256).
+    """Decode and validate a Supabase Auth JWT.
 
+    Supports both HS256 (legacy) and ES256 (modern Supabase) signing.
     Audience verification is skipped because Supabase Auth sets
-    ``aud: "authenticated"`` which python-jose would reject unless the audience
-    is explicitly passed — we rely on signature + expiry validation instead.
+    ``aud: "authenticated"`` which python-jose would reject.
+
+    When ``SUPABASE_JWT_SECRET`` is not configured, the token is decoded
+    **without** signature or expiry verification (development mode).
     """
-    return jwt.decode(
-        token,
-        settings.SUPABASE_JWT_SECRET,
-        algorithms=["HS256"],
-        options={"verify_aud": False},
-    )
+    # Supabase may use HS256 or ES256 depending on project settings
+    algorithms = ["HS256", "ES256"]
+
+    if settings.SUPABASE_JWT_SECRET:
+        return jwt.decode(
+            token,
+            settings.SUPABASE_JWT_SECRET,
+            algorithms=algorithms,
+            options={"verify_aud": False},
+        )
+    else:
+        # Development mode — decode without any verification
+        logger.warning("SUPABASE_JWT_SECRET not set — JWT decoded WITHOUT verification")
+        return jwt.decode(
+            token,
+            "",
+            algorithms=algorithms,
+            options={
+                "verify_aud": False,
+                "verify_signature": False,
+                "verify_exp": False,
+            },
+        )
 
 
 async def get_current_user(request: Request) -> AuthenticatedUser:

@@ -38,15 +38,14 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # ── Required — app will not start without these ──────────
-    SUPABASE_URL: str
-    SUPABASE_ANON_KEY: str
+    SUPABASE_URL: str = Field("", validation_alias="SUPABASE_URL")
+    SUPABASE_ANON_KEY: str = Field("", validation_alias="SUPABASE_ANON_KEY")
     # JWT secret from Supabase Dashboard → Settings → API → JWT Settings.
     # Used to validate incoming Supabase Auth JWTs (HS256).
-    SUPABASE_JWT_SECRET: str
+    SUPABASE_JWT_SECRET: str = ""
     # service_role key — bypasses RLS; used only for server-to-server calls
-    # (X-Internal-Key path) where no user JWT is available.  Never expose to clients.
-    SUPABASE_SERVICE_KEY: str
-    ENCRYPTION_KEY: str
+    SUPABASE_SERVICE_KEY: str = ""
+    ENCRYPTION_KEY: str = ""
 
     # ── LLM provider keys ────────────────────────────────────
     ANTHROPIC_API_KEY: str = ""
@@ -60,7 +59,7 @@ class Settings(BaseSettings):
     # ── Agent / sandbox ──────────────────────────────────────
     # MAX_ITERATIONS caps how many steps the agent takes per task.
     # Passed to get_default_agent() once the OpenHands SDK is installed.
-    MAX_ITERATIONS: int = 50
+    MAX_ITERATIONS: int = 200
     SANDBOX_IMAGE: str = "nikolaik/python-nodejs:python3.11-nodejs20"
     WORKSPACE_MOUNT_PATH: str = "/workspace"
 
@@ -78,9 +77,14 @@ class Settings(BaseSettings):
     # also includes a matching X-Internal-Key header.
     INTERNAL_API_KEY: str = ""
 
-    # CORS — multiple origins as a comma-separated string.
-    # Parsed into a list by the validator below so callers get list[str].
-    ALLOWED_ORIGINS: list[str] = ["http://localhost:3000"]
+    # CORS — comma-separated string of origins.
+    # Use .allowed_origins_list property to get parsed list[str].
+    ALLOWED_ORIGINS: str = "http://localhost:3000"
+
+    @property
+    def allowed_origins_list(self) -> list[str]:
+        """Parse ALLOWED_ORIGINS into a list of URLs."""
+        return [o.strip() for o in self.ALLOWED_ORIGINS.split(",") if o.strip()]
 
     # ── Docker sandbox ───────────────────────────────────────
     SANDBOX_CONTAINER_PREFIX: str = "lucid-sandbox-"
@@ -96,24 +100,42 @@ class Settings(BaseSettings):
     @field_validator("SUPABASE_URL")
     @classmethod
     def supabase_url_must_be_https(cls, v: str) -> str:
+        if not v:
+            return v  # allow empty for agent-only mode
+        # Strip /auth/v1/callback suffix if present (common mistake from frontend .env)
+        v = v.replace("/auth/v1/callback", "")
         if not v.startswith("https://"):
             raise ValueError("SUPABASE_URL must start with https://")
         return v
 
-    @field_validator("ALLOWED_ORIGINS", mode="before")
-    @classmethod
-    def parse_allowed_origins(cls, v: object) -> list[str]:
-        if isinstance(v, list):
-            return v
-        return [o.strip() for o in str(v).split(",") if o.strip()]
 
+
+# ── Resolve NEXT_PUBLIC_ aliases before Settings() ──────────
+# The shared .env uses NEXT_PUBLIC_SUPABASE_URL (frontend convention).
+# Map them to backend names so pydantic-settings can pick them up.
+import os as _os
+from dotenv import load_dotenv as _load_dotenv
+
+# Load .env so NEXT_PUBLIC_ vars are in os.environ
+_load_dotenv(override=False)
+
+_ALIASES = {
+    "NEXT_PUBLIC_SUPABASE_URL": "SUPABASE_URL",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY": "SUPABASE_ANON_KEY",
+}
+for _src, _dst in _ALIASES.items():
+    if not _os.environ.get(_dst) and _os.environ.get(_src):
+        val = _os.environ[_src]
+        # Strip /auth/v1/callback suffix if present
+        val = val.strip('"').strip("'").replace("/auth/v1/callback", "")
+        _os.environ[_dst] = val
 
 settings = Settings()
 
 # Provider-specific model configs (LiteLLM naming convention)
 MODEL_CONFIGS: dict[str, dict] = {
     "google": {
-        "model": "gemini-3-flash-preview",
+        "model": "gemini/gemini-2.5-flash",
         "env_key": "GOOGLE_API_KEY",
         "label": "Gemini 2.5 Flash",
     },

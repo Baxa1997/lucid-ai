@@ -83,8 +83,9 @@ async def _resolve_workspace(session_id: str, user_id: str) -> str:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to access this session.",
             )
-        if isinstance(session.workspace, str):
-            return session.workspace
+        # workspace_dir is always a string path on the local filesystem
+        if session.workspace_dir:
+            return session.workspace_dir
 
     # Session gone — reconstruct path from disk convention
     workspace_dir = os.path.join(settings.WORKSPACE_BASE_PATH, user_id, session_id)
@@ -98,8 +99,8 @@ async def _resolve_workspace(session_id: str, user_id: str) -> str:
 
 async def build_file_tree(session) -> list[dict]:
     """Build a file tree for the session's workspace."""
-    if isinstance(session.workspace, str):
-        return _build_local_file_tree(session.workspace)
+    if session.workspace_dir:
+        return _build_local_file_tree(session.workspace_dir)
     return []
 
 
