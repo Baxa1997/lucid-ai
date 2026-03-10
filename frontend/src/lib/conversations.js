@@ -179,3 +179,103 @@ async function getMessageCount(conversationId) {
 
   return error ? 0 : count;
 }
+
+// ─────────────────────────────────────────────────────────
+//  Unified Chat History (reads from chat_messages table,
+//  the same table the backend writes to)
+// ─────────────────────────────────────────────────────────
+
+/**
+ * Get chat history for a workspace session.
+ * Reads from chat_messages via chat_sessions.project_id match.
+ * This is the SAME table the backend WS handler writes to,
+ * so history survives across refreshes and reconnects.
+ *
+ * @param {string} projectId — the conversationId (UUID from URL)
+ */
+export async function getChatHistory(projectId) {
+  const supabase = getSupabaseBrowserClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return [];
+
+  try {
+    // 1. Find ALL chat sessions for this project (not just the latest)
+    const { data: sessions, error: sessErr } = await supabase
+      .from('chat_sessions')
+      .select('id')
+      .eq('project_id', projectId)
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false });
+
+    if (sessErr || !sessions?.length) return [];
+
+    const sessionIds = sessions.map(s => s.id);
+
+    // 2. Read all messages from ALL chat sessions for this project
+    const { data: messages, error: msgErr } = await supabase
+      .from('chat_messages')
+      .select('*')
+      .in('session_id', sessionIds)
+      .order('created_at', { ascending: true });
+
+    if (msgErr) {
+      console.error('Failed to load chat history:', msgErr);
+      return [];
+    }
+
+    return messages || [];
+  } catch (err) {
+    console.error('getChatHistory error:', err);
+    return [];
+  }
+}
+
+/**
+ * Save a user message to the chat_messages table (same table backend uses).
+ *
+ * @param {string} projectId — conversationId to find the chat_session
+ * @param {object} msg — { role, content }
+ */
+export async function saveChatMessage(projectId, { role, content }) {
+  const supabase = getSupabaseBrowserClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  try {
+    // Find the LATEST chat_session for this project
+    const { data: sessions } = await supabase
+      .from('chat_sessions')
+      .select('id')
+      .eq('project_id', projectId)
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (!sessions?.length) {
+      console.warn('No chat session found for project:', projectId);
+      return null;
+    }
+
+    const chatSessionId = sessions[0].id;
+
+    const { data, error } = await supabase
+      .from('chat_messages')
+      .insert({
+        session_id: chatSessionId,
+        role,
+        content,
+        event_type: role === 'user' ? 'UserMessage' : 'AssistantMessage',
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Failed to save chat message:', error);
+      return null;
+    }
+    return data;
+  } catch (err) {
+    console.error('saveChatMessage error:', err);
+    return null;
+  }
+}

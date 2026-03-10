@@ -51,7 +51,7 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - DEFAULT_MODEL_PROVIDER=${DEFAULT_MODEL_PROVIDER:-google}
-      - MAX_ITERATIONS=50
+      - MAX_ITERATIONS=200
       - SANDBOX_IMAGE=nikolaik/python-nodejs:python3.11-nodejs20
       - SANDBOX_CONTAINER_PREFIX=lucid-sandbox-
       - SANDBOX_MEMORY_LIMIT=2g

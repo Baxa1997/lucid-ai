@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     LLM_BASE_URL: str | None = None
 
     # DEFAULT_MODEL_PROVIDER env var maps to DEFAULT_PROVIDER attribute
-    DEFAULT_PROVIDER: str = Field("anthropic", validation_alias="DEFAULT_MODEL_PROVIDER")
+    DEFAULT_PROVIDER: str = Field("google", validation_alias="DEFAULT_MODEL_PROVIDER")
 
     # ── Agent / sandbox ──────────────────────────────────────
     # MAX_ITERATIONS caps how many steps the agent takes per task.
@@ -132,19 +132,53 @@ for _src, _dst in _ALIASES.items():
 
 settings = Settings()
 
-# Provider-specific model configs (LiteLLM naming convention)
+# ── Model catalogue (LiteLLM model strings) ─────────────────
+# Keyed by the canonical LiteLLM model identifier.
+# Each entry carries:
+#   provider  – top-level provider family ('google' | 'anthropic')
+#   env_key   – env var that holds the API key for this provider
+#   label     – human-readable name shown in logs / error messages
 MODEL_CONFIGS: dict[str, dict] = {
-    "google": {
-        "model": "gemini/gemini-2.5-flash",
-        "env_key": "GOOGLE_API_KEY",
-        "label": "Gemini 2.5 Flash",
+    # ── Google Gemini ────────────────────────────────────────
+    "gemini/gemini-3-flash-preview": {
+        "provider": "google",
+        "env_key":  "GOOGLE_API_KEY",
+        "label":    "Gemini 3 Flash Preview",
     },
-    "anthropic": {
-        "model": "anthropic/claude-3-5-sonnet-20241022",
-        "env_key": "ANTHROPIC_API_KEY",
-        "label": "Claude 3.5 Sonnet",
+    "gemini/gemini-3.1-pro-preview": {
+        "provider": "google",
+        "env_key":  "GOOGLE_API_KEY",
+        "label":    "Gemini 3 Pro Preview",
+    },
+    # ── Anthropic Claude ─────────────────────────────────────
+    "anthropic/claude-3-5-sonnet-20241022": {
+        "provider": "anthropic",
+        "env_key":  "ANTHROPIC_API_KEY",
+        "label":    "Claude Sonnet 3.5",
+    },
+    "anthropic/claude-3-5-opus-20241022": {
+        "provider": "anthropic",
+        "env_key":  "ANTHROPIC_API_KEY",
+        "label":    "Claude Opus 3.5",
+    },
+    "anthropic/claude-sonnet-4-6": {
+        "provider": "anthropic",
+        "env_key":  "ANTHROPIC_API_KEY",
+        "label":    "Claude Sonnet 4.6",
+    },
+    "anthropic/claude-opus-4-6": {
+        "provider": "anthropic",
+        "env_key":  "ANTHROPIC_API_KEY",
+        "label":    "Claude Opus 4.6",
     },
 }
+
+# ── Default model per provider ───────────────────────────────
+DEFAULT_MODEL_PER_PROVIDER: dict[str, str] = {
+    "google":    "gemini/gemini-3-flash-preview",
+    "anthropic": "anthropic/claude-3-5-sonnet-20241022",
+}
+
 
 # Gemini safety settings — disable content filters for coding agents
 GEMINI_SAFETY_SETTINGS: list[dict] = [

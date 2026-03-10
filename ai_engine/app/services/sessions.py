@@ -17,9 +17,10 @@ from typing import Any, Optional
 
 from app.config import logger, settings, EVENT_BUFFER_MAX_SIZE
 
-# Sessions expire after 24 hours of inactivity
-SESSION_TTL_SECONDS = 24 * 60 * 60  # 24 hours
-REAPER_INTERVAL_SECONDS = 5 * 60    # check every 5 minutes
+# Sessions expire after 2 hours of inactivity (production-safe)
+SESSION_TTL_SECONDS = 2 * 60 * 60   # 2 hours
+REAPER_INTERVAL_SECONDS = 2 * 60    # check every 2 minutes
+MAX_SESSIONS_PER_USER = 3           # rate limit: max concurrent sessions
 from app import sdk
 from app.exceptions import SessionNotFoundError
 from app.services.llm import resolve_llm
@@ -45,6 +46,7 @@ class AgentSession:
         "conversation", "workspace", "workspace_dir",
         "agent", "llm",
         "event_buffer", "container_id", "project_id",
+        "repo_context", "last_agent_message",
     )
 
     def __init__(
@@ -66,6 +68,8 @@ class AgentSession:
         self.last_active = time.monotonic()
         self.is_alive = True
         self.project_id: str = ""
+        self.repo_context: str = ""  # Scanned repo structure for agent context
+        self.last_agent_message: str = ""  # Tracked for handoff summaries
 
         # SDK objects — populated by create_session()
         self.conversation: Any = None
@@ -156,9 +160,107 @@ class SessionStore:
                 if s.is_expired()
             ]
 
+    async def count_by_user(self, user_id: str) -> int:
+        """Count active, non-expired sessions for a given user."""
+        async with self._lock:
+            return sum(
+                1 for s in self._sessions.values()
+                if s.user_id == user_id
+                and s.is_alive
+                and not s.is_expired()
+            )
+
 
 # Module-level singleton — imported by routers and app factory
 store = SessionStore()
+
+
+# ── Workspace scanning ──────────────────────────────────────
+
+_KEY_FILES = (
+    "package.json", "requirements.txt", "pyproject.toml",
+    "Pipfile", "Cargo.toml", "go.mod", "pom.xml", "build.gradle",
+    "README.md", "README.rst", "README",
+    "Dockerfile", "docker-compose.yml", "docker-compose.yaml",
+    ".env.example", ".env.sample",
+    "Makefile", "tsconfig.json", "vite.config.ts", "vite.config.js",
+    "next.config.js", "next.config.mjs",
+    "webpack.config.js", "angular.json",
+    # Design system context — helps agent match existing styles
+    "tailwind.config.js", "tailwind.config.ts",
+    "src/app/globals.css", "src/index.css", "src/styles/globals.css",
+    "src/app/layout.js", "src/app/layout.tsx",
+    ".eslintrc.json", ".eslintrc.js",
+)
+_MAX_KEY_FILE_CHARS = 2000  # cap per file to avoid huge payloads
+
+
+def _scan_workspace(workspace_dir: str) -> str:
+    """Build a text summary of the workspace for agent context.
+
+    Returns a string like:
+        Project structure:
+        ├── src/
+        │   ├── app.py
+        │   └── utils.py
+        ├── package.json
+        └── README.md
+
+        Key files:
+        --- package.json ---
+        { ... }
+    """
+    if not os.path.isdir(workspace_dir):
+        return ""
+
+    lines: list[str] = ["## Project structure\n"]
+    count = 0
+
+    for root, dirs, files in os.walk(workspace_dir):
+        # Skip hidden dirs and common noise
+        dirs[:] = [
+            d for d in dirs
+            if not d.startswith(".") and d not in (
+                "node_modules", "__pycache__", "venv", ".venv",
+                "dist", "build", ".next", ".git",
+            )
+        ]
+        level = root.replace(workspace_dir, "").count(os.sep)
+        if level > 3:
+            continue  # max depth 3
+        indent = "│   " * level
+        basename = os.path.basename(root) or "."
+        if level > 0:
+            lines.append(f"{indent}├── {basename}/")
+        for f in sorted(files):
+            if f.startswith(".") and f not in (".env.example", ".env.sample"):
+                continue
+            lines.append(f"{indent}│   {f}")
+            count += 1
+            if count > 200:
+                lines.append(f"{indent}│   ... (truncated)")
+                break
+        if count > 200:
+            break
+
+    # Read key config files
+    key_contents: list[str] = []
+    for kf in _KEY_FILES:
+        path = os.path.join(workspace_dir, kf)
+        if os.path.isfile(path):
+            try:
+                with open(path, "r", errors="replace") as fh:
+                    body = fh.read(_MAX_KEY_FILE_CHARS)
+                key_contents.append(f"\n--- {kf} ---\n{body}")
+            except Exception:
+                pass
+
+    tree = "\n".join(lines)
+    keys = "\n".join(key_contents) if key_contents else ""
+    if keys:
+        keys = "\n## Key project files\n" + keys
+
+    return tree + keys
 
 
 # ── Session lifecycle ───────────────────────────────────────
@@ -191,6 +293,16 @@ async def create_session(
     if not user_id:
         raise ValueError("create_session requires a non-empty user_id")
 
+    # ── Rate limit: max concurrent sessions per user ─────────
+    user_session_count = await store.count_by_user(user_id)
+    if user_session_count >= MAX_SESSIONS_PER_USER:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=429,
+            detail=f"Session limit reached ({MAX_SESSIONS_PER_USER} concurrent sessions). "
+                   f"Please stop an existing session before starting a new one.",
+        )
+
     # ── Mock path ────────────────────────────────────────────
     if not sdk.OPENHANDS_AVAILABLE:
         session = AgentSession(
@@ -206,10 +318,12 @@ async def create_session(
     # ── Real path ────────────────────────────────────────────
     llm = resolve_llm(provider, api_key)
 
-    # get_default_agent creates an agent with terminal, file_editor, etc.
+    # get_default_agent with cli_mode=False enables BrowserToolSet (Playwright)
+    # so the agent can launch and visually inspect web apps — like OpenHands.
+    # Chromium + Playwright are installed in the Docker image (see Dockerfile).
     agent = sdk.get_default_agent(
         llm=llm,
-        cli_mode=True,
+        cli_mode=False,
     )
 
     # Create the workspace directory on the host
@@ -248,8 +362,21 @@ async def create_session(
             )
         except Exception as exc:
             logger.error("Failed to clone repo %s: %s", repo_url, exc)
-            # Continue without the clone — the workspace dir still exists
-            # and the agent can work from scratch
+            # Clean up the empty workspace directory
+            import shutil
+            shutil.rmtree(workspace_dir, ignore_errors=True)
+            # HARD FAILURE — agent must NOT work on an empty directory.
+            raise RuntimeError(
+                f"Failed to clone repository. Please check:\n"
+                f"• Repository URL is correct\n"
+                f"• Branch '{branch or 'main'}' exists\n"
+                f"• Git token has access to this repository\n"
+                f"\nError: {exc}"
+            ) from exc
+
+    # ── Scan cloned repo for context ─────────────────────────
+    repo_context = await asyncio.to_thread(_scan_workspace, workspace_dir)
+    session.repo_context = repo_context
 
     # ── Create SDK Workspace ─────────────────────────────────
     workspace_obj = sdk.Workspace(working_dir=workspace_dir)
@@ -261,26 +388,53 @@ async def create_session(
 
     def on_event(event):
         """Forward SDK events to the session's asyncio buffer.
-        
-        This is called from conversation.run() which runs in a thread
-        (via asyncio.to_thread), so we use call_soon_threadsafe to safely
-        enqueue to the asyncio Queue.
+
+        Also tracks the last meaningful agent message in
+        ``session.last_agent_message`` so the handoff summary always
+        has the agent's final output — even after the event buffer
+        has been drained by the streaming task.
         """
         try:
             event_data = format_sdk_event(event)
             if event_data:
-                # Thread-safe way to put into asyncio.Queue
                 loop.call_soon_threadsafe(_safe_put, session.event_buffer, event_data)
+
+                # ── Track last meaningful agent message ──────
+                event_type = event_data.get("eventType", "")
+                content = event_data.get("content", "")
+
+                if event_type == "MessageEvent" and content and len(content) > 20 and event_data.get("source") != "user":
+                    session.last_agent_message = content
+                elif (
+                    event_type == "ActionEvent"
+                    and content
+                    and len(content) > 30
+                    and not any(
+                        content.startswith(p)
+                        for p in (
+                            "Viewing file:",
+                            "Running: `ls",
+                            "Running: `cat",
+                            "Running: `pwd",
+                            "Running: `echo",
+                            "File:",
+                        )
+                    )
+                ):
+                    session.last_agent_message = content
         except Exception as exc:
             logger.error("Event callback error: %s", exc)
 
     # ── Create SDK Conversation ──────────────────────────────
+    # Context persistence is handled via Supabase (chat_messages +
+    # chat_sessions.summary/last_task), NOT SDK file persistence.
+    # This avoids expensive JSON event files on disk.
     conversation = sdk.Conversation(
         agent,
         workspace=workspace_obj,
         callbacks=[on_event],
         max_iteration_per_run=settings.MAX_ITERATIONS,
-        visualizer=None,  # we stream via our own WebSocket
+        visualizer=None,
     )
     session.conversation = conversation
 

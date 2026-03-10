@@ -22,7 +22,20 @@ User connects GitHub/GitLab → describes task in chat
 
 ---
 
-## Current State — Full Picture
+## Current State (Updated March 8, 2026)
+
+### ✅ Phase 1 — COMPLETE
+
+The full agent cycle works end-to-end from the browser:
+1. User logs in with Google/GitHub/GitLab (Supabase Auth)
+2. Connects GitHub/GitLab PAT on the Integrations page
+3. Picks repo + branch from dropdown → starts session
+4. Agent clones repo in Docker sandbox
+5. User gives task in chat → agent works: thoughts, file edits, terminal commands stream as styled cards
+6. Agent pushes changes → PR card appears in chat with "Create Pull Request" button
+7. Tab switch / sidebar nav / page refresh reconnects to existing workspace
+
+---
 
 ### Backend API (ai_engine — port 8000)
 
@@ -47,12 +60,11 @@ Every endpoint is behind `X-User-ID` + `X-Internal-Key` headers (or a JWT for We
 | `DELETE /api/v1/integrations/{provider}` | ✅ Working | Disconnect GitHub or GitLab |
 | `GET /api/v1/integrations/{provider}/repos` | ✅ Working | List repos via stored PAT (paginated, all pages) |
 | `POST /api/v1/integrations/{provider}/pr` | ✅ Working | Open GitHub PR or GitLab MR using stored PAT |
-| Session resume after refresh | ❌ Not built | Sessions are in-memory; browser refresh = session lost |
-| Token-by-token streaming | ❌ Not built | Events are batched (every 20 or every 2 s); no SSE/chunked streaming |
-
-**What the backend can do right now:** Start an agent, clone a repo, run code in Docker, stream events, save/query chat history, manage git tokens, list repos, create PRs. The core loop is complete at the API level.
-
-**What the backend cannot do yet:** Resume a session after the connection drops, or stream tokens as they are generated (agent outputs arrive in chunks, not word-by-word).
+| Session reconnect after refresh | ✅ Working | `find_by_user_and_project()` reconnects to existing session |
+| Session rate limiting | ✅ Working | Max 3 concurrent sessions per user (HTTP 429) |
+| WebSocket keepalive | ✅ Working | `--ws-ping-interval 20 --ws-ping-timeout 60 --timeout-keep-alive 65` |
+| Container cleanup reaper | ✅ Working | TTL=2h, reaper interval=2min |
+| Token-by-token streaming | ⚠️ Not built | Events are batched (every 20 or every 2s); cosmetic—not needed for v1 |
 
 ---
 
@@ -60,119 +72,38 @@ Every endpoint is behind `X-User-ID` + `X-Internal-Key` headers (or a JWT for We
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Auth — Supabase OAuth (Google, GitHub, GitLab) | ✅ Working | Native Supabase Auth via `@supabase/ssr`. No NextAuth. Login page has all 3 providers. |
-| Auth — Supabase middleware (session refresh + route protection) | ✅ Working | `src/middleware.js` refreshes session cookies and redirects unauthenticated users |
-| Auth — Supabase callback (PKCE code exchange) | ✅ Working | `src/app/auth/callback/route.js` handles OAuth redirect |
+| Auth — Supabase OAuth (Google, GitHub, GitLab) | ✅ Working | Native Supabase Auth via `@supabase/ssr`. Login page has all 3 providers. |
+| Auth — middleware (session refresh + route protection) | ✅ Working | `src/middleware.js` refreshes session cookies and redirects unauthenticated users |
+| Auth — callback (PKCE code exchange) | ✅ Working | `src/app/auth/callback/route.js` handles OAuth redirect |
 | Conversations list page | ✅ Working | Shows past chat sessions from DB |
-| Chat UI — send message, receive events | ✅ Working | WebSocket connected; basic message display |
+| Git token settings (Integrations page) | ✅ Working | PAT input, validation, masked display, connect/disconnect for GitHub and GitLab |
+| Repo picker in new session flow | ✅ Working | Dashboard dropdown with search, branch picker, model selector |
+| Chat UI — send message, receive events | ✅ Working | WebSocket connected; structured message display |
+| Inline agent events as structured cards | ✅ Working | ThinkingBlock, ToolCard, MessageBubble with markdown parsing |
 | Read-only file explorer | ✅ Working | Live workspace tree from agent; updates on file changes |
 | Terminal output panel | ✅ Working | Agent command output visible |
-| Git token settings page | ❌ Not built | No UI to paste a GitHub/GitLab PAT — must call API directly |
-| Repo picker in new session flow | ❌ Not built | User cannot pick a repo from a dropdown; must type the URL manually or hardcode it |
-| Inline agent events as structured cards | ❌ Not built | Agent events (thoughts, commands, diffs) arrive via WebSocket but are likely displayed as raw/flat text, not as styled thought bubbles / command blocks / diff cards |
-| Stop agent button | ❌ Not built | No button to interrupt the agent mid-task |
-| PR link card in chat | ❌ Not built | No card appears when agent creates a PR |
-| Notion connect / task picker | ❌ Not built | Phase 2 — not started |
-
----
-
-### What you can do end-to-end right now
-
-✅ **Fully testable via curl / wscat (no frontend needed):**
-- Connect a GitHub/GitLab PAT → list your repos → start an agent session on a repo → watch mock events stream → create a PR
-
-⚠️ **Partially works in the browser:**
-- Log in with Google/GitHub/GitLab (Supabase Auth), view past conversations, see the chat UI and file explorer
-- Cannot connect GitHub/GitLab from the UI (no settings page)
-- Cannot pick a repo from a dropdown (no repo picker)
-- Events appear in chat but without structured formatting
-
-❌ **Core loop is broken from the browser because:**
-1. There is no settings page to paste a PAT — users have no way to connect GitHub/GitLab from the UI
-2. New session flow has no repo picker — user can't select which repo to work on
-3. Agent events in chat show as flat messages, not as styled thought/command/diff cards
-
-**In short:** The backend is feature-complete for Phase 1. The frontend is missing the three pieces that expose those backend features to a real user: token settings (F3), repo picker (F4), and structured event rendering (F5).
+| Stop agent button | ✅ Working | `stopSession()` sends `stop` to backend + closes WS |
+| PR link card in chat | ✅ Working | Styled card with branch info, diff stats, "Create PR" button |
+| Auto-title conversations | ✅ Working | Uses Gemini to generate 2-5 word title from first user message |
+| Chat history persistence | ✅ Working | Unified `chat_messages` table — survives refresh + reconnect |
+| Loading skeleton | ✅ Working | Shows animated skeleton while history loads, no flash of empty state |
+| Error boundary | ✅ Working | `WorkspaceErrorBoundary` catches JS errors, shows "Reload" button |
+| Collapsible sidebar | ✅ Working | Icon-only mode with tooltips, persisted in localStorage |
+| Reconnection handling | ✅ Working | No workspace destruction on tab switch or sidebar nav |
+| Agent working spinner | ✅ Working | Shows during `connecting`, `preparing`, and `running` states |
 
 ---
 
 ### 🗑️ Removed from scope
 
-These were planned but don't belong in a chat product:
 - Monaco code editor as a separate pane — not an IDE; code is visible as inline diffs in chat
 - File write/edit by user — agent does all editing
 - Separate git status panel — agent commits/pushes autonomously
 - Commit & push UI — agent does this automatically
 - GitHub/GitLab OAuth flow for git tokens — replaced with PAT input (OpenHands style)
 - Organization/team logic — single-user, removed from codebase and DB schema
-- **NextAuth.js** — replaced with native Supabase Auth (Google, GitHub, GitLab OAuth). Packages `next-auth`, `@auth/prisma-adapter`, `jsonwebtoken` removed.
+- **NextAuth.js** — replaced with native Supabase Auth (Google, GitHub, GitLab OAuth)
 - **Dev email/password login** — removed; all auth now goes through Supabase OAuth providers
-
-### ✅ Auth Migration Completed (Feb 2026)
-
-**What changed:**
-- Replaced NextAuth v5 with native Supabase Auth (`@supabase/ssr` + `@supabase/supabase-js`)
-- Login page now supports Google, GitHub, and GitLab OAuth via Supabase
-- Added Next.js middleware for session refresh and route protection
-- API routes forward Supabase JWT as `Authorization: Bearer` to ai_engine
-- Backend (`ai_engine`) was NOT modified — it already validates Supabase JWTs
-- Per-user data isolation via Supabase RLS (`auth.uid()`) + Prisma `userId` filters
-
-**Files created:**
-- `src/lib/supabase/client.js` — Browser Supabase client
-- `src/lib/supabase/server.js` — Server-side Supabase client (API routes)
-- `src/lib/supabase/middleware.js` — Middleware Supabase client
-- `src/middleware.js` — Session refresh + route protection
-- `src/app/auth/callback/route.js` — OAuth PKCE code exchange
-
-**Files deleted:**
-- `src/lib/auth.js` — NextAuth config
-- `src/app/api/auth/[...nextauth]/route.js` — NextAuth route handler
-
-**Files updated:**
-- `src/app/login/page.js` — Supabase OAuth buttons (Google, GitHub, GitLab)
-- `src/lib/gatekeeper.js` — Supabase-based auth + Bearer JWT forwarding
-- `src/app/api/chats/route.js` — Uses new gatekeeper
-- `src/app/api/files/read/route.js` — Uses new gatekeeper
-- `src/app/api/agent/token/route.js` — Returns Supabase access_token
-- `src/app/api/agent/start/route.js` — Uses new gatekeeper + Supabase user metadata
-- `.env.example` — Supabase env vars replace NextAuth vars
-
----
-
-## Phase 1 — Full Agent Cycle (Priority)
-
-Get the complete loop working: connect repo → chat → agent codes → push → PR.
-
-### How GitHub/GitLab connection works (OpenHands style)
-
-No OAuth. User pastes a **Personal Access Token (PAT)** directly — copied from GitHub/GitLab → Settings → Developer tokens. Token is encrypted (AES-256-CBC) and stored in the `integrations` table. This is the same approach OpenHands uses.
-
-**GitHub PAT scopes needed:** `repo`, `workflow`
-**GitLab PAT scopes needed:** `api`, `read_repository`, `write_repository`
-
-### Backend
-
-| # | Task | Priority | Description |
-|---|------|----------|-------------|
-| B1 | ✅ **Save/update git token** | P0 | `POST /api/v1/integrations` — validates PAT against provider API, encrypts with AES-256-CBC (matching frontend key), upserts into `integrations` table. `GET` lists, `DELETE /{provider}` removes. |
-| B2 | ✅ **List user repos** | P0 | `GET /api/v1/integrations/{provider}/repos` — decrypts stored token, calls GitHub/GitLab API, returns repos list. Self-hosted GitLab URL encoded in scopes field. |
-| B3 | ✅ **Auto PR creation** | P0 | `POST /api/v1/integrations/{provider}/pr` — opens GitHub PR or GitLab MR using stored PAT. Frontend calls this after agent pushes a branch. Returns PR URL. |
-| B4 | **Session resume** | P1 | Reconnect WebSocket to an existing session after browser refresh. Session state (messages, files) already in DB — just re-attach. Currently a refresh loses the session. |
-| B5 | **Token-by-token streaming** | P1 | Stream agent output as it's generated, not in batches. User sees agent "thinking" in real-time. |
-| B6 | **Remove org tables from DB** | P1 | Run `prisma db push` against Supabase to drop `organizations` and `memberships` tables (schema already updated). |
-
-### Frontend
-
-| # | Task | Priority | Description |
-|---|------|----------|-------------|
-| F1 | ✅ **Chat + file explorer + terminal** | P0 | Done. |
-| F2 | ✅ **Conversations list** | P0 | Done. |
-| F3 | **Git token settings page** | P0 | Settings page with two fields: "GitHub Token" and "GitLab Token". User pastes PAT, hits Save. Shows masked token + connected username if valid. Clear button to remove. Same UX as OpenHands settings. |
-| F4 | **Repo picker in new session flow** | P0 | When starting a new session, user types or picks a repo URL. If a token is saved, repos are listed in a dropdown (from B2). Pre-fills repoUrl + passes token to agent. |
-| F5 | **Inline agent events in chat** | P0 | Render agent WebSocket events as structured chat messages: thought bubbles, command blocks with output, file edit diffs (unified diff format), status updates. This is the core of the OpenHands-like UX. |
-| F6 | **Stop agent button** | P1 | Button in chat to stop the agent mid-task. |
-| F7 | **PR link in chat** | P1 | When agent creates a PR, a card appears in chat with the PR link, branch name, and title. |
 
 ---
 
@@ -218,37 +149,18 @@ User → Settings → Connect Notion (OAuth)
 
 ## Phase 3 — Polish & Production
 
-| # | Task | Priority | Description |
-|---|------|----------|-------------|
-| P1 | **Rate limiting** | P2 | Limit sessions per user, requests per minute. |
-| P2 | **Container auto-cleanup** | P2 | Destroy idle containers after 30 min. |
-| P3 | **Cost tracking** | P2 | Track LLM token usage per session. Expose via `/api/v1/usage`. |
-| P4 | **Multi-model routing** | P3 | Choose model per session or let agent pick based on task complexity. |
-| P5 | **Redis session store** | P3 | Replace in-memory store for multi-instance deployment. |
-| P6 | **GitHub webhook trigger** | P3 | Auto-trigger agent when a new issue is opened or a comment asks for it. |
+| # | Task | Priority | Status | Description |
+|---|------|----------|--------|-------------|
+| P1 | **Rate limiting** | P2 | ✅ Done | Max 3 concurrent sessions per user. HTTP 429. |
+| P2 | **Container auto-cleanup** | P2 | ✅ Done | TTL=2h, reaper every 2min. Explicit stop destroys immediately. |
+| P3 | **Cost tracking** | P2 | ❌ Not built | Track LLM token usage per session. Expose via `/api/v1/usage`. |
+| P4 | **Multi-model routing** | P3 | ⚠️ Partial | Model selector exists in UI. Backend reads `modelProvider`. |
+| P5 | **Redis session store** | P3 | ❌ Not built | Replace in-memory store for multi-instance deployment. |
+| P6 | **GitHub webhook trigger** | P3 | ❌ Not built | Auto-trigger agent when a new issue is opened. |
 
 ---
 
-## Build Order
-
-```
-Done:    B1 + B2 + B3        ✅ Save GitHub/GitLab PAT + repo listing + auto PR
-Now:     F3 + F4              → Token settings page + repo picker in new session flow
-Then:    B4 + B5 + F5 + F6   → Session resume + streaming + inline events + stop button
-         B6                   → Run prisma db push (drop org tables)
-         F7                   → PR link card in chat
-Later:   Phase 2 (Notion)     → N1→N6, NF1→NF4
-Last:    Phase 3 (Polish)      → Rate limiting, cost tracking, cleanup
-```
-
-After "Now" (F3 + F4) you have the complete working cycle:
-- User connects GitHub → picks repo → describes task in chat
-- Agent clones repo, writes code, commits, pushes
-- PR opened automatically — user gets the link
-
----
-
-## Architecture (Target State)
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -263,16 +175,17 @@ After "Now" (F3 + F4) you have the complete working cycle:
 │ │ (read-only,     │  ─────────────     │  ────────────────    │ │
 │ │  live from      │  Agent messages    │  Agent commands      │ │
 │ │  agent)         │  User input        │  & output            │ │
-│ │                 │  PR link banner    │                      │ │
+│ │                 │  PR link card      │                      │ │
 │ └─────────────────┴────────────────────┴──────────────────────┘ │
 │          ↕ REST + WebSocket                                      │
 ├─────────────────────────────────────────────────────────────────┤
 │  Next.js (Frontend)                                              │
-│  Auth · API Routes · Prisma                                      │
+│  Auth · API Routes · Supabase Client                             │
 │          ↕ HTTP                                                  │
 ├─────────────────────────────────────────────────────────────────┤
 │  FastAPI (ai_engine)                                             │
 │  Sessions · WebSocket · Chat · Files · Git · GitHub/GitLab API  │
+│  Rate Limiting (3 sessions/user) · Reaper (TTL 2h)              │
 │          ↕ Docker SDK                                            │
 ├─────────────────────────────────────────────────────────────────┤
 │  Docker Containers (per session)                                 │
@@ -285,7 +198,21 @@ After "Now" (F3 + F4) you have the complete working cycle:
 ├─────────────────────────────────────────────────────────────────┤
 │  Supabase (hosted PostgreSQL)                                    │
 │  users · integrations · chat_sessions · chat_messages           │
-│  Frontend → Prisma (DATABASE_URL)                               │
+│  conversations · messages (legacy)                               │
+│  Frontend → Supabase Client (RLS)                               │
 │  ai_engine → supabase-py (SUPABASE_URL + SUPABASE_SERVICE_KEY)  │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## Stability Fixes Applied (March 2026)
+
+| Fix | Description |
+|-----|------------|
+| Tab switch no longer destroys workspace | Removed `visibilitychange` reconnect handler. Hardened `agentWSManager.connect()` to block duplicate connections. |
+| Sidebar nav no longer resets workspace | Fixed `projectId` to consistently use `conversationId` (URL UUID) instead of async-loaded repo name. |
+| Backend reconnect is clean | Skips duplicate DB records, skips duplicate "ready" messages, looks up existing `chat_session_id` on reconnect. |
+| WebSocket keepalive under proxies | Configured uvicorn with `--ws-ping-interval`, `--ws-ping-timeout`, `--timeout-keep-alive` in both Dockerfile and main.py. |
+| Unified message persistence | Both frontend and backend read/write from `chat_messages` table. Legacy `messages` table supported for backward compat. |
+| Error recovery | `WorkspaceErrorBoundary` catches JS errors and shows styled "Reload Workspace" UI. |

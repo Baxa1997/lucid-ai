@@ -1,11 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from 'react';
 import {
   Settings, ChevronDown, Check, Plus, Trash2, Eye, EyeOff,
   X, ExternalLink, Key, Server, Globe, Lock, Cpu, HardDrive,
   Bell, BellOff, BarChart3, GitBranch, Package, Languages,
-  Zap, Shield, ChevronRight, Info
+  Zap, Shield, ChevronRight, Info, Loader2, AlertCircle
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -169,58 +169,203 @@ function Dropdown({ value, options, onChange, placeholder }) {
 }
 
 /* ════════════════════════════════════════════════
-   LLM TAB
+   LLM TAB — Supabase-backed
    ════════════════════════════════════════════════ */
-function LLMTab() {
-  const [advanced, setAdvanced] = useState(false);
-  const [provider, setProvider] = useState('Anthropic');
-  const [model, setModel] = useState('claude-opus-4-5-20251101');
-  const [apiKey, setApiKey] = useState('sk-ant-xxxxxxxxxxxxxxxx');
-  const [showKey, setShowKey] = useState(false);
-  const [apiKeyValid, setApiKeyValid] = useState(true);
 
-  const providers = ['Anthropic', 'OpenAI', 'Google', 'Groq', 'Ollama', 'Azure OpenAI'];
-  const models = {
-    Anthropic: ['claude-opus-4-5-20251101', 'claude-sonnet-4-20250514', 'claude-3-5-haiku-20241022'],
-    OpenAI: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o1-preview', 'o1-mini'],
-    Google: ['gemini-3-flash-preview', 'gemini-3-flash-preview', 'gemini-3-flash-preview'],
-    Groq: ['llama-3.3-70b-versatile', 'mixtral-8x7b-32768'],
-    Ollama: ['llama3.2', 'codellama', 'mistral'],
-    'Azure OpenAI': ['gpt-4o', 'gpt-4-turbo'],
-  };
+// ── Provider / model catalogue ───────────────────
+const PROVIDER_CONFIG = {
+  google: {
+    label: 'Google Gemini',
+    docsUrl: 'https://aistudio.google.com/app/apikey',
+    models: [
+      { id: 'gemini/gemini-3-flash-preview', label: 'Gemini 3 Flash Preview' },
+      { id: 'gemini/gemini-3.1-pro-preview',   label: 'Gemini 3 Pro Preview' },
+    ],
+  },
+  anthropic: {
+    label: 'Anthropic Claude',
+    docsUrl: 'https://console.anthropic.com/settings/keys',
+    models: [
+      { id: 'anthropic/claude-3-5-sonnet-20241022', label: 'Claude Sonnet 3.5' },
+      { id: 'anthropic/claude-3-5-opus-20241022',   label: 'Claude Opus 3.5' },
+      { id: 'anthropic/claude-sonnet-4-6',          label: 'Claude Sonnet 4.6' },
+      { id: 'anthropic/claude-opus-4-6',            label: 'Claude Opus 4.6' },
+    ],
+  },
+};
+
+const PROVIDER_KEYS = Object.keys(PROVIDER_CONFIG); // ['google', 'anthropic']
+
+const LLMTab = forwardRef(function LLMTab(_, ref) {
+  // ── local state ──────────────────────────────────
+  const [provider,   setProvider]   = useState('google');
+  const [model,      setModel]      = useState('gemini/gemini-3-flash-preview');
+  const [apiKey,     setApiKey]     = useState('');
+  const [showKey,    setShowKey]    = useState(false);
+  const [hasKey,     setHasKey]     = useState(false);  // true if Supabase has an encrypted key
+  const [advanced,   setAdvanced]   = useState(false);
+  const [loading,    setLoading]    = useState(true);
+  const [saving,     setSaving]     = useState(false);
+  const [saveStatus, setSaveStatus] = useState(null); // 'success' | 'error' | null
+  const [error,      setError]      = useState(null);
+
+  // ── helpers ───────────────────────────────────────
+  const providerModels = PROVIDER_CONFIG[provider]?.models ?? [];
+  const currentModelLabel = providerModels.find(m => m.id === model)?.label ?? model;
+  const providerLabel = PROVIDER_CONFIG[provider]?.label ?? provider;
+  const docsUrl = PROVIDER_CONFIG[provider]?.docsUrl ?? '#';
+
+  const switchProvider = useCallback((newProvider) => {
+    setProvider(newProvider);
+    const firstModel = PROVIDER_CONFIG[newProvider]?.models?.[0]?.id ?? '';
+    setModel(firstModel);
+    setApiKey('');   // clear the typed key when switching provider
+    setHasKey(false);
+    setError(null);
+  }, []);
+
+  // ── load settings from Supabase on mount ─────────
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSettings() {
+      try {
+        const res = await fetch('/api/settings');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (cancelled) return;
+
+        // Validate loaded provider/model against our catalogue
+        const loadedProvider = PROVIDER_KEYS.includes(data.llm_provider)
+          ? data.llm_provider : 'google';
+        const loadedModels   = PROVIDER_CONFIG[loadedProvider].models.map(m => m.id);
+        const loadedModel    = loadedModels.includes(data.llm_model)
+          ? data.llm_model : loadedModels[0];
+
+        setProvider(loadedProvider);
+        setModel(loadedModel);
+        setHasKey(!!data.has_api_key);
+      } catch (err) {
+        if (!cancelled) setError('Could not load settings. Using defaults.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    loadSettings();
+    return () => { cancelled = true; };
+  }, []);
+
+  // ── save handler ──────────────────────────────────
+  const handleSave = useCallback(async () => {
+    setSaving(true);
+    setSaveStatus(null);
+    setError(null);
+    try {
+      const body = { llm_provider: provider, llm_model: model };
+      if (apiKey.trim()) body.api_key = apiKey.trim();
+
+      const res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error ?? `HTTP ${res.status}`);
+      }
+
+      setSaveStatus('success');
+      if (apiKey.trim()) {
+        setHasKey(true);
+        setApiKey('');   // clear field after save — key is now stored
+      }
+      setTimeout(() => setSaveStatus(null), 3500);
+    } catch (err) {
+      setError(err.message);
+      setSaveStatus('error');
+    } finally {
+      setSaving(false);
+    }
+  }, [provider, model, apiKey]);
+
+  // ── expose save() to parent via ref ─────────────
+  useImperativeHandle(ref, () => ({ save: handleSave }), [handleSave]);
+
+  // ── render ────────────────────────────────────────
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
+        <span className="ml-3 text-sm text-slate-400">Loading settings…</span>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
-      {/* Provider & Model Section */}
+      {/* Error banner */}
+      {error && (
+        <div className="flex items-center gap-3 px-4 py-3 bg-red-50 dark:bg-red-500/10 border border-red-100 dark:border-red-500/20 rounded-xl">
+          <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />
+          <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+        </div>
+      )}
+
+      {/* Provider & Model */}
       <SectionCard
         title="Model Configuration"
         description="Select your AI provider and model for code generation"
         icon={Cpu}
       >
         <div className="space-y-5">
+          {/* Provider */}
           <FieldRow label="Provider" description="AI service that powers the agent">
-            <Dropdown
-              value={provider}
-              options={providers}
-              onChange={(v) => { setProvider(v); setModel(models[v]?.[0] || ''); }}
-              placeholder="Select provider..."
-            />
+            <div className="flex flex-col gap-2">
+              {PROVIDER_KEYS.map((pk) => {
+                const cfg = PROVIDER_CONFIG[pk];
+                const isSelected = provider === pk;
+                return (
+                  <button
+                    key={pk}
+                    type="button"
+                    onClick={() => switchProvider(pk)}
+                    className={cn(
+                      "flex items-center gap-3 px-4 py-3 rounded-xl border text-sm font-medium transition-all text-left",
+                      isSelected
+                        ? "border-blue-400 dark:border-blue-500 bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-300 shadow-sm"
+                        : "border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:border-blue-300 dark:hover:border-blue-500/60 hover:bg-white dark:hover:bg-slate-700"
+                    )}
+                  >
+                    <span className={cn(
+                      "w-2 h-2 rounded-full shrink-0",
+                      isSelected ? "bg-blue-500" : "bg-slate-300 dark:bg-slate-600"
+                    )} />
+                    {cfg.label}
+                    {isSelected && <Check className="w-4 h-4 ml-auto text-blue-500" />}
+                  </button>
+                );
+              })}
+            </div>
           </FieldRow>
 
           <div className="border-t border-slate-100 dark:border-slate-800" />
 
+          {/* Model */}
           <FieldRow label="Model" description="Specific model variant to use">
             <Dropdown
-              value={model}
-              options={models[provider] || []}
-              onChange={setModel}
-              placeholder="Select model..."
+              value={currentModelLabel}
+              options={providerModels.map(m => m.label)}
+              onChange={(label) => {
+                const found = providerModels.find(m => m.label === label);
+                if (found) setModel(found.id);
+              }}
+              placeholder="Select model…"
             />
           </FieldRow>
         </div>
       </SectionCard>
 
-      {/* API Key Section */}
+      {/* API Key */}
       <SectionCard
         title="Authentication"
         description="Your API key is stored securely and never shared"
@@ -228,22 +373,23 @@ function LLMTab() {
       >
         <FieldRow
           label="API Key"
-          description="Required for accessing the AI provider"
+          description={`Required for accessing ${providerLabel}`}
           badge={
-            apiKeyValid ? (
+            hasKey && !apiKey ? (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-100 dark:border-emerald-500/20 rounded-full">
                 <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
-                <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase">Valid</span>
+                <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase">Saved</span>
               </span>
             ) : null
           }
         >
           <div className="relative">
             <input
+              id="llm-api-key"
               type={showKey ? 'text' : 'password'}
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
-              placeholder="<hidden>"
+              placeholder={hasKey ? '••••••••••••••••••••  (key saved — paste to replace)' : `Paste your ${providerLabel} API key…`}
               className="w-full px-4 py-2.5 pr-10 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
             />
             <button
@@ -255,9 +401,14 @@ function LLMTab() {
             </button>
           </div>
           <p className="mt-2 text-xs text-slate-400 dark:text-slate-500">
-            Don&apos;t know your API key?{' '}
-            <a href="#" className="text-blue-600 dark:text-blue-400 hover:text-blue-500 underline underline-offset-2 transition-colors">
-              Click here for instructions
+            Don&apos;t have an API key?{' '}
+            <a
+              href={docsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 dark:text-blue-400 hover:text-blue-500 underline underline-offset-2 transition-colors"
+            >
+              Get one here ↗
             </a>
           </p>
         </FieldRow>
@@ -275,23 +426,20 @@ function LLMTab() {
           label="Enable advanced configuration"
           description="Override default API endpoints and model identifiers"
         />
-
         {advanced && (
           <div className="space-y-5 pt-4 border-t border-slate-100 dark:border-slate-800 mt-4 animate-slide-down">
             <FieldRow label="Base URL" description="Custom API endpoint">
               <input
                 type="text"
-                placeholder="https://api.anthropic.com"
+                placeholder={provider === 'google' ? 'https://generativelanguage.googleapis.com' : 'https://api.anthropic.com'}
                 className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
               />
             </FieldRow>
-
             <div className="border-t border-slate-100 dark:border-slate-800" />
-
-            <FieldRow label="Custom Model" description="Override the model identifier">
+            <FieldRow label="Custom Model ID" description="Override the model identifier (LiteLLM format)">
               <input
                 type="text"
-                placeholder="Enter custom model identifier..."
+                placeholder="e.g. gemini/gemini-3-flash-preview"
                 className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
               />
             </FieldRow>
@@ -299,15 +447,35 @@ function LLMTab() {
         )}
       </SectionCard>
 
-      {/* Save */}
-      <div className="flex justify-end">
-        <button className="px-6 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 transition-all shadow-sm shadow-blue-600/15 active:scale-[0.98]">
-          Save Changes
+      {/* Save row */}
+      <div className="flex items-center justify-end gap-4">
+        {saveStatus === 'success' && (
+          <span className="flex items-center gap-1.5 text-sm text-emerald-600 dark:text-emerald-400 animate-fade-in">
+            <Check className="w-4 h-4" /> Settings saved!
+          </span>
+        )}
+        {saveStatus === 'error' && (
+          <span className="flex items-center gap-1.5 text-sm text-red-500 dark:text-red-400 animate-fade-in">
+            <AlertCircle className="w-4 h-4" /> Save failed.
+          </span>
+        )}
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className={cn(
+            "flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm active:scale-[0.98]",
+            saving
+              ? "bg-blue-400 text-white cursor-not-allowed"
+              : "bg-blue-600 text-white hover:bg-blue-700 shadow-blue-600/15"
+          )}
+        >
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+          {saving ? 'Saving…' : 'Save Changes'}
         </button>
       </div>
     </div>
   );
-}
+});
 
 /* ════════════════════════════════════════════════
    MCP TAB
@@ -736,10 +904,29 @@ function SecretsTab() {
    ════════════════════════════════════════════════ */
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState('llm');
+  const llmTabRef = useRef(null);
+  const [headerSaving, setHeaderSaving] = useState(false);
+  const [headerSaveStatus, setHeaderSaveStatus] = useState(null); // 'success' | 'error' | null
+
+  const handleHeaderSave = useCallback(async () => {
+    if (activeTab === 'llm' && llmTabRef.current?.save) {
+      setHeaderSaving(true);
+      setHeaderSaveStatus(null);
+      try {
+        await llmTabRef.current.save();
+        setHeaderSaveStatus('success');
+        setTimeout(() => setHeaderSaveStatus(null), 3000);
+      } catch {
+        setHeaderSaveStatus('error');
+      } finally {
+        setHeaderSaving(false);
+      }
+    }
+  }, [activeTab]);
 
   const renderTabContent = () => {
     switch (activeTab) {
-      case 'llm': return <LLMTab />;
+      case 'llm': return <LLMTab ref={llmTabRef} />;
       case 'mcp': return <MCPTab />;
       case 'application': return <ApplicationTab />;
       case 'secrets': return <SecretsTab />;
@@ -766,9 +953,26 @@ export default function SettingsPage() {
             </div>
           </div>
           
-          <button className="flex items-center gap-2 px-6 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-600/20 active:scale-[0.98]">
-            <Check className="w-4 h-4" />
-            Save Changes
+          <button
+            onClick={handleHeaderSave}
+            disabled={headerSaving || activeTab !== 'llm'}
+            className={cn(
+              "flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold transition-all shadow-lg active:scale-[0.98]",
+              headerSaving
+                ? "bg-blue-400 text-white cursor-not-allowed shadow-blue-400/20"
+                : headerSaveStatus === 'success'
+                  ? "bg-emerald-600 text-white shadow-emerald-600/20"
+                  : activeTab !== 'llm'
+                    ? "bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed shadow-none"
+                    : "bg-blue-600 text-white hover:bg-blue-700 shadow-blue-600/20"
+            )}
+          >
+            {headerSaving
+              ? <Loader2 className="w-4 h-4 animate-spin" />
+              : headerSaveStatus === 'success'
+                ? <Check className="w-4 h-4" />
+                : <Check className="w-4 h-4" />}
+            {headerSaving ? 'Saving…' : headerSaveStatus === 'success' ? 'Saved!' : 'Save Changes'}
           </button>
         </div>
 

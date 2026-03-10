@@ -2,17 +2,17 @@
 //  Lucid AI — Next.js Middleware
 //  Protects authenticated routes by checking Supabase auth cookies.
 //
-//  No @supabase/supabase-js import — Edge Middleware doesn't
-//  support all Node.js APIs that the SDK needs.
-//  We simply check if auth cookies exist. Actual JWT validation
-//  happens server-side in API routes via gatekeeper.js.
+//  The browser client keeps sb-access-token cookie in sync
+//  with Supabase's localStorage session via onAuthStateChange.
+//  This middleware just checks if the cookie exists.
 // ─────────────────────────────────────────────────────────
 
 import { NextResponse } from 'next/server';
 
 /**
  * Check if the request has Supabase auth cookies.
- * We check for our explicit sb-access-token cookie (set by /auth/callback)
+ * We check for our explicit sb-access-token cookie (set by /auth/callback
+ * and kept in sync by the browser client's onAuthStateChange listener),
  * as well as the default Supabase cookie pattern.
  */
 function hasSupabaseSession(request) {
@@ -29,6 +29,15 @@ function hasSupabaseSession(request) {
 
 export function middleware(request) {
   const { pathname } = request.nextUrl;
+
+  // ── Skip middleware for internal Next.js requests ──
+  // RSC (React Server Component) requests and prefetches should NOT redirect.
+  // They use the `Sec-Fetch-Dest` and `Next-Router-Prefetch` headers.
+  const isPrefetch = request.headers.get('next-router-prefetch') === '1';
+  const isRSC = request.headers.get('rsc') === '1';
+  if (isPrefetch || isRSC) {
+    return NextResponse.next();
+  }
 
   const isAuthenticated = hasSupabaseSession(request);
 

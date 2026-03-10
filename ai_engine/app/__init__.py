@@ -47,7 +47,7 @@ async def lifespan(_app: FastAPI):
 
     # Start the background session reaper (cleans up inactive sessions after 24h)
     reaper_task = asyncio.create_task(reap_expired_sessions())
-    logger.info("Session reaper started (TTL=24h, interval=5min)")
+    logger.info("Session reaper started (TTL=2h, interval=2min)")
 
     yield
 

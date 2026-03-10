@@ -226,9 +226,14 @@ def format_sdk_event(event) -> Optional[dict]:
     if tool_args:
         payload["toolArgs"] = tool_args[:WS_EVENT_MAX_CHARS]
 
-    # Attach optional fields for backward compat
     if hasattr(event, "command"):
         payload["command"] = str(event.command)
+    if hasattr(event, "source"):
+        payload["source"] = str(event.source).split(".")[-1].lower()
+    elif hasattr(event, "action") and hasattr(event.action, "source"):
+        payload["source"] = str(event.action.source).split(".")[-1].lower()
+    elif hasattr(event, "observation") and hasattr(event.observation, "source"):
+        payload["source"] = str(event.observation.source).split(".")[-1].lower()
     if hasattr(event, "exit_code"):
         payload["exitCode"] = event.exit_code
     if hasattr(event, "path"):
@@ -264,13 +269,10 @@ async def stream_events_to_ws(
     """Background task that drains the session's event buffer and
     forwards each item to the WebSocket client.
 
-    When ``chat_session_id`` and ``user_jwt`` are provided, meaningful agent
-    events are batched and flushed to the database periodically (every
-    ``DB_BATCH_SIZE`` events or ``DB_BATCH_INTERVAL`` seconds).
+    NOTE: Raw agent events are NO LONGER batch-saved to chat_messages.
+    Clean user tasks and agent responses are saved explicitly by the
+    task handlers in ws.py via ChatService.add_message().
     """
-    pending: list[dict] = []
-    last_flush = time.monotonic()
-
     try:
         while session.is_alive:
             try:
@@ -292,36 +294,11 @@ async def stream_events_to_ws(
                     except Exception as tree_err:
                         logger.warning("File tree refresh failed: %s", tree_err)
 
-                # Accumulate persistable events (only when JWT is available for RLS)
-                if (
-                    chat_session_id
-                    and user_jwt
-                    and event_data.get("content")
-                    and event_data.get("event") in ("action", "observation", "error")
-                ):
-                    pending.append(event_data)
-
-                # Flush when batch is full
-                if len(pending) >= DB_BATCH_SIZE:
-                    await _flush_batch(pending, chat_session_id, user_jwt)
-                    pending.clear()
-                    last_flush = time.monotonic()
-
             except asyncio.TimeoutError:
                 pass
             except Exception as exc:
                 logger.warning("Event stream error (session=%s): %s", getattr(session, "session_id", "?"), exc)
                 break
 
-            # Flush on time interval even if batch isn't full
-            if pending and (time.monotonic() - last_flush) >= DB_BATCH_INTERVAL:
-                await _flush_batch(pending, chat_session_id, user_jwt)
-                pending.clear()
-                last_flush = time.monotonic()
-
     except asyncio.CancelledError:
         pass
-    finally:
-        # Flush remaining events on shutdown
-        if pending and chat_session_id and user_jwt:
-            await _flush_batch(pending, chat_session_id, user_jwt)

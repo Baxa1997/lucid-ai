@@ -58,9 +58,10 @@ async def clone_repo(
         # Ensure the target directory exists and is empty
         os.makedirs(workspace_dir, exist_ok=True)
 
+        # Remove --depth 1 for reliability — shallow clones cause push issues.
+        # User explicitly requested stable push/pull across branches.
         cmd = [
             "git", "clone",
-            "--depth", "1",
             "--branch", branch,
             authed_url,
             ".",  # clone into current dir
@@ -75,7 +76,7 @@ async def clone_repo(
             cwd=workspace_dir,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=180,  # Increased timeout for full clones
         )
 
         if result.returncode != 0:
@@ -109,6 +110,7 @@ async def push_changes(
     token: str,
     commit_message: str = "Changes by Lucid AI Agent",
     branch: str | None = None,
+    new_branch: str | None = None,
 ) -> dict:
     """Stage all changes, commit, and push to the remote.
 
@@ -116,7 +118,16 @@ async def push_changes(
     """
 
     def _push():
-        # Check if there are changes to commit
+        # 1. Create and switch to new branch if requested
+        if new_branch:
+            logger.info("Creating new branch %s in %s", new_branch, workspace_dir)
+            subprocess.run(
+                ["git", "checkout", "-b", new_branch],
+                cwd=workspace_dir,
+                check=True,
+            )
+
+        # 2. Check if there are changes to commit
         status = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=workspace_dir,
@@ -127,14 +138,14 @@ async def push_changes(
         if not status.stdout.strip():
             return {"committed": False, "pushed": False, "summary": "No changes to commit"}
 
-        # Stage all changes
+        # 3. Stage all changes
         subprocess.run(
             ["git", "add", "-A"],
             cwd=workspace_dir,
             check=True,
         )
 
-        # Commit
+        # 4. Commit
         subprocess.run(
             ["git", "commit", "-m", commit_message],
             cwd=workspace_dir,
@@ -143,7 +154,7 @@ async def push_changes(
             check=True,
         )
 
-        # Ensure the remote URL contains the token for push auth
+        # 5. Ensure the remote URL contains the token for push auth
         if token:
             remote_result = subprocess.run(
                 ["git", "remote", "get-url", "origin"],
@@ -162,30 +173,23 @@ async def push_changes(
                     check=True,
                 )
 
-        # Unshallow if needed (shallow clones can't push)
-        is_shallow = subprocess.run(
-            ["git", "rev-parse", "--is-shallow-repository"],
-            cwd=workspace_dir,
-            capture_output=True,
-            text=True,
-        )
-        if is_shallow.stdout.strip() == "true":
-            logger.info("Unshallowing repo before push in %s", workspace_dir)
-            subprocess.run(
-                ["git", "fetch", "--unshallow", "origin"],
-                cwd=workspace_dir,
-                capture_output=True, text=True, timeout=120,
-            )
-
-        # Push
-        target_branch = branch or "HEAD"
+        # 6. Push
+        target_branch = new_branch or branch or "HEAD"
         logger.info("Pushing to %s (branch=%s)", workspace_dir, target_branch)
+        
+        # If pushing a new branch for the first time, we need -u origin
+        cmd = ["git", "push"]
+        if new_branch:
+            cmd.extend(["-u", "origin", new_branch])
+        else:
+            cmd.extend(["origin", target_branch])
+
         push_result = subprocess.run(
-            ["git", "push", "origin", target_branch],
+            cmd,
             cwd=workspace_dir,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=120,
         )
 
         if push_result.returncode != 0:
@@ -194,7 +198,7 @@ async def push_changes(
                 err = err.replace(token, "***")
             raise RuntimeError(f"git push failed: {err.strip()}")
 
-        # Get a summary of what was changed
+        # 7. Get a summary of what was changed
         diff_stat = subprocess.run(
             ["git", "diff", "--stat", "HEAD~1"],
             cwd=workspace_dir,

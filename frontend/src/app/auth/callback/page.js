@@ -15,22 +15,28 @@ export default function AuthCallbackPage() {
 
   useEffect(() => {
     const supabase = getSupabaseBrowserClient();
+    let redirected = false;
 
-    supabase.auth.onAuthStateChange((event, session) => {
+    const doRedirect = (session) => {
+      if (redirected) return;
+      redirected = true;
+      // Cookies are kept in sync by the global onAuthStateChange listener
+      // in client.js. We just need to set the toast flag and redirect.
+      sessionStorage.setItem('lucid-just-signed-in', 'true');
+      router.push('/dashboard/engineer');
+    };
+
+    // Listen for the SIGNED_IN event (OAuth code exchange triggers this)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_IN' && session) {
-        document.cookie = `sb-access-token=${session.access_token}; path=/; max-age=${60 * 60 * 24 * 7}; samesite=lax`;
-        document.cookie = `sb-refresh-token=${session.refresh_token}; path=/; max-age=${60 * 60 * 24 * 7}; samesite=lax`;
-        sessionStorage.setItem('lucid-just-signed-in', 'true');
-        router.push('/dashboard/engineer');
+        doRedirect(session);
       }
     });
 
+    // Also check if session already exists (e.g. page reload during callback)
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
-        document.cookie = `sb-access-token=${session.access_token}; path=/; max-age=${60 * 60 * 24 * 7}; samesite=lax`;
-        document.cookie = `sb-refresh-token=${session.refresh_token}; path=/; max-age=${60 * 60 * 24 * 7}; samesite=lax`;
-        sessionStorage.setItem('lucid-just-signed-in', 'true');
-        router.push('/dashboard/engineer');
+        doRedirect(session);
       }
     });
 
@@ -38,7 +44,10 @@ export default function AuthCallbackPage() {
       setError('Authentication timed out. Please try again.');
     }, 15000);
 
-    return () => clearTimeout(timeout);
+    return () => {
+      clearTimeout(timeout);
+      subscription?.unsubscribe();
+    };
   }, [router]);
 
   if (error) {

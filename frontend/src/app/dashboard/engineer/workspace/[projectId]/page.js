@@ -8,11 +8,14 @@
 import { useState, useRef, useEffect, useCallback, use } from 'react';
 import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
+import { WorkspaceErrorBoundary } from '@/components/WorkspaceErrorBoundary';
 import {
   ArrowLeft, Send, Terminal, Settings, X,
   Bot, User, Cpu, ArrowDown, Loader2,
   FileText, Copy, Check, Clock, GitBranch, Github,
   ChevronDown, ChevronRight, Zap, Code2, Play,
+  FileCheck2, AlertCircle, TriangleAlert, Sparkles, Activity,
+  ExternalLink, GitPullRequest
 } from 'lucide-react';
 import { useAgentSession } from '@/hooks/useAgentSession';
 import {
@@ -20,6 +23,8 @@ import {
   getMessages,
   addMessage as saveMessage,
   updateConversation,
+  getChatHistory,
+  saveChatMessage,
 } from '@/lib/conversations';
 
 // ── Status Component ───────────────────────────────────────
@@ -28,6 +33,7 @@ function ConnectionStatus({ status, error }) {
     idle:       { color: 'text-slate-400 dark:text-slate-500', label: 'Idle' },
     connecting: { color: 'text-blue-600 dark:text-blue-400',  label: 'Connecting...' },
     preparing:  { color: 'text-amber-600 dark:text-amber-400', label: 'Preparing workspace...' },
+    running:    { color: 'text-blue-600 dark:text-blue-400',  label: 'Agent working…' },
     ready:      { color: 'text-emerald-600 dark:text-emerald-400', label: 'Ready' },
     connected:  { color: 'text-emerald-600 dark:text-emerald-400', label: 'Connected' },
     error:      { color: 'text-red-600 dark:text-red-400',   label: 'Error' },
@@ -40,7 +46,7 @@ function ConnectionStatus({ status, error }) {
       <div className={cn("w-2 h-2 rounded-full",
         status === 'ready' || status === 'connected' ? "bg-emerald-500" :
         status === 'preparing' ? "bg-amber-500 animate-pulse" :
-        status === 'connecting' ? "bg-blue-500 animate-pulse" :
+        status === 'connecting' || status === 'running' ? "bg-blue-500 animate-pulse" :
         status === 'error' ? "bg-red-500" : "bg-slate-300 dark:bg-slate-600"
       )} />
       <span className={cn("text-xs font-semibold", current.color)}>
@@ -104,266 +110,245 @@ function FileViewer({ path, content, loading }) {
 }
 
 // ── Message Bubble Components ──────────────────────────────
-
-// Collapsible thinking block (like OpenHands)
-function ThinkingBlock({ content, isActive }) {
-  const [expanded, setExpanded] = useState(false);
-  const preview = content.split('\n')[0].slice(0, 80);
-
-  return (
-    <div className="border border-blue-200/70 dark:border-blue-500/20 rounded-xl overflow-hidden bg-blue-50/40 dark:bg-blue-950/20">
-      <button
-        onClick={() => setExpanded(e => !e)}
-        className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left hover:bg-blue-50/60 dark:hover:bg-blue-900/15 transition-colors"
-      >
-        <div className="flex items-center gap-1.5 shrink-0">
-          {isActive ? (
-            <span className="flex gap-0.5">
-              <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce" style={{animationDelay:'0ms'}} />
-              <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce" style={{animationDelay:'120ms'}} />
-              <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce" style={{animationDelay:'240ms'}} />
-            </span>
-          ) : (
-            <Cpu className="w-3.5 h-3.5 text-blue-500 dark:text-blue-400" />
-          )}
-          <span className="text-[11px] font-bold uppercase tracking-wider text-blue-600 dark:text-blue-400">
-            {isActive ? 'Thinking…' : 'Thought'}
-          </span>
-        </div>
-        <span className="flex-1 text-xs text-slate-500 dark:text-slate-400 truncate">
-          {!expanded && preview}
-        </span>
-        <span className="shrink-0 text-blue-400 dark:text-blue-500">
-          {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-        </span>
-      </button>
-      {expanded && (
-        <div className="px-4 pb-3 pt-1 border-t border-blue-200/40 dark:border-blue-500/15">
-          <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed whitespace-pre-wrap font-mono">
-            {content}
-          </p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Tool call step card — human-readable
-function ToolCard({ content, toolName, isLatest }) {
-  const [expanded, setExpanded] = useState(false);
-
-  // Parse the content to get a human-readable label
-  let label = '';
-  let detail = '';
-  const raw = content.trim();
-
-  if (raw.startsWith('Running:')) {
-    const cmd = raw.replace(/^Running:\s*`?/, '').replace(/`$/, '').trim();
-    label = 'Ran command';
-    detail = cmd.split('\n')[0].slice(0, 100);
-  } else if (raw.startsWith('Editing file:')) {
-    const path = raw.replace(/^Editing file:\s*/, '').trim();
-    const fileName = path.split('/').pop();
-    label = 'Edited';
-    detail = fileName || path;
-  } else if (raw.startsWith('File:')) {
-    const path = raw.replace(/^File:\s*/, '').trim();
-    const fileName = path.split('/').pop();
-    label = 'Modified';
-    detail = fileName || path;
-  } else if (toolName === 'file_editor' || toolName === 'str_replace_editor') {
-    label = 'Modified file';
-    detail = raw.split('\n')[0].slice(0, 80);
-  } else if (toolName === 'terminal') {
-    label = 'Ran command';
-    detail = raw.split('\n')[0].slice(0, 100);
-  } else {
-    label = 'Action';
-    detail = raw.split('\n')[0].slice(0, 100);
-  }
-
-  const hasMore = content.length > (detail.length + label.length + 20);
-
-  return (
-    <div className="flex items-center gap-2 py-1.5 group">
-      {/* Status icon */}
-      <div className="shrink-0">
-        {isLatest ? (
-          <span className="flex gap-0.5">
-            <span className="w-1 h-1 bg-blue-400 rounded-full animate-bounce" style={{animationDelay:'0ms'}} />
-            <span className="w-1 h-1 bg-blue-400 rounded-full animate-bounce" style={{animationDelay:'120ms'}} />
-            <span className="w-1 h-1 bg-blue-400 rounded-full animate-bounce" style={{animationDelay:'240ms'}} />
-          </span>
-        ) : (
-          <Check className="w-3.5 h-3.5 text-emerald-500" />
-        )}
-      </div>
-
-      {/* Label + detail */}
-      <button
-        onClick={() => hasMore && setExpanded(e => !e)}
-        className={cn(
-          "flex items-center gap-1.5 text-xs text-left min-w-0",
-          hasMore && "cursor-pointer hover:opacity-80"
-        )}
-      >
-        <span className="text-slate-500 dark:text-slate-400 shrink-0">{label}</span>
-        <code className="text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-[11px] truncate max-w-[400px]">
-          {detail}
-        </code>
-        {hasMore && (
-          expanded
-            ? <ChevronDown className="w-3 h-3 text-slate-400 shrink-0" />
-            : <ChevronRight className="w-3 h-3 text-slate-400 shrink-0" />
-        )}
-      </button>
-
-      {/* Expanded output */}
-      {expanded && (
-        <div className="absolute left-0 right-0 mt-8 mx-4 p-3 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg z-10">
-          <pre className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed whitespace-pre-wrap font-mono overflow-x-auto max-h-40 overflow-y-auto">
-            {content}
-          </pre>
-        </div>
-      )}
-    </div>
-  );
-}
+// CLEAN CHAT MODE: Only user, agent, system, and push_result messages.
+// ThinkingBlock and ToolCard removed — events go to logs only.
 
 // The main message bubble dispatcher
 function MessageBubble({ msg, isLatest }) {
+  // CLEAN CHAT MODE: skip thinking blocks and tool calls entirely
+  if (msg.role === 'thinking' || msg.role === 'tool' || (msg.role === 'assistant' && msg.toolName)) {
+    return null;
+  }
+
   // User message
   if (msg.role === 'user') {
     return (
-      <div className="flex justify-end px-4">
-        <div className="max-w-[80%] flex items-end gap-3">
-          <div className="bg-slate-900 dark:bg-blue-600 text-white rounded-2xl rounded-br-sm px-4 py-3 shadow-sm">
-            <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+      <div className="flex justify-end px-4 py-2">
+        <div className="flex items-end gap-3 max-w-[85%]">
+          <div className="flex flex-col items-end gap-1">
+            <span className="text-[10px] uppercase font-bold tracking-widest text-slate-400 px-1">You</span>
+            <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl rounded-br-sm px-4 py-3 shadow-sm">
+              <p className="text-sm leading-relaxed whitespace-pre-wrap text-slate-800 dark:text-slate-200">{msg.content}</p>
+            </div>
           </div>
-          <div className="w-7 h-7 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center shrink-0 mb-0.5">
-            <User className="w-3.5 h-3.5 text-slate-600 dark:text-slate-300" />
+          <div className="w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center shrink-0 border border-slate-200 dark:border-slate-700 shadow-sm">
+            <User className="w-4 h-4 text-slate-500" />
           </div>
         </div>
       </div>
     );
   }
 
-  // Thinking block
-  if (msg.role === 'thinking') {
+  // Push result — minimal clean design
+  if (msg.role === 'push_result') {
     return (
-      <div className="flex items-start gap-3 px-4">
-        <div className="w-7 h-7 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center shrink-0 mt-0.5">
-          <Cpu className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+      <div className="flex items-start gap-3 px-4 py-2 animate-in fade-in duration-300">
+        <div className="mt-0.5 text-emerald-500 shrink-0">
+          <Check className="w-5 h-5" />
         </div>
-        <div className="flex-1 max-w-[90%]">
-          <ThinkingBlock content={msg.content} isActive={isLatest} />
+        <div className="flex-1 space-y-1.5">
+          <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+            ✅ Changes pushed successfully
+          </p>
+          <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+            <GitBranch className="w-3.5 h-3.5" />
+            <span className="font-mono">{msg.branch}</span>
+            {msg.newBranch && (
+              <span className="text-[10px] font-semibold text-blue-500">(new branch)</span>
+            )}
+          </div>
+          {msg.content && (
+            <pre className="font-mono text-[11px] text-slate-400 dark:text-slate-500 leading-relaxed whitespace-pre-wrap">
+              {msg.content}
+            </pre>
+          )}
+          {msg.prUrl && (
+            <a
+              href={msg.prUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline mt-1"
+            >
+              <GitPullRequest className="w-3.5 h-3.5" />
+              Create Pull Request
+              <ExternalLink className="w-3 h-3 opacity-60" />
+            </a>
+          )}
         </div>
       </div>
     );
   }
 
-  // Tool action — inline step with no border, just a check + description
-  if (msg.role === 'tool') {
-    return (
-      <div className="flex items-start gap-3 px-4 relative">
-        <div className="w-7 shrink-0" /> {/* Spacer to align with avatar column */}
-        <div className="flex-1 max-w-[90%]">
-          <ToolCard content={msg.content} toolName={msg.toolName || ''} isLatest={isLatest} />
-        </div>
-      </div>
-    );
-  }
-
-  // System status
+  // System status — redesigned for attractiveness
   if (msg.role === 'system') {
+    const isWarning = msg.content.toLowerCase().includes('limit') || msg.content.toLowerCase().includes('warning');
+    const isError = msg.content.toLowerCase().includes('error') || msg.content.toLowerCase().includes('failed');
+
+    if (isWarning || isError) {
+      return (
+        <div className="px-4 py-2 flex justify-center animate-in fade-in zoom-in-95 duration-300">
+          <div className={cn(
+            "flex items-center gap-3 px-4 py-2.5 rounded-xl border shadow-sm max-w-[85%]",
+            isError 
+              ? "bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-900/50 text-red-700 dark:text-red-400" 
+              : "bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900/50 text-amber-700 dark:text-amber-400"
+          )}>
+            {isError ? <AlertCircle className="w-4 h-4 shrink-0" /> : <TriangleAlert className="w-4 h-4 shrink-0" />}
+            <span className="text-xs font-semibold leading-relaxed">
+              {msg.content}
+            </span>
+          </div>
+        </div>
+      );
+    }
+
     return (
-      <div className="flex justify-center px-4">
-        <span className="text-[11px] text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800/60 px-3 py-1 rounded-full">
-          {msg.content}
-        </span>
+      <div className="flex justify-center px-4 py-2 animate-in fade-in duration-500">
+        <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-slate-100/80 dark:bg-slate-800/40 border border-slate-200/50 dark:border-slate-700/30 backdrop-blur-sm">
+          <div className="w-1.5 h-1.5 rounded-full bg-slate-400 dark:bg-slate-600 animate-pulse" />
+          <span className="text-[10px] uppercase font-bold tracking-widest text-slate-500 dark:text-slate-400">
+            {msg.content}
+          </span>
+        </div>
       </div>
     );
   }
 
-  // Agent message — clean, no borders, well-structured
-  // Parse markdown-like content into rich elements
+  // Agent message — clean, conversational, natural design
   const renderContent = (text) => {
+    // Split into sections: steps, summary text, changed files
     const lines = text.split('\n');
+    const elements = [];
+    let inChangedFiles = false;
     let inCodeBlock = false;
     let codeLines = [];
 
-    return lines.map((line, i) => {
-      // Code block start/end
+    // Inline formatting helper — bold (**), inline code (`)
+    function formatInline(str) {
+      const parts = str.split(/(\*\*.*?\*\*|`[^`]+`)/g);
+      return parts.map((part, j) => {
+        if (part.startsWith('**') && part.endsWith('**')) {
+          return <strong key={j} className="font-semibold text-slate-800 dark:text-slate-100">{part.slice(2, -2)}</strong>;
+        }
+        if (part.startsWith('`') && part.endsWith('`')) {
+          return <code key={j} className="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-[11px] font-mono text-blue-600 dark:text-blue-400">{part.slice(1, -1)}</code>;
+        }
+        return part;
+      });
+    }
+
+    lines.forEach((line, i) => {
+      // Code block handling
       if (line.trim().startsWith('```')) {
         if (inCodeBlock) {
           inCodeBlock = false;
           const code = codeLines.join('\n');
           codeLines = [];
-          return (
-            <pre key={i} className="font-mono text-xs bg-slate-100 dark:bg-slate-800/80 rounded-lg px-3 py-2 my-1.5 text-slate-600 dark:text-slate-400 overflow-x-auto">
+          elements.push(
+            <pre key={i} className="font-mono text-xs bg-slate-50 dark:bg-slate-800/60 rounded-lg px-3 py-2 my-2 text-slate-600 dark:text-slate-400 overflow-x-auto border border-slate-100 dark:border-slate-700/30">
               {code}
             </pre>
           );
+          return;
         }
         inCodeBlock = true;
-        return null;
+        return;
+      }
+      if (inCodeBlock) { codeLines.push(line); return; }
+
+      // "Changed files:" header
+      if (line.toLowerCase().includes('changed files:')) {
+        inChangedFiles = true;
+        elements.push(
+          <div key={i} className="mt-3 mb-1.5 flex items-center gap-2">
+            <FileText className="w-3.5 h-3.5 text-slate-400" />
+            <span className="text-xs uppercase font-bold tracking-wider text-slate-400 dark:text-slate-500">Changed files</span>
+          </div>
+        );
+        return;
       }
 
-      if (inCodeBlock) {
-        codeLines.push(line);
-        return null;
+      // File change lines (+ new, ~ modified, - deleted)
+      if (inChangedFiles && line.trim()) {
+        const trimmed = line.trim();
+        let color = 'text-slate-500';
+        let icon = '•';
+        if (trimmed.startsWith('+') || trimmed.includes('(new)')) {
+          color = 'text-emerald-500';
+          icon = '+';
+        } else if (trimmed.startsWith('~') || trimmed.includes('(modified)')) {
+          color = 'text-amber-500';
+          icon = '~';
+        } else if (trimmed.startsWith('-') || trimmed.includes('(deleted)')) {
+          color = 'text-red-400';
+          icon = '−';
+        }
+        const fileName = trimmed.replace(/^[+~-]\s*/, '').replace(/\(new\)|\(modified\)|\(deleted\)/, '').trim();
+        elements.push(
+          <div key={i} className="flex items-center gap-2 py-0.5 pl-1">
+            <span className={cn("font-mono text-xs font-bold w-3 text-center", color)}>{icon}</span>
+            <span className="font-mono text-xs text-slate-600 dark:text-slate-400">{fileName}</span>
+          </div>
+        );
+        return;
       }
 
-      // Inline formatting helper
-      const formatInline = (str) => {
-        // Bold + inline code
-        const parts = str.split(/(\*\*.*?\*\*|`[^`]+`)/g);
-        return parts.map((part, j) => {
-          if (part.startsWith('**') && part.endsWith('**')) {
-            return <strong key={j} className="font-semibold">{part.slice(2, -2)}</strong>;
-          }
-          if (part.startsWith('`') && part.endsWith('`')) {
-            return <code key={j} className="bg-slate-200/60 dark:bg-slate-700/60 px-1 py-0.5 rounded text-[12px] font-mono">{part.slice(1, -1)}</code>;
-          }
-          return part;
-        });
-      };
+      // Step lines with ✅ — already completed, show subtly
+      if (line.trim().startsWith('✅')) {
+        elements.push(
+          <div key={i} className="flex items-center gap-2 py-0.5 text-slate-500 dark:text-slate-400 text-sm">
+            {line}
+          </div>
+        );
+        return;
+      }
 
       // Numbered list items
       const numberedMatch = line.match(/^\s*(\d+)\.\s+(.*)/);
       if (numberedMatch) {
-        return (
-          <div key={i} className="flex items-start gap-2.5 py-1">
-            <span className="w-5 h-5 rounded-full bg-emerald-100 dark:bg-emerald-500/15 flex items-center justify-center shrink-0 mt-0.5">
-              <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
-            </span>
-            <span className="flex-1">{formatInline(numberedMatch[2])}</span>
+        elements.push(
+          <div key={i} className="flex items-start gap-2 py-0.5">
+            <span className="shrink-0 text-slate-400 font-mono text-xs mt-0.5 w-4 text-right">{numberedMatch[1]}.</span>
+            <span className="text-slate-700 dark:text-slate-300">{formatInline(numberedMatch[2])}</span>
           </div>
         );
+        return;
       }
 
-      // Bullet points
-      if (line.trim().startsWith('- ') || line.trim().startsWith('• ')) {
-        const bulletContent = line.trim().replace(/^[-•]\s*/, '');
-        return (
-          <div key={i} className="flex items-start gap-2 py-0.5 pl-2">
-            <span className="text-emerald-500 mt-1 shrink-0">•</span>
-            <span>{formatInline(bulletContent)}</span>
+      // Bullets
+      if (line.trim().startsWith('- ') || line.trim().startsWith('• ') || line.trim().startsWith('* ')) {
+        const bulletContent = line.trim().replace(/^[-•*]\s*/, '');
+        elements.push(
+          <div key={i} className="flex items-start gap-2 py-0.5">
+            <span className="shrink-0 mt-1 w-1.5 h-1.5 rounded-full bg-slate-400 dark:bg-slate-500" />
+            <span className="text-slate-700 dark:text-slate-300">{formatInline(bulletContent)}</span>
           </div>
         );
+        return;
       }
 
-      if (!line.trim()) return <div key={i} className="h-1.5" />;
-      return <div key={i} className="py-0.5">{formatInline(line)}</div>;
+      // Empty line
+      if (!line.trim()) {
+        inChangedFiles = false; // end of changed files section
+        elements.push(<div key={i} className="h-2" />);
+        return;
+      }
+
+      // Normal text — conversation style
+      elements.push(
+        <div key={i} className="py-0.5 text-slate-700 dark:text-slate-300">{formatInline(line)}</div>
+      );
     });
+
+    return elements;
   };
 
   return (
-    <div className="flex items-start gap-3 px-4">
-      <div className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center shrink-0 mt-0.5">
-        <Bot className="w-3.5 h-3.5 text-white" />
+    <div className="flex items-start gap-3 px-4 py-2 animate-in fade-in duration-300">
+      <div className="mt-0.5 text-blue-500 shrink-0">
+        <Bot className="w-5 h-5" />
       </div>
-      <div className="flex-1 max-w-[90%] text-sm text-slate-700 dark:text-slate-300 leading-relaxed">
+      <div className="flex-1 text-sm leading-relaxed">
         {renderContent(msg.content)}
       </div>
     </div>
@@ -372,6 +357,14 @@ function MessageBubble({ msg, isLatest }) {
 
 // ── Main Page Component ────────────────────────────────────
 export default function ConversationPage({ params }) {
+  return (
+    <WorkspaceErrorBoundary>
+      <ConversationPageInner params={params} />
+    </WorkspaceErrorBoundary>
+  );
+}
+
+function ConversationPageInner({ params }) {
   const { projectId } = use(params);
   const router = useRouter();
   const conversationId = decodeURIComponent(projectId || 'unknown');
@@ -394,7 +387,14 @@ export default function ConversationPage({ params }) {
         const conv = await getConversation(conversationId);
         if (!cancelled && conv) {
           setConversation(conv);
-          const msgs = await getMessages(conversationId);
+          // Try unified chat_messages first (same table backend writes to).
+          // Fall back to old messages table for legacy conversations.
+          let msgs = await getChatHistory(conversationId);
+          console.log('[Chat] chat_messages:', msgs.length, 'items');
+          if (!msgs.length) {
+            msgs = await getMessages(conversationId);
+            console.log('[Chat] fallback messages:', msgs.length, 'items');
+          }
           if (!cancelled) setSavedMessages(msgs);
         }
       } catch (err) {
@@ -450,8 +450,12 @@ export default function ConversationPage({ params }) {
     sendMessage,
     isReady,
     isPreparing,
+    stopSession,
+    pushToBranch,
+    setInitialMessages,
+    steps,
   } = useAgentSession({
-    projectId: conversation?.repo_name || conversationId,
+    projectId: conversationId,
     token,
     repoUrl: conversation?.repo_url || '',
     gitToken,
@@ -462,7 +466,17 @@ export default function ConversationPage({ params }) {
   const [chatInput, setChatInput] = useState('');
   const [showScrollBtn, setShowScrollBtn] = useState(false);
 
-  // Save assistant messages to Supabase as they arrive
+  // ── Hydrate chat history from Supabase into the hook ────
+  useEffect(() => {
+    if (savedMessages.length > 0 && setInitialMessages) {
+      setInitialMessages(savedMessages);
+    }
+  }, [savedMessages, setInitialMessages]);
+
+  // ── Frontend save (guaranteed backup) ────────────────────
+  // Backend also saves to chat_messages, but those saves can fail
+  // due to RLS/schema issues. Frontend saves to the simpler
+  // 'messages' table as a reliable fallback.
   useEffect(() => {
     if (!conversation?.id || !messages || messages.length === 0) return;
 
@@ -470,11 +484,34 @@ export default function ConversationPage({ params }) {
     prevMessagesLenRef.current = messages.length;
 
     for (const msg of newMessages) {
-      if (msg.role === 'assistant' && msg.content) {
+      if (msg.fromHistory) continue;
+
+      if (msg.role === 'user' && msg.content) {
+        saveMessage(conversation.id, { role: 'user', content: msg.content });
+        saveChatMessage(conversationId, { role: 'user', content: msg.content });
+      }
+      if ((msg.role === 'agent' || msg.role === 'assistant') && msg.content) {
         saveMessage(conversation.id, { role: 'assistant', content: msg.content });
+        saveChatMessage(conversationId, { role: 'assistant', content: msg.content });
       }
     }
-  }, [messages, conversation?.id]);
+  }, [messages, conversation?.id, conversationId]);
+
+  // ── Update conversation status in DB ────────────────────
+  const prevStatusRef = useRef(null);
+  useEffect(() => {
+    if (!conversationId || prevStatusRef.current === status) return;
+    prevStatusRef.current = status;
+
+    if (status === 'running') {
+      updateConversation(conversationId, { status: 'active' });
+    } else if (status === 'ready' && messages.length > 0) {
+      // Only mark completed if there are messages (actual work was done)
+      updateConversation(conversationId, { status: 'completed' });
+    } else if (status === 'error') {
+      updateConversation(conversationId, { status: 'error' });
+    }
+  }, [status, conversationId, messages.length]);
 
   // rightPanel: null | 'terminal' | 'file'
   const [rightPanel, setRightPanel] = useState(null);
@@ -507,8 +544,11 @@ export default function ConversationPage({ params }) {
     sendMessage(text);
     setChatInput('');
 
-    // Save user message to Supabase
+    // Save user message to both tables
     if (conversation?.id) {
+      // Save to unified chat_messages
+      saveChatMessage(conversationId, { role: 'user', content: text });
+      // Save to legacy messages table
       await saveMessage(conversation.id, { role: 'user', content: text });
 
       // Auto-generate title from first message via Gemini
@@ -601,12 +641,22 @@ export default function ConversationPage({ params }) {
               <ArrowLeft className="w-5 h-5" />
             </button>
             <div>
-              <h1 className="text-lg font-bold text-slate-900 dark:text-slate-100 truncate max-w-[300px]">
-                {conversation?.title || 'New Conversation'}
-              </h1>
-              <div className="flex items-center gap-2 mt-0.5">
-                <span className="px-2 py-0.5 rounded-md bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400 text-[10px] font-bold uppercase tracking-wide border border-blue-100 dark:border-blue-500/20">
+              <div className="flex items-center gap-2">
+                <h1 className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate max-w-[200px]">
+                  {conversation?.title || 'New Conversation'}
+                </h1>
+                <span className="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400 text-[9px] font-bold uppercase tracking-wider border border-blue-100 dark:border-blue-500/20">
                   {status || 'Idle'}
+                </span>
+              </div>
+              <div className="flex items-center gap-3 mt-0.5 text-[10px] text-slate-400 dark:text-slate-500 font-medium">
+                <span className="flex items-center gap-1">
+                  <Github className="w-3 h-3" />
+                  {conversation?.repo_name || 'local'}
+                </span>
+                <span className="flex items-center gap-1">
+                  <GitBranch className="w-3 h-3 text-emerald-500" />
+                  {conversation?.branch || 'main'}
                 </span>
               </div>
             </div>
@@ -646,8 +696,39 @@ export default function ConversationPage({ params }) {
         >
           <div className="max-w-3xl mx-auto space-y-6">
 
-            {/* Welcome State */}
-            {messages.length === 0 && (
+            {/* Loading skeleton — shown while conversation loads from DB */}
+            {convLoading && messages.length === 0 && (
+              <div className="flex flex-col gap-6 py-12 animate-pulse">
+                {/* Fake user message */}
+                <div className="flex justify-end px-4">
+                  <div className="w-48 h-10 rounded-2xl bg-slate-200 dark:bg-slate-800" />
+                </div>
+                {/* Fake agent message */}
+                <div className="flex items-start gap-4 px-4">
+                  <div className="w-8 h-8 rounded-xl bg-slate-200 dark:bg-slate-800 shrink-0" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-4 bg-slate-200 dark:bg-slate-800 rounded w-3/4" />
+                    <div className="h-4 bg-slate-200 dark:bg-slate-800 rounded w-1/2" />
+                    <div className="h-4 bg-slate-200 dark:bg-slate-800 rounded w-2/3" />
+                  </div>
+                </div>
+                {/* Fake user message */}
+                <div className="flex justify-end px-4">
+                  <div className="w-64 h-10 rounded-2xl bg-slate-200 dark:bg-slate-800" />
+                </div>
+                {/* Fake agent message */}
+                <div className="flex items-start gap-4 px-4">
+                  <div className="w-8 h-8 rounded-xl bg-slate-200 dark:bg-slate-800 shrink-0" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-4 bg-slate-200 dark:bg-slate-800 rounded w-full" />
+                    <div className="h-4 bg-slate-200 dark:bg-slate-800 rounded w-4/5" />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Welcome State — only after loading completes and no messages exist */}
+            {!convLoading && messages.length === 0 && (
               <div className="flex flex-col items-center justify-center py-24 text-center">
                 <div className="text-6xl mb-6">🔨</div>
                 <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-8">
@@ -680,18 +761,40 @@ export default function ConversationPage({ params }) {
               </div>
             ))}
 
-            {/* Agent working indicator */}
-            {(status === 'preparing' || status === 'connecting') && (
-              <div className="flex items-center gap-3 px-4">
-                <div className="w-8 h-8 rounded-xl bg-blue-600 flex items-center justify-center shadow-sm shrink-0">
-                  <Bot className="w-4 h-4 text-white" />
+            {/* Structured progress steps from backend */}
+            {steps.length > 0 && (
+              <div className="flex items-start gap-3 px-4 py-2 animate-in fade-in duration-300">
+                <div className="mt-0.5 text-blue-500 shrink-0">
+                  <Bot className="w-5 h-5" />
                 </div>
-                <div className="flex items-center gap-2 px-4 py-2.5 bg-white dark:bg-[#151b23] border border-slate-200 dark:border-slate-700/50 rounded-2xl shadow-sm">
-                  <div className="flex gap-1">
-                    <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce" style={{animationDelay:'0ms'}} />
-                    <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce" style={{animationDelay:'150ms'}} />
-                    <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce" style={{animationDelay:'300ms'}} />
-                  </div>
+                <div className="flex-1 space-y-1">
+                  {steps.map((s) => (
+                    <div key={s.id || s.step} className="flex items-center gap-2 py-0.5">
+                      {s.done ? (
+                        <span className="text-emerald-500 shrink-0">✅</span>
+                      ) : (
+                        <Loader2 className="w-4 h-4 text-blue-500 animate-spin shrink-0" />
+                      )}
+                      <span className={cn(
+                        "text-sm",
+                        s.done ? "text-slate-600 dark:text-slate-400" : "text-slate-800 dark:text-slate-200 font-medium"
+                      )}>
+                        {s.label}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Preparing/connecting indicator (no steps yet) */}
+            {steps.length === 0 && (status === 'preparing' || status === 'connecting') && (
+              <div className="flex items-center gap-3 px-4 py-2 animate-in fade-in duration-300">
+                <div className="mt-0.5 text-blue-500 shrink-0">
+                  <Bot className="w-5 h-5" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 text-amber-500 animate-spin" />
                   <span className="text-sm text-slate-500 dark:text-slate-400">
                     {status === 'preparing' ? 'Preparing workspace…' : 'Connecting…'}
                   </span>
@@ -718,17 +821,64 @@ export default function ConversationPage({ params }) {
 
             <form
               onSubmit={handleSend}
-              className="relative bg-white dark:bg-[#151b23] border border-slate-300 dark:border-slate-700/60 rounded-2xl shadow-sm focus-within:ring-4 focus-within:ring-blue-500/10 focus-within:border-blue-500 dark:focus-within:border-blue-500 transition-all overflow-hidden"
+              className={cn(
+                "relative bg-white dark:bg-[#151b23] border rounded-2xl shadow-sm transition-all overflow-hidden",
+                isPreparing
+                  ? "border-amber-300 dark:border-amber-600/40"
+                  : status === 'running'
+                    ? "border-blue-300 dark:border-blue-600/40"
+                    : "border-slate-300 dark:border-slate-700/60 focus-within:ring-4 focus-within:ring-blue-500/10 focus-within:border-blue-500 dark:focus-within:border-blue-500"
+              )}
             >
+              {/* Preparing overlay */}
+              {isPreparing && (
+                <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80 dark:bg-[#151b23]/85 backdrop-blur-sm rounded-2xl">
+                  <div className="flex items-center gap-3">
+                    <div className="relative">
+                      <div className="w-8 h-8 rounded-full border-[3px] border-amber-200 dark:border-amber-800/50 border-t-amber-500 dark:border-t-amber-400 animate-spin" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                        Setting up workspace
+                      </p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Please wait — cloning repo and preparing environment…
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Running task overlay */}
+              {status === 'running' && (
+                <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80 dark:bg-[#151b23]/85 backdrop-blur-sm rounded-2xl">
+                  <div className="flex items-center gap-3">
+                    <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
+                    <div>
+                      <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                        Processing task…
+                      </p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        The agent is working — please wait
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <textarea
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder={isPreparing ? "Preparing workspace…" : "What do you want to build?"}
-                disabled={isPreparing}
+                placeholder={
+                  isPreparing ? "Waiting for workspace…" :
+                  status === 'running' ? "Agent is working…" :
+                  "What do you want to build?"
+                }
+                disabled={isPreparing || status === 'running'}
                 className={cn(
                   "w-full px-5 py-4 min-h-[56px] max-h-[200px] outline-none text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 resize-none font-medium leading-relaxed bg-transparent",
-                  isPreparing && "opacity-50 cursor-not-allowed"
+                  (isPreparing || status === 'running') && "opacity-40 cursor-not-allowed pointer-events-none"
                 )}
                 rows={1}
               />
@@ -738,11 +888,23 @@ export default function ConversationPage({ params }) {
                     <Settings className="w-3.5 h-3.5" />
                     Tools
                   </span>
+                  {status === 'ready' && (
+                    <button
+                      type="button"
+                      onClick={() => pushToBranch()}
+                      className="flex items-center gap-1.5 px-2 py-1 rounded text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 transition-colors"
+                    >
+                      <Zap className="w-3.5 h-3.5" />
+                      Push to {conversation?.branch || 'main'}
+                    </button>
+                  )}
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-xs text-slate-400 dark:text-slate-500 font-medium flex items-center gap-1.5">
                     {isPreparing ? (
-                      <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Preparing workspace…</>
+                      <><Loader2 className="w-3.5 h-3.5 animate-spin text-amber-500" /> Preparing workspace…</>
+                    ) : status === 'running' ? (
+                      <><Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" /> Agent working…</>
                     ) : isReady ? (
                       <><Clock className="w-3.5 h-3.5" /> Ready for task</>
                     ) : (
@@ -751,10 +913,10 @@ export default function ConversationPage({ params }) {
                   </span>
                   <button
                     type="submit"
-                    disabled={!chatInput.trim() || isPreparing}
+                    disabled={!chatInput.trim() || isPreparing || status === 'running'}
                     className={cn(
                       "p-2.5 rounded-xl transition-all",
-                      chatInput.trim() && !isPreparing
+                      chatInput.trim() && !isPreparing && status !== 'running'
                         ? "bg-blue-600 text-white shadow-md shadow-blue-600/20 hover:bg-blue-700 hover:scale-105"
                         : "bg-slate-100 dark:bg-white/[0.06] text-slate-300 dark:text-slate-600 cursor-not-allowed"
                     )}

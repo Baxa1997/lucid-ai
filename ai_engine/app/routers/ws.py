@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 
 from app.auth import AuthenticatedUser, authenticate_websocket, authenticate_from_handshake
 from app.config import (
@@ -25,8 +25,117 @@ from app.services.sessions import (
     store as session_store,
 )
 from app.services.git_operations import push_changes, get_git_status
+from app.supabase_client import db_client
 
 router = APIRouter()
+
+
+# ── Context replay helper ────────────────────────────────────
+
+async def _build_conversation_context(
+    user_id: str,
+    project_id: str,
+    user_jwt: str,
+    max_messages: int = 20,
+) -> str:
+    """Load recent messages from DB to rebuild agent context.
+
+    Retrieves the most recent chat session for this user+project
+    and builds a summary of past work so the agent isn't starting
+    from scratch.
+    """
+    try:
+        # Find the most recent chat session for this project
+        # Try with summary columns first (fast path), fall back if missing
+        try:
+            async with db_client(user_jwt) as client:
+                result = await (
+                    client.table("chat_sessions")
+                    .select("id, title, summary, last_task")
+                    .eq("user_id", user_id)
+                    .eq("project_id", project_id)
+                    .order("updated_at", desc=True)
+                    .limit(1)
+                    .execute()
+                )
+        except Exception:
+            # summary/last_task columns may not exist yet — fall back
+            async with db_client(user_jwt) as client:
+                result = await (
+                    client.table("chat_sessions")
+                    .select("id, title")
+                    .eq("user_id", user_id)
+                    .eq("project_id", project_id)
+                    .order("updated_at", desc=True)
+                    .limit(1)
+                    .execute()
+                )
+
+        if not result.data:
+            return ""
+
+        prev_session = result.data[0]
+        session_id = prev_session["id"]
+
+        # If we have a stored handoff note, use it (fast path)
+        if prev_session.get("summary"):
+            return (
+                "## What happened in the previous session\n\n"
+                f"{prev_session['summary']}\n\n"
+                "Use this context to understand what was already done. "
+                "Do not repeat completed work."
+            )
+
+        # Otherwise, load the last N messages (slow path)
+        async with db_client(user_jwt) as client:
+            msgs = await (
+                client.table("chat_messages")
+                .select("role, content, event_type")
+                .eq("session_id", session_id)
+                .order("created_at", desc=True)
+                .limit(max_messages)
+                .execute()
+            )
+
+        if not msgs.data:
+            return ""
+
+        # Build a compact summary of past conversation
+        messages = list(reversed(msgs.data))
+        lines = ["## Previous conversation context\n"]
+
+        for msg in messages:
+            role = msg.get("role", "")
+            content = (msg.get("content") or "")[:500]
+            event_type = msg.get("event_type") or ""
+
+            if not content.strip():
+                continue
+
+            if role == "user":
+                lines.append(f"**User asked:** {content}")
+            elif event_type == "ChangeSummary":
+                lines.append(f"**Changes made:** {content}")
+            elif role == "assistant" and event_type in (
+                "MessageEvent", "ActionEvent",
+            ):
+                # Only include meaningful agent messages, skip tool noise
+                if len(content) > 30:
+                    lines.append(f"**Agent:** {content[:300]}")
+
+        if len(lines) <= 1:
+            return ""  # No meaningful messages found
+
+        return "\n".join(lines)
+
+    except Exception as exc:
+        logger.warning("Failed to load conversation context: %s", exc)
+        return ""
+
+
+def _build_agent_guidelines() -> str:
+    """Return comprehensive operating guidelines for the agent."""
+    return ""
 
 
 @router.websocket("/api/v1/ws")
@@ -81,8 +190,39 @@ async def websocket_agent(websocket: WebSocket):
         })
 
         user_id = ws_user.user_id
+        user_jwt = ws_user.raw_jwt
         project_id = raw.get("projectId", "")
         explicit_stop = False  # track if user explicitly stopped
+
+        # ── 1.5 Resolve LLM Settings (Handshake > Supabase > Default) ──
+        model_provider = raw.get("modelProvider") or raw.get("model_provider")
+        api_key = raw.get("apiKey") or raw.get("api_key")
+
+        if not model_provider or not api_key:
+            try:
+                async with db_client(user_jwt) as client:
+                    q = client.table("user_settings").select("*").eq("user_id", user_id).maybe_single()
+                    res = await q.execute()
+                    if res.data:
+                        logger.info("Applying saved LLM settings for user %s", user_id)
+                        if not model_provider:
+                            model_provider = res.data.get("llm_model")
+                        if not api_key:
+                            enc = res.data.get("api_key_enc")
+                            iv = res.data.get("api_key_iv")
+                            if enc and iv:
+                                from app.utils.crypto import decrypt_api_key
+                                try:
+                                    api_key = decrypt_api_key(enc, iv)
+                                except Exception as dec_err:
+                                    logger.error("Failed to decrypt API key: %s", dec_err)
+            except Exception as db_err:
+                logger.warning("Failed to fetch user settings from Supabase: %s", db_err)
+
+        if not model_provider:
+            model_provider = settings.DEFAULT_PROVIDER
+        
+        logger.info("[%s] Using model: %s", project_id or "new-session", model_provider)
 
         # ── 2. Try to reconnect to existing session ───────
         existing = await session_store.find_by_user_and_project(user_id, project_id) if project_id else None
@@ -100,41 +240,106 @@ async def websocket_agent(websocket: WebSocket):
             })
         else:
             # ── Create new session (clone repo if provided) ──
-            session = await create_session(
-                task=task or "Workspace initialization",
-                user_id=user_id,
-                repo_url=raw.get("repoUrl", ""),
-                git_token=raw.get("gitToken", ""),
-                branch=raw.get("branch", ""),
-                git_user_name=raw.get("gitUserName", ""),
-                git_user_email=raw.get("gitUserEmail", ""),
-                model_provider=raw.get(
-                    "modelProvider",
-                    raw.get("model_provider", settings.DEFAULT_PROVIDER),
-                ),
-                api_key=raw.get("apiKey", raw.get("api_key", "")),
-                project_id=project_id,
-            )
+            try:
+                # Send cloning step BEFORE the actual clone
+                if raw.get("repoUrl"):
+                    await websocket.send_json({
+                        "type": "step", "step": "cloning",
+                        "label": "Cloning repository", "done": False,
+                    })
+
+                session = await create_session(
+                    task=task or "Workspace initialization",
+                    user_id=user_id,
+                    repo_url=raw.get("repoUrl", ""),
+                    git_token=raw.get("gitToken", ""),
+                    branch=raw.get("branch", ""),
+                    git_user_name=raw.get("gitUserName", ""),
+                    git_user_email=raw.get("gitUserEmail", ""),
+                    model_provider=model_provider,
+                    api_key=api_key or "",
+                    project_id=project_id,
+                )
+
+                # Mark cloning as done
+                if raw.get("repoUrl"):
+                    await websocket.send_json({
+                        "type": "step", "step": "cloning",
+                        "label": "Cloning repository", "done": True,
+                    })
+            except RuntimeError as clone_err:
+                # Clone failed — send clear error to user and stop
+                logger.error("Session creation failed: %s", clone_err)
+                await websocket.send_json({
+                    "type": "error",
+                    "message": str(clone_err),
+                })
+                await websocket.close(code=4001, reason="Clone failed")
+                return
+            except HTTPException as rate_err:
+                # Rate limit or other HTTP error from create_session
+                logger.warning("Session creation rejected: %s", rate_err.detail)
+                await websocket.send_json({
+                    "type": "error",
+                    "message": rate_err.detail,
+                })
+                await websocket.close(code=4029, reason="Rate limited")
+                return
 
         user_jwt = ws_user.raw_jwt
 
-        # ── Persist chat session to DB ───────────────────
-        try:
-            chat_sess = await ChatService.create_session(
-                user_id=user_id,
-                user_jwt=user_jwt,
-                agent_session_id=session.session_id,
-                project_id=raw.get("projectId"),
-                title=task[:255] if task else "New workspace session",
-                model_provider=raw.get(
-                    "modelProvider",
-                    raw.get("model_provider", settings.DEFAULT_PROVIDER),
-                ),
-            )
-            chat_session_id = chat_sess["id"]
-            logger.info("Chat session %s created for user %s", chat_session_id, user_id)
-        except Exception as exc:
-            logger.warning("Failed to create chat session in DB: %s", exc)
+        # ── Persist chat session to DB (new sessions only) ──
+        # On reconnect we skip this — a chat session already exists for this
+        # agent session and creating another would leave orphan records.
+        if not existing:
+            try:
+                chat_sess = await ChatService.create_session(
+                    user_id=user_id,
+                    user_jwt=user_jwt,
+                    agent_session_id=session.session_id,
+                    project_id=raw.get("projectId"),
+                    title=task[:255] if task else "New workspace session",
+                    model_provider=model_provider,
+                )
+                chat_session_id = chat_sess["id"]
+                logger.info("Chat session %s created for user %s", chat_session_id, user_id)
+            except Exception as exc:
+                logger.warning("Failed to create chat session in DB: %s", exc)
+        else:
+            # On reconnect — look up the existing chat session_id so
+            # follow-up messages are still persisted after the reconnect.
+            try:
+                async with db_client(ws_user.raw_jwt) as client:
+                    # First try by agent_session_id
+                    result = await (
+                        client.table("chat_sessions")
+                        .select("id")
+                        .eq("user_id", user_id)
+                        .eq("agent_session_id", session.session_id)
+                        .order("created_at", desc=True)
+                        .limit(1)
+                        .execute()
+                    )
+                if result.data:
+                    chat_session_id = result.data[0]["id"]
+                    logger.info("Reconnected to existing chat session %s", chat_session_id)
+                elif project_id:
+                    # Fallback: find by project_id
+                    async with db_client(ws_user.raw_jwt) as client:
+                        result = await (
+                            client.table("chat_sessions")
+                            .select("id")
+                            .eq("user_id", user_id)
+                            .eq("project_id", project_id)
+                            .order("created_at", desc=True)
+                            .limit(1)
+                            .execute()
+                        )
+                    if result.data:
+                        chat_session_id = result.data[0]["id"]
+                        logger.info("Found chat session %s by project_id %s", chat_session_id, project_id)
+            except Exception as exc:
+                logger.warning("Failed to look up existing chat session on reconnect: %s", exc)
 
         # ── 3. Mock path ─────────────────────────────────
         if not sdk.OPENHANDS_AVAILABLE:
@@ -152,12 +357,22 @@ async def websocket_agent(websocket: WebSocket):
             return
 
         # ── 4. Real agent — workspace is ready ───────────
-        await websocket.send_json({
-            "type": "status",
-            "status": "ready",
-            "sessionId": session.session_id,
-            "message": "Workspace ready. You can start giving tasks.",
-        })
+        # Only send the "ready" message for NEW sessions.
+        # For reconnects we already sent it at step 2 above (reconnected=True).
+        if not existing:
+            ready_msg = "Workspace ready. You can start giving tasks."
+            if session.repo_url:
+                ready_msg = (
+                    f"Repository cloned and workspace ready. "
+                    f"The agent has terminal, file editor, and browser tools available. "
+                    f"You can start giving tasks."
+                )
+            await websocket.send_json({
+                "type": "status",
+                "status": "ready",
+                "sessionId": session.session_id,
+                "message": ready_msg,
+            })
 
         streaming_task = asyncio.create_task(
             stream_events_to_ws(
@@ -168,29 +383,117 @@ async def websocket_agent(websocket: WebSocket):
         )
 
         # ── If task was included in handshake, run it immediately ─
-        if task:
-            # Save user's initial message
+        if task and not existing:
+            # ── Step 1: Save user task to DB ──────────────────
             if chat_session_id:
                 try:
                     await ChatService.add_message(
                         session_id=chat_session_id, role="user",
-                        content=task, event_type="InitialTask",
+                        content=task, event_type="UserTask",
                         user_jwt=user_jwt,
                     )
                 except Exception as exc:
                     logger.warning("Failed to persist user message: %s", exc)
 
+            # ── Step: Got Task ────────────────────────────────
             await websocket.send_json({
-                "type": "agent_event",
-                "event": "task_start",
+                "type": "step", "step": "got_task",
+                "label": "Got task", "done": True,
+            })
+            await websocket.send_json({
+                "type": "agent_event", "event": "task_start",
                 "content": f"Agent starting task: {task}",
             })
 
-            session.conversation.send_message(task)
+            # ── Step: Understanding ───────────────────────────
+            # (Cloning step was already sent during create_session)
+            repo_ctx = getattr(session, "repo_context", "")
+
+            await websocket.send_json({
+                "type": "step", "step": "understanding",
+                "label": "Understanding the project", "done": True,
+            })
+
+            # Build the enriched message
+            enriched_task = task
+            context_parts = []
+
+            if project_id and user_jwt:
+                prev_context = await _build_conversation_context(
+                    user_id, project_id, user_jwt
+                )
+                if prev_context:
+                    context_parts.append(prev_context)
+
+            if repo_ctx:
+                context_parts.append(
+                    f"I have cloned the repository into the workspace directory. "
+                    f"Here is the project layout and key configuration files:\n\n"
+                    f"{repo_ctx}"
+                )
+
+            if context_parts:
+                enriched_task = (
+                    "\n\n---\n\n".join(context_parts)
+                    + f"\n\n---\n\n"
+                    f"Now, here is my task:\n{task}\n"
+                    f"{_build_agent_guidelines()}"
+                )
+            else:
+                enriched_task = f"{task}{_build_agent_guidelines()}"
+
+            # ── Step: Working ─────────────────────────────────
+            await websocket.send_json({
+                "type": "step", "step": "editing",
+                "label": "Editing related files", "done": False,
+            })
+
+            session.conversation.send_message(enriched_task)
             await _run_conversation_with_timeout(websocket, session)
+
+            # Mark editing as done
+            await websocket.send_json({
+                "type": "step", "step": "editing",
+                "label": "Editing related files", "done": True,
+            })
 
             # Push changes if repo was cloned
             await _auto_push_if_needed(websocket, session)
+
+            # ── Step: Finished — build summary ────────────────
+            files_changed = await _get_files_changed(session)
+            last_msg = _extract_last_agent_message(session)
+
+            finish_summary = []
+            if last_msg:
+                finish_summary.append(last_msg)
+            if files_changed:
+                finish_summary.append(f"\nChanged files:\n{files_changed}")
+
+            summary_text = "\n".join(finish_summary) if finish_summary else "Task completed."
+
+            await websocket.send_json({
+                "type": "step", "step": "finished",
+                "label": "Finished", "done": True,
+                "summary": summary_text,
+            })
+
+            # ── Save structured agent response to DB ──────────
+            if chat_session_id:
+                try:
+                    await ChatService.add_message(
+                        session_id=chat_session_id, role="assistant",
+                        content=summary_text,
+                        event_type="AgentResponse",
+                        user_jwt=user_jwt,
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to persist agent response: %s", exc)
+
+            # Save task summary for future context replay
+            await _update_session_summary(
+                chat_session_id, task, session, user_jwt
+            )
 
             await websocket.send_json({
                 "type": "status",
@@ -204,8 +507,13 @@ async def websocket_agent(websocket: WebSocket):
             msg_type = data.get("type", "message")
             content = data.get("content", "")
 
+            # Heartbeat ping — respond and continue
+            if msg_type == "ping":
+                await websocket.send_json({"type": "pong"})
+                continue
+
             if not content:
-                # Skip empty messages (heartbeats, pongs, etc.) — don't send error
+                # Skip empty messages — don't send error
                 continue
 
             if msg_type == "stop":
@@ -219,33 +527,100 @@ async def websocket_agent(websocket: WebSocket):
 
             if msg_type == "push":
                 # Explicit push request from client
-                await _auto_push_if_needed(websocket, session, content or "Manual push by user")
+                new_branch = data.get("newBranch")
+                await _auto_push_if_needed(
+                    websocket, session, 
+                    commit_message=content or "Manual push by user",
+                    new_branch=new_branch
+                )
                 continue
 
             logger.info("[%s] Follow-up: %s", session.session_id, content[:80])
 
-            # Persist follow-up message
+            # ── Save follow-up user message to DB ─────────────
             if chat_session_id:
                 try:
                     await ChatService.add_message(
                         session_id=chat_session_id, role="user",
-                        content=content, event_type="FollowUp",
+                        content=content, event_type="UserTask",
                         user_jwt=user_jwt,
                     )
                 except Exception as exc:
                     logger.warning("Failed to persist follow-up message: %s", exc)
 
+            # ── Step: Got Task ────────────────────────────────
             await websocket.send_json({
-                "type": "agent_event",
-                "event": "task_start",
+                "type": "step", "step": "got_task",
+                "label": "Got task", "done": True,
+            })
+            await websocket.send_json({
+                "type": "agent_event", "event": "task_start",
                 "content": f"Processing: {content[:80]}...",
             })
 
-            session.conversation.send_message(content)
+            # ── Step: Understanding ───────────────────────────
+            await websocket.send_json({
+                "type": "step", "step": "understanding",
+                "label": "Understanding the project", "done": True,
+            })
+
+            # Rebuild context if this is a reconnection or a project with history
+            context_briefing = await _build_conversation_context(user_id, project_id, user_jwt)
+            full_task = f"{context_briefing}\n\nCURRENT TASK: {content}{_build_agent_guidelines()}" if context_briefing else f"{content}{_build_agent_guidelines()}"
+
+            # ── Step: Working ─────────────────────────────────
+            await websocket.send_json({
+                "type": "step", "step": "editing",
+                "label": "Editing related files", "done": False,
+            })
+
+            logger.info("[%s] Starting task: %s", session.session_id, content[:100])
+            session.conversation.send_message(full_task)
             await _run_conversation_with_timeout(websocket, session)
+
+            # Mark editing as done
+            await websocket.send_json({
+                "type": "step", "step": "editing",
+                "label": "Editing related files", "done": True,
+            })
 
             # Push after each follow-up task completes
             await _auto_push_if_needed(websocket, session)
+
+            # ── Step: Finished ────────────────────────────────
+            files_changed = await _get_files_changed(session)
+            last_msg = _extract_last_agent_message(session)
+
+            finish_summary = []
+            if last_msg:
+                finish_summary.append(last_msg)
+            if files_changed:
+                finish_summary.append(f"\nChanged files:\n{files_changed}")
+
+            summary_text = "\n".join(finish_summary) if finish_summary else "Task completed."
+
+            await websocket.send_json({
+                "type": "step", "step": "finished",
+                "label": "Finished", "done": True,
+                "summary": summary_text,
+            })
+
+            # ── Save structured agent response to DB ──────────
+            if chat_session_id:
+                try:
+                    await ChatService.add_message(
+                        session_id=chat_session_id, role="assistant",
+                        content=summary_text,
+                        event_type="AgentResponse",
+                        user_jwt=user_jwt,
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to persist agent response: %s", exc)
+
+            # Update session summary with latest task
+            await _update_session_summary(
+                chat_session_id, content, session, user_jwt
+            )
 
             await websocket.send_json({
                 "type": "status",
@@ -290,7 +665,7 @@ async def websocket_agent(websocket: WebSocket):
             logger.info("Session %s destroyed (user stopped)", session.session_id)
         elif session:
             session.touch()
-            logger.info("Session %s kept alive for reconnection (TTL 24h)", session.session_id)
+            logger.info("Session %s kept alive for reconnection (TTL 2h)", session.session_id)
 
         # Mark chat session as inactive
         if chat_session_id and ws_user:
@@ -350,6 +725,143 @@ async def _get_change_summary(session: AgentSession) -> str:
         logger.warning("Failed to get change summary: %s", exc)
         return ""
 
+
+async def _update_session_summary(
+    chat_session_id: str | None,
+    task: str,
+    session: AgentSession,
+    user_jwt: str | None,
+) -> None:
+    """Build a structured 'handoff note' and save to chat_sessions.
+
+    The note captures three things so the next agent session immediately
+    understands the conversation history:
+
+    1. **Task** — what the user asked
+    2. **Files changed** — which files were created / modified / deleted
+    3. **Last agent message** — the final explanation or result
+    """
+    if not chat_session_id or not user_jwt:
+        return
+
+    try:
+        # ── 1. Gather file changes from git ──────────────────
+        files_changed = await _get_files_changed(session)
+
+        # ── 2. Extract last meaningful agent message ─────────
+        last_agent_msg = _extract_last_agent_message(session)
+
+        # ── 3. Build the handoff note ────────────────────────
+        parts = []
+        parts.append(f"Task: {task[:400]}")
+
+        if files_changed:
+            parts.append(f"Files changed:\n{files_changed}")
+
+        if last_agent_msg:
+            parts.append(f"Result: {last_agent_msg[:600]}")
+
+        summary = "\n\n".join(parts)
+
+        update_data: dict = {
+            "last_task": task[:500] if task else "",
+            "summary": summary[:2000],
+        }
+
+        async with db_client(user_jwt) as client:
+            await (
+                client.table("chat_sessions")
+                .update(update_data)
+                .eq("id", chat_session_id)
+                .execute()
+            )
+        logger.info("Session summary updated for %s", chat_session_id)
+    except Exception as exc:
+        # Gracefully handle missing columns — don't break the flow
+        logger.warning("Failed to update session summary: %s", exc)
+
+
+async def _get_files_changed(session: AgentSession) -> str:
+    """Return a compact list of files changed in the workspace.
+
+    Format:
+      + src/new_file.js (new)
+      ~ src/existing.css (modified)
+      - old_config.json (deleted)
+    """
+    if not session.workspace_dir:
+        return ""
+    try:
+        import subprocess
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["git", "status", "--porcelain"],
+            cwd=session.workspace_dir,
+            capture_output=True, text=True, timeout=10,
+        )
+        status = result.stdout.strip()
+        if not status:
+            return ""
+
+        files = []
+        for line in status.split("\n"):
+            if not line.strip():
+                continue
+            code = line[:2].strip()
+            path = line[3:].strip()
+            if code == "??":
+                files.append(f"  + {path} (new)")
+            elif code in ("M", "MM", "AM"):
+                files.append(f"  ~ {path} (modified)")
+            elif code == "A":
+                files.append(f"  + {path} (added)")
+            elif code == "D":
+                files.append(f"  - {path} (deleted)")
+            elif code == "R":
+                files.append(f"  → {path} (renamed)")
+            else:
+                files.append(f"  {code} {path}")
+
+        return "\n".join(files[:30])  # Cap at 30 files
+    except Exception:
+        return ""
+
+
+def _extract_last_agent_message(session: AgentSession) -> str:
+    """Return the last meaningful agent message, cleaned for human display.
+
+    Reads from ``session.last_agent_message`` which is tracked by the
+    ``on_event`` callback in real-time — NOT from the event buffer
+    (which is already drained by ``stream_events_to_ws``).
+    """
+    raw = getattr(session, "last_agent_message", "") or ""
+    if not raw:
+        return ""
+
+    # Clean up raw Python dict strings like:
+    # "{'message': 'The login page...', 'kind': 'FinishAction'}"
+    if raw.strip().startswith("{") and "message" in raw:
+        try:
+            import ast
+            data = ast.literal_eval(raw.strip())
+            if isinstance(data, dict) and "message" in data:
+                return data["message"]
+        except (ValueError, SyntaxError):
+            pass
+
+    # Filter out non-user-facing content
+    skip_prefixes = (
+        "Running: `",
+        "Viewing file:",
+        "File:",
+        "{'",
+    )
+    if any(raw.startswith(p) for p in skip_prefixes):
+        return ""
+
+    return raw
+
+
 async def _run_conversation_with_timeout(
     websocket: WebSocket,
     session: AgentSession,
@@ -368,17 +880,9 @@ async def _run_conversation_with_timeout(
         # Give the streaming task time to drain remaining events
         await asyncio.sleep(0.5)
 
-        # Generate a change summary
-        change_summary = await _get_change_summary(session)
-        
+        # NOTE: Change summary is now sent as a structured 'finished' step
+        # by the task handler in ws.py. No duplicateChangeSummary here.
         try:
-            if change_summary:
-                await websocket.send_json({
-                    "type": "agent_event",
-                    "event": "action",
-                    "eventType": "ChangeSummary",
-                    "content": change_summary,
-                })
             await websocket.send_json({
                 "type": "status",
                 "status": "completed",
@@ -389,9 +893,15 @@ async def _run_conversation_with_timeout(
     except asyncio.TimeoutError:
         logger.warning("Session %s timed out after %ds", session.session_id, CONVERSATION_TIMEOUT_SECONDS)
         try:
+            error_msg = f"Agent timed out after {CONVERSATION_TIMEOUT_SECONDS}s."
+            if session.last_agent_message:
+                session.last_agent_message += f"\n[Task aborted: {error_msg}]"
+            else:
+                session.last_agent_message = f"Error: {error_msg}"
+            
             await websocket.send_json({
                 "type": "error",
-                "message": f"Agent timed out after {CONVERSATION_TIMEOUT_SECONDS}s.",
+                "message": error_msg,
             })
         except (RuntimeError, Exception):
             pass
@@ -409,11 +919,13 @@ async def _run_conversation_with_timeout(
             session.session_id, error_msg,
         )
         try:
+            error_content = f"Agent error: {error_msg[:300]}"
+            session.last_agent_message = error_content
             await websocket.send_json({
                 "type": "agent_event",
                 "event": "error",
                 "eventType": "ConversationError",
-                "content": f"Agent error: {error_msg[:300]}",
+                "content": error_content,
             })
         except (RuntimeError, Exception):
             pass
@@ -423,6 +935,7 @@ async def _auto_push_if_needed(
     websocket: WebSocket,
     session: AgentSession,
     commit_message: str | None = None,
+    new_branch: str | None = None,
 ) -> None:
     """Push changes to remote if the session has a repo and git_token."""
     if not session.repo_url or not session.git_token or not session.workspace_dir:
@@ -458,6 +971,7 @@ async def _auto_push_if_needed(
             token=session.git_token,
             commit_message=commit_message or f"Lucid AI: {session.task[:100]}",
             branch=session.branch,
+            new_branch=new_branch,
         )
 
         await websocket.send_json({
@@ -471,6 +985,36 @@ async def _auto_push_if_needed(
             ),
             "timestamp": now_iso(),
         })
+
+        # Emit a structured push result event for the frontend PR card
+        if result.get("pushed"):
+            target_branch = new_branch or session.branch or "main"
+            repo_url = session.repo_url or ""
+            # Build a GitHub/GitLab compare URL for easy PR creation
+            pr_url = ""
+            if "github.com" in repo_url:
+                # https://github.com/owner/repo/compare/main...branch
+                clean_url = repo_url.rstrip(".git").rstrip("/")
+                pr_url = f"{clean_url}/compare/{session.branch}...{target_branch}" if new_branch else ""
+            elif "gitlab" in repo_url:
+                clean_url = repo_url.rstrip(".git").rstrip("/")
+                pr_url = f"{clean_url}/-/merge_requests/new?merge_request[source_branch]={target_branch}" if new_branch else ""
+
+            await websocket.send_json({
+                "type": "git_push_result",
+                "pushed": True,
+                "branch": target_branch,
+                "repoUrl": repo_url,
+                "prUrl": pr_url,
+                "summary": result.get("summary", ""),
+                "newBranch": bool(new_branch),
+                "timestamp": now_iso(),
+            })
+
+        # If we pushed to a new branch, update the session to track it
+        if result.get("pushed") and new_branch:
+            logger.info("Updating session %s branch to %s", session.session_id, new_branch)
+            session.branch = new_branch
 
     except Exception as exc:
         logger.error("Git push failed for session %s: %s", session.session_id, exc)
