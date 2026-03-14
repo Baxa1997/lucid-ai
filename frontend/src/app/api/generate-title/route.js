@@ -12,6 +12,8 @@ export async function POST(request) {
       return NextResponse.json({ title: 'New Conversation' });
     }
 
+    // TEMPORARILY DISABLED
+    /*
     if (!GEMINI_API_KEY) {
       console.error('GEMINI_API_KEY is not set');
       return NextResponse.json({ title: fallbackTitle(message) });
@@ -50,6 +52,8 @@ User message: ${message}${repoName ? `\nRepository: ${repoName}` : ''}`;
     }
 
     return NextResponse.json({ title });
+    */
+    return NextResponse.json({ title: fallbackTitle(message) });
   } catch (error) {
     console.error('Title generation error:', error);
     return NextResponse.json({ title: 'New Conversation' });

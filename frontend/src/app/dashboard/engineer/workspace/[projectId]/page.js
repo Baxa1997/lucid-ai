@@ -26,6 +26,8 @@ import {
   getChatHistory,
   saveChatMessage,
 } from '@/lib/conversations';
+import TaskProgress from '@/components/TaskProgress';
+import StopTaskButton from '@/components/StopTaskButton';
 
 // ── Status Component ───────────────────────────────────────
 function ConnectionStatus({ status, error }) {
@@ -454,6 +456,7 @@ function ConversationPageInner({ params }) {
     pushToBranch,
     setInitialMessages,
     steps,
+    phases,
   } = useAgentSession({
     projectId: conversationId,
     token,
@@ -663,6 +666,19 @@ function ConversationPageInner({ params }) {
           </div>
 
           <div className="flex items-center gap-2">
+            <StopTaskButton 
+              status={status} 
+              websocket={{
+                send: (data) => {
+                  try {
+                    // This relies on hook's stopSession internally generating a send
+                    stopSession();
+                  } catch(e) {}
+                }
+              }} 
+              currentTaskId={sessionId} 
+            />
+
             <ConnectionStatus status={status} error={error} />
 
             {/* Terminal toggle */}
@@ -761,34 +777,32 @@ function ConversationPageInner({ params }) {
               </div>
             ))}
 
-            {/* Structured progress steps from backend */}
-            {steps.length > 0 && (
-              <div className="flex items-start gap-3 px-4 py-2 animate-in fade-in duration-300">
+            {/* Structured progress steps from TaskProgress */}
+            <TaskProgress phases={phases} status={status} />
+
+            {/* Thinking indicator — shown while agent processes before first phase */}
+            {phases.length === 0 && status === 'running' && (
+              <div className="flex items-start gap-3 px-4 py-3 animate-in fade-in duration-300">
                 <div className="mt-0.5 text-blue-500 shrink-0">
                   <Bot className="w-5 h-5" />
                 </div>
-                <div className="flex-1 space-y-1">
-                  {steps.map((s) => (
-                    <div key={s.id || s.step} className="flex items-center gap-2 py-0.5">
-                      {s.done ? (
-                        <span className="text-emerald-500 shrink-0">✅</span>
-                      ) : (
-                        <Loader2 className="w-4 h-4 text-blue-500 animate-spin shrink-0" />
-                      )}
-                      <span className={cn(
-                        "text-sm",
-                        s.done ? "text-slate-600 dark:text-slate-400" : "text-slate-800 dark:text-slate-200 font-medium"
-                      )}>
-                        {s.label}
-                      </span>
+                <div className="flex-1">
+                  <div className="flex items-center gap-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl px-5 py-4 shadow-sm">
+                    <div className="flex gap-1">
+                      <div className="w-2 h-2 rounded-full bg-blue-500 animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <div className="w-2 h-2 rounded-full bg-blue-500 animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <div className="w-2 h-2 rounded-full bg-blue-500 animate-bounce" style={{ animationDelay: '300ms' }} />
                     </div>
-                  ))}
+                    <span className="text-sm text-slate-500 dark:text-slate-400 font-medium">
+                      Thinking and analyzing your request...
+                    </span>
+                  </div>
                 </div>
               </div>
             )}
 
             {/* Preparing/connecting indicator (no steps yet) */}
-            {steps.length === 0 && (status === 'preparing' || status === 'connecting') && (
+            {steps.length === 0 && phases.length === 0 && (status === 'preparing' || status === 'connecting') && (
               <div className="flex items-center gap-3 px-4 py-2 animate-in fade-in duration-300">
                 <div className="mt-0.5 text-blue-500 shrink-0">
                   <Bot className="w-5 h-5" />

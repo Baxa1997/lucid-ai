@@ -32,6 +32,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpango-1.0-0 \
     libcairo2 \
     libasound2 \
+    # ── noVNC live preview dependencies ──
+    xvfb \
+    x11vnc \
+    novnc \
+    websockify \
     && rm -rf /var/lib/apt/lists/*
 
 # Tell Playwright to use the system-installed Chromium
@@ -42,6 +47,9 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code CLI (required by claude-code-sdk Python package)
+RUN npm install -g @anthropic-ai/claude-code
 
 COPY requirements.txt .
 
@@ -58,6 +66,8 @@ ENV PYTHONUNBUFFERED=1
 ENV PORT=8000
 
 EXPOSE 8000
+# noVNC preview port range
+EXPOSE 6080-6180
 
 CMD ["uvicorn", "main:app", \
      "--host", "0.0.0.0", \

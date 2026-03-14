@@ -35,6 +35,14 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   const [steps, setSteps] = useState([]);
   const [finishSummary, setFinishSummary] = useState('');
 
+  // ── Structured phases for TaskProgress UI ─────────────────
+  // Each phase: { phase, title, description, status }
+  const [phases, setPhases] = useState([]);
+
+  // ── Preview state (noVNC) ────────────────────────────────
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const [previewTaskId, setPreviewTaskId] = useState(null);
+
   // ── Refs ─────────────────────────────────────────────────
   const idCounter = useRef(0);
   const initialTaskRef = useRef(task);
@@ -76,24 +84,38 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   // Use a ref to track steps for safe flush (no nesting state updates)
   const stepsRef = useRef([]);
   const flushedRef = useRef(false);
+  const phasesRef = useRef([]);
 
-  // Keep ref in sync with state
+  // Keep refs in sync with state
   useEffect(() => { stepsRef.current = steps; }, [steps]);
+  useEffect(() => { phasesRef.current = phases; }, [phases]);
 
-  // ── Flush current steps into a chat message ──────────────
-  const flushStepsToChat = useCallback((summary) => {
+  // ── Flush current phases + steps into a chat message ─────
+  const flushPhasesToChat = useCallback((summary) => {
     // Guard: prevent double flush
     if (flushedRef.current) return;
     flushedRef.current = true;
 
+    const currentPhases = phasesRef.current;
     const currentSteps = stepsRef.current;
 
-    // Build a clean message from completed steps + summary
-    const stepLines = currentSteps
-      .filter((s) => s.done)
-      .map((s) => `✅ ${s.label}`);
+    // Build structured content from phases
+    let content = '';
 
-    let content = stepLines.join('\n');
+    if (currentPhases.length > 0) {
+      const phaseLines = currentPhases.map(p => {
+        const icon = p.status === 'done' ? '✅' : p.status === 'error' ? '❌' : '⏳';
+        return `${icon} **${p.title}**\n   _${p.description || ''}_`;
+      });
+      content = phaseLines.join('\n\n');
+    } else {
+      // Fallback to old steps
+      const stepLines = currentSteps
+        .filter((s) => s.done)
+        .map((s) => `✅ ${s.label}`);
+      content = stepLines.join('\n');
+    }
+
     if (summary) {
       content += `\n\n${summary}`;
     }
@@ -101,11 +123,19 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     if (content.trim()) {
       setChatMessages((prev) => [
         ...prev,
-        { id: uid(), role: 'agent', content, ts: Date.now() },
+        {
+          id: uid(),
+          role: 'agent',
+          content,
+          ts: Date.now(),
+          // Store structured data for rich rendering on reload
+          taskPhases: currentPhases.length > 0 ? [...currentPhases] : undefined,
+        },
       ]);
     }
 
-    // Clear steps separately (NOT nested inside setChatMessages)
+    // Clear phases and steps separately
+    setPhases([]);
     setSteps([]);
     setFinishSummary('');
   }, []);
@@ -162,10 +192,10 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         }
 
         if (step === 'finished') {
-          // Flush all steps + summary into a single chat message
+          // Flush phases + file changes into a permanent chat message
           setFinishSummary(summary || '');
-          // Small delay to let last step update render
-          setTimeout(() => flushStepsToChat(summary || ''), 150);
+          setTimeout(() => flushPhasesToChat(summary || ''), 150);
+          setState('ready');
           return;
         }
 
@@ -270,9 +300,75 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         return;
       }
 
+      // ─── Claude Message ──────────────────────────
+      if (msg.type === 'claude_message') {
+        let label = 'Claude';
+        if (msg.action === 'fix_bug') label = '🐛 Bug Fix';
+        if (msg.action === 'write_code') label = '💻 Code Writing';
+        
+        pushLog(`[${label}] ${msg.content}`, 'agent_message');
+        return;
+      }
+
+      // ─── Claude Result — update phase 4 ────────────
+      if (msg.type === 'claude_result') {
+        const resultText = msg.result || 'Code written successfully';
+        pushLog(`[Claude Result] ${resultText.slice(0, 300)}`, 'agent_message');
+        // Update phase 4 with the actual result
+        setPhases(prev => {
+          const updated = [...prev];
+          const idx = updated.findIndex(p => p.phase === 4);
+          if (idx >= 0) {
+            updated[idx] = { ...updated[idx], description: resultText.slice(0, 200), status: 'done' };
+          }
+          return updated;
+        });
+        return;
+      }
+
+      // ─── Task Phase — structured progress ──────────
+      if (msg.type === 'task_phase') {
+        // Set running state when first phase arrives
+        if (msg.phase === 1 && msg.status === 'active') {
+          setState('running');
+          // Reset flush guard for new task
+          flushedRef.current = false;
+          setPhases([{ ...msg }]);
+          return;
+        }
+        setPhases(prev => {
+          const updated = [...prev];
+          const idx = updated.findIndex(p => p.phase === msg.phase);
+          if (idx >= 0) {
+            updated[idx] = { ...updated[idx], ...msg };
+          } else {
+            updated.push({ ...msg });
+          }
+          return updated.sort((a, b) => a.phase - b.phase);
+        });
+        return;
+      }
+
+      // ─── Preview Ready ────────────────────────────
+      if (msg.type === 'preview_ready') {
+        setPreviewUrl(msg.preview_url);
+        setPreviewTaskId(msg.task_id);
+        pushLog(`[Preview] ${msg.message || 'Preview ready'}`, 'system');
+        return;
+      }
+
       if (msg.type === 'complete') {
         setState('ready');
-        pushLog('Task completed', 'system');
+        const successMsg = msg.message || 'Task completed successfully.';
+        pushChat('system', `✅ ${successMsg}`);
+        pushLog(`[Success] ${successMsg}`, 'system');
+        
+        // Refresh task status
+        setSteps([]);
+        setFinishSummary(successMsg);
+        // Clear preview on completion
+        setPreviewUrl(null);
+        setPreviewTaskId(null);
         return;
       }
 
@@ -311,11 +407,20 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         return;
       }
 
+      if (msg.type === 'stopped') {
+        setState('ready');
+        pushChat('system', `⛔ ${msg.message || 'Task stopped by user.'}`);
+        pushLog(`[Stopped] ${msg.message || 'Task stopped'}`, 'system');
+        setSteps([]);
+        setFinishSummary('Task stopped by user.');
+        return;
+      }
+
       if (msg.type === 'pong' || msg.type === 'ack') return;
 
       pushLog(JSON.stringify(msg), 'system');
     },
-    [pushLog, pushChat, flushStepsToChat]
+    [pushLog, pushChat, flushPhasesToChat]
   );
 
   // ── Subscribe to global manager events ──────────────────
@@ -396,6 +501,8 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       manager.send({ type: 'message', content: text });
       pushChat('user', text);
       pushLog(`→ ${text}`, 'user');
+      // Show thinking indicator immediately
+      setState('running');
     },
     [pushLog, pushChat]
   );
@@ -440,12 +547,13 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
 
   const stopSession = useCallback(() => {
     if (manager) {
-      try { manager.send({ type: 'stop', content: 'stop' }); } catch (_) {}
-      manager.close(1000, 'User stopped session');
+      try { 
+        manager.send({ type: 'stop_task', task_id: sessionId }); 
+      } catch (_) {}
     }
     setState('stopped');
-    pushLog('Session stopped', 'system');
-  }, [pushLog]);
+    pushLog('Stopping session...', 'system');
+  }, [pushLog, sessionId]);
 
   // ── Hydrate chat history from Supabase (called once by page) ──
   const setInitialMessages = useCallback((savedMsgs) => {
@@ -495,6 +603,9 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     steps,
     finishSummary,
 
+    // Structured phases for TaskProgress
+    phases,
+
     // Aliases for backward compat
     status: state,
     messages: chatMessages,
@@ -509,5 +620,10 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     stopSession,
     pushToBranch,
     setInitialMessages,
+
+    // Preview (noVNC)
+    previewUrl,
+    previewTaskId,
+    clearPreview: () => { setPreviewUrl(null); setPreviewTaskId(null); },
   };
 }

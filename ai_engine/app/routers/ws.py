@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
@@ -223,6 +224,9 @@ async def websocket_agent(websocket: WebSocket):
             model_provider = settings.DEFAULT_PROVIDER
         
         logger.info("[%s] Using model: %s", project_id or "new-session", model_provider)
+
+        # Resolve Gemini API key for pre-exploration
+        gemini_api_key = os.environ.get("GOOGLE_API_KEY") or settings.GOOGLE_API_KEY or ""
 
         # ── 2. Try to reconnect to existing session ───────
         existing = await session_store.find_by_user_and_project(user_id, project_id) if project_id else None
@@ -448,8 +452,21 @@ async def websocket_agent(websocket: WebSocket):
                 "label": "Editing related files", "done": False,
             })
 
-            session.conversation.send_message(enriched_task)
-            await _run_conversation_with_timeout(websocket, session)
+            # Smart task handling: Gemini classifies + explores, Claude executes
+            from app.services.claude_service import handle_task
+            try:
+                await handle_task(enriched_task, session.workspace_dir, api_key, gemini_api_key, websocket)
+            except Exception as e:
+                print(f"ERROR in handle_task (initial): {e}")
+                import traceback as tb
+                tb.print_exc()
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"Task failed: {str(e)[:300]}"
+                    })
+                except Exception:
+                    pass
 
             # Mark editing as done
             await websocket.send_json({
@@ -575,8 +592,21 @@ async def websocket_agent(websocket: WebSocket):
             })
 
             logger.info("[%s] Starting task: %s", session.session_id, content[:100])
-            session.conversation.send_message(full_task)
-            await _run_conversation_with_timeout(websocket, session)
+            # Smart task handling: Gemini classifies + explores, Claude executes
+            from app.services.claude_service import handle_task
+            try:
+                await handle_task(full_task, session.workspace_dir, api_key, gemini_api_key, websocket)
+            except Exception as e:
+                print(f"ERROR in handle_task (follow-up): {e}")
+                import traceback as tb
+                tb.print_exc()
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"Task failed: {str(e)[:300]}"
+                    })
+                except Exception:
+                    pass
 
             # Mark editing as done
             await websocket.send_json({

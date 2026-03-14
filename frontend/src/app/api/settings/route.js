@@ -90,7 +90,7 @@ export async function PUT(req) {
 
   const { llm_provider, llm_model, api_key } = body;
 
-  // Validate provider
+
   if (!VALID_PROVIDERS.includes(llm_provider)) {
     return NextResponse.json(
       { error: `Invalid provider. Must be one of: ${VALID_PROVIDERS.join(', ')}` },
@@ -98,7 +98,7 @@ export async function PUT(req) {
     );
   }
 
-  // Validate model belongs to provider
+
   if (!VALID_MODELS[llm_provider]?.includes(llm_model)) {
     return NextResponse.json(
       { error: `Invalid model '${llm_model}' for provider '${llm_provider}'.` },
@@ -108,7 +108,7 @@ export async function PUT(req) {
 
   const supabase = await getSupabaseServerClient();
 
-  // Fetch existing settings to preserve the API key if a new one isn't provided
+
   const { data: existing, error: fetchError } = await supabase
     .from('user_settings')
     .select('api_key_enc, api_key_iv')
@@ -124,12 +124,9 @@ export async function PUT(req) {
     user_id: ctx.userId,
     llm_provider,
     llm_model,
-    // Preserve existing key if no new one provided
     api_key_enc: existing?.api_key_enc || null,
     api_key_iv: existing?.api_key_iv || null,
   };
-
-  // Encrypt new API key if provided
   if (api_key && api_key.trim()) {
     try {
       const { encrypt } = await import('@/lib/crypto');
