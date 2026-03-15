@@ -26,6 +26,7 @@ services:
     build: ./ai_engine
     ports:
       - "8000:8000"
+      - "6080:6080"
     volumes:
       - ./ai_engine:/app
       - /var/run/docker.sock:/var/run/docker.sock
@@ -35,6 +36,7 @@ services:
     environment:
       - PYTHONPATH=.
       - PORT=8000
+      - DISPLAY=:99
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
       # JWT secret from Supabase Dashboard → Settings → API → JWT Settings
@@ -60,4 +62,7 @@ services:
       # Must match frontend ENCRYPTION_KEY — used to decrypt stored git tokens
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - ALLOWED_ORIGINS=http://localhost:3000,http://frontend:3000
-
+      # Playwright
+      - PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+      - PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+      - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright

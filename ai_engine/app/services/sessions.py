@@ -316,15 +316,11 @@ async def create_session(
         return session
 
     # ── Real path ────────────────────────────────────────────
-    llm = resolve_llm(provider, api_key)
-
-    # get_default_agent with cli_mode=False enables BrowserToolSet (Playwright)
-    # so the agent can launch and visually inspect web apps — like OpenHands.
-    # Chromium + Playwright are installed in the Docker image (see Dockerfile).
-    agent = sdk.get_default_agent(
-        llm=llm,
-        cli_mode=False,
-    )
+    # NOTE: We do NOT create OpenHands Agent/LLM/Conversation anymore.
+    # Claude Code SDK handles all task execution directly.
+    # OpenHands objects were injecting system prompts that blocked Claude
+    # from writing code ("MUST refuse to improve or augment the code").
+    # Now the session only manages: workspace_dir + git clone + repo scan.
 
     # Create the workspace directory on the host
     workspace_dir = os.path.join(
@@ -340,8 +336,6 @@ async def create_session(
         branch=branch,
         git_token=git_token,
     )
-    session.llm = llm
-    session.agent = agent
     session.workspace_dir = workspace_dir
     session.project_id = project_id or ""
 
@@ -362,10 +356,8 @@ async def create_session(
             )
         except Exception as exc:
             logger.error("Failed to clone repo %s: %s", repo_url, exc)
-            # Clean up the empty workspace directory
             import shutil
             shutil.rmtree(workspace_dir, ignore_errors=True)
-            # HARD FAILURE — agent must NOT work on an empty directory.
             raise RuntimeError(
                 f"Failed to clone repository. Please check:\n"
                 f"• Repository URL is correct\n"
@@ -377,66 +369,7 @@ async def create_session(
     # ── Scan cloned repo for context ─────────────────────────
     repo_context = await asyncio.to_thread(_scan_workspace, workspace_dir)
     session.repo_context = repo_context
-
-    # ── Create SDK Workspace ─────────────────────────────────
-    workspace_obj = sdk.Workspace(working_dir=workspace_dir)
-    session.workspace = workspace_obj
     logger.info("Workspace created at %s for session %s", workspace_dir, session_id)
-
-    # ── Event callback (called from SDK thread — must be thread-safe) ──
-    loop = asyncio.get_event_loop()
-
-    def on_event(event):
-        """Forward SDK events to the session's asyncio buffer.
-
-        Also tracks the last meaningful agent message in
-        ``session.last_agent_message`` so the handoff summary always
-        has the agent's final output — even after the event buffer
-        has been drained by the streaming task.
-        """
-        try:
-            event_data = format_sdk_event(event)
-            if event_data:
-                loop.call_soon_threadsafe(_safe_put, session.event_buffer, event_data)
-
-                # ── Track last meaningful agent message ──────
-                event_type = event_data.get("eventType", "")
-                content = event_data.get("content", "")
-
-                if event_type == "MessageEvent" and content and len(content) > 20 and event_data.get("source") != "user":
-                    session.last_agent_message = content
-                elif (
-                    event_type == "ActionEvent"
-                    and content
-                    and len(content) > 30
-                    and not any(
-                        content.startswith(p)
-                        for p in (
-                            "Viewing file:",
-                            "Running: `ls",
-                            "Running: `cat",
-                            "Running: `pwd",
-                            "Running: `echo",
-                            "File:",
-                        )
-                    )
-                ):
-                    session.last_agent_message = content
-        except Exception as exc:
-            logger.error("Event callback error: %s", exc)
-
-    # ── Create SDK Conversation ──────────────────────────────
-    # Context persistence is handled via Supabase (chat_messages +
-    # chat_sessions.summary/last_task), NOT SDK file persistence.
-    # This avoids expensive JSON event files on disk.
-    conversation = sdk.Conversation(
-        agent,
-        workspace=workspace_obj,
-        callbacks=[on_event],
-        max_iteration_per_run=settings.MAX_ITERATIONS,
-        visualizer=None,
-    )
-    session.conversation = conversation
 
     await store.add(session)
     logger.info("Session %s created — task: %s", session_id, task[:60])

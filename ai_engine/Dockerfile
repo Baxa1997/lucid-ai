@@ -13,11 +13,13 @@ WORKDIR /app
 #   curl       — Container health checks
 #   chromium   — Required by Playwright for browser-based app inspection
 #   node 20    — Required for running/building frontend projects
+#   xvfb/x11vnc/novnc/websockify — noVNC live preview
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     docker.io \
     chromium \
+    chromium-driver \
     fonts-liberation \
     libnss3 \
     libatk1.0-0 \
@@ -42,6 +44,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Tell Playwright to use the system-installed Chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# Virtual display for headless browser
+ENV DISPLAY=:99
 
 # Install Node.js 20 for running frontend projects
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
@@ -58,22 +64,20 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Install Playwright browsers (uses system Chromium as fallback)
 RUN pip install playwright && python -m playwright install chromium 2>/dev/null || true
+RUN python -m playwright install-deps chromium 2>/dev/null || true
 
 # Copy application source
 COPY . .
+
+# Copy startup script
+COPY start.sh /app/start.sh
+RUN chmod +x /app/start.sh
 
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8000
 
 EXPOSE 8000
-# noVNC preview port range
-EXPOSE 6080-6180
+# noVNC preview port
+EXPOSE 6080
 
-CMD ["uvicorn", "main:app", \
-     "--host", "0.0.0.0", \
-     "--port", "8000", \
-     "--reload", \
-     "--ws-ping-interval", "20", \
-     "--ws-ping-timeout", "60", \
-     "--timeout-keep-alive", "65"]
-
+CMD ["/app/start.sh"]

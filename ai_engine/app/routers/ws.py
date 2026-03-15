@@ -252,11 +252,33 @@ async def websocket_agent(websocket: WebSocket):
                         "label": "Cloning repository", "done": False,
                     })
 
+                # Resolve git_token — frontend may send it, or extract from JWT
+                git_token = raw.get("gitToken", "")
+                if not git_token and user_jwt:
+                    # Extract git token from JWT user_metadata as fallback
+                    try:
+                        import jwt as pyjwt
+                        decoded = pyjwt.decode(user_jwt, options={"verify_signature": False})
+                        user_meta = decoded.get("user_metadata", {})
+                        repo_url_raw = raw.get("repoUrl", "")
+                        if "github" in repo_url_raw.lower():
+                            gh = user_meta.get("github_integration", {})
+                            git_token = gh.get("token", "")
+                        elif "gitlab" in repo_url_raw.lower():
+                            gl = user_meta.get("gitlab_integration", {})
+                            git_token = gl.get("token", "")
+                        if git_token:
+                            print(f"DEBUG git_token extracted from JWT (len={len(git_token)})")
+                    except Exception as jwt_err:
+                        print(f"DEBUG failed to extract git_token from JWT: {jwt_err}")
+
+                print(f"DEBUG create_session: repo_url={raw.get('repoUrl', '')}, git_token present={bool(git_token)}, branch={raw.get('branch', '')}")
+
                 session = await create_session(
                     task=task or "Workspace initialization",
                     user_id=user_id,
                     repo_url=raw.get("repoUrl", ""),
-                    git_token=raw.get("gitToken", ""),
+                    git_token=git_token,
                     branch=raw.get("branch", ""),
                     git_user_name=raw.get("gitUserName", ""),
                     git_user_email=raw.get("gitUserEmail", ""),
@@ -378,13 +400,9 @@ async def websocket_agent(websocket: WebSocket):
                 "message": ready_msg,
             })
 
-        streaming_task = asyncio.create_task(
-            stream_events_to_ws(
-                websocket, session,
-                chat_session_id=chat_session_id,
-                user_jwt=user_jwt,
-            ),
-        )
+        # NOTE: stream_events_to_ws removed — OpenHands Conversation no longer
+        # created. Claude Code SDK sends events directly via WebSocket.
+        streaming_task = None
 
         # ── If task was included in handshake, run it immediately ─
         if task and not existing:
@@ -533,7 +551,7 @@ async def websocket_agent(websocket: WebSocket):
                 # Skip empty messages — don't send error
                 continue
 
-            if msg_type == "stop":
+            if msg_type == "stop" or msg_type == "stop_task":
                 explicit_stop = True
                 await websocket.send_json({
                     "type": "status",
@@ -968,11 +986,30 @@ async def _auto_push_if_needed(
     new_branch: str | None = None,
 ) -> None:
     """Push changes to remote if the session has a repo and git_token."""
+    print(f"DEBUG _auto_push_if_needed called")
+    print(f"DEBUG   repo_url: {bool(session.repo_url)} = {session.repo_url}")
+    print(f"DEBUG   git_token: {bool(session.git_token)} (len={len(session.git_token) if session.git_token else 0})")
+    print(f"DEBUG   workspace_dir: {bool(session.workspace_dir)} = {session.workspace_dir}")
+    print(f"DEBUG   branch: {session.branch}")
+
     if not session.repo_url or not session.git_token or not session.workspace_dir:
-        logger.info(
-            "Auto-push skipped (repo=%s, token=%s, dir=%s)",
-            bool(session.repo_url), bool(session.git_token), bool(session.workspace_dir),
-        )
+        skip_reason = []
+        if not session.repo_url:
+            skip_reason.append("no repo_url")
+        if not session.git_token:
+            skip_reason.append("no git_token")
+        if not session.workspace_dir:
+            skip_reason.append("no workspace_dir")
+        reason_str = ", ".join(skip_reason)
+        logger.info("Auto-push skipped: %s", reason_str)
+        print(f"DEBUG auto-push SKIPPED: {reason_str}")
+        try:
+            await websocket.send_json({
+                "type": "warning",
+                "message": f"⚠️ Auto-push skipped: {reason_str}. Changes are saved locally.",
+            })
+        except Exception:
+            pass
         return
 
     try:

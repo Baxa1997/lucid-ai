@@ -1,18 +1,16 @@
-import React from 'react';
+'use client';
 
-const StopTaskButton = ({ 
-  status, 
-  websocket, 
-  currentTaskId 
-}) => {
+import React from 'react';
+import manager from '@/lib/agentWSManager';
+
+const StopTaskButton = ({ status }) => {
   // Show ONLY when task is running
   if (status !== "running" && status !== "progress") return null;
 
   const handleStop = () => {
-    if (websocket) {
-      websocket.send({
+    if (manager?.isOpen) {
+      manager.send({
         type: "stop_task",
-        task_id: currentTaskId
       });
     }
   };
