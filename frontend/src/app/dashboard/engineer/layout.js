@@ -6,11 +6,11 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
-import { useState, useEffect, useCallback, memo } from 'react';
+import { useState, useEffect, useCallback, memo, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import ThemeModeSelector from '@/components/ThemeModeSelector';
 import Toast from '@/components/Toast';
-import { getSupabaseBrowserClient } from '@/lib/supabase/client';
+import { getSupabaseBrowserClient, clearAllSupabaseCookies } from '@/lib/supabase/client';
 
 const navItems = [
   { label: 'Usage Docs', icon: FileText, href: '/dashboard/engineer/usage-docs' },
@@ -95,15 +95,34 @@ export default function EngineerLayout({ children }) {
   // ── User state ──
   const [user, setUser] = useState(null);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const isLoggingOutRef = useRef(false);
 
   // ── Toast state ──
   const [toast, setToast] = useState(null);
 
-  // Fetch user on mount
+  // Fetch user on mount + session guard
   useEffect(() => {
+    // Check session — redirect if not authenticated
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) {
+        console.warn('[Layout] No session found, redirecting to login');
+        router.replace('/login');
+        return;
+      }
+    });
+
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (user) {
         setUser(user);
+      }
+    });
+
+    // Session guard: redirect to /login if session is lost mid-use
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_OUT' && !isLoggingOutRef.current) {
+        console.warn('[Layout] Session lost (SIGNED_OUT event), redirecting to login');
+        clearAllSupabaseCookies();
+        router.replace('/login');
       }
     });
 
@@ -120,7 +139,11 @@ export default function EngineerLayout({ children }) {
         sessionStorage.removeItem('lucid-just-signed-out');
       }
     }
-  }, [supabase]);
+
+    return () => {
+      subscription?.unsubscribe();
+    };
+  }, [supabase, router]);
 
   // Derive display info from Supabase user
   const displayName = user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split('@')[0] || 'User';
@@ -135,21 +158,21 @@ export default function EngineerLayout({ children }) {
 
   // ── Logout handler ──
   const handleLogout = useCallback(async () => {
+    isLoggingOutRef.current = true;
     setIsLoggingOut(true);
     try {
       await supabase.auth.signOut();
-
-      // Clear auth cookies
-      document.cookie = 'sb-access-token=; path=/; max-age=0';
-      document.cookie = 'sb-refresh-token=; path=/; max-age=0';
+    } catch (err) {
+      console.error('Logout signOut() failed:', err);
+      // Continue with cleanup even if signOut fails
+    } finally {
+      // Always clear all cookies and redirect
+      clearAllSupabaseCookies();
 
       // Set flag for one-time logout toast on login page
       sessionStorage.setItem('lucid-just-signed-out', 'true');
 
-      router.push('/login');
-    } catch (err) {
-      console.error('Logout failed:', err);
-      setIsLoggingOut(false);
+      router.replace('/login');
     }
   }, [supabase, router]);
 

@@ -15,6 +15,37 @@ import { createClient } from '@supabase/supabase-js';
 let client;
 let listenerAttached = false;
 
+/**
+ * Clear ALL Supabase-related cookies.
+ * Handles both our custom cookies and any default Supabase cookies
+ * matching the sb-*-auth-token pattern.
+ */
+export function clearAllSupabaseCookies() {
+  if (typeof document === 'undefined') return;
+  // Clear our explicit cookies
+  document.cookie = 'sb-access-token=; path=/; max-age=0';
+  document.cookie = 'sb-refresh-token=; path=/; max-age=0';
+
+  // Clear any default Supabase auth cookies (sb-<project-ref>-auth-token*)
+  const allCookies = document.cookie.split(';');
+  for (const cookie of allCookies) {
+    const name = cookie.split('=')[0].trim();
+    if (name.startsWith('sb-') && name.includes('-auth-token')) {
+      document.cookie = `${name}=; path=/; max-age=0`;
+    }
+  }
+}
+
+/**
+ * Sync cookies with the current Supabase session tokens.
+ */
+export function syncCookiesFromSession(session) {
+  if (typeof document === 'undefined') return;
+  if (!session?.access_token) return;
+  document.cookie = `sb-access-token=${session.access_token}; path=/; max-age=${60 * 60 * 24 * 7}; samesite=lax`;
+  document.cookie = `sb-refresh-token=${session.refresh_token}; path=/; max-age=${60 * 60 * 24 * 7}; samesite=lax`;
+}
+
 export function getSupabaseBrowserClient() {
   if (client) return client;
 
@@ -28,16 +59,19 @@ export function getSupabaseBrowserClient() {
     listenerAttached = true;
 
     client.auth.onAuthStateChange((event, session) => {
-      // Keep cookies in sync with the latest tokens
-      if (session) {
-        document.cookie = `sb-access-token=${session.access_token}; path=/; max-age=${60 * 60 * 24 * 7}; samesite=lax`;
-        document.cookie = `sb-refresh-token=${session.refresh_token}; path=/; max-age=${60 * 60 * 24 * 7}; samesite=lax`;
+      // Keep cookies in sync for ALL session-bearing events
+      if (session && (
+        event === 'SIGNED_IN' ||
+        event === 'TOKEN_REFRESHED' ||
+        event === 'INITIAL_SESSION' ||
+        event === 'USER_UPDATED'
+      )) {
+        syncCookiesFromSession(session);
       }
 
-      // Only clear cookies on EXPLICIT sign-out
+      // Clear ALL cookies on explicit sign-out
       if (event === 'SIGNED_OUT') {
-        document.cookie = 'sb-access-token=; path=/; max-age=0';
-        document.cookie = 'sb-refresh-token=; path=/; max-age=0';
+        clearAllSupabaseCookies();
       }
     });
   }

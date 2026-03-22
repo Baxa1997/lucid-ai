@@ -31,18 +31,24 @@ export default function LoginPage() {
     setIsLoading(provider);
     setError('');
 
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider,
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-      },
-    });
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
 
-    if (error) {
-      setError(error.message);
+      if (error) {
+        setError(error.message);
+        setIsLoading(null);
+      }
+      // On success, Supabase redirects the browser — no further action needed
+    } catch (err) {
+      console.error('OAuth Exception:', err);
+      setError(err?.message || 'An unexpected error occurred during login');
       setIsLoading(null);
     }
-    // On success, Supabase redirects the browser — no further action needed
   };
 
   return (

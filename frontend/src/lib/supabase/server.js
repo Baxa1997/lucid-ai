@@ -28,10 +28,18 @@ export async function getSupabaseServerClient() {
 
   // If we have tokens, set the session manually
   if (accessToken && refreshToken) {
-    await supabase.auth.setSession({
+    const { error } = await supabase.auth.setSession({
       access_token: accessToken,
       refresh_token: refreshToken,
     });
+
+    if (error) {
+      console.warn('[SupabaseServer] Failed to set session from cookies:', error.message);
+    }
+  } else if (!accessToken && !refreshToken) {
+    // No tokens at all — this is expected for unauthenticated requests
+  } else {
+    console.warn('[SupabaseServer] Partial tokens found — access:', !!accessToken, 'refresh:', !!refreshToken);
   }
 
   return supabase;
