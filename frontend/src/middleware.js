@@ -40,12 +40,16 @@ export function middleware(request) {
   }
 
   const isAuthenticated = hasSupabaseSession(request);
+  const protectedPaths = ['/dashboard', '/workspace', '/session', '/projects'];
+  const isProtectedRoutePath = protectedPaths.some((p) => pathname.startsWith(p));
+  
+  if (isProtectedRoutePath) {
+    console.log(`[Middleware] Path: ${pathname}, Auth: ${isAuthenticated}`);
+  }
 
   // ── Protected routes: redirect to /login if not authenticated ──
-  const protectedPaths = ['/dashboard', '/workspace', '/session', '/projects'];
-  const isProtectedRoute = protectedPaths.some((p) => pathname.startsWith(p));
-
-  if (isProtectedRoute && !isAuthenticated) {
+  if (isProtectedRoutePath && !isAuthenticated) {
+    console.warn(`[Middleware] Unauthorized redirect to /login from ${pathname}`);
     const loginUrl = request.nextUrl.clone();
     loginUrl.pathname = '/login';
     loginUrl.searchParams.set('redirect', pathname);

@@ -303,17 +303,12 @@ async def create_session(
                    f"Please stop an existing session before starting a new one.",
         )
 
-    # ── Mock path ────────────────────────────────────────────
+    # ── Always create a real workspace ─────────────────────────
+    # NOTE: The old mock gate (sdk.OPENHANDS_AVAILABLE) is removed.
+    # The pipeline uses subprocess fallbacks for clone/push when
+    # the OpenHands SDK is not installed.
     if not sdk.OPENHANDS_AVAILABLE:
-        session = AgentSession(
-            session_id=session_id,
-            user_id=user_id,
-            task=task,
-            repo_url=repo_url,
-        )
-        session.project_id = project_id or ""
-        await store.add(session)
-        return session
+        logger.info("OpenHands SDK not installed — workspace will use subprocess git")
 
     # ── Real path ────────────────────────────────────────────
     # NOTE: We do NOT create OpenHands Agent/LLM/Conversation anymore.
@@ -339,35 +334,17 @@ async def create_session(
     session.workspace_dir = workspace_dir
     session.project_id = project_id or ""
 
-    # ── Clone repo if provided ───────────────────────────────
-    if repo_url and repo_url.strip():
-        try:
-            await clone_repo(
-                repo_url=repo_url,
-                token=git_token or "",
-                branch=branch or "main",
-                workspace_dir=workspace_dir,
-                git_user_name=git_user_name,
-                git_user_email=git_user_email,
-            )
-            logger.info(
-                "Repo %s cloned into %s (branch=%s)",
-                repo_url, workspace_dir, branch,
-            )
-        except Exception as exc:
-            logger.error("Failed to clone repo %s: %s", repo_url, exc)
-            import shutil
-            shutil.rmtree(workspace_dir, ignore_errors=True)
-            raise RuntimeError(
-                f"Failed to clone repository. Please check:\n"
-                f"• Repository URL is correct\n"
-                f"• Branch '{branch or 'main'}' exists\n"
-                f"• Git token has access to this repository\n"
-                f"\nError: {exc}"
-            ) from exc
+    # NOTE: Repo cloning is handled by workspace_manager.get_or_create_workspace()
+    # inside run_pipeline(). We do NOT clone here to avoid:
+    #   1. Double-cloning (once here, once in workspace_manager)
+    #   2. Fatal failures — if clone fails here, the entire WS connection dies
+    #      before the pipeline can even start. workspace_manager has better
+    #      retry/recovery logic.
 
-    # ── Scan cloned repo for context ─────────────────────────
-    repo_context = await asyncio.to_thread(_scan_workspace, workspace_dir)
+    # ── Scan workspace for context (will be empty if no clone) ──
+    repo_context = ""
+    if repo_url and os.path.exists(os.path.join(workspace_dir, ".git")):
+        repo_context = await asyncio.to_thread(_scan_workspace, workspace_dir)
     session.repo_context = repo_context
     logger.info("Workspace created at %s for session %s", workspace_dir, session_id)
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import uuid
 from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
@@ -26,6 +27,8 @@ from app.services.sessions import (
     store as session_store,
 )
 from app.services.git_operations import push_changes, get_git_status
+from app.services.task_pipeline import run_pipeline
+from app.services.workspace_manager import workspace_manager
 from app.supabase_client import db_client
 
 router = APIRouter()
@@ -161,6 +164,7 @@ async def websocket_agent(websocket: WebSocket):
     session: Optional[AgentSession] = None
     streaming_task: Optional[asyncio.Task] = None
     chat_session_id: Optional[str] = None
+    conversation_id: str = str(uuid.uuid4())  # unique per WS connection
 
     try:
         # ── 1. Receive initial config ────────────────────
@@ -222,8 +226,14 @@ async def websocket_agent(websocket: WebSocket):
 
         if not model_provider:
             model_provider = settings.DEFAULT_PROVIDER
+
+        # Fallback: if no API key from handshake or user settings, use server's .env key
+        if not api_key:
+            api_key = os.environ.get("ANTHROPIC_API_KEY") or settings.ANTHROPIC_API_KEY or ""
+            if api_key:
+                logger.info("Using server fallback ANTHROPIC_API_KEY for user %s", user_id)
         
-        logger.info("[%s] Using model: %s", project_id or "new-session", model_provider)
+        logger.info("[%s] Using model: %s, api_key prefix: %s (len=%d)", project_id or "new-session", model_provider, str(api_key or "")[:15], len(str(api_key or "")))
 
         # Resolve Gemini API key for pre-exploration
         gemini_api_key = os.environ.get("GOOGLE_API_KEY") or settings.GOOGLE_API_KEY or ""
@@ -243,15 +253,8 @@ async def websocket_agent(websocket: WebSocket):
                 "message": "Reconnected to existing workspace.",
             })
         else:
-            # ── Create new session (clone repo if provided) ──
+            # ── Create new session (no clone — workspace_manager handles it) ──
             try:
-                # Send cloning step BEFORE the actual clone
-                if raw.get("repoUrl"):
-                    await websocket.send_json({
-                        "type": "step", "step": "cloning",
-                        "label": "Cloning repository", "done": False,
-                    })
-
                 # Resolve git_token — frontend may send it, or extract from JWT
                 git_token = raw.get("gitToken", "")
                 if not git_token and user_jwt:
@@ -268,11 +271,9 @@ async def websocket_agent(websocket: WebSocket):
                             gl = user_meta.get("gitlab_integration", {})
                             git_token = gl.get("token", "")
                         if git_token:
-                            print(f"DEBUG git_token extracted from JWT (len={len(git_token)})")
+                            logger.info("git_token extracted from JWT (len=%d)", len(git_token))
                     except Exception as jwt_err:
-                        print(f"DEBUG failed to extract git_token from JWT: {jwt_err}")
-
-                print(f"DEBUG create_session: repo_url={raw.get('repoUrl', '')}, git_token present={bool(git_token)}, branch={raw.get('branch', '')}")
+                        logger.warning("Failed to extract git_token from JWT: %s", jwt_err)
 
                 session = await create_session(
                     task=task or "Workspace initialization",
@@ -286,22 +287,6 @@ async def websocket_agent(websocket: WebSocket):
                     api_key=api_key or "",
                     project_id=project_id,
                 )
-
-                # Mark cloning as done
-                if raw.get("repoUrl"):
-                    await websocket.send_json({
-                        "type": "step", "step": "cloning",
-                        "label": "Cloning repository", "done": True,
-                    })
-            except RuntimeError as clone_err:
-                # Clone failed — send clear error to user and stop
-                logger.error("Session creation failed: %s", clone_err)
-                await websocket.send_json({
-                    "type": "error",
-                    "message": str(clone_err),
-                })
-                await websocket.close(code=4001, reason="Clone failed")
-                return
             except HTTPException as rate_err:
                 # Rate limit or other HTTP error from create_session
                 logger.warning("Session creation rejected: %s", rate_err.detail)
@@ -367,29 +352,21 @@ async def websocket_agent(websocket: WebSocket):
             except Exception as exc:
                 logger.warning("Failed to look up existing chat session on reconnect: %s", exc)
 
-        # ── 3. Mock path ─────────────────────────────────
+        # ── 3. Pipeline handles agent execution ──────────
+        # NOTE: The old mock gate (sdk.OPENHANDS_AVAILABLE) is removed.
+        # run_pipeline() has its own subprocess fallbacks for clone/push
+        # and does NOT require the OpenHands SDK.
         if not sdk.OPENHANDS_AVAILABLE:
-            await websocket.send_json({
-                "type": "status",
-                "status": "mock_mode",
-                "sessionId": session.session_id,
-                "message": (
-                    "Running in MOCK mode — OpenHands SDK not installed. "
-                    "Install openhands-sdk, openhands-tools, openhands-workspace "
-                    "to enable real agent execution."
-                ),
-            })
-            await _run_mock_loop(websocket, session)
-            return
+            logger.info("OpenHands SDK not installed — pipeline will use subprocess fallbacks")
 
-        # ── 4. Real agent — workspace is ready ───────────
+        # ── 4. Session ready — workspace initialized ─────────
         # Only send the "ready" message for NEW sessions.
         # For reconnects we already sent it at step 2 above (reconnected=True).
         if not existing:
             ready_msg = "Workspace ready. You can start giving tasks."
             if session.repo_url:
                 ready_msg = (
-                    f"Repository cloned and workspace ready. "
+                    f"Workspace initialized. "
                     f"The agent has terminal, file editor, and browser tools available. "
                     f"You can start giving tasks."
                 )
@@ -464,77 +441,128 @@ async def websocket_agent(websocket: WebSocket):
             else:
                 enriched_task = f"{task}{_build_agent_guidelines()}"
 
-            # ── Step: Working ─────────────────────────────────
-            await websocket.send_json({
-                "type": "step", "step": "editing",
-                "label": "Editing related files", "done": False,
-            })
+            # ── Step: Working — run full pipeline (cancellable) ──
+            pipeline_task_id = str(uuid.uuid4())[:8]
+            pipeline_user = {
+                "anthropic_api_key": api_key,
+                "gemini_api_key": gemini_api_key,
+                "git_provider": "gitlab" if "gitlab" in (session.repo_url or "").lower() else "github",
+                "github_repo": session.repo_url or "",
+                "github_token": session.git_token or "",
+                "gitlab_repo": session.repo_url or "",
+                "gitlab_token": session.git_token or "",
+                "selected_branch": session.branch or "main",
+                "git_token": session.git_token or "",
+            }
 
-            # Smart task handling: Gemini classifies + explores, Claude executes
-            from app.services.claude_service import handle_task
-            try:
-                await handle_task(enriched_task, session.workspace_dir, api_key, gemini_api_key, websocket)
-            except Exception as e:
-                print(f"ERROR in handle_task (initial): {e}")
-                import traceback as tb
-                tb.print_exc()
+            # Run pipeline as a cancellable task so stop messages work
+            pipeline_task = asyncio.create_task(
+                run_pipeline(
+                    task=enriched_task,
+                    user=pipeline_user,
+                    websocket=websocket,
+                    task_id=pipeline_task_id,
+                    conversation_id=conversation_id,
+                )
+            )
+
+            # Listen for stop messages while pipeline runs
+            pipeline_stopped = False
+            while not pipeline_task.done():
                 try:
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": f"Task failed: {str(e)[:300]}"
-                    })
+                    # Wait for either pipeline completion or a WS message
+                    msg_coro = asyncio.ensure_future(websocket.receive_json())
+                    done, pending = await asyncio.wait(
+                        {pipeline_task, msg_coro},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+
+                    if msg_coro in done:
+                        data = msg_coro.result()
+                        msg_type = data.get("type", "message")
+                        if msg_type == "ping":
+                            await websocket.send_json({"type": "pong"})
+                        elif msg_type in ("stop", "stop_task"):
+                            explicit_stop = True
+                            pipeline_stopped = True
+                            pipeline_task.cancel()
+                            await websocket.send_json({
+                                "type": "status",
+                                "status": "stopping",
+                                "message": "Stopping agent...",
+                            })
+                            try:
+                                await pipeline_task
+                            except (asyncio.CancelledError, Exception):
+                                pass
+                            break
+                    else:
+                        # Pipeline finished, cancel the pending receive
+                        msg_coro.cancel()
+                        try:
+                            await msg_coro
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                        break
+                except Exception:
+                    break
+
+            if pipeline_stopped:
+                await websocket.send_json({
+                    "type": "status",
+                    "status": "ready",
+                    "message": "Task stopped. Ready for next instruction.",
+                })
+            else:
+                # Pipeline completed normally — update session workspace_dir
+                # to the workspace manager path (where Claude actually worked)
+                try:
+                    result_path = pipeline_task.result()
+                    if result_path and session:
+                        session.workspace_dir = result_path
                 except Exception:
                     pass
 
-            # Mark editing as done
-            await websocket.send_json({
-                "type": "step", "step": "editing",
-                "label": "Editing related files", "done": True,
-            })
+                # Build summary
+                files_changed = await _get_files_changed(session)
+                last_msg = _extract_last_agent_message(session)
 
-            # Push changes if repo was cloned
-            await _auto_push_if_needed(websocket, session)
+                finish_summary = []
+                if last_msg:
+                    finish_summary.append(last_msg)
+                if files_changed:
+                    finish_summary.append(f"\nChanged files:\n{files_changed}")
 
-            # ── Step: Finished — build summary ────────────────
-            files_changed = await _get_files_changed(session)
-            last_msg = _extract_last_agent_message(session)
+                summary_text = "\n".join(finish_summary) if finish_summary else "Task completed."
 
-            finish_summary = []
-            if last_msg:
-                finish_summary.append(last_msg)
-            if files_changed:
-                finish_summary.append(f"\nChanged files:\n{files_changed}")
+                await websocket.send_json({
+                    "type": "step", "step": "finished",
+                    "label": "Finished", "done": True,
+                    "summary": summary_text,
+                })
 
-            summary_text = "\n".join(finish_summary) if finish_summary else "Task completed."
+                # ── Save structured agent response to DB ──────────
+                if chat_session_id:
+                    try:
+                        await ChatService.add_message(
+                            session_id=chat_session_id, role="assistant",
+                            content=summary_text,
+                            event_type="AgentResponse",
+                            user_jwt=user_jwt,
+                        )
+                    except Exception as exc:
+                        logger.warning("Failed to persist agent response: %s", exc)
 
-            await websocket.send_json({
-                "type": "step", "step": "finished",
-                "label": "Finished", "done": True,
-                "summary": summary_text,
-            })
+                # Save task summary for future context replay
+                await _update_session_summary(
+                    chat_session_id, task, session, user_jwt
+                )
 
-            # ── Save structured agent response to DB ──────────
-            if chat_session_id:
-                try:
-                    await ChatService.add_message(
-                        session_id=chat_session_id, role="assistant",
-                        content=summary_text,
-                        event_type="AgentResponse",
-                        user_jwt=user_jwt,
-                    )
-                except Exception as exc:
-                    logger.warning("Failed to persist agent response: %s", exc)
-
-            # Save task summary for future context replay
-            await _update_session_summary(
-                chat_session_id, task, session, user_jwt
-            )
-
-            await websocket.send_json({
-                "type": "status",
-                "status": "ready",
-                "message": "Task completed. Ready for next instruction.",
-            })
+                await websocket.send_json({
+                    "type": "status",
+                    "status": "ready",
+                    "message": "Task completed. Ready for next instruction.",
+                })
 
         # ── 5. Follow-up loop ────────────────────────────
         while True:
@@ -547,11 +575,9 @@ async def websocket_agent(websocket: WebSocket):
                 await websocket.send_json({"type": "pong"})
                 continue
 
-            if not content:
-                # Skip empty messages — don't send error
-                continue
-
-            if msg_type == "stop" or msg_type == "stop_task":
+            # Stop must be checked BEFORE empty-content guard
+            # because stop messages typically have no content field
+            if msg_type in ("stop", "stop_task"):
                 explicit_stop = True
                 await websocket.send_json({
                     "type": "status",
@@ -559,6 +585,10 @@ async def websocket_agent(websocket: WebSocket):
                     "message": "Stopping agent...",
                 })
                 break
+
+            if not content:
+                # Skip empty messages — don't send error
+                continue
 
             if msg_type == "push":
                 # Explicit push request from client
@@ -603,78 +633,127 @@ async def websocket_agent(websocket: WebSocket):
             context_briefing = await _build_conversation_context(user_id, project_id, user_jwt)
             full_task = f"{context_briefing}\n\nCURRENT TASK: {content}{_build_agent_guidelines()}" if context_briefing else f"{content}{_build_agent_guidelines()}"
 
-            # ── Step: Working ─────────────────────────────────
-            await websocket.send_json({
-                "type": "step", "step": "editing",
-                "label": "Editing related files", "done": False,
-            })
-
+            # ── Step: Working — run pipeline as cancellable task ──
             logger.info("[%s] Starting task: %s", session.session_id, content[:100])
-            # Smart task handling: Gemini classifies + explores, Claude executes
-            from app.services.claude_service import handle_task
-            try:
-                await handle_task(full_task, session.workspace_dir, api_key, gemini_api_key, websocket)
-            except Exception as e:
-                print(f"ERROR in handle_task (follow-up): {e}")
-                import traceback as tb
-                tb.print_exc()
+            pipeline_task_id = str(uuid.uuid4())[:8]
+            pipeline_user = {
+                "anthropic_api_key": api_key,
+                "gemini_api_key": gemini_api_key,
+                "git_provider": "gitlab" if "gitlab" in (session.repo_url or "").lower() else "github",
+                "github_repo": session.repo_url or "",
+                "github_token": session.git_token or "",
+                "gitlab_repo": session.repo_url or "",
+                "gitlab_token": session.git_token or "",
+                "selected_branch": session.branch or "main",
+                "git_token": session.git_token or "",
+            }
+
+            # Run pipeline as cancellable task (same pattern as initial task)
+            pipeline_task = asyncio.create_task(
+                run_pipeline(
+                    task=full_task,
+                    user=pipeline_user,
+                    websocket=websocket,
+                    task_id=pipeline_task_id,
+                    conversation_id=conversation_id,
+                )
+            )
+
+            # Listen for stop messages while pipeline runs
+            followup_stopped = False
+            while not pipeline_task.done():
                 try:
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": f"Task failed: {str(e)[:300]}"
-                    })
+                    msg_coro = asyncio.ensure_future(websocket.receive_json())
+                    done_set, _ = await asyncio.wait(
+                        {pipeline_task, msg_coro},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+
+                    if msg_coro in done_set:
+                        stop_data = msg_coro.result()
+                        stop_msg_type = stop_data.get("type", "message")
+                        if stop_msg_type == "ping":
+                            await websocket.send_json({"type": "pong"})
+                        elif stop_msg_type in ("stop", "stop_task"):
+                            explicit_stop = True
+                            followup_stopped = True
+                            pipeline_task.cancel()
+                            await websocket.send_json({
+                                "type": "status",
+                                "status": "stopping",
+                                "message": "Stopping agent...",
+                            })
+                            try:
+                                await pipeline_task
+                            except (asyncio.CancelledError, Exception):
+                                pass
+                            break
+                    else:
+                        # Pipeline finished, cancel the pending receive
+                        msg_coro.cancel()
+                        try:
+                            await msg_coro
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                        break
+                except Exception:
+                    break
+
+            if followup_stopped:
+                await websocket.send_json({
+                    "type": "status",
+                    "status": "ready",
+                    "message": "Task stopped. Ready for next instruction.",
+                })
+            else:
+                # Pipeline completed normally — update session workspace_dir
+                try:
+                    result_path = pipeline_task.result()
+                    if result_path and session:
+                        session.workspace_dir = result_path
                 except Exception:
                     pass
 
-            # Mark editing as done
-            await websocket.send_json({
-                "type": "step", "step": "editing",
-                "label": "Editing related files", "done": True,
-            })
+                # ── Step: Finished ────────────────────────────────
+                files_changed = await _get_files_changed(session)
+                last_msg = _extract_last_agent_message(session)
 
-            # Push after each follow-up task completes
-            await _auto_push_if_needed(websocket, session)
+                finish_summary = []
+                if last_msg:
+                    finish_summary.append(last_msg)
+                if files_changed:
+                    finish_summary.append(f"\nChanged files:\n{files_changed}")
 
-            # ── Step: Finished ────────────────────────────────
-            files_changed = await _get_files_changed(session)
-            last_msg = _extract_last_agent_message(session)
+                summary_text = "\n".join(finish_summary) if finish_summary else "Task completed."
 
-            finish_summary = []
-            if last_msg:
-                finish_summary.append(last_msg)
-            if files_changed:
-                finish_summary.append(f"\nChanged files:\n{files_changed}")
+                await websocket.send_json({
+                    "type": "step", "step": "finished",
+                    "label": "Finished", "done": True,
+                    "summary": summary_text,
+                })
 
-            summary_text = "\n".join(finish_summary) if finish_summary else "Task completed."
+                # ── Save structured agent response to DB ──────────
+                if chat_session_id:
+                    try:
+                        await ChatService.add_message(
+                            session_id=chat_session_id, role="assistant",
+                            content=summary_text,
+                            event_type="AgentResponse",
+                            user_jwt=user_jwt,
+                        )
+                    except Exception as exc:
+                        logger.warning("Failed to persist agent response: %s", exc)
 
-            await websocket.send_json({
-                "type": "step", "step": "finished",
-                "label": "Finished", "done": True,
-                "summary": summary_text,
-            })
+                # Update session summary with latest task
+                await _update_session_summary(
+                    chat_session_id, content, session, user_jwt
+                )
 
-            # ── Save structured agent response to DB ──────────
-            if chat_session_id:
-                try:
-                    await ChatService.add_message(
-                        session_id=chat_session_id, role="assistant",
-                        content=summary_text,
-                        event_type="AgentResponse",
-                        user_jwt=user_jwt,
-                    )
-                except Exception as exc:
-                    logger.warning("Failed to persist agent response: %s", exc)
-
-            # Update session summary with latest task
-            await _update_session_summary(
-                chat_session_id, content, session, user_jwt
-            )
-
-            await websocket.send_json({
-                "type": "status",
-                "status": "ready",
-                "message": "Task completed. Ready for next instruction.",
-            })
+                await websocket.send_json({
+                    "type": "status",
+                    "status": "ready",
+                    "message": "Task completed. Ready for next instruction.",
+                })
 
     except WebSocketDisconnect:
         logger.info(
@@ -723,6 +802,10 @@ async def websocket_agent(websocket: WebSocket):
                 )
             except Exception as exc:
                 logger.warning("Failed to mark chat session inactive: %s", exc)
+
+        # Destroy workspace for this conversation
+        await workspace_manager.destroy_workspace(conversation_id)
+        logger.info("Workspace destroyed for conversation %s", conversation_id)
 
         logger.info("WebSocket session cleaned up")
 

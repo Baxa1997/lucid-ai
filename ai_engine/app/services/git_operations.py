@@ -104,6 +104,75 @@ async def clone_repo(
     return True
 
 
+async def pull_latest(
+    *,
+    workspace_dir: str,
+    branch: str,
+    token: str = "",
+) -> bool:
+    """Pull latest changes into an existing workspace.
+
+    Resets any dirty state first, then pulls from origin.
+    Runs in a thread to avoid blocking the event loop.
+    Returns True on success, raises on failure.
+    """
+
+    def _pull():
+        # 1. Ensure remote URL has the auth token
+        if token:
+            remote_result = subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                cwd=workspace_dir,
+                capture_output=True,
+                text=True,
+            )
+            remote_url = remote_result.stdout.strip()
+            if token not in remote_url:
+                authed_url = _inject_token_into_url(remote_url, token)
+                subprocess.run(
+                    ["git", "remote", "set-url", "origin", authed_url],
+                    cwd=workspace_dir,
+                    check=True,
+                )
+
+        # 2. Discard any local changes from previous task
+        subprocess.run(
+            ["git", "checkout", "--", "."],
+            cwd=workspace_dir,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        subprocess.run(
+            ["git", "clean", "-fd"],
+            cwd=workspace_dir,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        # 3. Pull latest from remote
+        logger.info("Pulling latest for branch %s in %s", branch, workspace_dir)
+        result = subprocess.run(
+            ["git", "pull", "origin", branch],
+            cwd=workspace_dir,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        if result.returncode != 0:
+            err = result.stderr
+            if token:
+                err = err.replace(token, "***")
+            raise RuntimeError(f"git pull failed: {err.strip()}")
+
+        logger.info("Pull complete — workspace: %s", workspace_dir)
+
+    await asyncio.to_thread(_pull)
+    return True
+
+
 async def push_changes(
     *,
     workspace_dir: str,

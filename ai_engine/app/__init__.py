@@ -12,6 +12,7 @@ from app.config import logger, settings
 from app.sdk import OPENHANDS_AVAILABLE, import_error
 from app.services.sessions import store, destroy_session, reap_expired_sessions
 from app.services.docker_workspace import docker_manager
+from app.services.workspace_manager import workspace_manager
 from app.routers import health, sessions, ws, chat, files, integrations
 
 
@@ -45,9 +46,12 @@ async def lifespan(_app: FastAPI):
     if not settings.LLM_API_KEY and not settings.GOOGLE_API_KEY and not settings.ANTHROPIC_API_KEY:
         logger.warning("No LLM API keys set — agent will not function")
 
-    # Start the background session reaper (cleans up inactive sessions after 24h)
+    # Start the background session reaper (cleans up inactive sessions after 2h)
     reaper_task = asyncio.create_task(reap_expired_sessions())
     logger.info("Session reaper started (TTL=2h, interval=2min)")
+
+    # Start the workspace reaper (cleans up workspaces unused for 2h)
+    await workspace_manager.start_reaper()
 
     yield
 
@@ -64,6 +68,9 @@ async def lifespan(_app: FastAPI):
         await docker_manager.destroy_all()
     except Exception:
         pass
+    # Destroy all lingering workspaces
+    await workspace_manager.stop_reaper()
+    await workspace_manager.destroy_all()
     logger.info("All resources cleaned up.")
 
 
