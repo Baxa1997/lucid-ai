@@ -290,6 +290,41 @@ class WorkspaceManager:
         except Exception:
             pass
 
+        # --- FIX 2: Create .claude/settings.json for permission bypass ---
+        import json
+        import subprocess
+        claude_dir = os.path.join(workspace_path, ".claude")
+        os.makedirs(claude_dir, exist_ok=True)
+        settings = {
+            "permissions": {
+                "defaultMode": "bypassPermissions",
+                "allow": [
+                    "Read", "Write", "Edit",
+                    "MultiEdit", "Bash(npm *)",
+                    "Bash(npx *)", "Bash(node *)",
+                    "Bash(cat *)", "Bash(ls *)",
+                    "Bash(mkdir *)", "Bash(touch *)",
+                    "Bash(cp *)", "Bash(mv *)",
+                ],
+                "deny": [
+                    "Bash(git commit*)",
+                    "Bash(git push*)",
+                    "Bash(rm -rf*)",
+                    "Bash(sudo*)",
+                ],
+            }
+        }
+        with open(os.path.join(claude_dir, "settings.json"), "w") as f:
+            json.dump(settings, f, indent=2)
+
+        # Also fix OS permissions so Claude can write to all files
+        os.chmod(workspace_path, 0o777)
+        subprocess.run(
+            ["chmod", "-R", "777", workspace_path],
+            capture_output=True,
+        )
+        logger.info("Claude settings.json created and chmod 777 applied to %s", workspace_path)
+
         return workspace_path
 
     async def destroy_workspace(self, conversation_id: str) -> None:

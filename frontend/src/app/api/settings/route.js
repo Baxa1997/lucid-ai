@@ -5,13 +5,9 @@ import { getSupabaseServerClient } from '@/lib/supabase/server';
 // ─────────────────────────────────────────────────────────
 //  Supported providers and models (mirrors the frontend UI)
 // ─────────────────────────────────────────────────────────
-const VALID_PROVIDERS = ['google', 'anthropic'];
+const VALID_PROVIDERS = ['anthropic'];
 
 const VALID_MODELS = {
-  google: [
-    'gemini/gemini-3-flash-preview',
-    'gemini/gemini-3.1-pro-preview',
-  ],
   anthropic: [
     'anthropic/claude-3-5-sonnet-20241022',
     'anthropic/claude-3-5-opus-20241022',
@@ -46,17 +42,13 @@ export async function GET() {
   // Return defaults if no row yet
   if (!data) {
     return NextResponse.json({
-      llm_provider: 'google',
-      llm_model: 'gemini/gemini-3-flash-preview',
+      llm_provider: 'anthropic',
+      llm_model: 'anthropic/claude-3-5-sonnet-20241022',
       has_api_key: false,
     });
   }
 
-  const legacyMappings = {
-    'gemini/gemini-2.5-flash-preview': 'gemini/gemini-3-flash-preview',
-    'gemini/gemini-2.5-pro-preview': 'gemini/gemini-3.1-pro-preview',
-  };
-  const resolvedModel = legacyMappings[data.llm_model] || data.llm_model;
+  const resolvedModel = data.llm_model;
 
   return NextResponse.json({
     llm_provider: data.llm_provider,

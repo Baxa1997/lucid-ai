@@ -37,3 +37,6 @@ dev.log
 # Supabase CLI
 supabase/.branches
 supabase/.temp
+
+# Workspaces
+workspaces/

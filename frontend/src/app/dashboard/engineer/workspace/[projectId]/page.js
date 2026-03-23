@@ -424,8 +424,14 @@ function ConversationPageInner({ params }) {
   }, []);
 
   // Load git token from integrations when conversation is available
+  const [gitTokenLoaded, setGitTokenLoaded] = useState(false);
   useEffect(() => {
     if (!conversation) return;
+    // Scratch sessions (no repo_provider) don't need a git token
+    if (!conversation.repo_provider) {
+      setGitTokenLoaded(true);
+      return;
+    }
     (async () => {
       try {
         const { getIntegrations } = await import('@/lib/integrations');
@@ -437,11 +443,21 @@ function ConversationPageInner({ params }) {
         }
       } catch (err) {
         console.error('Failed to load git token:', err);
+      } finally {
+        setGitTokenLoaded(true);
       }
     })();
   }, [conversation]);
 
   // ── Agent session hook ──────────────────────────────────
+  // IMPORTANT: Don't pass the token until ALL data has loaded:
+  //   1. Auth token (from /api/agent/token)
+  //   2. Conversation metadata (from Supabase — has repoUrl, branch)
+  //   3. Git token (from user_metadata — needed for cloning)
+  // This prevents race conditions where the WebSocket connects before
+  // the backend has the repo URL and git credentials.
+  const effectiveToken = (convLoading || !gitTokenLoaded) ? '' : token;
+
   const {
     status,
     sessionId,
@@ -459,7 +475,7 @@ function ConversationPageInner({ params }) {
     phases,
   } = useAgentSession({
     projectId: conversationId,
-    token,
+    token: effectiveToken,
     repoUrl: conversation?.repo_url || '',
     gitToken,
     branch: conversation?.branch || 'main',

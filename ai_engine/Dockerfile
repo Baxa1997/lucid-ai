@@ -57,6 +57,27 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 # Install Claude Code CLI (required by claude-code-sdk Python package)
 RUN npm install -g @anthropic-ai/claude-code
 
+# ── Pre-approve ALL Claude Code tool permissions ──────────
+# This prevents the agent from ever pausing for permission prompts.
+# DO NOT REMOVE — this has been repeatedly reset and must persist.
+RUN mkdir -p /root/.claude && echo '{\
+  "permissions": {\
+    "allow": [\
+      "Bash(*)",\
+      "Read(*)",\
+      "Write(*)",\
+      "Edit(*)",\
+      "MultiEdit(*)",\
+      "Glob(*)",\
+      "Grep(*)",\
+      "LS(*)",\
+      "TodoRead(*)",\
+      "TodoWrite(*)"\
+    ],\
+    "deny": []\
+  }\
+}' > /root/.claude/settings.json
+
 COPY requirements.txt .
 
 # Install all Python dependencies including OpenHands SDK (all in requirements.txt)

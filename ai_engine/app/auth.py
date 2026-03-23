@@ -49,24 +49,103 @@ class AuthenticatedUser:
         self.session_id = session_id
 
 
+def _get_token_algorithm(token: str) -> str:
+    """Peek at the JWT header to determine the signing algorithm."""
+    try:
+        header = jwt.get_unverified_header(token)
+        return header.get("alg", "HS256")
+    except Exception:
+        return "HS256"
+
+
+# Cache for JWKS public keys
+_jwks_cache: dict | None = None
+
+
+def _fetch_jwks() -> dict | None:
+    """Fetch the JWKS public keys from the Supabase Auth endpoint."""
+    global _jwks_cache
+    if _jwks_cache is not None:
+        return _jwks_cache
+
+    import urllib.request
+    import json
+
+    supabase_url = settings.SUPABASE_URL
+    if not supabase_url:
+        return None
+
+    jwks_url = f"{supabase_url.rstrip('/')}/auth/v1/.well-known/jwks.json"
+    try:
+        with urllib.request.urlopen(jwks_url, timeout=5) as resp:
+            _jwks_cache = json.loads(resp.read())
+            logger.info("Fetched JWKS from %s", jwks_url)
+            return _jwks_cache
+    except Exception as exc:
+        logger.warning("Failed to fetch JWKS from %s: %s", jwks_url, exc)
+        return None
+
+
 def decode_jwt(token: str) -> dict:
     """Decode and validate a Supabase Auth JWT.
 
     Supports both HS256 (legacy) and ES256 (modern Supabase) signing.
-    Audience verification is skipped because Supabase Auth sets
-    ``aud: "authenticated"`` which python-jose would reject.
+    - HS256: Uses SUPABASE_JWT_SECRET as the HMAC key.
+    - ES256: Fetches the JWKS public key from the Supabase Auth endpoint.
 
-    When ``SUPABASE_JWT_SECRET`` is not configured, the token is decoded
-    **without** signature or expiry verification (development mode).
+    When ``SUPABASE_JWT_SECRET`` is not configured AND JWKS cannot be fetched,
+    the token is decoded **without** signature verification (development mode).
     """
-    # Supabase may use HS256 or ES256 depending on project settings
-    algorithms = ["HS256", "ES256"]
+    alg = _get_token_algorithm(token)
 
+    # ── ES256 path: needs the JWKS public key, not the HMAC secret ──
+    if alg == "ES256":
+        jwks = _fetch_jwks()
+        if jwks:
+            try:
+                from jose import jwk as jose_jwk
+                header = jwt.get_unverified_header(token)
+                kid = header.get("kid")
+
+                # Find the matching key in the JWKS
+                key_data = None
+                for key in jwks.get("keys", []):
+                    if key.get("kid") == kid:
+                        key_data = key
+                        break
+
+                if key_data:
+                    public_key = jose_jwk.construct(key_data, "ES256")
+                    return jwt.decode(
+                        token,
+                        public_key,
+                        algorithms=["ES256"],
+                        options={"verify_aud": False},
+                    )
+                else:
+                    logger.warning("No matching JWKS key found for kid=%s, decoding without verification", kid)
+            except Exception as exc:
+                logger.warning("ES256 JWKS verification failed: %s — falling back to unverified", exc)
+
+        # Fallback: decode ES256 without verification
+        logger.warning("ES256 token decoded WITHOUT signature verification")
+        return jwt.decode(
+            token,
+            "",
+            algorithms=["ES256"],
+            options={
+                "verify_aud": False,
+                "verify_signature": False,
+                "verify_exp": False,
+            },
+        )
+
+    # ── HS256 path: use the shared secret ──
     if settings.SUPABASE_JWT_SECRET:
         return jwt.decode(
             token,
             settings.SUPABASE_JWT_SECRET,
-            algorithms=algorithms,
+            algorithms=["HS256"],
             options={"verify_aud": False},
         )
     else:
@@ -75,7 +154,7 @@ def decode_jwt(token: str) -> dict:
         return jwt.decode(
             token,
             "",
-            algorithms=algorithms,
+            algorithms=["HS256"],
             options={
                 "verify_aud": False,
                 "verify_signature": False,

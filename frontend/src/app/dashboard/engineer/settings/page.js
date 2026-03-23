@@ -174,14 +174,6 @@ function Dropdown({ value, options, onChange, placeholder }) {
 
 // ── Provider / model catalogue ───────────────────
 const PROVIDER_CONFIG = {
-  google: {
-    label: 'Google Gemini',
-    docsUrl: 'https://aistudio.google.com/app/apikey',
-    models: [
-      { id: 'gemini/gemini-3-flash-preview', label: 'Gemini 3 Flash Preview' },
-      { id: 'gemini/gemini-3.1-pro-preview',   label: 'Gemini 3 Pro Preview' },
-    ],
-  },
   anthropic: {
     label: 'Anthropic Claude',
     docsUrl: 'https://console.anthropic.com/settings/keys',
@@ -198,8 +190,8 @@ const PROVIDER_KEYS = Object.keys(PROVIDER_CONFIG); // ['google', 'anthropic']
 
 const LLMTab = forwardRef(function LLMTab(_, ref) {
   // ── local state ──────────────────────────────────
-  const [provider,   setProvider]   = useState('google');
-  const [model,      setModel]      = useState('gemini/gemini-3-flash-preview');
+  const [provider,   setProvider]   = useState('anthropic');
+  const [model,      setModel]      = useState('anthropic/claude-3-5-sonnet-20241022');
   const [apiKey,     setApiKey]     = useState('');
   const [showKey,    setShowKey]    = useState(false);
   const [hasKey,     setHasKey]     = useState(false);  // true if Supabase has an encrypted key
@@ -236,7 +228,7 @@ const LLMTab = forwardRef(function LLMTab(_, ref) {
 
         // Validate loaded provider/model against our catalogue
         const loadedProvider = PROVIDER_KEYS.includes(data.llm_provider)
-          ? data.llm_provider : 'google';
+          ? data.llm_provider : 'anthropic';
         const loadedModels   = PROVIDER_CONFIG[loadedProvider].models.map(m => m.id);
         const loadedModel    = loadedModels.includes(data.llm_model)
           ? data.llm_model : loadedModels[0];
@@ -431,7 +423,7 @@ const LLMTab = forwardRef(function LLMTab(_, ref) {
             <FieldRow label="Base URL" description="Custom API endpoint">
               <input
                 type="text"
-                placeholder={provider === 'google' ? 'https://generativelanguage.googleapis.com' : 'https://api.anthropic.com'}
+                placeholder={'https://api.anthropic.com'}
                 className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
               />
             </FieldRow>

@@ -244,6 +244,24 @@ async def websocket_agent(websocket: WebSocket):
         if existing:
             session = existing
             session.touch()
+
+            # ── Refresh session with latest handshake data ─────
+            # Always update from the fresh handshake to fix stale sessions
+            # that may have empty or wrong repo_url/git_token/branch.
+            fresh_repo_url = raw.get("repoUrl", "")
+            fresh_git_token = raw.get("gitToken", "")
+            fresh_branch = raw.get("branch", "")
+
+            if fresh_repo_url:
+                session.repo_url = fresh_repo_url
+                logger.info("Session repo_url refreshed → %s", fresh_repo_url[:60])
+            if fresh_git_token:
+                session.git_token = fresh_git_token
+                logger.info("Session git_token refreshed (len=%d)", len(fresh_git_token))
+            if fresh_branch:
+                session.branch = fresh_branch
+                logger.info("Session branch refreshed → %s", fresh_branch)
+
             logger.info("Reconnecting to existing session %s for project %s", session.session_id, project_id)
             await websocket.send_json({
                 "type": "status",
