@@ -318,12 +318,12 @@ class WorkspaceManager:
             json.dump(settings, f, indent=2)
 
         # Also fix OS permissions so Claude can write to all files
-        os.chmod(workspace_path, 0o777)
+        os.chmod(workspace_path, 0o755)
         subprocess.run(
-            ["chmod", "-R", "777", workspace_path],
+            ["chmod", "-R", "755", workspace_path],
             capture_output=True,
         )
-        logger.info("Claude settings.json created and chmod 777 applied to %s", workspace_path)
+        logger.info("Claude settings.json created and chmod 755 applied to %s", workspace_path)
 
         return workspace_path
 

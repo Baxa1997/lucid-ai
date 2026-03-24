@@ -163,6 +163,7 @@ async def websocket_agent(websocket: WebSocket):
 
     session: Optional[AgentSession] = None
     streaming_task: Optional[asyncio.Task] = None
+    pipeline_task: Optional[asyncio.Task] = None
     chat_session_id: Optional[str] = None
     conversation_id: str = str(uuid.uuid4())  # unique per WS connection
 
@@ -460,6 +461,8 @@ async def websocket_agent(websocket: WebSocket):
                 enriched_task = f"{task}{_build_agent_guidelines()}"
 
             # ── Step: Working — run full pipeline (cancellable) ──
+            # Note: initial task comes from WS query params, no images possible
+            initial_images = []
             pipeline_task_id = str(uuid.uuid4())[:8]
             pipeline_user = {
                 "anthropic_api_key": api_key,
@@ -481,6 +484,7 @@ async def websocket_agent(websocket: WebSocket):
                     websocket=websocket,
                     task_id=pipeline_task_id,
                     conversation_id=conversation_id,
+                    images=initial_images,
                 )
             )
 
@@ -587,6 +591,7 @@ async def websocket_agent(websocket: WebSocket):
             data = await websocket.receive_json()
             msg_type = data.get("type", "message")
             content = data.get("content", "")
+            followup_images = data.get("images", [])
 
             # Heartbeat ping — respond and continue
             if msg_type == "ping":
@@ -604,9 +609,13 @@ async def websocket_agent(websocket: WebSocket):
                 })
                 break
 
-            if not content:
-                # Skip empty messages — don't send error
+            if not content and not followup_images:
+                # Skip truly empty messages (no text AND no images)
                 continue
+
+            # Image-only messages need a default task description
+            if not content and followup_images:
+                content = f"Analyze the {len(followup_images)} attached image(s) and implement any changes they suggest."
 
             if msg_type == "push":
                 # Explicit push request from client
@@ -649,7 +658,8 @@ async def websocket_agent(websocket: WebSocket):
 
             # Rebuild context if this is a reconnection or a project with history
             context_briefing = await _build_conversation_context(user_id, project_id, user_jwt)
-            full_task = f"{context_briefing}\n\nCURRENT TASK: {content}{_build_agent_guidelines()}" if context_briefing else f"{content}{_build_agent_guidelines()}"
+            image_note = f"\n\n[User attached {len(followup_images)} image(s) — they will be analyzed for visual context.]" if followup_images else ""
+            full_task = f"{context_briefing}\n\nCURRENT TASK: {content}{image_note}{_build_agent_guidelines()}" if context_briefing else f"{content}{image_note}{_build_agent_guidelines()}"
 
             # ── Step: Working — run pipeline as cancellable task ──
             logger.info("[%s] Starting task: %s", session.session_id, content[:100])
@@ -674,6 +684,7 @@ async def websocket_agent(websocket: WebSocket):
                     websocket=websocket,
                     task_id=pipeline_task_id,
                     conversation_id=conversation_id,
+                    images=followup_images,
                 )
             )
 
@@ -797,6 +808,15 @@ async def websocket_agent(websocket: WebSocket):
         except Exception:
             pass
     finally:
+        # Cancel any running pipeline task to prevent orphaned Claude subprocesses
+        if pipeline_task and not pipeline_task.done():
+            pipeline_task.cancel()
+            try:
+                await pipeline_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            logger.info("Pipeline task cancelled on disconnect")
+
         if streaming_task:
             streaming_task.cancel()
             try:

@@ -27,6 +27,7 @@ docker>=7.1.0
 # Utilities
 python-dotenv>=1.0.0
 httpx>=0.27.0
+Pillow>=10.0.0
 
 # ─────────────────────────────────────────────────────────
 #  OpenHands SDK (all 5 packages)

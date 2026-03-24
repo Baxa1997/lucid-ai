@@ -15,7 +15,8 @@ import {
   FileText, Copy, Check, Clock, GitBranch, Github,
   ChevronDown, ChevronRight, Zap, Code2, Play,
   FileCheck2, AlertCircle, TriangleAlert, Sparkles, Activity,
-  ExternalLink, GitPullRequest
+  ExternalLink, GitPullRequest, FileImage, Eye,
+  Video, Globe, Camera, Link2, Layers, Paperclip, Plus,
 } from 'lucide-react';
 import { useAgentSession } from '@/hooks/useAgentSession';
 import {
@@ -473,6 +474,7 @@ function ConversationPageInner({ params }) {
     setInitialMessages,
     steps,
     phases,
+    completionSummary,
   } = useAgentSession({
     projectId: conversationId,
     token: effectiveToken,
@@ -484,6 +486,17 @@ function ConversationPageInner({ params }) {
   // ── Layout state ────────────────────────────────────────
   const [chatInput, setChatInput] = useState('');
   const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const [showToolsMenu, setShowToolsMenu] = useState(false);
+  const [attachedImages, setAttachedImages] = useState([]);
+  const [previewImage, setPreviewImage] = useState(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragCounterRef = useRef(0);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(true);
+  const [showFigmaInput, setShowFigmaInput] = useState(false);
+  const [figmaUrl, setFigmaUrl] = useState('');
+  const fileInputRef = useRef(null);
+  const videoInputRef = useRef(null);
+  const toolsMenuRef = useRef(null);
 
   // ── Hydrate chat history from Supabase into the hook ────
   useEffect(() => {
@@ -558,13 +571,14 @@ function ConversationPageInner({ params }) {
   // ── Handlers ───────────────────────────────────────────
   const handleSend = async (e) => {
     e.preventDefault();
-    if (!chatInput.trim()) return;
+    if (!chatInput.trim() && attachedImages.length === 0) return;
     const text = chatInput.trim();
-    sendMessage(text);
+    sendMessage(text, attachedImages);
     setChatInput('');
+    setAttachedImages([]);
 
     // Save user message to both tables
-    if (conversation?.id) {
+    if (conversation?.id && text) {
       // Save to unified chat_messages
       saveChatMessage(conversationId, { role: 'user', content: text });
       // Save to legacy messages table
@@ -606,12 +620,141 @@ function ConversationPageInner({ params }) {
     }
   };
 
+  // ── Image handling ──────────────────────────────────────
+  const handleImageSelect = (e) => {
+    const files = Array.from(e.target.files || []);
+    files.forEach((file) => {
+      if (!file.type.startsWith('image/')) return;
+      setAttachedImages((prev) => {
+        if (prev.length >= 5) return prev;
+        return [...prev, { name: file.name, data: null, file, size: file.size }];
+      });
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        setAttachedImages((prev) =>
+          prev.map((img) =>
+            img.file === file ? { ...img, data: ev.target.result } : img
+          )
+        );
+      };
+      reader.readAsDataURL(file);
+    });
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    setShowToolsMenu(false);
+  };
+
+  const handleVideoSelect = (e) => {
+    const files = Array.from(e.target.files || []);
+    files.forEach((file) => {
+      if (!file.type.startsWith('video/')) return;
+      setAttachedImages((prev) => {
+        if (prev.length >= 5) return prev;
+        return [...prev, { name: file.name, data: null, file, size: file.size, type: 'video' }];
+      });
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        setAttachedImages((prev) =>
+          prev.map((img) =>
+            img.file === file ? { ...img, data: ev.target.result } : img
+          )
+        );
+      };
+      reader.readAsDataURL(file);
+    });
+    if (videoInputRef.current) videoInputRef.current.value = '';
+    setShowToolsMenu(false);
+  };
+
+  const handleFigmaSubmit = () => {
+    if (!figmaUrl.trim()) return;
+    setAttachedImages((prev) => {
+      if (prev.length >= 5) return prev;
+      return [...prev, { name: 'Figma Design', data: figmaUrl.trim(), size: 0, type: 'figma', url: figmaUrl.trim() }];
+    });
+    setFigmaUrl('');
+    setShowFigmaInput(false);
+    setShowToolsMenu(false);
+  };
+
+  const removeImage = (index) => {
+    setAttachedImages((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const formatFileSize = (bytes) => {
+    if (!bytes) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  // Close tools menu on outside click
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (toolsMenuRef.current && !toolsMenuRef.current.contains(e.target)) {
+        setShowToolsMenu(false);
+      }
+    };
+    if (showToolsMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showToolsMenu]);
+
+  // ── Drag-and-drop handlers ──────────────────────────────
+  const handleDragEnter = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current += 1;
+    if (e.dataTransfer?.types?.includes('Files')) {
+      setIsDragging(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setIsDragging(false);
+    }
+  }, []);
+
+  const handleDragOver = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDrop = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    dragCounterRef.current = 0;
+
+    const files = Array.from(e.dataTransfer?.files || []);
+    files.forEach((file) => {
+      if (!file.type.startsWith('image/')) return;
+      setAttachedImages((prev) => {
+        if (prev.length >= 5) return prev;
+        return [...prev, { name: file.name, data: null, file, size: file.size }];
+      });
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        setAttachedImages((prev) =>
+          prev.map((img) =>
+            img.file === file ? { ...img, data: ev.target.result } : img
+          )
+        );
+      };
+      reader.readAsDataURL(file);
+    });
+  }, []);
+
   const handleChatScroll = (e) => {
     const { scrollTop, scrollHeight, clientHeight } = e.target;
     const distFromBottom = scrollHeight - scrollTop - clientHeight;
     const isNearBottom = distFromBottom < 100;
     setShowScrollBtn(distFromBottom > 100);
-    // Track if user scrolled up intentionally
     userScrolledUpRef.current = !isNearBottom;
   };
 
@@ -643,8 +786,26 @@ function ConversationPageInner({ params }) {
 
   // ── Render ─────────────────────────────────────────────
   return (
-    <div className="flex h-screen bg-[#f5f7fa] dark:bg-[#0d1117] overflow-hidden transition-colors duration-200">
+    <div
+      className="flex h-screen bg-[#f5f7fa] dark:bg-[#0d1117] overflow-hidden transition-colors duration-200"
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
 
+      {/* Full-page drag-and-drop overlay */}
+      {isDragging && (
+        <div className="fixed inset-0 z-[100] bg-blue-500/10 dark:bg-blue-500/15 backdrop-blur-[2px] border-2 border-dashed border-blue-400 dark:border-blue-500 flex items-center justify-center">
+          <div className="flex flex-col items-center gap-3 bg-white/90 dark:bg-slate-900/90 rounded-2xl px-8 py-6 shadow-xl border border-blue-200 dark:border-blue-800">
+            <div className="w-14 h-14 rounded-2xl bg-blue-50 dark:bg-blue-500/15 border border-blue-200 dark:border-blue-700 flex items-center justify-center">
+              <FileImage className="w-6 h-6 text-blue-500" />
+            </div>
+            <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Drop images here</p>
+            <p className="text-xs text-slate-400 dark:text-slate-500">PNG, JPG, GIF up to 5 files</p>
+          </div>
+        </div>
+      )}
       {/* ════════════════════════════════════════════════
           CENTER — Chat Area
       ════════════════════════════════════════════════ */}
@@ -759,8 +920,8 @@ function ConversationPageInner({ params }) {
               </div>
             )}
 
-            {/* Welcome State — only after loading completes and no messages exist */}
-            {!convLoading && messages.length === 0 && (
+            {/* Welcome State — only after loading completes and no messages/phases exist */}
+            {!convLoading && messages.length === 0 && phases.length === 0 && status !== 'running' && status !== 'preparing' && status !== 'connecting' && (
               <div className="flex flex-col items-center justify-center py-24 text-center">
                 <div className="text-6xl mb-6">🔨</div>
                 <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-8">
@@ -794,7 +955,7 @@ function ConversationPageInner({ params }) {
             ))}
 
             {/* Structured progress steps from TaskProgress */}
-            <TaskProgress phases={phases} status={status} />
+            <TaskProgress phases={phases} status={status} completionSummary={completionSummary} />
 
             {/* Thinking indicator — shown while agent processes before first phase */}
             {phases.length === 0 && status === 'running' && (
@@ -852,7 +1013,7 @@ function ConversationPageInner({ params }) {
             <form
               onSubmit={handleSend}
               className={cn(
-                "relative bg-white dark:bg-[#151b23] border rounded-2xl shadow-sm transition-all overflow-hidden",
+                "relative bg-white dark:bg-[#151b23] border rounded-2xl shadow-sm transition-all",
                 isPreparing
                   ? "border-amber-300 dark:border-amber-600/40"
                   : status === 'running'
@@ -912,12 +1073,216 @@ function ConversationPageInner({ params }) {
                 )}
                 rows={1}
               />
+
+              {/* Image previews — Claude-style cards */}
+              {attachedImages.length > 0 && (
+                <div className="px-4 pb-2">
+                  <div className="flex gap-2 flex-wrap">
+                    {attachedImages.map((img, i) => (
+                      <div
+                        key={i}
+                        className="relative group flex items-center gap-2 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl px-2 py-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                      >
+                        {/* Thumbnail */}
+                        <div className="relative w-10 h-10 rounded-lg overflow-hidden shrink-0 bg-slate-200 dark:bg-slate-700">
+                          {img.data ? (
+                            <img src={img.data} alt={img.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center">
+                              <Loader2 className="w-4 h-4 text-slate-400 animate-spin" />
+                            </div>
+                          )}
+                          {img.data && (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setPreviewImage(img); }}
+                              className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                            >
+                              <Eye className="w-3.5 h-3.5 text-white" />
+                            </button>
+                          )}
+                        </div>
+                        {/* File info */}
+                        <div className="flex flex-col min-w-0">
+                          <span className="text-[11px] font-medium text-slate-700 dark:text-slate-300 truncate max-w-[100px]">
+                            {img.name}
+                          </span>
+                          <span className="text-[10px] text-slate-400 dark:text-slate-500">
+                            {formatFileSize(img.size)}
+                          </span>
+                        </div>
+                        {/* Remove */}
+                        <button
+                          type="button"
+                          onClick={() => removeImage(i)}
+                          className="ml-1 p-0.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-md transition-colors"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                    {attachedImages.length < 5 && (
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="flex items-center justify-center w-10 h-[52px] border border-dashed border-slate-300 dark:border-slate-600 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:border-slate-400 dark:hover:border-slate-500 transition-colors"
+                        title="Add more images"
+                      >
+                        <span className="text-lg font-light">+</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <div className="flex items-center justify-between px-4 pb-3">
                 <div className="flex items-center gap-2 text-xs font-semibold text-slate-400 dark:text-slate-500">
-                  <span className="flex items-center gap-1.5 px-2 py-1 rounded hover:bg-slate-100 dark:hover:bg-white/[0.04] cursor-pointer transition-colors">
-                    <Settings className="w-3.5 h-3.5" />
-                    Tools
-                  </span>
+                  {/* Tools dropdown */}
+                  <div className="relative" ref={toolsMenuRef}>
+                    <button
+                      type="button"
+                      onClick={() => { setShowToolsMenu(!showToolsMenu); setShowFigmaInput(false); }}
+                      className={cn(
+                        "flex items-center gap-1.5 px-2 py-1 rounded transition-all",
+                        showToolsMenu
+                          ? "bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200"
+                          : "hover:bg-slate-100 dark:hover:bg-white/[0.04] cursor-pointer"
+                      )}
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      Tools
+                    </button>
+
+                    {showToolsMenu && (
+                      <div className="absolute bottom-full left-0 mb-2 w-64 bg-white dark:bg-[#2b2b3b] border border-slate-200 dark:border-slate-700/60 rounded-2xl shadow-2xl overflow-hidden z-30 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                        {/* Group 1: Files */}
+                        <div className="py-1.5">
+                          <button
+                            type="button"
+                            onClick={() => fileInputRef.current?.click()}
+                            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors text-left"
+                          >
+                            <Paperclip className="w-4 h-4 text-slate-500 dark:text-slate-400" />
+                            <span className="font-medium">Add files or photos</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => videoInputRef.current?.click()}
+                            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors text-left"
+                          >
+                            <Video className="w-4 h-4 text-slate-500 dark:text-slate-400" />
+                            <span className="font-medium">Add video</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setShowFigmaInput(!showFigmaInput)}
+                            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors text-left"
+                          >
+                            <Layers className="w-4 h-4 text-slate-500 dark:text-slate-400" />
+                            <span className="flex-1 font-medium">Paste Figma link</span>
+                            <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+                          </button>
+                        </div>
+
+                        {/* Figma URL input (appears inline) */}
+                        {showFigmaInput && (
+                          <div className="px-3 pb-2">
+                            <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-800/60 rounded-lg px-2.5 py-1.5 border border-slate-200 dark:border-slate-600">
+                              <Link2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                              <input
+                                type="url"
+                                value={figmaUrl}
+                                onChange={(e) => setFigmaUrl(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleFigmaSubmit(); } }}
+                                placeholder="https://figma.com/..."
+                                className="flex-1 bg-transparent outline-none text-xs text-slate-700 dark:text-slate-200 placeholder:text-slate-400"
+                                autoFocus
+                              />
+                              <button
+                                type="button"
+                                onClick={handleFigmaSubmit}
+                                disabled={!figmaUrl.trim()}
+                                className={cn(
+                                  "px-2 py-0.5 rounded text-[10px] font-bold transition-colors",
+                                  figmaUrl.trim()
+                                    ? "bg-blue-600 text-white hover:bg-blue-700"
+                                    : "bg-slate-200 dark:bg-slate-700 text-slate-400 cursor-not-allowed"
+                                )}
+                              >
+                                Add
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Divider */}
+                        <div className="border-t border-slate-200 dark:border-slate-700/50" />
+
+                        {/* Group 2: Capture */}
+                        <div className="py-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowToolsMenu(false);
+                              setChatInput((prev) => prev + (prev ? '\n' : '') + '[Screenshot requested — paste or drag an image]');
+                            }}
+                            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors text-left"
+                          >
+                            <Camera className="w-4 h-4 text-slate-500 dark:text-slate-400" />
+                            <span className="font-medium">Take a screenshot</span>
+                          </button>
+                        </div>
+
+                        {/* Divider */}
+                        <div className="border-t border-slate-200 dark:border-slate-700/50" />
+
+                        {/* Group 3: Search & Context */}
+                        <div className="py-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setWebSearchEnabled(!webSearchEnabled)}
+                            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-left transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.06]"
+                          >
+                            <Globe className={cn("w-4 h-4", webSearchEnabled ? "text-blue-500" : "text-slate-400")} />
+                            <span className={cn("flex-1 font-medium", webSearchEnabled ? "text-blue-600 dark:text-blue-400" : "text-slate-800 dark:text-slate-200")}>
+                              Web search
+                            </span>
+                            {webSearchEnabled && <Check className="w-4 h-4 text-blue-500" />}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowToolsMenu(false);
+                              setChatInput((prev) => prev + (prev ? '\n' : '') + 'Context: ');
+                            }}
+                            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors text-left"
+                          >
+                            <FileText className="w-4 h-4 text-slate-500 dark:text-slate-400" />
+                            <span className="font-medium">Add context</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Hidden file inputs */}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={handleImageSelect}
+                    className="hidden"
+                  />
+                  <input
+                    ref={videoInputRef}
+                    type="file"
+                    accept="video/*"
+                    multiple
+                    onChange={handleVideoSelect}
+                    className="hidden"
+                  />
+
                   {status === 'ready' && (
                     <button
                       type="button"
@@ -943,10 +1308,10 @@ function ConversationPageInner({ params }) {
                   </span>
                   <button
                     type="submit"
-                    disabled={!chatInput.trim() || isPreparing || status === 'running'}
+                    disabled={(!chatInput.trim() && attachedImages.length === 0) || isPreparing || status === 'running'}
                     className={cn(
                       "p-2.5 rounded-xl transition-all",
-                      chatInput.trim() && !isPreparing && status !== 'running'
+                      (chatInput.trim() || attachedImages.length > 0) && !isPreparing && status !== 'running'
                         ? "bg-blue-600 text-white shadow-md shadow-blue-600/20 hover:bg-blue-700 hover:scale-105"
                         : "bg-slate-100 dark:bg-white/[0.06] text-slate-300 dark:text-slate-600 cursor-not-allowed"
                     )}
@@ -956,6 +1321,32 @@ function ConversationPageInner({ params }) {
                 </div>
               </div>
             </form>
+
+            {/* Image Preview Modal */}
+            {previewImage && (
+              <div
+                className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 animate-in fade-in duration-200"
+                onClick={() => setPreviewImage(null)}
+              >
+                <div className="relative max-w-[80vw] max-h-[80vh]" onClick={(e) => e.stopPropagation()}>
+                  <img
+                    src={previewImage.data}
+                    alt={previewImage.name}
+                    className="max-w-full max-h-[80vh] rounded-xl shadow-2xl"
+                  />
+                  <button
+                    onClick={() => setPreviewImage(null)}
+                    className="absolute -top-3 -right-3 w-8 h-8 bg-white text-slate-600 rounded-full flex items-center justify-center shadow-lg hover:bg-slate-100 transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                  <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent rounded-b-xl px-4 py-3">
+                    <p className="text-white text-sm font-medium">{previewImage.name}</p>
+                    <p className="text-white/70 text-xs">{formatFileSize(previewImage.size)}</p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Bottom repo/branch bar */}
             <div className="flex items-center gap-3 mt-3">

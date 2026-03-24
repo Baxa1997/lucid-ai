@@ -35,6 +35,10 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   const [steps, setSteps] = useState([]);
   const [finishSummary, setFinishSummary] = useState('');
 
+  // Completion summary — persists after pipeline finishes so TaskProgress
+  // can render a polished completion card instead of raw chat text.
+  const [completionSummary, setCompletionSummary] = useState('');
+
   // ── Structured phases for TaskProgress UI ─────────────────
   // Each phase: { phase, title, description, status }
   const [phases, setPhases] = useState([]);
@@ -96,12 +100,16 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     if (flushedRef.current) return;
     flushedRef.current = true;
 
+    // Keep phases visible for the completion card in TaskProgress.
+    // Only store a small summary in chat for history, and set
+    // completionSummary so the TaskProgress component can show it.
+    if (summary) {
+      setCompletionSummary(summary);
+    }
+
+    // Build a minimal summary chat message for persistence
     const currentPhases = phasesRef.current;
-    const currentSteps = stepsRef.current;
-
-    // Build structured content from phases
     let content = '';
-
     if (currentPhases.length > 0) {
       const phaseLines = currentPhases.map(p => {
         const icon = p.status === 'done' ? '✅' : p.status === 'error' ? '❌' : '⏳';
@@ -109,7 +117,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       });
       content = phaseLines.join('\n\n');
     } else {
-      // Fallback to old steps
+      const currentSteps = stepsRef.current;
       const stepLines = currentSteps
         .filter((s) => s.done)
         .map((s) => `✅ ${s.label}`);
@@ -128,14 +136,13 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
           role: 'agent',
           content,
           ts: Date.now(),
-          // Store structured data for rich rendering on reload
           taskPhases: currentPhases.length > 0 ? [...currentPhases] : undefined,
         },
       ]);
     }
 
-    // Clear phases and steps separately
-    setPhases([]);
+    // DON'T clear phases — keep them visible for the completion UI.
+    // They will be reset when a new task starts (phase 1 active).
     setSteps([]);
     setFinishSummary('');
   }, []);
@@ -300,13 +307,48 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         return;
       }
 
-      // ─── Claude Message ──────────────────────────
+      // ─── Claude Message — parse and route to chat ────
       if (msg.type === 'claude_message') {
-        let label = 'Claude';
-        if (msg.action === 'fix_bug') label = '🐛 Bug Fix';
-        if (msg.action === 'write_code') label = '💻 Code Writing';
-        
-        pushLog(`[${label}] ${msg.content}`, 'agent_message');
+        const raw = msg.content || '';
+
+        // Detect tool use patterns in the raw SDK dump
+        const toolMatch = raw.match(/ToolUseBlock\(.*?name=['"]?(\w+)['"]?.*?input=.*?['"]?(?:file_path|command|pattern)['"]?:\s*['"]?([^'"\)]+)/i);
+        if (toolMatch) {
+          const toolName = toolMatch[1].toLowerCase();
+          const target = toolMatch[2].trim().slice(0, 100);
+
+          // Route tool calls as structured chat messages
+          const isWrite = ['write', 'edit', 'multiedit'].includes(toolName);
+          const isBash = toolName === 'bash';
+          const isRead = ['read', 'glob', 'ls', 'grep'].includes(toolName);
+
+          if (isWrite || isBash) {
+            pushChat('agent', '', {
+              toolCalls: [{ type: toolName, target }],
+            });
+          }
+          pushLog(`[Tool: ${toolName}] ${target}`, isWrite ? 'file_write' : isBash ? 'cmd_output' : 'agent_message');
+          return;
+        }
+
+        // Detect text response (AssistantMessage with actual content)
+        const textMatch = raw.match(/TextBlock\(.*?text=['"](.{10,}?)['"]/s);
+        if (textMatch) {
+          const text = textMatch[1]
+            .replace(/\\n/g, '\n')
+            .replace(/\\t/g, '  ')
+            .trim();
+          if (text.length > 20) {
+            pushChat('agent', text);
+          }
+          pushLog(`[Claude] ${text.slice(0, 200)}`, 'agent_message');
+          return;
+        }
+
+        // Fallback: log raw content
+        if (raw.length > 5) {
+          pushLog(`[Claude] ${raw.slice(0, 300)}`, 'agent_message');
+        }
         return;
       }
 
@@ -333,6 +375,8 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
           setState('running');
           // Reset flush guard for new task
           flushedRef.current = false;
+          // Clear previous task's completion state
+          setCompletionSummary('');
           setPhases([{ ...msg }]);
           return;
         }
@@ -493,13 +537,22 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   );
 
   const sendMessageInternal = useCallback(
-    (text) => {
+    (text, images = []) => {
       if (!manager?.isOpen) {
         pushLog('Not connected — cannot send message', 'error');
         return;
       }
-      manager.send({ type: 'message', content: text });
-      pushChat('user', text);
+      const payload = { type: 'message', content: text };
+      if (images.length > 0) {
+        payload.images = images.map((img) => ({
+          name: img.name,
+          data: img.data,
+          type: img.type || 'image',
+          ...(img.url && { url: img.url }),
+        }));
+      }
+      manager.send(payload);
+      pushChat('user', text, { images: images.length > 0 ? images : undefined });
       pushLog(`→ ${text}`, 'user');
       // Show thinking indicator immediately
       setState('running');
@@ -508,13 +561,13 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   );
 
   const sendMessage = useCallback(
-    (text) => {
-      if (!text?.trim()) return;
+    (text, images = []) => {
+      if (!text?.trim() && images.length === 0) return;
       if (!manager?.isOpen) {
-        startSession(text.trim());
+        startSession(text?.trim() || '');
         return;
       }
-      sendMessageInternal(text.trim());
+      sendMessageInternal(text?.trim() || '', images);
     },
     [startSession, sendMessageInternal]
   );
@@ -605,6 +658,9 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
 
     // Structured phases for TaskProgress
     phases,
+
+    // Completion summary for polished completion card
+    completionSummary,
 
     // Aliases for backward compat
     status: state,

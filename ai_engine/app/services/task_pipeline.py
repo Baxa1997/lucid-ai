@@ -229,7 +229,7 @@ Do nothing else. Stop after these commands."""
         if not os.listdir(workspace_path) if os.path.exists(workspace_path) else True:
             logger.info("Falling back to subprocess git clone")
             result = subprocess.run(
-                ["git", "clone", "--branch", branch, repo_url, "."],
+                ["git", "clone", "--branch", branch, "--single-branch", "--depth", "1", repo_url, "."],
                 cwd=workspace_path,
                 capture_output=True,
                 text=True,
@@ -556,14 +556,14 @@ async def explore_with_gemini(
     gemini_key: str,
     websocket: WebSocket,
 ) -> str:
-    """Read codebase and generate implementation plan.
+    """Read specific codebase files and generate implementation plan.
 
     NEVER raises — always returns a string.
     """
     try:
         await websocket.send_json({
             "type": "progress",
-            "message": "🔍 Analyzing codebase...",
+            "message": "🔍 Analyzing repository structure...",
         })
     except Exception:
         pass
@@ -580,7 +580,8 @@ async def explore_with_gemini(
         "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
     }
 
-    all_files = {}
+    # STEP 1: Read file tree only (no content)
+    file_paths = []
     try:
         for root, dirs, files in os.walk(workspace_path):
             dirs[:] = [d for d in dirs if d not in skip_dirs]
@@ -592,36 +593,118 @@ async def explore_with_gemini(
                     continue
                 full_path = os.path.join(root, f)
                 rel_path = os.path.relpath(full_path, workspace_path)
-                try:
-                    with open(full_path, "r", encoding="utf-8", errors="replace") as fh:
-                        content = fh.read()
-                        if len(content.splitlines()) <= 300:
-                            all_files[rel_path] = content
-                except Exception:
-                    pass
+                file_paths.append(rel_path)
     except Exception as e:
         logger.warning("explore_with_gemini file walk error: %s", e)
 
-    files_content = "\n\n".join(
-        f"=== FILE: {path} ===\n{content}"
-        for path, content in all_files.items()
-    )
-
-    # Hard limit: 40000 characters
-    if len(files_content) > 40000:
-        files_content = files_content[:40000] + "\n... (truncated)"
-
+    # STEP 2: Ask Gemini which files are relevant
+    relevant_files = []
     try:
         genai.configure(api_key=gemini_key)
         model = genai.GenerativeModel("gemini-2.5-flash")
 
+        file_tree_str = "\\n".join(file_paths)
+        
+        # Hard limit just in case repo has massive number of files
+        if len(file_tree_str) > 50000:
+            file_tree_str = file_tree_str[:50000] + "\\n... (truncated)"
+
+        # Dynamic file count based on task complexity
+        complexity = classification.get("complexity", "medium")
+        if complexity == "simple":
+            file_range = "3-5"
+            fallback_count = 5
+        elif complexity == "complex":
+            file_range = "8-15"
+            fallback_count = 15
+        else:
+            file_range = "5-10"
+            fallback_count = 10
+
+        filter_prompt = f"""Task type: {classification.get('task_type', 'feature')}
+Task: {task}
+
+Here are the files in the repository:
+{file_tree_str}
+
+Which {file_range} files are most relevant to completing this task?
+
+IMPORTANT SELECTION RULES:
+1. ALWAYS include entry points (index.js, page.js, layout.js, App.js, main.py, etc.)
+2. ALWAYS include shared config files (tailwind.config.js, tsconfig.json, package.json, etc.) if they could be relevant
+3. ALWAYS include component/module files directly referenced by the task
+4. Include parent layout/wrapper files if the task involves UI changes
+5. Include utility/helper files that the target files import from
+
+Return ONLY a valid JSON list of file paths. No markdown formatting, no backticks, just the JSON array.
+Example: ["src/app/page.js", "src/components/Header.js"]"""
+
+        filter_response = await asyncio.to_thread(
+            model.generate_content,
+            filter_prompt,
+        )
+
+        text = filter_response.text.strip()
+        if "```" in text:
+            # Extract JSON from markdown fencing
+            parts = text.split("```")
+            if len(parts) >= 3:
+                text = parts[1]
+            if text.startswith("json"):
+                text = text[4:]
+        
+        relevant_files = json.loads(text.strip())
+        if not isinstance(relevant_files, list):
+            relevant_files = file_paths[:fallback_count]
+    except Exception as e:
+        logger.warning("explore_with_gemini file filtering failed: %s", e)
+        relevant_files = file_paths[:fallback_count]
+
+    try:
+        await websocket.send_json({
+            "type": "progress",
+            "message": "🔍 Reading relevant files...",
+        })
+    except Exception:
+        pass
+
+    # STEP 3: Read ONLY those relevant files
+    all_files = {}
+    for rel_path in relevant_files:
+        if not rel_path or not isinstance(rel_path, str):
+            continue
+            
+        full_path = os.path.join(workspace_path, rel_path)
+        # Prevent directory traversal
+        abs_ws = os.path.abspath(workspace_path)
+        abs_fp = os.path.abspath(full_path)
+        if not abs_fp.startswith(abs_ws):
+            continue
+            
+        try:
+            with open(abs_fp, "r", encoding="utf-8", errors="replace") as fh:
+                all_files[rel_path] = fh.read()
+        except Exception:
+            pass
+
+    files_content = "\\n\\n".join(
+        f"=== FILE: {path} ===\\n{content}"
+        for path, content in all_files.items()
+    )
+
+    # Ensure we still have some fallback limit if single files are huge
+    if len(files_content) > 100000:
+       files_content = files_content[:100000] + "\\n... (truncated)"
+
+    # STEP 4: Send focused context to Gemini
+    try:
         response = await asyncio.to_thread(
             model.generate_content,
             f"""You are a senior software engineer.
 Task type: {classification.get('task_type', 'feature')}
 Task: {task}
 
-Codebase:
+Focused Codebase Context:
 {files_content}
 
 Create EXACT implementation instructions.
@@ -686,8 +769,8 @@ EXACT CHANGES:
         plan = response.text
 
     except Exception as e:
-        logger.warning("explore_with_gemini Gemini call failed: %s", e)
-        plan = f"Task: {task}\nImplement this directly in the most relevant file."
+        logger.warning("explore_with_gemini Gemini plan generation failed: %s", e)
+        plan = f"Task: {task}\\nImplement this directly in the most relevant file."
 
     try:
         await websocket.send_json({
@@ -698,6 +781,138 @@ EXACT CHANGES:
         pass
 
     return plan
+
+
+# ═══════════════════════════════════════════════════════════════
+#  STEP 4.5 — Analyze user-uploaded images with Gemini Vision
+# ═══════════════════════════════════════════════════════════════
+
+async def analyze_images(
+    images: list,
+    task: str,
+    gemini_key: str,
+    websocket: WebSocket,
+) -> str:
+    """Analyze user-uploaded images using Gemini Flash Vision.
+
+    Handles three attachment types:
+    - Images (base64 data URL) → analyzed with Gemini Vision
+    - Videos (base64 data URL) → noted as context (not analyzed frame-by-frame)
+    - Figma links (URL string) → included as design reference
+
+    Args:
+        images: List of dicts with 'name', 'data', and optionally 'type', 'url'.
+        task: The user's task description.
+        gemini_key: Gemini API key.
+        websocket: WebSocket for progress updates.
+
+    Returns:
+        A text description of all attachments, or empty string if none/failure.
+    """
+    if not images:
+        return ""
+
+    try:
+        await websocket.send_json({
+            "type": "progress",
+            "message": f"🖼️ Analyzing {len(images)} attachment(s)...",
+        })
+    except Exception:
+        pass
+
+    descriptions = []
+
+    # ── Separate attachments by type ──────────────────────
+    actual_images = []
+    videos = []
+    figma_links = []
+
+    for item in images:
+        item_type = item.get("type", "image")
+        if item_type == "video":
+            videos.append(item)
+        elif item_type == "figma":
+            figma_links.append(item)
+        else:
+            actual_images.append(item)
+
+    # ── Process Figma links (no analysis needed) ──────────
+    for fig in figma_links:
+        url = fig.get("url", fig.get("data", ""))
+        name = fig.get("name", "Figma Design")
+        descriptions.append(f"### Figma Reference: {name}\nDesign link: {url}\nUse this Figma design as a visual reference for the UI implementation.")
+
+    # ── Process videos (note their presence) ──────────────
+    for vid in videos:
+        name = vid.get("name", "video")
+        descriptions.append(f"### Video Attachment: {name}\nA video file was attached. Consider the user may be showing a UI flow, bug reproduction, or desired behavior.")
+
+    # ── Process actual images with Gemini Vision ──────────
+    if actual_images:
+        try:
+            import base64
+            from PIL import Image
+            from io import BytesIO
+
+            genai.configure(api_key=gemini_key)
+            model = genai.GenerativeModel("gemini-2.5-flash")
+
+            for i, img_data in enumerate(actual_images):
+                try:
+                    raw = img_data.get("data", "")
+                    name = img_data.get("name", f"image_{i+1}")
+
+                    if not raw:
+                        descriptions.append(f"### Image: {name}\n(No image data received)")
+                        continue
+
+                    # Extract base64 from data URL (data:image/png;base64,xxxxx)
+                    if "," in raw:
+                        raw = raw.split(",", 1)[1]
+
+                    img_bytes = base64.b64decode(raw)
+                    pil_image = Image.open(BytesIO(img_bytes))
+
+                    analysis_prompt = f"""Analyze this image in the context of this coding task:
+Task: {task}
+
+Describe what you see in detail:
+1. If it's a UI screenshot — describe the layout, components, colors, text, and navigation.
+2. If it's a design mockup — describe the intended design, positioning, and visual hierarchy.
+3. If it's an error/log screenshot — extract the error message and stack trace.
+4. If it's a diagram — describe the architecture/flow.
+
+Be specific and technical. Your description will be used by another AI to implement code changes."""
+
+                    response = await asyncio.to_thread(
+                        model.generate_content,
+                        [analysis_prompt, pil_image],
+                    )
+
+                    desc = response.text.strip()
+                    descriptions.append(f"### Image: {name}\n{desc}")
+
+                    logger.info("Image '%s' analyzed: %d chars", name, len(desc))
+
+                except Exception as e:
+                    logger.warning("Failed to analyze image '%s': %s", name, e)
+                    descriptions.append(f"### Image: {name}\n(Failed to analyze: {str(e)[:100]})")
+
+        except ImportError:
+            logger.warning("PIL not available for image analysis, skipping")
+        except Exception as e:
+            logger.warning("analyze_images failed: %s", e)
+
+    if descriptions:
+        try:
+            await websocket.send_json({
+                "type": "progress",
+                "message": f"✅ Processed {len(descriptions)} attachment(s)",
+            })
+        except Exception:
+            pass
+
+    return "\n\n".join(descriptions)
 
 
 async def execute_with_claude(
@@ -1112,15 +1327,33 @@ Stop when fully done.
 
     # Anti-loop directive — prevents Claude from refusing to edit code
     anti_loop = (
-        "\n\nCRITICAL RULES:\n"
-        "1. You are an AUTHORIZED code editor working on the user's own project.\n"
-        "2. This is NOT malware. This is the user's legitimate codebase.\n"
-        "3. You MUST use Write/Edit tools to make changes. Do NOT just analyze.\n"
-        "4. If you read a file, you MUST edit it in the next step or move on.\n"
-        "5. NEVER loop reading the same file multiple times without editing.\n"
-        "6. After reading a file, immediately use the Write tool to make changes.\n"
-        "7. You are expected to MODIFY code, not just report on it.\n"
-        "8. STOP as soon as all required changes are written.\n"
+        "\n\nTOOL USE CONTRACT — READ BEFORE ACTING\n\n"
+        "You are an autonomous software engineer operating inside a real git repository.\n"
+        "You have access to Read, Glob, LS, Grep, Write, Edit, MultiEdit, and Bash tools.\n\n"
+        "ABSOLUTE RULES — violating any rule means task failure:\n\n"
+        "RULE 1 — READ CAP:\n"
+        "You may call Read, Glob, LS, or Grep a maximum of 3 times in a row.\n"
+        "After 3 consecutive read-type calls with no write or edit between them,\n"
+        "you MUST immediately either:\n"
+        "  a) Make a code change using Write, Edit, or MultiEdit, OR\n"
+        "  b) Output exactly: STALLED: <one sentence explaining why>\n"
+        "     Then stop completely. Do not continue.\n\n"
+        "RULE 2 — NO REPEAT READS:\n"
+        "If you have already read a file, do not read it again under any circumstance.\n"
+        "Its content is already in your context. Use it.\n\n"
+        "RULE 3 — NO VERIFICATION READS:\n"
+        "After writing or editing a file, do NOT re-read it to verify your changes.\n"
+        "Trust your own output. Proceed to the next step immediately.\n\n"
+        "RULE 4 — EDIT BEFORE EXPLORING:\n"
+        "If you already know which file needs to change, edit it first.\n"
+        "Only read additional files if the edit requires understanding\n"
+        "a dependency you have not yet seen.\n\n"
+        "RULE 5 — ONE FILE AT A TIME:\n"
+        "Do not bulk-read every file in a directory speculatively.\n"
+        "Read only what is directly needed for the next action.\n\n"
+        "These rules are non-negotiable and override any other instinct\n"
+        "to \"explore more\" or \"double check\". Act like a senior engineer\n"
+        "who has already seen this codebase. Be decisive.\n"
     )
 
     import sys
@@ -1128,21 +1361,39 @@ Stop when fully done.
     import subprocess
     import pwd
 
-    # --- FIX OS PERMISSIONS (chmod 777 on workspace) ---
     try:
-        subprocess.run(["chmod", "-R", "777", str(workspace_path)], capture_output=True)
-        logger.info("chmod -R 777 applied to %s", workspace_path)
+        lucidai = pwd.getpwnam('lucidai')
+        home = lucidai.pw_dir
+        user = 'lucidai'
+    except KeyError:
+        home = '/root'
+        user = 'root'
+
+    env = {
+        "ANTHROPIC_API_KEY": str(api_key).strip(),
+        "HOME": home,
+        "USER": user,
+        "USERNAME": user,
+        "LOGNAME": user,
+        "PATH": f"{home}/.npm-global/bin:/usr/local/bin:/usr/bin:/bin",
+        "IS_SANDBOX": "1",  # CRITICAL: Bypasses CLI root check
+    }
+    
+    subprocess.run(
+        ['chown', '-R', f'{user}:{user}', workspace_path],
+        capture_output=True
+    )
+
+    # --- FIX OS PERMISSIONS (chmod 755 on workspace) ---
+    try:
+        subprocess.run(["chmod", "-R", "755", str(workspace_path)], capture_output=True)
+        logger.info("chmod -R 755 applied to %s", workspace_path)
     except Exception as e:
         logger.error("chmod failed: %s", e)
 
     options = ClaudeCodeOptions(
         cwd=str(workspace_path),
-        env={
-            "ANTHROPIC_API_KEY": str(api_key).strip(),
-            "HOME": str(os.environ.get("HOME", "/root")),
-            "PATH": str(os.environ.get("PATH", "/usr/bin:/bin")),
-            "IS_SANDBOX": "1",  # CRITICAL: Bypasses CLI root check
-        },
+        env=env,
         model=str(classification["model_id"]),
         max_turns=int(classification.get("max_turns", 10)),
         permission_mode="bypassPermissions",
@@ -1172,57 +1423,99 @@ Stop when fully done.
     max_turns = int(classification.get("max_turns", 10))
     timeout_seconds = max(120, max_turns * 30)  # min 2min, ~30s per turn
 
-    try:
-        async with asyncio.timeout(timeout_seconds):
-            async for message in query(
-                prompt=prompt,
-                options=options,
+    max_retries = 2
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            # ── Hallucination loop circuit breaker ─────────
+            consecutive_reads = 0
+            max_consecutive_reads = 6  # Force-stop after 6 reads with no write
+            has_written = False
+
+            async with asyncio.timeout(
+                timeout_seconds
             ):
+                async for message in query(
+                    prompt=prompt,
+                    options=options
+                ):
+                    msg_str = str(message)
+
+                    # Track tool usage patterns to detect read-only loops
+                    msg_lower = msg_str.lower()
+                    is_read_tool = any(t in msg_lower for t in (
+                        "tool_use: read", "tool_use: glob", "tool_use: ls",
+                        "tool_use: grep", "'read'", "'glob'", "'ls'", "'grep'",
+                    ))
+                    is_write_tool = any(t in msg_lower for t in (
+                        "tool_use: write", "tool_use: edit", "tool_use: multiedit",
+                        "tool_use: bash", "'write'", "'edit'", "'multiedit'", "'bash'",
+                    ))
+
+                    if is_write_tool:
+                        consecutive_reads = 0
+                        has_written = True
+                    elif is_read_tool:
+                        consecutive_reads += 1
+
+                    # Circuit breaker: if Claude reads 6+ times without writing, kill it
+                    if consecutive_reads >= max_consecutive_reads:
+                        logger.warning(
+                            "CIRCUIT BREAKER: Claude read %d times without writing — forcing stop",
+                            consecutive_reads,
+                        )
+                        try:
+                            await websocket.send_json({
+                                "type": "warning",
+                                "message": "⚠️ Agent was reading files in a loop without making changes. Stopping to prevent wasted resources.",
+                            })
+                        except Exception:
+                            pass
+                        break
+
+                    try:
+                        await websocket.send_json({
+                            "type": "claude_message",
+                            "content": msg_str
+                        })
+                    except Exception:
+                        pass
+
+            # If circuit breaker fired but Claude never wrote anything, report failure
+            if consecutive_reads >= max_consecutive_reads and not has_written:
+                return False
+
+            return True
+            
+        except Exception as e:
+            last_error = e
+            exit_code = getattr(e, 'returncode', None)
+            
+            print(f"Claude attempt {attempt + 1} failed:")
+            print(f"Error: {str(e)}")
+            print(f"Exit code: {exit_code}")
+            
+            if attempt < max_retries - 1:
                 try:
                     await websocket.send_json({
-                        "type": "claude_message",
-                        "content": str(message),
+                        "type": "progress",
+                        "message": f"⚠️ Retrying... (attempt {attempt + 2}/{max_retries})"
                     })
                 except Exception:
                     pass
-        return True
-
-    except asyncio.TimeoutError:
-        try:
-            await websocket.send_json({
-                "type": "error",
-                "message": f"⏱️ Task timed out after {timeout_seconds // 60} minutes. Try a smaller task.",
-            })
-        except Exception:
-            pass
-        return False
-
-    except Exception as e:
-        import traceback
-        full_error = traceback.format_exc()
-        print(f"CLAUDE FULL ERROR: {full_error}")
-        print(f"CLAUDE ERROR TYPE: {type(e).__name__}")
-        print(f"CLAUDE ERROR STR: {str(e)}")
-
-        # Try to get stderr if available
-        stderr_info = ""
-        if hasattr(e, 'stderr'):
-            stderr_info = str(e.stderr)
-            print(f"CLAUDE STDERR: {stderr_info}")
-        if hasattr(e, 'stdout'):
-            print(f"CLAUDE STDOUT: {str(e.stdout)}")
-        if hasattr(e, 'returncode'):
-            print(f"CLAUDE RETURNCODE: {e.returncode}")
-
-        logger.error("execute_with_claude failed: %s", e, exc_info=True)
-        try:
-            await websocket.send_json({
-                "type": "error",
-                "message": f"❌ Claude failed: {str(e)[:500]} | {stderr_info[:200]}",
-            })
-        except Exception:
-            pass
-        return False
+                await asyncio.sleep(2)
+                continue
+            
+            # All retries failed
+            try:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": f"❌ Claude failed after {max_retries} attempts: {str(last_error)[:200]}"
+                })
+            except Exception:
+                pass
+            return False
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1604,6 +1897,7 @@ async def run_pipeline(
     websocket: WebSocket,
     task_id: str,
     conversation_id: str = "",
+    images: list = None,
 ) -> str | None:
     """Run all pipeline steps sequentially.
 
@@ -1616,13 +1910,30 @@ async def run_pipeline(
     workspace_path = None
     validated = None
 
+    # ── Helper: send structured phase events ──────────────
+    async def _send_phase(phase: int, title: str, description: str, status: str):
+        try:
+            await websocket.send_json({
+                "type": "task_phase",
+                "phase": phase,
+                "title": title,
+                "description": description,
+                "status": status,
+            })
+        except Exception:
+            pass
+
     try:
-        # Step 1 — Validate inputs
+        # ── Phase 1: Validate ─────────────────────────────
+        await _send_phase(1, "Validating inputs", "Checking API keys and repository settings…", "active")
         validated = await validate_inputs(task, user, websocket)
         if validated is None:
+            await _send_phase(1, "Validating inputs", "Validation failed", "error")
             return
+        await _send_phase(1, "Validating inputs", "All inputs validated", "done")
 
-        # Step 2 — Get or create workspace (clone once, git pull after)
+        # ── Phase 2: Clone / prepare workspace ────────────
+        await _send_phase(2, "Preparing workspace", "Setting up repository workspace…", "active")
         if conversation_id:
             workspace_path = await workspace_manager.get_or_create_workspace(
                 conversation_id=conversation_id,
@@ -1630,27 +1941,31 @@ async def run_pipeline(
                 websocket=websocket,
             )
         else:
-            # Fallback: no conversation_id — clone fresh like before
             workspace_path = await clone_with_openhands(
                 validated, task_id, websocket,
             )
         if not workspace_path:
+            await _send_phase(2, "Preparing workspace", "Workspace setup failed", "error")
             return
+        await _send_phase(2, "Preparing workspace", "Repository ready", "done")
 
         # ── HANDOFF POINT: OpenHands is now DEAD ──────────
-        # Verify OpenHands is destroyed before Claude starts
         if await openhands_manager.is_active():
             await openhands_manager.destroy_all()
             await asyncio.sleep(0.5)
 
-        # Step 3 — Classify with Gemini
+        # ── Phase 3: Classify task ────────────────────────
+        await _send_phase(3, "Classifying task", "Analyzing task complexity…", "active")
         classification = await classify_task(
             task,
             validated["gemini_api_key"],
             websocket,
         )
+        model = classification.get("model", "sonnet")
+        await _send_phase(3, "Classifying task", f"Assigned to {model} ({classification.get('complexity', 'medium')})", "done")
 
-        # Step 4 — Explore with Gemini
+        # ── Phase 4: Explore codebase ─────────────────────
+        await _send_phase(4, "Exploring codebase", "Identifying relevant files…", "active")
         plan = await explore_with_gemini(
             task,
             workspace_path,
@@ -1658,8 +1973,23 @@ async def run_pipeline(
             validated["gemini_api_key"],
             websocket,
         )
+        await _send_phase(4, "Exploring codebase", "Implementation plan ready", "done")
 
-        # Step 5 — Execute with Claude (OpenHands MUST be dead)
+        # ── Phase 4.5: Analyze images (if any) ────────────
+        if images:
+            await _send_phase(4, "Analyzing images", f"Processing {len(images)} attached image(s)…", "active")
+            image_analysis = await analyze_images(
+                images,
+                task,
+                validated["gemini_api_key"],
+                websocket,
+            )
+            if image_analysis:
+                plan = plan + "\n\n## Visual Context (from attached images)\n" + image_analysis
+            await _send_phase(4, "Analyzing images", f"Analyzed {len(images)} image(s)", "done")
+
+        # ── Phase 5: Execute with Claude ──────────────────
+        await _send_phase(5, "Writing code", f"Claude ({model}) is implementing the task…", "active")
         success = await execute_with_claude(
             task,
             workspace_path,
@@ -1669,22 +1999,28 @@ async def run_pipeline(
             websocket,
         )
         if not success:
+            await _send_phase(5, "Writing code", "Code execution failed", "error")
             return
+        await _send_phase(5, "Writing code", "Code changes written", "done")
 
-        # Step 5.5 — Smart build verification (TypeScript auto-fix)
+        # ── Phase 6: Verify build ─────────────────────────
+        await _send_phase(6, "Verifying build", "Running build checks…", "active")
         await verify_build(
             workspace_path,
             validated["anthropic_api_key"],
             classification,
             websocket,
         )
+        await _send_phase(6, "Verifying build", "Build verification complete", "done")
 
-        # Step 6 — Verify changes
+        # ── Phase 6.5: Verify changes ────────────────────
         changed = await verify_changes(workspace_path, websocket)
         if not changed:
+            await _send_phase(6, "Verifying build", "No changes detected", "error")
             return
 
-        # Step 7 — Push with OpenHands (Claude is done)
+        # ── Phase 7: Push changes ─────────────────────────
+        await _send_phase(7, "Pushing changes", "Committing and pushing to remote…", "active")
         await push_with_openhands(
             workspace_path,
             validated,
@@ -1692,6 +2028,7 @@ async def run_pipeline(
             task_id,
             websocket,
         )
+        await _send_phase(7, "Pushing changes", "Changes pushed successfully", "done")
 
         return workspace_path
 

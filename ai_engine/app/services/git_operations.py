@@ -37,6 +37,57 @@ def _inject_token_into_url(repo_url: str, token: str) -> str:
     return urlunparse(authed)
 
 
+async def run_git_with_retry(
+    cmd: list,
+    cwd: str,
+    max_retries: int = 3,
+    delay: int = 2
+) -> subprocess.CompletedProcess:
+    
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                cmd,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            
+            if result.returncode == 0:
+                return result
+            
+            # Check if retryable error
+            retryable = any(w in result.stderr for w in [
+                "Could not resolve host",
+                "Connection timed out",
+                "Connection reset",
+                "Unable to connect",
+                "network",
+                "timeout"
+            ])
+            
+            if not retryable:
+                return result  # Don't retry auth/other errors
+            
+            last_error = result.stderr
+            
+            if attempt < max_retries - 1:
+                await asyncio.sleep(delay)
+                continue
+                
+        except subprocess.TimeoutExpired:
+            last_error = "timeout"
+            if attempt < max_retries - 1:
+                await asyncio.sleep(delay)
+                continue
+    
+    return result
+
+
 async def clone_repo(
     *,
     repo_url: str,
@@ -46,61 +97,42 @@ async def clone_repo(
     git_user_name: str | None = None,
     git_user_email: str | None = None,
 ) -> bool:
-    """Clone a repository into *workspace_dir*.
+    """Clone a repository into *workspace_dir*."""
 
-    Runs in a thread to avoid blocking the event loop.
-    Returns True on success, raises on failure.
-    """
+    authed_url = _inject_token_into_url(repo_url, token) if token else repo_url
 
-    def _clone():
-        authed_url = _inject_token_into_url(repo_url, token) if token else repo_url
+    # Ensure the target directory exists and is empty
+    os.makedirs(workspace_dir, exist_ok=True)
 
-        # Ensure the target directory exists and is empty
-        os.makedirs(workspace_dir, exist_ok=True)
+    cmd = [
+        "git", "clone",
+        "--branch", branch,
+        "--single-branch",
+        "--depth", "1",
+        authed_url,
+        ".",  # clone into current dir
+    ]
 
-        # Remove --depth 1 for reliability — shallow clones cause push issues.
-        # User explicitly requested stable push/pull across branches.
-        cmd = [
-            "git", "clone",
-            "--branch", branch,
-            authed_url,
-            ".",  # clone into current dir
-        ]
+    logger.info("Cloning %s (branch=%s) into %s", repo_url, branch, workspace_dir)
+    
+    result = await run_git_with_retry(cmd, cwd=workspace_dir, max_retries=3, delay=2)
 
-        logger.info(
-            "Cloning %s (branch=%s) into %s",
-            repo_url, branch, workspace_dir,
-        )
-        result = subprocess.run(
-            cmd,
-            cwd=workspace_dir,
-            capture_output=True,
-            text=True,
-            timeout=180,  # Increased timeout for full clones
-        )
+    if result.returncode != 0:
+        # Strip token from error message
+        err = result.stderr.replace(token, "***") if token else result.stderr
+        raise RuntimeError(f"git clone failed: {err.strip()}")
 
-        if result.returncode != 0:
-            # Strip token from error message
-            err = result.stderr.replace(token, "***") if token else result.stderr
-            raise RuntimeError(f"git clone failed: {err.strip()}")
+    # Configure git user for commits
+    name = git_user_name or "Lucid AI Agent"
+    email = git_user_email or "agent@lucid-ai.dev"
+    await asyncio.to_thread(
+        subprocess.run, ["git", "config", "user.name", name], cwd=workspace_dir, check=True
+    )
+    await asyncio.to_thread(
+        subprocess.run, ["git", "config", "user.email", email], cwd=workspace_dir, check=True
+    )
 
-        # Configure git user for commits
-        name = git_user_name or "Lucid AI Agent"
-        email = git_user_email or "agent@lucid-ai.dev"
-        subprocess.run(
-            ["git", "config", "user.name", name],
-            cwd=workspace_dir,
-            check=True,
-        )
-        subprocess.run(
-            ["git", "config", "user.email", email],
-            cwd=workspace_dir,
-            check=True,
-        )
-
-        logger.info("Clone complete — workspace: %s", workspace_dir)
-
-    await asyncio.to_thread(_clone)
+    logger.info("Clone complete — workspace: %s", workspace_dir)
     return True
 
 
@@ -110,66 +142,39 @@ async def pull_latest(
     branch: str,
     token: str = "",
 ) -> bool:
-    """Pull latest changes into an existing workspace.
+    """Pull latest changes into an existing workspace."""
 
-    Resets any dirty state first, then pulls from origin.
-    Runs in a thread to avoid blocking the event loop.
-    Returns True on success, raises on failure.
-    """
-
-    def _pull():
-        # 1. Ensure remote URL has the auth token
-        if token:
-            remote_result = subprocess.run(
-                ["git", "remote", "get-url", "origin"],
-                cwd=workspace_dir,
-                capture_output=True,
-                text=True,
+    # 1. Ensure remote URL has the auth token
+    if token:
+        remote_result = await asyncio.to_thread(
+            subprocess.run, ["git", "remote", "get-url", "origin"], cwd=workspace_dir, capture_output=True, text=True
+        )
+        remote_url = remote_result.stdout.strip()
+        if token not in remote_url:
+            authed_url = _inject_token_into_url(remote_url, token)
+            await asyncio.to_thread(
+                subprocess.run, ["git", "remote", "set-url", "origin", authed_url], cwd=workspace_dir, check=True
             )
-            remote_url = remote_result.stdout.strip()
-            if token not in remote_url:
-                authed_url = _inject_token_into_url(remote_url, token)
-                subprocess.run(
-                    ["git", "remote", "set-url", "origin", authed_url],
-                    cwd=workspace_dir,
-                    check=True,
-                )
 
-        # 2. Discard any local changes from previous task
-        subprocess.run(
-            ["git", "checkout", "--", "."],
-            cwd=workspace_dir,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        subprocess.run(
-            ["git", "clean", "-fd"],
-            cwd=workspace_dir,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
+    # 2. Discard any local changes from previous task
+    await asyncio.to_thread(
+        subprocess.run, ["git", "checkout", "--", "."], cwd=workspace_dir, capture_output=True, text=True, timeout=30
+    )
+    await asyncio.to_thread(
+        subprocess.run, ["git", "clean", "-fd"], cwd=workspace_dir, capture_output=True, text=True, timeout=30
+    )
 
-        # 3. Pull latest from remote
-        logger.info("Pulling latest for branch %s in %s", branch, workspace_dir)
-        result = subprocess.run(
-            ["git", "pull", "origin", branch],
-            cwd=workspace_dir,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
+    # 3. Pull latest from remote
+    logger.info("Pulling latest for branch %s in %s", branch, workspace_dir)
+    result = await run_git_with_retry(["git", "pull", "origin", branch], cwd=workspace_dir, max_retries=3, delay=2)
 
-        if result.returncode != 0:
-            err = result.stderr
-            if token:
-                err = err.replace(token, "***")
-            raise RuntimeError(f"git pull failed: {err.strip()}")
+    if result.returncode != 0:
+        err = result.stderr
+        if token:
+            err = err.replace(token, "***")
+        raise RuntimeError(f"git pull failed: {err.strip()}")
 
-        logger.info("Pull complete — workspace: %s", workspace_dir)
-
-    await asyncio.to_thread(_pull)
+    logger.info("Pull complete — workspace: %s", workspace_dir)
     return True
 
 
@@ -181,109 +186,75 @@ async def push_changes(
     branch: str | None = None,
     new_branch: str | None = None,
 ) -> dict:
-    """Stage all changes, commit, and push to the remote.
+    """Stage all changes, commit, and push to the remote."""
 
-    Returns a dict with {committed: bool, pushed: bool, summary: str}.
-    """
+    # 1. Create and switch to new branch if requested
+    if new_branch:
+        logger.info("Creating new branch %s in %s", new_branch, workspace_dir)
+        await asyncio.to_thread(
+            subprocess.run, ["git", "checkout", "-b", new_branch], cwd=workspace_dir, check=True
+        )
 
-    def _push():
-        # 1. Create and switch to new branch if requested
-        if new_branch:
-            logger.info("Creating new branch %s in %s", new_branch, workspace_dir)
-            subprocess.run(
-                ["git", "checkout", "-b", new_branch],
-                cwd=workspace_dir,
-                check=True,
+    # 2. Check if there are changes to commit
+    status = await asyncio.to_thread(
+        subprocess.run, ["git", "status", "--porcelain"], cwd=workspace_dir, capture_output=True, text=True
+    )
+
+    if not status.stdout.strip():
+        return {"committed": False, "pushed": False, "summary": "No changes to commit"}
+
+    # 3. Stage all changes
+    await asyncio.to_thread(
+        subprocess.run, ["git", "add", "-A"], cwd=workspace_dir, check=True
+    )
+
+    # 4. Commit
+    await asyncio.to_thread(
+        subprocess.run, ["git", "commit", "-m", commit_message], cwd=workspace_dir, capture_output=True, text=True, check=True
+    )
+
+    # 5. Ensure the remote URL contains the token for push auth
+    if token:
+        remote_result = await asyncio.to_thread(
+            subprocess.run, ["git", "remote", "get-url", "origin"], cwd=workspace_dir, capture_output=True, text=True
+        )
+        remote_url = remote_result.stdout.strip()
+
+        # Only re-inject if not already present
+        if token not in remote_url:
+            authed_url = _inject_token_into_url(remote_url, token)
+            await asyncio.to_thread(
+                subprocess.run, ["git", "remote", "set-url", "origin", authed_url], cwd=workspace_dir, check=True
             )
 
-        # 2. Check if there are changes to commit
-        status = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=workspace_dir,
-            capture_output=True,
-            text=True,
-        )
+    # 6. Push
+    target_branch = new_branch or branch or "HEAD"
+    logger.info("Pushing to %s (branch=%s)", workspace_dir, target_branch)
+    
+    cmd = ["git", "push"]
+    if new_branch:
+        cmd.extend(["-u", "origin", new_branch])
+    else:
+        cmd.extend(["origin", target_branch])
 
-        if not status.stdout.strip():
-            return {"committed": False, "pushed": False, "summary": "No changes to commit"}
+    push_result = await run_git_with_retry(cmd, cwd=workspace_dir, max_retries=3, delay=2)
 
-        # 3. Stage all changes
-        subprocess.run(
-            ["git", "add", "-A"],
-            cwd=workspace_dir,
-            check=True,
-        )
-
-        # 4. Commit
-        subprocess.run(
-            ["git", "commit", "-m", commit_message],
-            cwd=workspace_dir,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-
-        # 5. Ensure the remote URL contains the token for push auth
+    if push_result.returncode != 0:
+        err = push_result.stderr
         if token:
-            remote_result = subprocess.run(
-                ["git", "remote", "get-url", "origin"],
-                cwd=workspace_dir,
-                capture_output=True,
-                text=True,
-            )
-            remote_url = remote_result.stdout.strip()
+            err = err.replace(token, "***")
+        raise RuntimeError(f"git push failed: {err.strip()}")
 
-            # Only re-inject if not already present
-            if token not in remote_url:
-                authed_url = _inject_token_into_url(remote_url, token)
-                subprocess.run(
-                    ["git", "remote", "set-url", "origin", authed_url],
-                    cwd=workspace_dir,
-                    check=True,
-                )
+    # 7. Get a summary of what was changed
+    diff_stat = await asyncio.to_thread(
+        subprocess.run, ["git", "diff", "--stat", "HEAD~1"], cwd=workspace_dir, capture_output=True, text=True
+    )
 
-        # 6. Push
-        target_branch = new_branch or branch or "HEAD"
-        logger.info("Pushing to %s (branch=%s)", workspace_dir, target_branch)
-        
-        # If pushing a new branch for the first time, we need -u origin
-        cmd = ["git", "push"]
-        if new_branch:
-            cmd.extend(["-u", "origin", new_branch])
-        else:
-            cmd.extend(["origin", target_branch])
-
-        push_result = subprocess.run(
-            cmd,
-            cwd=workspace_dir,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-
-        if push_result.returncode != 0:
-            err = push_result.stderr
-            if token:
-                err = err.replace(token, "***")
-            raise RuntimeError(f"git push failed: {err.strip()}")
-
-        # 7. Get a summary of what was changed
-        diff_stat = subprocess.run(
-            ["git", "diff", "--stat", "HEAD~1"],
-            cwd=workspace_dir,
-            capture_output=True,
-            text=True,
-        )
-
-        return {
-            "committed": True,
-            "pushed": True,
-            "summary": diff_stat.stdout.strip() or "Changes pushed successfully",
-        }
-
-    result = await asyncio.to_thread(_push)
-    logger.info("Push result for %s: %s", workspace_dir, result)
-    return result
+    return {
+        "committed": True,
+        "pushed": True,
+        "summary": diff_stat.stdout.strip() or "Changes pushed successfully",
+    }
 
 
 async def get_git_status(workspace_dir: str) -> str:
