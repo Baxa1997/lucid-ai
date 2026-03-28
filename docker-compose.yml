@@ -37,6 +37,8 @@ services:
       # Bind-mount (not named volume) so the Docker daemon can resolve
       # the host-side path when creating per-session sandbox containers.
       - ${PWD}/workspaces:/app/storage
+    env_file:
+      - ./.env
     environment:
       - PYTHONPATH=.
       - PORT=8000
@@ -66,7 +68,3 @@ services:
       # Must match frontend ENCRYPTION_KEY — used to decrypt stored git tokens
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - ALLOWED_ORIGINS=http://localhost:3000,http://frontend:3000
-      # Playwright
-      - PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
-      - PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-      - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright

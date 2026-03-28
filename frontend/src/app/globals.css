@@ -200,6 +200,22 @@ html.dark body {
   animation: msg-in 0.18s ease-out forwards;
 }
 
+/* ── Wizard step transitions ── */
+@keyframes wizard-slide-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes wizard-slide-back {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.animate-wizard-slide-in {
+  animation: wizard-slide-in 0.25s ease-out forwards;
+}
+.animate-wizard-slide-back {
+  animation: wizard-slide-back 0.25s ease-out forwards;
+}
+
 /* ── Custom scrollbar for chat area ── */
 .custom-scrollbar::-webkit-scrollbar { width: 5px; }
 .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }

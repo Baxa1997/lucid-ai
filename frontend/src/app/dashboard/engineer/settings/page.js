@@ -5,8 +5,11 @@ import {
   Settings, ChevronDown, Check, Plus, Trash2, Eye, EyeOff,
   X, ExternalLink, Key, Server, Globe, Lock, Cpu, HardDrive,
   Bell, BellOff, BarChart3, GitBranch, Package, Languages,
-  Zap, Shield, ChevronRight, Info, Loader2, AlertCircle
+  Zap, Shield, ChevronRight, Info, Loader2, AlertCircle, Rocket,
+  Database, Cloud, Container, Upload
 } from 'lucide-react';
+import ExportCodeModal from '@/components/ExportCodeModal';
+import AuthProvidersTab from '@/components/AuthProvidersTab';
 import { cn } from '@/lib/utils';
 
 /* ────────────────────────────────────────────────
@@ -41,6 +44,20 @@ const tabs = [
     Icon: Shield,
     color: 'amber',
   },
+  {
+    id: 'deployment',
+    label: 'Deployment',
+    description: 'CI/CD & infrastructure',
+    Icon: Rocket,
+    color: 'rose',
+  },
+  {
+    id: 'auth',
+    label: 'Auth Providers',
+    description: 'OAuth configuration',
+    Icon: Database,
+    color: 'teal',
+  },
 ];
 
 const colorMap = {
@@ -48,6 +65,8 @@ const colorMap = {
   violet:  { bg: 'bg-violet-50 dark:bg-violet-500/10',  border: 'border-violet-100 dark:border-violet-500/20', text: 'text-violet-600 dark:text-violet-400',  icon: 'text-violet-500', activeBg: 'bg-violet-600',  dot: 'bg-violet-500' },
   emerald: { bg: 'bg-emerald-50 dark:bg-emerald-500/10', border: 'border-emerald-100 dark:border-emerald-500/20',text: 'text-emerald-600 dark:text-emerald-400', icon: 'text-emerald-500',activeBg: 'bg-emerald-600', dot: 'bg-emerald-500' },
   amber:   { bg: 'bg-amber-50 dark:bg-amber-500/10',   border: 'border-amber-100 dark:border-amber-500/20',  text: 'text-amber-600 dark:text-amber-400',   icon: 'text-amber-500',  activeBg: 'bg-amber-600',   dot: 'bg-amber-500' },
+  rose:    { bg: 'bg-rose-50 dark:bg-rose-500/10',     border: 'border-rose-100 dark:border-rose-500/20',    text: 'text-rose-600 dark:text-rose-400',     icon: 'text-rose-500',   activeBg: 'bg-rose-600',    dot: 'bg-rose-500' },
+  teal:    { bg: 'bg-teal-50 dark:bg-teal-500/10',     border: 'border-teal-100 dark:border-teal-500/20',    text: 'text-teal-600 dark:text-teal-400',     icon: 'text-teal-500',   activeBg: 'bg-teal-600',    dot: 'bg-teal-500' },
 };
 
 /* ────────────────────────────────────────────────
@@ -284,14 +303,7 @@ const LLMTab = forwardRef(function LLMTab(_, ref) {
   useImperativeHandle(ref, () => ({ save: handleSave }), [handleSave]);
 
   // ── render ────────────────────────────────────────
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
-        <span className="ml-3 text-sm text-slate-400">Loading settings…</span>
-      </div>
-    );
-  }
+  // No loading gate — show UI immediately, data populates when ready
 
   return (
     <div className="space-y-6">
@@ -892,13 +904,249 @@ function SecretsTab() {
 }
 
 /* ════════════════════════════════════════════════
+   DEPLOYMENT TAB
+   ════════════════════════════════════════════════ */
+function DeploymentTab() {
+  const [gitlabHost, setGitlabHost] = useState('');
+  const [gitlabGroup, setGitlabGroup] = useState('');
+  const [gitlabToken, setGitlabToken] = useState('');
+  const [hasGitlabToken, setHasGitlabToken] = useState(false);
+  const [showGitlabToken, setShowGitlabToken] = useState(false);
+  const [opsRepoUrl, setOpsRepoUrl] = useState('');
+  const [opsRepoBranch, setOpsRepoBranch] = useState('main');
+  const [vercelToken, setVercelToken] = useState('');
+  const [hasVercelToken, setHasVercelToken] = useState(false);
+  const [showVercelToken, setShowVercelToken] = useState(false);
+  const [vercelTeamId, setVercelTeamId] = useState('');
+  const [k8sNamespace, setK8sNamespace] = useState('frontend-prod');
+  const [k8sDomain, setK8sDomain] = useState('*.udevs.io');
+  const [k8sTlsSecret, setK8sTlsSecret] = useState('');
+  const [registryUrl, setRegistryUrl] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const res = await fetch('/api/settings');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (cancelled) return;
+        setGitlabHost(data.gitlab_host || '');
+        setGitlabGroup(data.gitlab_group || '');
+        setHasGitlabToken(!!data.has_gitlab_token);
+        setOpsRepoUrl(data.ops_repo_url || '');
+        setOpsRepoBranch(data.ops_repo_branch || 'main');
+        setHasVercelToken(!!data.has_vercel_token);
+        setVercelTeamId(data.vercel_team_id || '');
+        setK8sNamespace(data.k8s_namespace || 'frontend-prod');
+        setK8sDomain(data.k8s_domain || '*.udevs.io');
+        setK8sTlsSecret(data.k8s_tls_secret || '');
+        setRegistryUrl(data.registry_url || '');
+      } catch (err) {
+        if (!cancelled) setError('Could not load deployment settings.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleSave = useCallback(async () => {
+    setSaving(true); setSaveStatus(null); setError(null);
+    try {
+      const body = {
+        gitlab_host: gitlabHost,
+        gitlab_group: gitlabGroup,
+        ops_repo_url: opsRepoUrl,
+        ops_repo_branch: opsRepoBranch,
+        vercel_team_id: vercelTeamId,
+        k8s_namespace: k8sNamespace,
+        k8s_domain: k8sDomain,
+        k8s_tls_secret: k8sTlsSecret,
+        registry_url: registryUrl,
+      };
+      if (gitlabToken.trim()) body.gitlab_token = gitlabToken.trim();
+      if (vercelToken.trim()) body.vercel_token = vercelToken.trim();
+
+      const res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+
+      setSaveStatus('success');
+      if (gitlabToken.trim()) { setHasGitlabToken(true); setGitlabToken(''); }
+      if (vercelToken.trim()) { setHasVercelToken(true); setVercelToken(''); }
+      setTimeout(() => setSaveStatus(null), 3500);
+    } catch (err) {
+      setError(err.message); setSaveStatus('error');
+    } finally { setSaving(false); }
+  }, [gitlabHost, gitlabGroup, gitlabToken, opsRepoUrl, opsRepoBranch, vercelToken, vercelTeamId, k8sNamespace, k8sDomain, k8sTlsSecret, registryUrl]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="w-6 h-6 text-rose-500 animate-spin" />
+        <span className="ml-3 text-sm text-slate-400">Loading deployment settings…</span>
+      </div>
+    );
+  }
+
+  const inputCls = "w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-rose-300 dark:focus:border-rose-500 focus:ring-2 focus:ring-rose-500/10 outline-none transition-all";
+
+  return (
+    <div className="space-y-6">
+      {error && (
+        <div className="flex items-center gap-3 px-4 py-3 bg-red-50 dark:bg-red-500/10 border border-red-100 dark:border-red-500/20 rounded-xl">
+          <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />
+          <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+        </div>
+      )}
+
+      {/* GitLab */}
+      <SectionCard title="GitLab" description="Repository hosting and CI/CD" icon={GitBranch}>
+        <div className="space-y-5">
+          <FieldRow label="Host URL" description="Your GitLab instance">
+            <input type="text" value={gitlabHost} onChange={(e) => setGitlabHost(e.target.value)} placeholder="https://gitlab.udevs.io" className={inputCls} />
+          </FieldRow>
+          <div className="border-t border-slate-100 dark:border-slate-800" />
+          <FieldRow label="Group / Namespace" description="Group ID or path for new repos">
+            <input type="text" value={gitlabGroup} onChange={(e) => setGitlabGroup(e.target.value)} placeholder="e.g. frontend or 42" className={inputCls} />
+          </FieldRow>
+          <div className="border-t border-slate-100 dark:border-slate-800" />
+          <FieldRow label="Access Token" description="GitLab personal access token"
+            badge={hasGitlabToken && !gitlabToken ? (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-100 dark:border-emerald-500/20 rounded-full">
+                <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase">Saved</span>
+              </span>
+            ) : null}
+          >
+            <div className="relative">
+              <input type={showGitlabToken ? 'text' : 'password'} value={gitlabToken} onChange={(e) => setGitlabToken(e.target.value)} placeholder={hasGitlabToken ? '••••••••  (saved — paste to replace)' : 'glpat-xxxxxxxxxxxx'} className={inputCls + ' pr-10'} />
+              <button type="button" onClick={() => setShowGitlabToken(!showGitlabToken)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
+                {showGitlabToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </FieldRow>
+        </div>
+      </SectionCard>
+
+      {/* Ops Repo */}
+      <SectionCard title="Ops Repository" description="K8s deployment configs (values.yaml, config.json)" icon={Container}>
+        <div className="space-y-5">
+          <FieldRow label="Ops Repo URL" description="Where Helm values are stored">
+            <input type="text" value={opsRepoUrl} onChange={(e) => setOpsRepoUrl(e.target.value)} placeholder="https://gitlab.udevs.io/ops/deployments" className={inputCls} />
+          </FieldRow>
+          <div className="border-t border-slate-100 dark:border-slate-800" />
+          <FieldRow label="Branch" description="Default branch for ops commits">
+            <input type="text" value={opsRepoBranch} onChange={(e) => setOpsRepoBranch(e.target.value)} placeholder="main" className={inputCls} />
+          </FieldRow>
+        </div>
+      </SectionCard>
+
+      {/* Vercel */}
+      <SectionCard title="Vercel" description="Deployment for Next.js projects" icon={Cloud}>
+        <div className="space-y-5">
+          <FieldRow label="API Token" description="Vercel personal access token"
+            badge={hasVercelToken && !vercelToken ? (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-100 dark:border-emerald-500/20 rounded-full">
+                <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase">Saved</span>
+              </span>
+            ) : null}
+          >
+            <div className="relative">
+              <input type={showVercelToken ? 'text' : 'password'} value={vercelToken} onChange={(e) => setVercelToken(e.target.value)} placeholder={hasVercelToken ? '••••••••  (saved — paste to replace)' : 'Vercel API token'} className={inputCls + ' pr-10'} />
+              <button type="button" onClick={() => setShowVercelToken(!showVercelToken)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
+                {showVercelToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </FieldRow>
+          <div className="border-t border-slate-100 dark:border-slate-800" />
+          <FieldRow label="Team ID" description="Optional — for team deployments">
+            <input type="text" value={vercelTeamId} onChange={(e) => setVercelTeamId(e.target.value)} placeholder="team_xxxxxxxx" className={inputCls} />
+          </FieldRow>
+        </div>
+      </SectionCard>
+
+      {/* Kubernetes */}
+      <SectionCard title="Kubernetes" description="K8s namespace, domain, and TLS" icon={Database}>
+        <div className="space-y-5">
+          <FieldRow label="Namespace" description="K8s namespace for deployments">
+            <input type="text" value={k8sNamespace} onChange={(e) => setK8sNamespace(e.target.value)} placeholder="frontend-prod" className={inputCls} />
+          </FieldRow>
+          <div className="border-t border-slate-100 dark:border-slate-800" />
+          <FieldRow label="Domain" description="Wildcard domain for ingress">
+            <input type="text" value={k8sDomain} onChange={(e) => setK8sDomain(e.target.value)} placeholder="*.udevs.io" className={inputCls} />
+          </FieldRow>
+          <div className="border-t border-slate-100 dark:border-slate-800" />
+          <FieldRow label="TLS Secret" description="TLS secret name for HTTPS">
+            <input type="text" value={k8sTlsSecret} onChange={(e) => setK8sTlsSecret(e.target.value)} placeholder="e.g. app-tls" className={inputCls} />
+          </FieldRow>
+          <div className="border-t border-slate-100 dark:border-slate-800" />
+          <FieldRow label="Registry URL" description="Docker registry for images">
+            <input type="text" value={registryUrl} onChange={(e) => setRegistryUrl(e.target.value)} placeholder="registry.gitlab.udevs.io" className={inputCls} />
+          </FieldRow>
+        </div>
+      </SectionCard>
+
+      {/* Self-Host / Export */}
+      <SectionCard title="Export Code" description="Push your generated code to your own repo" icon={Upload}>
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 px-4 py-3 bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-100 dark:border-indigo-500/20 rounded-xl">
+            <Info className="w-4 h-4 text-indigo-500 dark:text-indigo-400 shrink-0 mt-0.5" />
+            <p className="text-xs text-indigo-700 dark:text-indigo-300 leading-relaxed">
+              Export your project code to GitHub, GitLab, or Bitbucket. This creates a clone — your platform copy stays untouched. Re-export anytime.
+            </p>
+          </div>
+          <ExportCodeModal isOpen={false} onClose={() => {}} />
+          {/* The actual export is project-specific — this button shows the modal for any saved project */}
+        </div>
+      </SectionCard>
+
+      {/* Save */}
+      <div className="flex items-center justify-end gap-4">
+        {saveStatus === 'success' && (
+          <span className="flex items-center gap-1.5 text-sm text-emerald-600 dark:text-emerald-400 animate-fade-in">
+            <Check className="w-4 h-4" /> Settings saved!
+          </span>
+        )}
+        {saveStatus === 'error' && (
+          <span className="flex items-center gap-1.5 text-sm text-red-500 dark:text-red-400 animate-fade-in">
+            <AlertCircle className="w-4 h-4" /> Save failed.
+          </span>
+        )}
+        <button onClick={handleSave} disabled={saving}
+          className={cn(
+            "flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm active:scale-[0.98]",
+            saving
+              ? "bg-rose-400 text-white cursor-not-allowed"
+              : "bg-rose-600 text-white hover:bg-rose-700 shadow-rose-600/15"
+          )}
+        >
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+          {saving ? 'Saving…' : 'Save Changes'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════
    MAIN SETTINGS PAGE
    ════════════════════════════════════════════════ */
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState('llm');
   const llmTabRef = useRef(null);
   const [headerSaving, setHeaderSaving] = useState(false);
-  const [headerSaveStatus, setHeaderSaveStatus] = useState(null); // 'success' | 'error' | null
+  const [headerSaveStatus, setHeaderSaveStatus] = useState(null);
 
   const handleHeaderSave = useCallback(async () => {
     if (activeTab === 'llm' && llmTabRef.current?.save) {
@@ -922,6 +1170,8 @@ export default function SettingsPage() {
       case 'mcp': return <MCPTab />;
       case 'application': return <ApplicationTab />;
       case 'secrets': return <SecretsTab />;
+      case 'deployment': return <DeploymentTab />;
+      case 'auth': return <AuthProvidersTab />;
       default: return null;
     }
   };
@@ -930,120 +1180,101 @@ export default function SettingsPage() {
   const activeColor = colorMap[activeTabData?.color || 'blue'];
 
   return (
-    <div className="min-h-full bg-[#f0f4f9] dark:bg-[#0d1117] transition-colors duration-200">
-      <div className="max-w-6xl mx-auto px-8 py-10">
+    <div className="h-full flex flex-col bg-[#f0f4f9] dark:bg-[#0d1117]">
 
-        {/* Page Header */}
-        <div className="flex items-center justify-between mb-8">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center shadow-soft">
-              <Settings className="w-6 h-6 text-slate-500 dark:text-slate-400" />
-            </div>
+      {/* ── Unified Card: Sidebar + Content ── */}
+      <div className="flex-1 flex overflow-hidden bg-white dark:bg-slate-900 border-t border-slate-200/80 dark:border-slate-800/60">
+
+        {/* ── Sidebar Panel (never scrolls) ── */}
+        <div className="hidden lg:flex shrink-0 w-[230px] flex-col border-r border-slate-100 dark:border-slate-800/80 bg-slate-50/70 dark:bg-slate-900/50">
+          {/* Settings heading inside sidebar */}
+          <div className="px-5 pt-6 pb-4">
+            <h1 className="text-[16px] font-bold text-slate-900 dark:text-slate-100 tracking-tight">Settings</h1>
+            <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">Manage your workspace</p>
+          </div>
+
+          {/* Tab navigation */}
+          <nav className="flex-1 px-3 space-y-0.5">
+            {tabs.map((tab) => {
+              const isActive = activeTab === tab.id;
+              const colors = colorMap[tab.color]; 
+              
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={cn(
+                    "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-all duration-150 group",
+                    isActive
+                      ? "bg-white dark:bg-slate-800 shadow-sm border border-slate-200/80 dark:border-slate-700/80"
+                      : "hover:bg-white/80 dark:hover:bg-slate-800/50 border border-transparent"
+                  )}
+                >
+                  <div className={cn(
+                    "w-7 h-7 rounded-md flex items-center justify-center shrink-0 transition-colors",
+                    isActive
+                      ? `${colors?.activeBg || 'bg-blue-600'} text-white`
+                      : "bg-slate-200/60 dark:bg-slate-700/60 text-slate-400 dark:text-slate-500 group-hover:text-slate-500 dark:group-hover:text-slate-400"
+                  )}>
+                    <tab.Icon className="w-3.5 h-3.5" />
+                  </div>
+                  
+                  <span className={cn(
+                    "text-[13px] font-medium transition-colors",
+                    isActive ? "text-slate-900 dark:text-slate-100" : "text-slate-500 dark:text-slate-400 group-hover:text-slate-700 dark:group-hover:text-slate-200"
+                  )}>
+                    {tab.label}
+                  </span>
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* Footer */}
+          <div className="px-5 py-4 border-t border-slate-100 dark:border-slate-800/60">
+            <p className="text-[10px] text-slate-400 dark:text-slate-600 font-medium">Lucid AI v1.0</p>
+          </div>
+        </div>
+
+        {/* ── Content Panel (scrollable) ── */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Content header bar */}
+          <div className="shrink-0 flex items-center justify-between px-8 py-4 border-b border-slate-100 dark:border-slate-800/60 bg-white dark:bg-slate-900">
             <div>
-              <h1 className="text-2xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight">Settings</h1>
-              <p className="text-sm text-slate-400 dark:text-slate-500 font-medium mt-0.5">Configure your AI development environment</p>
+              <h2 className="text-[15px] font-bold text-slate-900 dark:text-slate-100">{activeTabData?.label}</h2>
+              <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">{activeTabData?.description}</p>
             </div>
-          </div>
-          
-          <button
-            onClick={handleHeaderSave}
-            disabled={headerSaving || activeTab !== 'llm'}
-            className={cn(
-              "flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold transition-all shadow-lg active:scale-[0.98]",
-              headerSaving
-                ? "bg-blue-400 text-white cursor-not-allowed shadow-blue-400/20"
+            <button
+              onClick={handleHeaderSave}
+              disabled={headerSaving || activeTab !== 'llm'}
+              className={cn(
+                "flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[12px] font-semibold transition-all active:scale-[0.98]",
+                headerSaving
+                  ? "bg-blue-400 text-white cursor-not-allowed"
+                  : headerSaveStatus === 'success'
+                    ? "bg-emerald-600 text-white"
+                    : activeTab !== 'llm'
+                      ? "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed"
+                      : "bg-blue-600 text-white hover:bg-blue-700 shadow-sm shadow-blue-600/20"
+              )}
+            >
+              {headerSaving
+                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 : headerSaveStatus === 'success'
-                  ? "bg-emerald-600 text-white shadow-emerald-600/20"
-                  : activeTab !== 'llm'
-                    ? "bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed shadow-none"
-                    : "bg-blue-600 text-white hover:bg-blue-700 shadow-blue-600/20"
-            )}
-          >
-            {headerSaving
-              ? <Loader2 className="w-4 h-4 animate-spin" />
-              : headerSaveStatus === 'success'
-                ? <Check className="w-4 h-4" />
-                : <Check className="w-4 h-4" />}
-            {headerSaving ? 'Saving…' : headerSaveStatus === 'success' ? 'Saved!' : 'Save Changes'}
-          </button>
-        </div>
+                  ? <Check className="w-3.5 h-3.5" />
+                  : <Check className="w-3.5 h-3.5" />}
+              {headerSaving ? 'Saving…' : headerSaveStatus === 'success' ? 'Saved!' : 'Save'}
+            </button>
+          </div>
 
-        {/* Content Area */}
-        <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-8 relative z-10">
-
-          {/* ── Tab Sidebar ── */}
-          <div className="lg:sticky lg:top-32 self-start space-y-6">
-            <nav className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-2 shadow-soft space-y-1">
-              {tabs.map((tab) => {
-                const isActive = activeTab === tab.id;
-                const colors = colorMap[tab.color]; 
-                const activeBg = colors?.bg || 'bg-slate-50';
-                const activeBorder = colors?.border || 'border-slate-200';
-                const activeIconBg = colors?.activeBg || 'bg-slate-800';
-                
-                return (
-                  <button
-                    key={tab.id}
-                    onClick={() => setActiveTab(tab.id)}
-                    className={cn(
-                      "w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-left transition-all duration-200 group relative overflow-hidden",
-                      isActive
-                        ? `${activeBg} border ${activeBorder}`
-                        : "hover:bg-slate-50 dark:hover:bg-slate-800 border border-transparent"
-                    )}
-                  >
-                    {/* Active Indicator Bar */}
-                    {isActive && (
-                      <div className={cn("absolute left-0 top-0 bottom-0 w-1", colors?.activeBg || 'bg-blue-600')} />
-                    )}
-
-                    <div className={cn(
-                      "w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-colors shadow-sm",
-                      isActive
-                        ? `${activeIconBg} text-white`
-                        : "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 group-hover:bg-white dark:group-hover:bg-slate-700 group-hover:text-slate-600 dark:group-hover:text-slate-300 group-hover:shadow-sm"
-                    )}>
-                      <tab.Icon className="w-4.5 h-4.5" />
-                    </div>
-                    
-                    <div className="flex-1 min-w-0">
-                      <span className={cn(
-                        "block text-sm font-bold transition-colors",
-                        isActive ? "text-slate-900 dark:text-slate-100" : "text-slate-500 dark:text-slate-400 group-hover:text-slate-700 dark:group-hover:text-slate-200"
-                      )}>
-                        {tab.label}
-                      </span>
-                      <span className={cn(
-                        "block text-[11px] font-medium transition-colors truncate",
-                        isActive ? "text-slate-500 dark:text-slate-400" : "text-slate-400 dark:text-slate-500 group-hover:text-slate-500 dark:group-hover:text-slate-400"
-                      )}>
-                        {tab.description}
-                      </span>
-                    </div>
-                    
-                    {isActive && (
-                      <ChevronRight className="w-4 h-4 text-slate-400 dark:text-slate-500" />
-                    )}
-                  </button>
-                );
-              })}
-            </nav>
-            
-            <div className="p-5 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-2xl text-white text-center shadow-lg shadow-blue-900/20">
-              <h3 className="font-bold text-sm mb-1">Need Help?</h3>
-              <p className="text-xs text-blue-100 mb-3 leading-relaxed">Check our documentation for advanced configuration guides.</p>
-              <button className="px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/20 rounded-lg text-xs font-bold transition-all w-full backdrop-blur-sm">
-                View Docs
-              </button>
+          {/* Scrollable content */}
+          <div className="flex-1 overflow-y-auto bg-[#f8f9fc] dark:bg-[#0d1117]">
+            <div className="max-w-[680px] mx-auto px-8 py-6 pb-16">
+              {renderTabContent()}
             </div>
           </div>
-
-          {/* ── Tab Content ── */}
-          <div className="min-w-0">
-             {renderTabContent()}
-          </div>
-
         </div>
+
       </div>
     </div>
   );

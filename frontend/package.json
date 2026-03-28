@@ -9,10 +9,13 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "@monaco-editor/react": "^4.7.0",
     "@prisma/client": "^5.22.0",
+    "@supabase/mcp-server-supabase": "^0.7.0",
     "@supabase/supabase-js": "^2.98.0",
     "clsx": "^2.1.0",
+    "figma-developer-mcp": "^0.8.0",
     "framer-motion": "^11.0.8",
     "lucide-react": "^0.564.0",
     "next": "latest",

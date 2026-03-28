@@ -18,6 +18,7 @@ import {
   fetchGitLabBranches,
 } from '@/lib/integrations';
 import { createConversation } from '@/lib/conversations';
+import { useWizard } from './layout';
 
 export default function EngineerDashboardPage() {
   const router = useRouter();
@@ -36,6 +37,7 @@ export default function EngineerDashboardPage() {
   const [selectedProvider, setSelectedProvider] = useState('github');
   const [isLaunching, setIsLaunching] = useState(false);
   const [showBanner, setShowBanner] = useState(true);
+  const { setShowWizard } = useWizard();
 
   // Real repos from integrations
   const [allRepos, setAllRepos] = useState([]);
@@ -117,9 +119,7 @@ export default function EngineerDashboardPage() {
   };
 
   const handleNewConversation = () => {
-    setSessionActive(true);
-    setSelectedRepo({ name: 'scratch-session', lang: '', updated: 'Now', stars: 0 });
-    router.push('/dashboard/engineer/workspace/scratch-session');
+    setShowWizard(true);
   };
 
   return (
@@ -355,25 +355,42 @@ export default function EngineerDashboardPage() {
             </button>
           </div>
 
-          {/* RIGHT: Start from Scratch */}
-          <div className="bg-white dark:bg-slate-900  rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-soft flex flex-col">
+          {/* RIGHT: New Project (Wizard) */}
+          <div className="bg-gradient-to-br from-violet-50 via-white to-blue-50 dark:from-slate-900 dark:via-slate-900 dark:to-slate-900 rounded-2xl border-2 border-violet-200 dark:border-violet-500/20 p-6 shadow-soft relative overflow-hidden flex flex-col">
+            {/* Subtle glow accent */}
+            <div className="absolute -top-20 -right-20 w-40 h-40 bg-violet-200/40 dark:bg-violet-500/5 rounded-full blur-3xl pointer-events-none" />
             <div className="flex items-center gap-3 mb-3">
               <div className="w-8 h-8 rounded-lg bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 flex items-center justify-center">
-                <Plus className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                <Sparkles className="w-4 h-4 text-violet-600 dark:text-violet-400" />
               </div>
-              <h2 className="text-[15px] font-bold text-slate-900 dark:text-slate-100">Start from Scratch</h2>
+              <h2 className="text-[15px] font-bold text-slate-900 dark:text-slate-100">New Project</h2>
             </div>
             <p className="text-sm text-slate-400 leading-relaxed flex-1">
-              Start a new conversation that is not connected to an existing repository. Perfect for quick experiments, boilerplates, or prototyping new ideas.
+              Set up a brand-new project with the guided wizard. Pick your stack, describe your idea, and let AI generate fully production-ready code.
             </p>
 
-            {/* New Conversation Button */}
+            {/* New Project Button */}
             <button
               onClick={handleNewConversation}
-              className="w-full mt-6 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 bg-blue-600 text-white hover:bg-blue-700 shadow-sm shadow-blue-600/20 transition-all active:scale-[0.98]"
+              disabled={isLaunching}
+              className={cn(
+                "w-full mt-6 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all active:scale-[0.98]",
+                isLaunching
+                  ? "bg-slate-100 dark:bg-slate-800 text-slate-400 cursor-not-allowed"
+                  : "bg-gradient-to-r from-violet-600 to-blue-600 text-white hover:from-violet-700 hover:to-blue-700 shadow-sm shadow-violet-600/20"
+              )}
             >
-              New Conversation
-              <ArrowRight className="w-4 h-4" />
+              {isLaunching ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                <>
+                  New Project
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              )}
             </button>
           </div>
         </div>

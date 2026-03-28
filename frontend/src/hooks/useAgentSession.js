@@ -101,28 +101,28 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     flushedRef.current = true;
 
     // Keep phases visible for the completion card in TaskProgress.
-    // Only store a small summary in chat for history, and set
-    // completionSummary so the TaskProgress component can show it.
+    // Store completionSummary so the TaskProgress component can render it.
     if (summary) {
       setCompletionSummary(summary);
     }
 
-    // Build a minimal summary chat message for persistence
+    // When phases exist, TaskProgress already shows the full UI card.
+    // Don't duplicate it as a text chat message — only save summary text.
     const currentPhases = phasesRef.current;
-    let content = '';
     if (currentPhases.length > 0) {
-      const phaseLines = currentPhases.map(p => {
-        const icon = p.status === 'done' ? '✅' : p.status === 'error' ? '❌' : '⏳';
-        return `${icon} **${p.title}**\n   _${p.description || ''}_`;
-      });
-      content = phaseLines.join('\n\n');
-    } else {
-      const currentSteps = stepsRef.current;
-      const stepLines = currentSteps
-        .filter((s) => s.done)
-        .map((s) => `✅ ${s.label}`);
-      content = stepLines.join('\n');
+      // Phases are rendered by TaskProgress — no chat message needed.
+      // Just clean up steps.
+      setSteps([]);
+      setFinishSummary('');
+      return;
     }
+
+    // Fallback: if only steps (no phases), build a minimal text summary
+    const currentSteps = stepsRef.current;
+    const stepLines = currentSteps
+      .filter((s) => s.done)
+      .map((s) => `✅ ${s.label}`);
+    let content = stepLines.join('\n');
 
     if (summary) {
       content += `\n\n${summary}`;
@@ -136,13 +136,10 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
           role: 'agent',
           content,
           ts: Date.now(),
-          taskPhases: currentPhases.length > 0 ? [...currentPhases] : undefined,
         },
       ]);
     }
 
-    // DON'T clear phases — keep them visible for the completion UI.
-    // They will be reset when a new task starts (phase 1 active).
     setSteps([]);
     setFinishSummary('');
   }, []);
@@ -390,6 +387,20 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
           }
           return updated.sort((a, b) => a.phase - b.phase);
         });
+        return;
+      }
+
+      // ─── Deploy Ready — Vercel auto-deploy URL ────
+      if (msg.type === 'deploy_ready') {
+        pushChat('system', `🚀 **Live at:** [${msg.url}](${msg.url})`);
+        pushLog(`[Deploy] Live: ${msg.url}`, 'system');
+        return;
+      }
+
+      // ─── Repo Created — internal platform repo (not shown to user) ──
+      if (msg.type === 'repo_created') {
+        // Platform repos are internal storage — log only, don't show in chat
+        pushLog(`[Platform Repo] ${msg.repoUrl}`, 'system');
         return;
       }
 

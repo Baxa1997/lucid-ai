@@ -484,6 +484,7 @@ async def websocket_agent(websocket: WebSocket):
                     websocket=websocket,
                     task_id=pipeline_task_id,
                     conversation_id=conversation_id,
+                    chat_session_id=chat_session_id or "",
                     images=initial_images,
                 )
             )
@@ -684,6 +685,7 @@ async def websocket_agent(websocket: WebSocket):
                     websocket=websocket,
                     task_id=pipeline_task_id,
                     conversation_id=conversation_id,
+                    chat_session_id=chat_session_id or "",
                     images=followup_images,
                 )
             )

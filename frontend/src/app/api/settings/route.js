@@ -30,7 +30,7 @@ export async function GET() {
 
   const { data, error } = await supabase
     .from('user_settings')
-    .select('llm_provider, llm_model, api_key_enc, api_key_iv')
+    .select('*')
     .eq('user_id', ctx.userId)
     .maybeSingle();
 
@@ -45,16 +45,39 @@ export async function GET() {
       llm_provider: 'anthropic',
       llm_model: 'anthropic/claude-3-5-sonnet-20241022',
       has_api_key: false,
+      // Deployment defaults
+      gitlab_host: '',
+      gitlab_group: '',
+      has_gitlab_token: false,
+      has_github_token: false,
+      ops_repo_url: '',
+      ops_repo_branch: 'main',
+      has_vercel_token: false,
+      vercel_team_id: '',
+      k8s_namespace: 'frontend-prod',
+      k8s_domain: '*.udevs.io',
+      k8s_tls_secret: '',
+      registry_url: '',
     });
   }
 
-  const resolvedModel = data.llm_model;
-
   return NextResponse.json({
     llm_provider: data.llm_provider,
-    llm_model: resolvedModel,
-    // Never return the raw key — just let the client know one exists
+    llm_model: data.llm_model,
     has_api_key: !!(data.api_key_enc && data.api_key_iv),
+    // Deployment settings (never return raw tokens)
+    gitlab_host: data.gitlab_host || '',
+    gitlab_group: data.gitlab_group || '',
+    has_gitlab_token: !!(data.gitlab_token_enc && data.gitlab_token_iv),
+    has_github_token: !!(data.github_token_enc && data.github_token_iv),
+    ops_repo_url: data.ops_repo_url || '',
+    ops_repo_branch: data.ops_repo_branch || 'main',
+    has_vercel_token: !!(data.vercel_token_enc && data.vercel_token_iv),
+    vercel_team_id: data.vercel_team_id || '',
+    k8s_namespace: data.k8s_namespace || 'frontend-prod',
+    k8s_domain: data.k8s_domain || '*.udevs.io',
+    k8s_tls_secret: data.k8s_tls_secret || '',
+    registry_url: data.registry_url || '',
   });
 }
 
@@ -80,30 +103,38 @@ export async function PUT(req) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { llm_provider, llm_model, api_key } = body;
+  const {
+    llm_provider, llm_model, api_key,
+    // Deployment fields (optional — only present from Deployment tab)
+    gitlab_host, gitlab_group, gitlab_token,
+    github_token,
+    ops_repo_url, ops_repo_branch,
+    vercel_token, vercel_team_id,
+    k8s_namespace, k8s_domain, k8s_tls_secret,
+    registry_url,
+  } = body;
 
-
-  if (!VALID_PROVIDERS.includes(llm_provider)) {
-    return NextResponse.json(
-      { error: `Invalid provider. Must be one of: ${VALID_PROVIDERS.join(', ')}` },
-      { status: 400 }
-    );
-  }
-
-
-  if (!VALID_MODELS[llm_provider]?.includes(llm_model)) {
-    return NextResponse.json(
-      { error: `Invalid model '${llm_model}' for provider '${llm_provider}'.` },
-      { status: 400 }
-    );
+  // LLM fields are required if present
+  if (llm_provider !== undefined) {
+    if (!VALID_PROVIDERS.includes(llm_provider)) {
+      return NextResponse.json(
+        { error: `Invalid provider. Must be one of: ${VALID_PROVIDERS.join(', ')}` },
+        { status: 400 }
+      );
+    }
+    if (!VALID_MODELS[llm_provider]?.includes(llm_model)) {
+      return NextResponse.json(
+        { error: `Invalid model '${llm_model}' for provider '${llm_provider}'.` },
+        { status: 400 }
+      );
+    }
   }
 
   const supabase = await getSupabaseServerClient();
 
-
   const { data: existing, error: fetchError } = await supabase
     .from('user_settings')
-    .select('api_key_enc, api_key_iv')
+    .select('*')
     .eq('user_id', ctx.userId)
     .maybeSingle();
 
@@ -114,24 +145,59 @@ export async function PUT(req) {
 
   let updatePayload = {
     user_id: ctx.userId,
-    llm_provider,
-    llm_model,
+    // Preserve existing LLM settings unless overridden
+    llm_provider: llm_provider ?? existing?.llm_provider ?? 'anthropic',
+    llm_model: llm_model ?? existing?.llm_model ?? 'anthropic/claude-3-5-sonnet-20241022',
     api_key_enc: existing?.api_key_enc || null,
     api_key_iv: existing?.api_key_iv || null,
+    // Preserve existing deployment settings unless overridden
+    gitlab_host: gitlab_host ?? existing?.gitlab_host ?? '',
+    gitlab_group: gitlab_group ?? existing?.gitlab_group ?? '',
+    gitlab_token_enc: existing?.gitlab_token_enc || null,
+    gitlab_token_iv: existing?.gitlab_token_iv || null,
+    github_token_enc: existing?.github_token_enc || null,
+    github_token_iv: existing?.github_token_iv || null,
+    ops_repo_url: ops_repo_url ?? existing?.ops_repo_url ?? '',
+    ops_repo_branch: ops_repo_branch ?? existing?.ops_repo_branch ?? 'main',
+    vercel_token_enc: existing?.vercel_token_enc || null,
+    vercel_token_iv: existing?.vercel_token_iv || null,
+    vercel_team_id: vercel_team_id ?? existing?.vercel_team_id ?? '',
+    k8s_namespace: k8s_namespace ?? existing?.k8s_namespace ?? 'frontend-prod',
+    k8s_domain: k8s_domain ?? existing?.k8s_domain ?? '',
+    k8s_tls_secret: k8s_tls_secret ?? existing?.k8s_tls_secret ?? '',
+    registry_url: registry_url ?? existing?.registry_url ?? '',
   };
-  if (api_key && api_key.trim()) {
-    try {
-      const { encrypt } = await import('@/lib/crypto');
+
+  // Encrypt sensitive tokens
+  try {
+    const { encrypt } = await import('@/lib/crypto');
+
+    if (api_key?.trim()) {
       const { encrypted, iv } = encrypt(api_key.trim());
       updatePayload.api_key_enc = encrypted;
       updatePayload.api_key_iv = iv;
-    } catch (encErr) {
-      console.error('[settings PUT] Encryption error:', encErr);
-      return NextResponse.json(
-        { error: 'Failed to encrypt API key' },
-        { status: 500 }
-      );
     }
+    if (gitlab_token?.trim()) {
+      const { encrypted, iv } = encrypt(gitlab_token.trim());
+      updatePayload.gitlab_token_enc = encrypted;
+      updatePayload.gitlab_token_iv = iv;
+    }
+    if (github_token?.trim()) {
+      const { encrypted, iv } = encrypt(github_token.trim());
+      updatePayload.github_token_enc = encrypted;
+      updatePayload.github_token_iv = iv;
+    }
+    if (vercel_token?.trim()) {
+      const { encrypted, iv } = encrypt(vercel_token.trim());
+      updatePayload.vercel_token_enc = encrypted;
+      updatePayload.vercel_token_iv = iv;
+    }
+  } catch (encErr) {
+    console.error('[settings PUT] Encryption error:', encErr);
+    return NextResponse.json(
+      { error: 'Failed to encrypt tokens' },
+      { status: 500 }
+    );
   }
 
   const { error: upsertError } = await supabase

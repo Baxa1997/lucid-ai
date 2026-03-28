@@ -225,6 +225,7 @@ async def authenticate_websocket(websocket: WebSocket) -> Optional[Authenticated
     """
     token = websocket.query_params.get("token")
     if not token:
+        logger.info("WebSocket auth: no ?token query param")
         return None
 
     try:
@@ -248,6 +249,7 @@ async def authenticate_websocket(websocket: WebSocket) -> Optional[Authenticated
 def authenticate_from_handshake(raw: dict) -> Optional[AuthenticatedUser]:
     """Authenticate from the WebSocket handshake message (``token`` field)."""
     token = raw.get("token")
+    logger.info("Handshake auth: token present=%s, len=%d", bool(token), len(token or ""))
     if not token:
         return None
 

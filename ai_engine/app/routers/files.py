@@ -67,6 +67,67 @@ async def list_files(
     return {"tree": tree}
 
 
+BINARY_EXTENSIONS = {
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".svg",
+    ".woff", ".woff2", ".ttf", ".eot", ".otf",
+    ".zip", ".tar", ".gz", ".rar",
+    ".pdf", ".exe", ".dll", ".so", ".dylib",
+    ".mp3", ".mp4", ".avi", ".mov", ".wav",
+}
+
+MAX_EXPORT_FILES = 200
+MAX_FILE_SIZE = 512 * 1024  # 512KB per file
+
+
+@router.get("/export")
+async def export_files(
+    session_id: str = Query(...),
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Return all workspace files with content for export to external repo."""
+    workspace = await _resolve_workspace(session_id, user.user_id)
+    files = []
+
+    for dirpath, dirnames, filenames in os.walk(workspace):
+        # Skip excluded directories
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in EXCLUDE_DIRS and not d.startswith(".")
+        ]
+
+        for filename in filenames:
+            if filename.startswith("."):
+                continue
+            full_path = os.path.join(dirpath, filename)
+            rel_path = os.path.relpath(full_path, workspace)
+            ext = os.path.splitext(filename)[1].lower()
+
+            # Skip binary files
+            if ext in BINARY_EXTENSIONS:
+                continue
+
+            # Skip files that are too large
+            try:
+                if os.path.getsize(full_path) > MAX_FILE_SIZE:
+                    continue
+            except OSError:
+                continue
+
+            try:
+                with open(full_path, "r", errors="replace") as f:
+                    content = f.read()
+                files.append({"path": rel_path, "content": content})
+            except Exception:
+                continue
+
+            if len(files) >= MAX_EXPORT_FILES:
+                break
+        if len(files) >= MAX_EXPORT_FILES:
+            break
+
+    return {"files": files, "count": len(files)}
+
+
 # ── Shared helpers ───────────────────────────────────────────
 
 async def _resolve_workspace(session_id: str, user_id: str) -> str:

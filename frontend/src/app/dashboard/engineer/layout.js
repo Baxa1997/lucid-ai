@@ -2,15 +2,21 @@
 
 import { 
   Plus, MessageSquare, FileText, Settings, Zap,
-  LogOut, Grid2X2, PanelLeftClose, PanelLeft
+  LogOut, Grid2X2, PanelLeftClose, PanelLeft, Sparkles
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
-import { useState, useEffect, useCallback, memo, useRef } from 'react';
+import { useState, useEffect, useCallback, memo, useRef, createContext, useContext } from 'react';
 import { cn } from '@/lib/utils';
 import ThemeModeSelector from '@/components/ThemeModeSelector';
 import Toast from '@/components/Toast';
+import NewProjectWizard from '@/components/agent/NewProjectWizard';
 import { getSupabaseBrowserClient, clearAllSupabaseCookies } from '@/lib/supabase/client';
+import { createConversation } from '@/lib/conversations';
+
+// ── Context for wizard state (passed to children) ────────
+const WizardContext = createContext({ showWizard: false, setShowWizard: () => {} });
+export function useWizard() { return useContext(WizardContext); }
 
 const navItems = [
   { label: 'Usage Docs', icon: FileText, href: '/dashboard/engineer/usage-docs' },
@@ -76,6 +82,16 @@ export default function EngineerLayout({ children }) {
 
   // ── Sidebar collapsed state (persisted in localStorage) ──
   const [collapsed, setCollapsed] = useState(false);
+
+  // ── Wizard state (managed at layout level) ──
+  const [showWizard, setShowWizard] = useState(false);
+
+  // Auto-close wizard when navigating to a workspace (after wizard completion)
+  useEffect(() => {
+    if (showWizard && pathname.includes('/workspace/')) {
+      setShowWizard(false);
+    }
+  }, [pathname, showWizard]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -164,177 +180,263 @@ export default function EngineerLayout({ children }) {
       await supabase.auth.signOut();
     } catch (err) {
       console.error('Logout signOut() failed:', err);
-      // Continue with cleanup even if signOut fails
     } finally {
-      // Always clear all cookies and redirect
       clearAllSupabaseCookies();
-
-      // Set flag for one-time logout toast on login page
       sessionStorage.setItem('lucid-just-signed-out', 'true');
-
       router.replace('/login');
     }
   }, [supabase, router]);
 
+  // ── Wizard completion handler ──
+  const handleWizardComplete = useCallback(async (wizardResult) => {
+    // NOTE: Do NOT call setShowWizard(false) here — the wizard stays
+    // visible while we create the conversation + navigate.
+    // The useEffect on pathname closes it when the workspace URL loads.
+
+    // Create a real DB conversation
+    const stackLabel = wizardResult.stack || 'project';
+    const title = wizardResult.description
+      ? wizardResult.description.slice(0, 80)
+      : `New ${stackLabel} Project`;
+
+    try {
+      const conversation = await createConversation({
+        repoName: null,
+        repoProvider: null,
+        repoUrl: null,
+        branch: 'main',
+        title,
+      });
+
+      if (conversation) {
+        // Store the enhanced prompt so the workspace auto-starts with it
+        const prompt = wizardResult.enhancedPrompt || wizardResult.description || '';
+        if (prompt) {
+          try {
+            sessionStorage.setItem(`wizard_prompt_${conversation.id}`, prompt);
+            sessionStorage.setItem(`wizard_meta_${conversation.id}`, JSON.stringify({
+              stack: wizardResult.stack,
+              backend: wizardResult.backend,
+              deployment: wizardResult.deployment,
+              figmaUrl: wizardState.figmaUrl,
+            }));
+            // Store original description for project naming
+            sessionStorage.setItem(`wizard_desc_${conversation.id}`, wizardResult.description || '');
+          } catch (_) {}
+        }
+        // Use replace to avoid going back to the dashboard when pressing Back
+        router.replace(`/dashboard/engineer/workspace/${conversation.id}`);
+      } else {
+        const fallbackId = `scratch-${Date.now()}`;
+        router.replace(`/dashboard/engineer/workspace/${fallbackId}`);
+      }
+    } catch (err) {
+      console.error('[Layout] Wizard completion error:', err);
+      // Fallback: still navigate even if conversation creation fails
+      const fallbackId = `scratch-${Date.now()}`;
+      router.replace(`/dashboard/engineer/workspace/${fallbackId}`);
+    }
+  }, [router]);
+
+  // ── Close wizard when navigating away ──
+  useEffect(() => {
+    // If user navigates to a workspace, close the wizard
+    if (pathname.includes('/workspace/')) {
+      setShowWizard(false);
+    }
+  }, [pathname]);
+
   const isActive = (href) => pathname === href;
+  const wizardIsActive = showWizard;
 
   return (
-    <div className="h-screen flex bg-[#f0f4f9] dark:bg-[#0d1117] overflow-hidden transition-colors duration-200">
+    <WizardContext.Provider value={{ showWizard, setShowWizard }}>
+      <div className="h-screen flex bg-[#f0f4f9] dark:bg-[#0d1117] overflow-hidden transition-colors duration-200">
 
-      {/* ══ TOAST ══ */}
-      {toast && (
-        <Toast
-          message={toast.message}
-          type={toast.type}
-          onDone={() => setToast(null)}
-        />
-      )}
+        {/* ══ TOAST ══ */}
+        {toast && (
+          <Toast
+            message={toast.message}
+            type={toast.type}
+            onDone={() => setToast(null)}
+          />
+        )}
 
-      {/* ══ SIDEBAR ══ */}
-      <aside className={cn(
-        "h-full bg-white dark:bg-[#0d1117] border-r border-slate-200 dark:border-slate-800/80 flex flex-col shrink-0 transition-all duration-300 ease-in-out",
-        collapsed ? "w-[60px]" : "w-[240px]"
-      )}>
-
-        {/* Logo + Collapse Toggle */}
-        <div className={cn(
-          "border-b border-slate-100 dark:border-slate-800/60 flex items-center",
-          collapsed ? "px-2 pt-4 pb-4 justify-center" : "px-5 pt-5 pb-5 justify-between"
+        {/* ══ SIDEBAR ══ */}
+        <aside className={cn(
+          "h-full bg-white dark:bg-[#0d1117] border-r border-slate-200 dark:border-slate-800/80 flex flex-col shrink-0 transition-all duration-300 ease-in-out",
+          collapsed ? "w-[60px]" : "w-[240px]"
         )}>
-          <Link
-            href="/dashboard/engineer"
-            prefetch={true}
-            className="flex items-center gap-2.5"
-          >
-            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shrink-0">
-              <Zap className="w-4 h-4 text-white fill-current" />
-            </div>
-            {!collapsed && (
-              <span className="font-bold text-slate-900 dark:text-white text-[17px] tracking-tight">Lucid AI</span>
-            )}
-          </Link>
-          {!collapsed && (
-            <button
-              onClick={toggleCollapsed}
-              className="p-1 rounded-md text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.04] transition-colors"
-              title="Collapse sidebar"
-            >
-              <PanelLeftClose className="w-5 h-5" />
-            </button>
-          )}
-        </div>
 
-        {/* + New Project Button */}
-        <div className={cn("pt-4 pb-2", collapsed ? "px-2" : "px-3")}>
-          <Tooltip label="New Project" show={collapsed}>
-            <Link 
+          {/* Logo + Collapse Toggle */}
+          <div className={cn(
+            "border-b border-slate-100 dark:border-slate-800/60 flex items-center",
+            collapsed ? "px-2 pt-4 pb-4 justify-center" : "px-5 pt-5 pb-5 justify-between"
+          )}>
+            <Link
               href="/dashboard/engineer"
               prefetch={true}
-              className={cn(
-                "w-full flex items-center justify-center bg-blue-600 dark:bg-white text-white dark:text-slate-900 rounded-lg text-[14px] font-semibold hover:bg-blue-700 dark:hover:bg-slate-100 transition-colors active:scale-[0.98] shadow-sm shadow-blue-600/20 dark:shadow-none",
-                collapsed ? "px-2 py-3" : "gap-2 px-3 py-2.5"
-              )}
+              className="flex items-center gap-2.5"
+              onClick={() => setShowWizard(false)}
             >
-              <Plus className="w-4 h-4 shrink-0" strokeWidth={2.5} />
-              {!collapsed && "New Project"}
+              <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shrink-0">
+                <Zap className="w-4 h-4 text-white fill-current" />
+              </div>
+              {!collapsed && (
+                <span className="font-bold text-slate-900 dark:text-white text-[17px] tracking-tight">Lucid AI</span>
+              )}
             </Link>
-          </Tooltip>
-        </div>
-
-        {/* Section Label */}
-        {!collapsed && (
-          <div className="px-5 pt-4 pb-2">
-            <span className="text-[11px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-[0.08em]">
-              Workspace
-            </span>
-          </div>
-        )}
-        {collapsed && <div className="pt-3" />}
-
-        {/* Navigation */}
-        <nav className={cn("flex-1 space-y-px", collapsed ? "px-2" : "px-3")}>
-          {navItems.map((item) => (
-            <NavItem key={item.href} item={item} active={isActive(item.href)} collapsed={collapsed} />
-          ))}
-        </nav>
-
-        {/* Expand button when collapsed */}
-        {collapsed && (
-          <div className="px-2 py-2">
-            <Tooltip label="Expand sidebar" show={true}>
+            {!collapsed && (
               <button
                 onClick={toggleCollapsed}
-                className="w-full flex items-center justify-center p-2 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.04] transition-colors"
+                className="p-1 rounded-md text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.04] transition-colors"
+                title="Collapse sidebar"
               >
-                <PanelLeft className="w-5 h-5" />
+                <PanelLeftClose className="w-5 h-5" />
+              </button>
+            )}
+          </div>
+
+          {/* + New Project Button */}
+          <div className={cn("pt-4 pb-2", collapsed ? "px-2" : "px-3")}>
+            <Tooltip label="New Project" show={collapsed}>
+              <button
+                onClick={() => {
+                  // Navigate to dashboard where user can choose existing repo or new project
+                  router.push('/dashboard/engineer');
+                }}
+                className={cn(
+                  "w-full flex items-center justify-center rounded-lg text-[14px] font-semibold transition-colors active:scale-[0.98] shadow-sm",
+                  collapsed ? "px-2 py-3" : "gap-2 px-3 py-2.5",
+                  "bg-blue-600 dark:bg-white text-white dark:text-slate-900 hover:bg-blue-700 dark:hover:bg-slate-100 shadow-blue-600/20 dark:shadow-none"
+                )}
+              >
+                <Plus className="w-4 h-4 shrink-0" strokeWidth={2.5} />
+                {!collapsed && "New Project"}
               </button>
             </Tooltip>
           </div>
-        )}
 
-        {/* Bottom User + Logout */}
-        <div className="p-3 border-t border-slate-100 dark:border-slate-800/60">
-          <div className={cn(
-            "flex items-center rounded-lg",
-            collapsed ? "justify-center px-0 py-1" : "gap-2.5 px-2 py-1.5"
-          )}>
-            {/* Avatar */}
-            <Tooltip label={displayName} show={collapsed}>
-              {avatarUrl ? (
-                <img 
-                  src={avatarUrl} 
-                  alt={displayName}
-                  className="w-8 h-8 rounded-lg shrink-0 object-cover"
-                  referrerPolicy="no-referrer"
-                />
-              ) : (
-                <div className="w-8 h-8 rounded-lg bg-slate-800 dark:bg-slate-700 flex items-center justify-center shrink-0">
-                  <span className="text-[11px] font-semibold text-white leading-none">{initials}</span>
-                </div>
-              )}
-            </Tooltip>
+          {/* Section Label */}
+          {!collapsed && (
+            <div className="px-5 pt-4 pb-2">
+              <span className="text-[11px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-[0.08em]">
+                Workspace
+              </span>
+            </div>
+          )}
+          {collapsed && <div className="pt-3" />}
 
-            {/* User info + logout — only when expanded */}
-            {!collapsed && (
-              <>
-                <div className="flex-1 min-w-0">
-                  <p className="text-[14px] font-medium text-slate-700 dark:text-slate-200 truncate leading-tight">
-                    {displayName}
-                  </p>
-                  <p className="text-[12px] text-slate-400 dark:text-slate-500 truncate leading-tight">
-                    {displayEmail}
-                  </p>
-                </div>
+          {/* Wizard active indicator in sidebar */}
+          {wizardIsActive && (
+            <div className={cn("px-3 pb-1", collapsed && "px-2")}>
+              <div className={cn(
+                "w-full flex items-center rounded-lg text-[14px] font-medium bg-violet-50 dark:bg-violet-500/10 text-violet-700 dark:text-violet-400",
+                collapsed ? "justify-center px-2 py-3" : "gap-3 px-3 py-[10px]"
+              )}>
+                <Sparkles className="w-5 h-5 shrink-0 text-violet-500 dark:text-violet-400" strokeWidth={1.75} />
+                {!collapsed && (
+                  <>
+                    <span className="flex-1 text-left">New Project</span>
+                    <div className="w-1 h-1 rounded-full bg-violet-500 dark:bg-violet-400 shrink-0" />
+                  </>
+                )}
+              </div>
+            </div>
+          )}
 
-                {/* Logout button */}
-                <button 
-                  id="logout-button"
-                  onClick={handleLogout}
-                  disabled={isLoggingOut}
-                  className="p-1.5 rounded-md text-slate-300 dark:text-slate-600 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors shrink-0 disabled:opacity-50"
-                  title="Sign out"
+          {/* Navigation */}
+          <nav className={cn("flex-1 space-y-px", collapsed ? "px-2" : "px-3")}>
+            {navItems.map((item) => (
+              <NavItem key={item.href} item={item} active={isActive(item.href)} collapsed={collapsed} />
+            ))}
+          </nav>
+
+          {/* Expand button when collapsed */}
+          {collapsed && (
+            <div className="px-2 py-2">
+              <Tooltip label="Expand sidebar" show={true}>
+                <button
+                  onClick={toggleCollapsed}
+                  className="w-full flex items-center justify-center p-2 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.04] transition-colors"
                 >
-                  {isLoggingOut ? (
-                    <div className="w-3.5 h-3.5 border-2 border-slate-300 border-t-slate-600 rounded-full animate-spin" />
-                  ) : (
-                    <LogOut className="w-4 h-4" />
-                  )}
+                  <PanelLeft className="w-5 h-5" />
                 </button>
-              </>
-            )}
+              </Tooltip>
+            </div>
+          )}
+
+          {/* Bottom User + Logout */}
+          <div className="p-3 border-t border-slate-100 dark:border-slate-800/60">
+            <div className={cn(
+              "flex items-center rounded-lg",
+              collapsed ? "justify-center px-0 py-1" : "gap-2.5 px-2 py-1.5"
+            )}>
+              {/* Avatar */}
+              <Tooltip label={displayName} show={collapsed}>
+                {avatarUrl ? (
+                  <img 
+                    src={avatarUrl} 
+                    alt={displayName}
+                    className="w-8 h-8 rounded-lg shrink-0 object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div className="w-8 h-8 rounded-lg bg-slate-800 dark:bg-slate-700 flex items-center justify-center shrink-0">
+                    <span className="text-[11px] font-semibold text-white leading-none">{initials}</span>
+                  </div>
+                )}
+              </Tooltip>
+
+              {/* User info + logout — only when expanded */}
+              {!collapsed && (
+                <>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[14px] font-medium text-slate-700 dark:text-slate-200 truncate leading-tight">
+                      {displayName}
+                    </p>
+                    <p className="text-[12px] text-slate-400 dark:text-slate-500 truncate leading-tight">
+                      {displayEmail}
+                    </p>
+                  </div>
+
+                  {/* Logout button */}
+                  <button 
+                    id="logout-button"
+                    onClick={handleLogout}
+                    disabled={isLoggingOut}
+                    className="p-1.5 rounded-md text-slate-300 dark:text-slate-600 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors shrink-0 disabled:opacity-50"
+                    title="Sign out"
+                  >
+                    {isLoggingOut ? (
+                      <div className="w-3.5 h-3.5 border-2 border-slate-300 border-t-slate-600 rounded-full animate-spin" />
+                    ) : (
+                      <LogOut className="w-4 h-4" />
+                    )}
+                  </button>
+                </>
+              )}
+            </div>
           </div>
+        </aside>
+
+        {/* ══ MAIN CONTENT ══ */}
+        <main className={cn("flex-1", wizardIsActive ? "overflow-hidden" : "overflow-y-scroll")}>
+          {wizardIsActive ? (
+            <NewProjectWizard
+              onClose={() => setShowWizard(false)}
+              onWizardComplete={handleWizardComplete}
+            />
+          ) : (
+            children
+          )}
+        </main>
+
+        {/* ══ FIXED FLOATING THEME TOGGLE ══ */}
+        <div className="fixed bottom-6 right-6 z-50">
+          <ThemeModeSelector className="w-10 h-10 rounded-xl shadow-lg shadow-slate-900/10 dark:shadow-black/30 hover:shadow-xl hover:scale-105 transition-all duration-200 [&_svg]:w-4 [&_svg]:h-4" />
         </div>
-      </aside>
-
-      {/* ══ MAIN CONTENT ══ */}
-      <main className="flex-1 overflow-y-scroll">
-        {children}
-      </main>
-
-      {/* ══ FIXED FLOATING THEME TOGGLE ══ */}
-      <div className="fixed bottom-6 right-6 z-50">
-        <ThemeModeSelector className="w-10 h-10 rounded-xl shadow-lg shadow-slate-900/10 dark:shadow-black/30 hover:shadow-xl hover:scale-105 transition-all duration-200 [&_svg]:w-4 [&_svg]:h-4" />
       </div>
-    </div>
+    </WizardContext.Provider>
   );
 }

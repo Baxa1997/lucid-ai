@@ -1,0 +1,98 @@
+[
+  {
+    "type": "landing_page",
+    "keywords": ["landing", "homepage", "marketing", "portfolio", "showcase", "personal"],
+    "description": "Marketing or portfolio landing page",
+    "pages": ["Hero", "Features", "About", "Testimonials", "Pricing", "Contact", "Footer"],
+    "components": ["HeroSection", "FeatureCard", "TestimonialCard", "PricingCard", "ContactForm", "Navbar", "Footer"],
+    "features": ["responsive", "animations", "dark_mode", "smooth_scroll"],
+    "ui_style": "modern gradient with glassmorphism cards, bold typography, micro-animations"
+  },
+  {
+    "type": "admin_panel",
+    "keywords": ["admin", "dashboard", "panel", "management", "cms", "backoffice", "crm"],
+    "description": "Full CRUD admin dashboard with sidebar navigation",
+    "pages": ["Dashboard", "Users", "Settings", "Analytics", "Profile"],
+    "components": ["Layout", "Sidebar", "DataTable", "StatCard", "FormBuilder", "Modal", "SearchBar"],
+    "features": ["auth", "crud", "search", "pagination", "export", "role_based_access"],
+    "supabase_tables": ["users", "settings", "audit_logs"],
+    "ui_style": "clean professional with collapsible sidebar, data-dense tables, stat cards with trend indicators"
+  },
+  {
+    "type": "ecommerce",
+    "keywords": ["ecommerce", "shop", "store", "product", "cart", "marketplace", "catalog"],
+    "description": "Product catalog with shopping cart",
+    "pages": ["Home", "Products", "ProductDetail", "Cart", "Checkout", "Orders"],
+    "components": ["ProductCard", "CartDrawer", "SearchBar", "FilterSidebar", "PriceTag", "QuantitySelector", "ReviewStars"],
+    "features": ["search", "filter", "sort", "cart", "checkout", "responsive_grid"],
+    "supabase_tables": ["products", "orders", "categories"],
+    "ui_style": "modern minimal with product grid, floating cart, subtle shadows, hover zoom effects"
+  },
+  {
+    "type": "blog",
+    "keywords": ["blog", "articles", "posts", "news", "magazine", "content"],
+    "description": "Content publishing platform",
+    "pages": ["Home", "ArticleList", "ArticleDetail", "Categories", "About"],
+    "components": ["ArticleCard", "CategoryTag", "AuthorBadge", "TableOfContents", "ShareButtons", "Newsletter"],
+    "features": ["search", "categories", "tags", "reading_time", "responsive"],
+    "ui_style": "editorial clean with large typography, card-based layouts, reading-focused design"
+  },
+  {
+    "type": "saas_app",
+    "keywords": ["saas", "application", "app", "platform", "tool", "software", "service"],
+    "description": "SaaS web application with auth and dashboard",
+    "pages": ["Landing", "Login", "Signup", "Dashboard", "Settings", "Billing"],
+    "components": ["Navbar", "Sidebar", "StatCard", "UsageChart", "PricingTable", "ProfileEditor"],
+    "features": ["auth", "dashboard", "billing", "settings", "responsive"],
+    "supabase_tables": ["users", "subscriptions", "usage"],
+    "ui_style": "professional SaaS with gradient accents, clean dashboard layout, onboarding flow"
+  },
+  {
+    "type": "social_platform",
+    "keywords": ["social", "community", "forum", "feed", "chat", "messaging", "network"],
+    "description": "Social or community platform",
+    "pages": ["Feed", "Profile", "Messages", "Groups", "Discover", "Settings"],
+    "components": ["PostCard", "UserAvatar", "CommentThread", "MessageBubble", "FollowButton", "NotificationBell"],
+    "features": ["auth", "feed", "messaging", "profiles", "notifications", "search"],
+    "supabase_tables": ["users", "posts", "comments", "messages", "follows"],
+    "ui_style": "social media-inspired with cards, avatars, infinite scroll, real-time indicators"
+  },
+  {
+    "type": "booking_system",
+    "keywords": ["booking", "reservation", "appointment", "scheduling", "calendar", "hotel", "restaurant"],
+    "description": "Booking/reservation management",
+    "pages": ["Home", "Search", "DetailView", "BookingForm", "MyBookings", "Confirmation"],
+    "components": ["CalendarPicker", "TimeSlotGrid", "BookingCard", "SearchFilters", "PriceBreakdown"],
+    "features": ["search", "calendar", "booking_flow", "confirmation", "responsive"],
+    "supabase_tables": ["services", "bookings", "availability"],
+    "ui_style": "clean with calendar UI, step-by-step booking flow, confirmation cards"
+  },
+  {
+    "type": "task_manager",
+    "keywords": ["todo", "task", "project", "kanban", "trello", "jira", "board", "tracker"],
+    "description": "Task/project management board",
+    "pages": ["Board", "List", "TaskDetail", "Settings", "Team"],
+    "components": ["KanbanColumn", "TaskCard", "TaskModal", "LabelBadge", "AssigneeAvatar", "ProgressBar"],
+    "features": ["drag_drop", "labels", "assignees", "due_dates", "search", "filters"],
+    "supabase_tables": ["boards", "columns", "tasks", "labels"],
+    "ui_style": "Kanban-style with draggable columns, color-coded labels, minimal card design"
+  },
+  {
+    "type": "analytics_dashboard",
+    "keywords": ["analytics", "metrics", "reports", "charts", "insights", "monitoring", "data"],
+    "description": "Data visualization dashboard",
+    "pages": ["Overview", "Reports", "LiveMetrics", "Export", "Settings"],
+    "components": ["StatCard", "LineChart", "BarChart", "PieChart", "DataTable", "DateRangePicker", "MetricTrend"],
+    "features": ["charts", "real_time", "filters", "date_range", "export", "responsive"],
+    "ui_style": "data-dense with chart cards, metric sparklines, dark mode optimized"
+  },
+  {
+    "type": "documentation",
+    "keywords": ["docs", "documentation", "wiki", "knowledge", "help", "guide", "manual"],
+    "description": "Documentation or knowledge base",
+    "pages": ["Home", "DocPage", "Search", "Categories"],
+    "components": ["Sidebar", "TableOfContents", "SearchBar", "CodeBlock", "Breadcrumbs", "PrevNextNav"],
+    "features": ["search", "sidebar_navigation", "code_highlighting", "responsive"],
+    "ui_style": "clean readable with sidebar nav, code blocks, smooth typography"
+  }
+]

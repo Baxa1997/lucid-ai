@@ -19,9 +19,11 @@ export async function getIntegrations() {
 
   return {
     github: meta.github_integration || null,
-    // { token, connected }
+    // { token, connected, username, avatar }
     gitlab: meta.gitlab_integration || null,
-    // { token, host, connected }
+    // { token, host, connected, username, avatar }
+    bitbucket: meta.bitbucket_integration || null,
+    // { token, username, connected, displayName, avatar }
   };
 }
 
@@ -222,3 +224,92 @@ export async function fetchGitLabBranches(host, token, projectId) {
     return [];
   }
 }
+
+// ─────────────────────────────────────────────────
+//  Bitbucket Integration
+// ─────────────────────────────────────────────────
+
+/**
+ * Save Bitbucket app password. Requires repository:write scope.
+ * @param {string} username — Bitbucket username
+ * @param {string} appPassword — App password (not OAuth token)
+ */
+export async function saveBitbucketIntegration(username, appPassword) {
+  const supabase = getSupabaseBrowserClient();
+
+  const valid = await validateBitbucketToken(username, appPassword);
+  if (!valid.ok) return { ok: false, error: valid.error };
+
+  const { error } = await supabase.auth.updateUser({
+    data: {
+      bitbucket_integration: {
+        token: appPassword,
+        username,
+        connected: true,
+        displayName: valid.displayName,
+        avatar: valid.avatar,
+        connectedAt: new Date().toISOString(),
+      },
+    },
+  });
+
+  return error ? { ok: false, error: error.message } : { ok: true, username };
+}
+
+export async function disconnectBitbucket() {
+  const supabase = getSupabaseBrowserClient();
+  const { error } = await supabase.auth.updateUser({
+    data: { bitbucket_integration: null },
+  });
+  return !error;
+}
+
+async function validateBitbucketToken(username, appPassword) {
+  try {
+    const res = await fetch('https://api.bitbucket.org/2.0/user', {
+      headers: {
+        Authorization: `Basic ${btoa(`${username}:${appPassword}`)}`,
+      },
+    });
+    if (!res.ok) return { ok: false, error: 'Invalid username or app password' };
+    const data = await res.json();
+    return {
+      ok: true,
+      displayName: data.display_name,
+      avatar: data.links?.avatar?.href || '',
+    };
+  } catch {
+    return { ok: false, error: 'Failed to reach Bitbucket API' };
+  }
+}
+
+export async function fetchBitbucketRepos(username, appPassword) {
+  if (!username || !appPassword) return [];
+  try {
+    const res = await fetch(
+      `https://api.bitbucket.org/2.0/repositories/${username}?pagelen=50&sort=-updated_on`,
+      {
+        headers: {
+          Authorization: `Basic ${btoa(`${username}:${appPassword}`)}`,
+        },
+      }
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.values || []).map(r => ({
+      id: r.uuid,
+      name: r.full_name,
+      description: r.description || '',
+      language: r.language || '',
+      stars: 0,
+      updated: r.updated_on,
+      private: r.is_private,
+      provider: 'bitbucket',
+      defaultBranch: r.mainbranch?.name || 'main',
+      url: r.links?.html?.href || '',
+    }));
+  } catch {
+    return [];
+  }
+}
+

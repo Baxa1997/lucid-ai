@@ -27,8 +27,10 @@ import {
   getChatHistory,
   saveChatMessage,
 } from '@/lib/conversations';
+import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 import TaskProgress from '@/components/TaskProgress';
 import StopTaskButton from '@/components/StopTaskButton';
+import ExportCodeModal from '@/components/ExportCodeModal';
 
 // ── Status Component ───────────────────────────────────────
 function ConnectionStatus({ status, error }) {
@@ -378,6 +380,14 @@ function ConversationPageInner({ params }) {
   const [convLoading, setConvLoading] = useState(true);
   const prevMessagesLenRef = useRef(0);
 
+  // Repo info from chat_sessions (platform vs user repos)
+  const [repoInfo, setRepoInfo] = useState({
+    platformRepoUrl: null,
+    userRepoUrl: null,
+    userRepoProvider: null,
+    vercelUrl: null,
+  });
+
   // Load conversation and messages on mount (with timeout)
   useEffect(() => {
     let cancelled = false;
@@ -399,6 +409,27 @@ function ConversationPageInner({ params }) {
             console.log('[Chat] fallback messages:', msgs.length, 'items');
           }
           if (!cancelled) setSavedMessages(msgs);
+
+          // Load repo info from chat_sessions
+          try {
+            const sb = getSupabaseBrowserClient();
+            const { data: sessions } = await sb
+              .from('chat_sessions')
+              .select('platform_repo_url, user_repo_url, user_repo_provider, vercel_url')
+              .eq('project_id', conversationId)
+              .order('created_at', { ascending: false })
+              .limit(1);
+            if (!cancelled && sessions?.[0]) {
+              setRepoInfo({
+                platformRepoUrl: sessions[0].platform_repo_url || null,
+                userRepoUrl: sessions[0].user_repo_url || null,
+                userRepoProvider: sessions[0].user_repo_provider || null,
+                vercelUrl: sessions[0].vercel_url || null,
+              });
+            }
+          } catch (e) {
+            console.warn('[Workspace] Could not load repo info:', e);
+          }
         }
       } catch (err) {
         console.error('Failed to load conversation:', err);
@@ -427,20 +458,31 @@ function ConversationPageInner({ params }) {
   // Load git token from integrations when conversation is available
   const [gitTokenLoaded, setGitTokenLoaded] = useState(false);
   useEffect(() => {
-    if (!conversation) return;
-    // Scratch sessions (no repo_provider) don't need a git token
-    if (!conversation.repo_provider) {
+    // For new conversations that don't exist in the DB yet,
+    // conversation will be null. Mark git token as "loaded" (nothing to load).
+    if (!conversation && !convLoading) {
       setGitTokenLoaded(true);
       return;
     }
+    if (!conversation) return;
+
     (async () => {
       try {
         const { getIntegrations } = await import('@/lib/integrations');
         const intg = await getIntegrations();
+
         if (conversation.repo_provider === 'github' && intg.github?.token) {
           setGitToken(intg.github.token);
         } else if (conversation.repo_provider === 'gitlab' && intg.gitlab?.token) {
           setGitToken(intg.gitlab.token);
+        } else if (!conversation.repo_provider) {
+          // Scratch session — still load GitHub token if available so
+          // the backend can auto-create a repository for this project.
+          if (intg.github?.token) {
+            setGitToken(intg.github.token);
+          } else if (intg.gitlab?.token) {
+            setGitToken(intg.gitlab.token);
+          }
         }
       } catch (err) {
         console.error('Failed to load git token:', err);
@@ -448,7 +490,7 @@ function ConversationPageInner({ params }) {
         setGitTokenLoaded(true);
       }
     })();
-  }, [conversation]);
+  }, [conversation, convLoading]);
 
   // ── Agent session hook ──────────────────────────────────
   // IMPORTANT: Don't pass the token until ALL data has loaded:
@@ -494,6 +536,7 @@ function ConversationPageInner({ params }) {
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
   const [showFigmaInput, setShowFigmaInput] = useState(false);
   const [figmaUrl, setFigmaUrl] = useState('');
+  const [showExportModal, setShowExportModal] = useState(false);
   const fileInputRef = useRef(null);
   const videoInputRef = useRef(null);
   const toolsMenuRef = useRef(null);
@@ -504,6 +547,42 @@ function ConversationPageInner({ params }) {
       setInitialMessages(savedMessages);
     }
   }, [savedMessages, setInitialMessages]);
+
+  // ── Auto-start wizard task when workspace becomes ready ──
+  const wizardAutoStarted = useRef(false);
+  useEffect(() => {
+    if (status !== 'ready' || wizardAutoStarted.current) return;
+
+    try {
+      const key = `wizard_prompt_${conversationId}`;
+      const prompt = sessionStorage.getItem(key);
+      if (prompt) {
+        wizardAutoStarted.current = true;
+        // Read wizard metadata for project naming
+        const metaKey = `wizard_meta_${conversationId}`;
+        const metaStr = sessionStorage.getItem(metaKey);
+        // Clean up storage
+        sessionStorage.removeItem(key);
+        sessionStorage.removeItem(metaKey);
+
+        // Prepend metadata header so backend can derive a proper repo name
+        // Format: [LUCID_PROJECT] description=... | stack=... | backend=...
+        let finalPrompt = prompt;
+        if (metaStr) {
+          try {
+            const meta = JSON.parse(metaStr);
+            const descKey = `wizard_desc_${conversationId}`;
+            const origDesc = sessionStorage.getItem(descKey) || '';
+            sessionStorage.removeItem(descKey);
+            const header = `[LUCID_PROJECT] description=${origDesc || 'project'} | stack=${meta.stack || 'html-css'} | backend=${meta.backend || 'none'}`;
+            finalPrompt = `${header}\n\n${prompt}`;
+          } catch (_) {}
+        }
+        // Auto-send the enhanced prompt with metadata
+        setTimeout(() => sendMessage(finalPrompt), 300);
+      }
+    } catch (_) {}
+  }, [status, conversationId, sendMessage]);
 
   // ── Frontend save (guaranteed backup) ────────────────────
   // Backend also saves to chat_messages, but those saves can fail
@@ -794,6 +873,15 @@ function ConversationPageInner({ params }) {
       onDrop={handleDrop}
     >
 
+      {/* Export Code Modal */}
+      <ExportCodeModal
+        isOpen={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        projectSlug={conversation?.repo_name?.split('/').pop() || conversationId}
+        projectId={conversationId}
+      />
+
+
       {/* Full-page drag-and-drop overlay */}
       {isDragging && (
         <div className="fixed inset-0 z-[100] bg-blue-500/10 dark:bg-blue-500/15 backdrop-blur-[2px] border-2 border-dashed border-blue-400 dark:border-blue-500 flex items-center justify-center">
@@ -848,13 +936,22 @@ function ConversationPageInner({ params }) {
               websocket={{
                 send: (data) => {
                   try {
-                    // This relies on hook's stopSession internally generating a send
                     stopSession();
                   } catch(e) {}
                 }
               }} 
               currentTaskId={sessionId} 
             />
+
+            {/* Export Code */}
+            <button
+              onClick={() => setShowExportModal(true)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold border border-indigo-200 dark:border-indigo-500/30 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-500/20 transition-all"
+              title="Export code to your repo"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              Export
+            </button>
 
             <ConnectionStatus status={status} error={error} />
 
@@ -923,21 +1020,35 @@ function ConversationPageInner({ params }) {
             {/* Welcome State — only after loading completes and no messages/phases exist */}
             {!convLoading && messages.length === 0 && phases.length === 0 && status !== 'running' && status !== 'preparing' && status !== 'connecting' && (
               <div className="flex flex-col items-center justify-center py-24 text-center">
-                <div className="text-6xl mb-6">🔨</div>
-                <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-8">
-                  Let&apos;s start building!
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-blue-600 flex items-center justify-center mb-6 shadow-lg shadow-violet-500/20 mx-auto">
+                  <Sparkles className="w-7 h-7 text-white" />
+                </div>
+                <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-2">
+                  What shall we build?
                 </h2>
-                <div className="grid grid-cols-2 gap-3 max-w-lg">
+                <p className="text-sm text-slate-400 dark:text-slate-500 mb-8 max-w-md">
+                  Describe your project below, or use the setup wizard for a guided experience.
+                </p>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setShowWizard(true)}
+                    className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-violet-600 to-blue-600 text-white rounded-xl text-sm font-bold hover:from-violet-700 hover:to-blue-700 shadow-sm shadow-violet-600/20 transition-all active:scale-[0.97]"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    Open Project Wizard
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-3 max-w-lg mt-8">
                   {[
-                    { icon: '🔄', label: 'Increase test coverage' },
-                    { icon: '🔀', label: 'Auto-merge PRs' },
-                    { icon: '📄', label: 'Fix README' },
-                    { icon: '📦', label: 'Clean dependencies' },
+                    { icon: '🌐', label: 'Simple HTML & CSS site' },
+                    { icon: '⚛', label: 'React dashboard app' },
+                    { icon: '▲', label: 'Next.js landing page' },
+                    { icon: '📦', label: 'REST API with Express' },
                   ].map((suggestion) => (
                     <button
                       key={suggestion.label}
                       onClick={() => setChatInput(suggestion.label)}
-                      className="flex items-center gap-3 px-5 py-3 bg-white/5 dark:bg-white/[0.04] border border-slate-200 dark:border-slate-700/60 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-500 hover:bg-white/10 dark:hover:bg-white/[0.07] transition-all"
+                      className="flex items-center gap-3 px-5 py-3 bg-white dark:bg-white/[0.04] border border-slate-200 dark:border-slate-700/60 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-300 hover:border-violet-300 dark:hover:border-violet-500/50 hover:bg-violet-50 dark:hover:bg-violet-500/5 transition-all"
                     >
                       <span className="text-base">{suggestion.icon}</span>
                       {suggestion.label}
@@ -1350,14 +1461,47 @@ function ConversationPageInner({ params }) {
 
             {/* Bottom repo/branch bar */}
             <div className="flex items-center gap-3 mt-3">
-              <span className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 dark:bg-white/[0.04] border border-slate-200 dark:border-slate-700/50 rounded-lg text-xs font-semibold text-slate-400 dark:text-slate-500">
-                {conversation?.repo_provider === 'github' ? <Github className="w-3 h-3" /> : <GitBranch className="w-3 h-3" />}
-                {conversation?.repo_name || 'No Repo Connected'}
-              </span>
+              {repoInfo.userRepoUrl ? (
+                /* User exported to their own repo — show with link */
+                <a
+                  href={repoInfo.userRepoUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 dark:bg-white/[0.04] border border-slate-200 dark:border-slate-700/50 rounded-lg text-xs font-semibold text-blue-400 hover:text-blue-300 transition-colors cursor-pointer"
+                >
+                  {repoInfo.userRepoProvider === 'github' ? <Github className="w-3 h-3" /> : <GitBranch className="w-3 h-3" />}
+                  {repoInfo.userRepoUrl.replace(/https?:\/\/(github|gitlab)\.com\//, '')}
+                  <ExternalLink className="w-3 h-3 opacity-50" />
+                </a>
+              ) : repoInfo.platformRepoUrl ? (
+                /* Platform-hosted — internal storage, no link */
+                <span className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-xs font-semibold text-emerald-400">
+                  <Globe className="w-3 h-3" />
+                  Platform Hosted
+                </span>
+              ) : (
+                /* No repo at all */
+                <span className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 dark:bg-white/[0.04] border border-slate-200 dark:border-slate-700/50 rounded-lg text-xs font-semibold text-slate-400 dark:text-slate-500">
+                  <GitBranch className="w-3 h-3" />
+                  {conversation?.repo_name || 'No Repo Connected'}
+                </span>
+              )}
               <span className="flex items-center gap-1.5 px-3 py-1.5 bg-white/5 dark:bg-white/[0.04] border border-slate-200 dark:border-slate-700/50 rounded-lg text-xs font-semibold text-slate-400 dark:text-slate-500">
                 <GitBranch className="w-3 h-3" />
-                {conversation?.branch || 'No Branch'}
+                {conversation?.branch || 'main'}
               </span>
+              {repoInfo.vercelUrl && (
+                <a
+                  href={repoInfo.vercelUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-blue-500/10 to-violet-500/10 border border-blue-500/20 rounded-lg text-xs font-bold text-blue-400 hover:text-blue-300 transition-colors cursor-pointer"
+                >
+                  <Globe className="w-3 h-3" />
+                  Live Preview
+                  <ExternalLink className="w-3 h-3 opacity-50" />
+                </a>
+              )}
             </div>
           </div>
         </div>

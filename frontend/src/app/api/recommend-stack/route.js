@@ -1,0 +1,110 @@
+import { NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/gatekeeper';
+
+// ─────────────────────────────────────────────────────────
+//  POST /api/recommend-stack
+//  Given a project description, picks the best framework.
+// ─────────────────────────────────────────────────────────
+
+const ANTHROPIC_BASE = 'https://api.anthropic.com/v1/messages';
+
+const SYSTEM_PROMPT = `You are a frontend framework advisor. Given a project description, pick the single best frontend framework from: Next.js, React, Vue.js, Angular.
+
+Rules:
+- Admin panels → Angular
+- Ecommerce or marketing sites → Next.js
+- Dashboards or SaaS → React
+- Content sites → Vue.js
+
+Reply with ONLY valid JSON: {"framework":"<name>","reason":"<one short sentence why>"}
+No markdown, no extra text.`;
+
+export async function POST(req) {
+  const authResult = await requireAuth();
+  if (!authResult.ok) return authResult.response;
+
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+
+  const { description } = body;
+  if (!description?.trim()) {
+    return NextResponse.json(
+      { error: 'Description is required' },
+      { status: 400 }
+    );
+  }
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return NextResponse.json(
+      { error: 'ANTHROPIC_API_KEY is not configured' },
+      { status: 500 }
+    );
+  }
+
+  try {
+    const response = await fetch(ANTHROPIC_BASE, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 128,
+        system: SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: description.trim() }],
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      console.error('[recommend-stack] Claude API error:', response.status, err);
+      return NextResponse.json(
+        { error: 'Failed to get recommendation' },
+        { status: 502 }
+      );
+    }
+
+    const data = await response.json();
+    const raw = data.content?.[0]?.text || '';
+
+    // Parse the JSON response
+    try {
+      const parsed = JSON.parse(raw);
+      // Normalize framework name → id
+      const nameMap = {
+        'next.js': 'nextjs',
+        'nextjs': 'nextjs',
+        'react': 'react',
+        'vue.js': 'vue',
+        'vuejs': 'vue',
+        'vue': 'vue',
+        'angular': 'angular',
+      };
+      const stackId = nameMap[parsed.framework?.toLowerCase()] || 'nextjs';
+      return NextResponse.json({
+        stack: stackId,
+        reason: parsed.reason || 'Best fit for your project',
+      });
+    } catch {
+      // Fallback: try to extract framework name from raw text
+      const lower = raw.toLowerCase();
+      if (lower.includes('angular')) return NextResponse.json({ stack: 'angular', reason: 'Best fit for your project' });
+      if (lower.includes('vue')) return NextResponse.json({ stack: 'vue', reason: 'Best fit for your project' });
+      if (lower.includes('react') && !lower.includes('next')) return NextResponse.json({ stack: 'react', reason: 'Best fit for your project' });
+      return NextResponse.json({ stack: 'nextjs', reason: 'Best fit for your project' });
+    }
+  } catch (err) {
+    console.error('[recommend-stack] Network error:', err);
+    return NextResponse.json(
+      { error: 'Failed to reach Claude API' },
+      { status: 502 }
+    );
+  }
+}
