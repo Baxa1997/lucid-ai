@@ -1,75 +1,29 @@
 // ─────────────────────────────────────────────────────────
 //  Lucid AI — Nginx Config Generator
-//  Generates nginx.conf for SPA routing.
+//  Generates nginx.conf for SPA routing + static asset caching.
 // ─────────────────────────────────────────────────────────
 
 /**
  * Generate nginx.conf for the project.
  *
  * @param {object} opts
- * @param {boolean} opts.isAdmin — whether this is an admin panel (adds remoteEntry.js location)
+ * @param {boolean} opts.isAdmin — whether this is an admin panel
  * @returns {string}
  */
 export function generateNginxConf({ isAdmin = false } = {}) {
-  if (isAdmin) {
-    return `user  nginx;
-worker_processes  1;
-error_log  /var/log/nginx/error.log warn;
-pid        /var/run/nginx.pid;
-events {
-  worker_connections  1024;
-}
-http {
-  include       /etc/nginx/mime.types;
-  default_type  application/octet-stream;
-  log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
-                    '$status $body_bytes_sent "$http_referer" '
-                    '"$http_user_agent" "$http_x_forwarded_for"';
-  access_log  /var/log/nginx/access.log  main;
-  sendfile        on;
-  keepalive_timeout   65;
-  server {
-    gzip on;
-    gzip_types      text/plain application/xml;
-    gzip_proxied    no-cache no-store private expired auth;
-    gzip_min_length 1000;
-    listen       80;
-    server_name  localhost;
-    location / {
-      root   /build;
-      index  index.html;
-      try_files $uri $uri/ /index.html;
-    }
-    location /assets/remoteEntry.js {
-      root /build;
-    }
-    error_page   500 502 503 504  /50x.html;
-    location = /50x.html {
-      root   /usr/share/nginx/html;
-    }
-  }
-}
-`;
-  }
-
   return `server {
     listen 80;
     server_name _;
-
-    root /build;
+    root /usr/share/nginx/html;
     index index.html;
-
-    gzip on;
-    gzip_types
-        text/plain
-        text/css
-        application/javascript
-        application/json
-        application/xml
-        image/svg+xml;
 
     location / {
         try_files $uri $uri/ /index.html;
+    }
+
+    location ~* \\.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
     }
 }
 `;

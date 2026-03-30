@@ -27,7 +27,7 @@ from app.services.sessions import (
     store as session_store,
 )
 from app.services.git_operations import push_changes, get_git_status
-from app.services.task_pipeline import run_pipeline
+from app.services.task_pipeline import run_pipeline, PLATFORM_GITHUB_TOKEN
 from app.services.workspace_manager import workspace_manager
 from app.supabase_client import db_client
 
@@ -203,27 +203,30 @@ async def websocket_agent(websocket: WebSocket):
         # ── 1.5 Resolve LLM Settings (Handshake > Supabase > Default) ──
         model_provider = raw.get("modelProvider") or raw.get("model_provider")
         api_key = raw.get("apiKey") or raw.get("api_key")
+        user_package_manager = "npm"  # default, may be overridden from user_settings
 
-        if not model_provider or not api_key:
-            try:
-                async with db_client(user_jwt) as client:
-                    q = client.table("user_settings").select("*").eq("user_id", user_id).maybe_single()
-                    res = await q.execute()
-                    if res.data:
-                        logger.info("Applying saved LLM settings for user %s", user_id)
-                        if not model_provider:
-                            model_provider = res.data.get("llm_model")
-                        if not api_key:
-                            enc = res.data.get("api_key_enc")
-                            iv = res.data.get("api_key_iv")
-                            if enc and iv:
-                                from app.utils.crypto import decrypt_api_key
-                                try:
-                                    api_key = decrypt_api_key(enc, iv)
-                                except Exception as dec_err:
-                                    logger.error("Failed to decrypt API key: %s", dec_err)
-            except Exception as db_err:
-                logger.warning("Failed to fetch user settings from Supabase: %s", db_err)
+        # Always fetch user_settings — needed for package_manager even if API key is provided
+        try:
+            async with db_client(user_jwt) as client:
+                q = client.table("user_settings").select("*").eq("user_id", user_id).maybe_single()
+                res = await q.execute()
+                if res.data:
+                    logger.info("Applying saved settings for user %s", user_id)
+                    if not model_provider:
+                        model_provider = res.data.get("llm_model")
+                    if not api_key:
+                        enc = res.data.get("api_key_enc")
+                        iv = res.data.get("api_key_iv")
+                        if enc and iv:
+                            from app.utils.crypto import decrypt_api_key
+                            try:
+                                api_key = decrypt_api_key(enc, iv)
+                            except Exception as dec_err:
+                                logger.error("Failed to decrypt API key: %s", dec_err)
+                    # Always read package manager preference
+                    user_package_manager = res.data.get("package_manager") or "npm"
+        except Exception as db_err:
+            logger.warning("Failed to fetch user settings from Supabase: %s", db_err)
 
         if not model_provider:
             model_provider = settings.DEFAULT_PROVIDER
@@ -451,12 +454,24 @@ async def websocket_agent(websocket: WebSocket):
                 )
 
             if context_parts:
-                enriched_task = (
-                    "\n\n---\n\n".join(context_parts)
-                    + f"\n\n---\n\n"
-                    f"Now, here is my task:\n{task}\n"
-                    f"{_build_agent_guidelines()}"
-                )
+                # IMPORTANT: if the task has a [LUCID_PROJECT] wizard header, keep it
+                # at the very top so validate_inputs() early-exit detection always finds
+                # it on line 0. Context is appended AFTER the task in that case.
+                if task and "[LUCID_PROJECT]" in task[:200]:
+                    enriched_task = (
+                        f"{task}\n\n"
+                        f"---\n\n"
+                        f"## Previous conversation context\n\n"
+                        + "\n\n---\n\n".join(context_parts)
+                        + f"\n\n{_build_agent_guidelines()}"
+                    )
+                else:
+                    enriched_task = (
+                        "\n\n---\n\n".join(context_parts)
+                        + f"\n\n---\n\n"
+                        f"Now, here is my task:\n{task}\n"
+                        f"{_build_agent_guidelines()}"
+                    )
             else:
                 enriched_task = f"{task}{_build_agent_guidelines()}"
 
@@ -474,6 +489,7 @@ async def websocket_agent(websocket: WebSocket):
                 "gitlab_token": session.git_token or "",
                 "selected_branch": session.branch or "main",
                 "git_token": session.git_token or "",
+                "package_manager": user_package_manager,
             }
 
             # Run pipeline as a cancellable task so stop messages work
@@ -545,6 +561,29 @@ async def websocket_agent(websocket: WebSocket):
                         session.workspace_dir = result_path
                 except Exception:
                     pass
+
+                # ── BUG FIX: Hydrate session.repo_url after initial project creation ──
+                # If this was a wizard project (scratch mode), the pipeline created a
+                # GitHub repo in Phase 7. Update session.repo_url so follow-up tasks
+                # reuse the same repo instead of creating a new one.
+                if session and not session.repo_url and chat_session_id:
+                    try:
+                        async with db_client(user_jwt) as client:
+                            repo_check = await (
+                                client.table("chat_sessions")
+                                .select("platform_repo_url")
+                                .eq("id", chat_session_id)
+                                .maybe_single()
+                                .execute()
+                            )
+                        if repo_check.data and repo_check.data.get("platform_repo_url"):
+                            session.repo_url = repo_check.data["platform_repo_url"]
+                            logger.info(
+                                "Session repo_url hydrated after project creation: %s",
+                                session.repo_url,
+                            )
+                    except Exception as hydrate_err:
+                        logger.warning("Failed to hydrate session.repo_url: %s", hydrate_err)
 
                 # Build summary
                 files_changed = await _get_files_changed(session)
@@ -664,6 +703,34 @@ async def websocket_agent(websocket: WebSocket):
 
             # ── Step: Working — run pipeline as cancellable task ──
             logger.info("[%s] Starting task: %s", session.session_id, content[:100])
+
+            # ── BUG FIX: Hydrate session.repo_url from DB for follow-up tasks ──
+            # If session.repo_url is empty (wizard project), check chat_sessions
+            # for a platform_repo_url saved during Phase 7 of a previous task.
+            if session and not session.repo_url and chat_session_id:
+                try:
+                    async with db_client(user_jwt) as client:
+                        repo_check = await (
+                            client.table("chat_sessions")
+                            .select("platform_repo_url")
+                            .eq("id", chat_session_id)
+                            .maybe_single()
+                            .execute()
+                        )
+                    if repo_check.data and repo_check.data.get("platform_repo_url"):
+                        session.repo_url = repo_check.data["platform_repo_url"]
+                        # Use module-level PLATFORM_GITHUB_TOKEN (loaded at startup)
+                        platform_token = PLATFORM_GITHUB_TOKEN
+                        if platform_token:
+                            session.git_token = platform_token
+                        session.branch = session.branch or "main"
+                        logger.info(
+                            "Follow-up: session.repo_url hydrated from DB: %s",
+                            session.repo_url,
+                        )
+                except Exception as hydrate_err:
+                    logger.warning("Failed to hydrate session.repo_url for follow-up: %s", hydrate_err)
+
             pipeline_task_id = str(uuid.uuid4())[:8]
             pipeline_user = {
                 "anthropic_api_key": api_key,
@@ -675,6 +742,7 @@ async def websocket_agent(websocket: WebSocket):
                 "gitlab_token": session.git_token or "",
                 "selected_branch": session.branch or "main",
                 "git_token": session.git_token or "",
+                "package_manager": user_package_manager,
             }
 
             # Run pipeline as cancellable task (same pattern as initial task)

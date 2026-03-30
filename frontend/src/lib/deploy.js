@@ -153,7 +153,12 @@ export async function deployProject({
   }
 
   // ── Step 2: Generate infrastructure files ──────────
-  const docker = generateDockerfile({ stack });
+  // Detect package manager from generated files
+  const detectedPM = generatedFiles.some(f => f.path === 'yarn.lock') ? 'yarn'
+    : generatedFiles.some(f => f.path === 'pnpm-lock.yaml') ? 'pnpm'
+    : generatedFiles.some(f => f.path === 'bun.lockb') ? 'bun'
+    : 'npm';
+  const docker = generateDockerfile({ stack, packageManager: detectedPM });
   const allFiles = [...generatedFiles];
 
   if (useGitLab) {

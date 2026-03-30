@@ -31,6 +31,7 @@ import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 import TaskProgress from '@/components/TaskProgress';
 import StopTaskButton from '@/components/StopTaskButton';
 import ExportCodeModal from '@/components/ExportCodeModal';
+import GenerationProgress from '@/components/GenerationProgress';
 
 // ── Status Component ───────────────────────────────────────
 function ConnectionStatus({ status, error }) {
@@ -558,15 +559,17 @@ function ConversationPageInner({ params }) {
       const prompt = sessionStorage.getItem(key);
       if (prompt) {
         wizardAutoStarted.current = true;
-        // Read wizard metadata for project naming
+        // Read wizard metadata for project naming + pre-cloned repo info
         const metaKey = `wizard_meta_${conversationId}`;
         const metaStr = sessionStorage.getItem(metaKey);
         // Clean up storage
         sessionStorage.removeItem(key);
         sessionStorage.removeItem(metaKey);
 
-        // Prepend metadata header so backend can derive a proper repo name
-        // Format: [LUCID_PROJECT] description=... | stack=... | backend=...
+        // Prepend metadata header so backend can derive the right GitHub template.
+        // Format: [LUCID_PROJECT] description=... | stack=... | backend=... | ...
+        // The backend uses stack= to look up the template in its own registry —
+        // no clone_url or repo_url needed from the frontend.
         let finalPrompt = prompt;
         if (metaStr) {
           try {
@@ -574,12 +577,23 @@ function ConversationPageInner({ params }) {
             const descKey = `wizard_desc_${conversationId}`;
             const origDesc = sessionStorage.getItem(descKey) || '';
             sessionStorage.removeItem(descKey);
-            const header = `[LUCID_PROJECT] description=${origDesc || 'project'} | stack=${meta.stack || 'html-css'} | backend=${meta.backend || 'none'}`;
+
+            const parts = [
+              `description=${origDesc || 'project'}`,
+              `stack=${meta.stack || 'nextjs'}`,
+              `backend=${meta.backend || 'none'}`,
+            ];
+            if (meta.projectType) parts.push(`project_type=${meta.projectType}`);
+            if (meta.deployment)  parts.push(`deployment=${meta.deployment}`);
+            if (meta.figmaUrl)    parts.push(`figma_url=${meta.figmaUrl}`);
+
+            const header = `[LUCID_PROJECT] ${parts.join(' | ')}`;
             finalPrompt = `${header}\n\n${prompt}`;
           } catch (_) {}
         }
         // Auto-send the enhanced prompt with metadata
         setTimeout(() => sendMessage(finalPrompt), 300);
+
       }
     } catch (_) {}
   }, [status, conversationId, sendMessage]);
@@ -877,7 +891,11 @@ function ConversationPageInner({ params }) {
       <ExportCodeModal
         isOpen={showExportModal}
         onClose={() => setShowExportModal(false)}
-        projectSlug={conversation?.repo_name?.split('/').pop() || conversationId}
+        projectSlug={
+          conversation?.repo_name?.split('/').pop() ||
+          (conversation?.title || 'project').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50) ||
+          conversationId
+        }
         projectId={conversationId}
       />
 
@@ -1067,6 +1085,9 @@ function ConversationPageInner({ params }) {
 
             {/* Structured progress steps from TaskProgress */}
             <TaskProgress phases={phases} status={status} completionSummary={completionSummary} />
+
+            {/* Generation progress — real-time batch progress during new project creation */}
+            <GenerationProgress isVisible={status === 'running' || status === 'preparing'} />
 
             {/* Thinking indicator — shown while agent processes before first phase */}
             {phases.length === 0 && status === 'running' && (

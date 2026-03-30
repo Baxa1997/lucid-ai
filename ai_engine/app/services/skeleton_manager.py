@@ -2,9 +2,13 @@
 Skeleton Manager — copies pre-made project skeletons to workspace.
 
 Maps stack + backend flag → skeleton directory, then copies all files.
+
+IMPORTANT: html-css skeleton is ONLY used when user explicitly selects
+"HTML & CSS" in the wizard. Default fallback is always react-vite.
 """
 
 import os
+import json
 import shutil
 import logging
 
@@ -26,36 +30,91 @@ STACK_MAP = {
     "nextjs": "nextjs",
     "next": "nextjs",
     "next.js": "nextjs",
-    # Plain HTML
+    # Plain HTML — ONLY when explicitly selected, never as fallback
     "html": "html-css",
     "html-css": "html-css",
     "html/css": "html-css",
-    "static": "html-css",
-    "vanilla": "html-css",
+    # NOTE: "static" and "vanilla" are NOT mapped to html-css anymore.
+    # They fall through to the default (react-vite) which is a better experience.
     # Admin (detected by keywords, not just stack)
     "admin-react": "admin-react",
+    # Auto/empty → resolved by _detect_stack_from_description() below
+    "auto": None,
 }
 
+# Keywords from app_patterns.json that suggest specific skeletons
+_ADMIN_KEYWORDS = [
+    "admin", "dashboard", "panel", "management", "cms",
+    "backoffice", "back-office", "crm", "control panel",
+]
+_NEXTJS_KEYWORDS = [
+    "website", "landing", "portfolio", "marketing", "blog",
+    "homepage", "showcase", "personal", "documentation",
+    "docs", "wiki", "magazine",
+]
 
-def get_skeleton_for_stack(stack: str, is_admin: bool = False) -> str:
+
+def _detect_stack_from_description(task: str) -> str:
+    """Auto-detect the best skeleton from the task description.
+
+    Rules:
+        - admin/dashboard/panel/crm → admin-react
+        - website/landing/portfolio → nextjs
+        - app/saas/platform/ecommerce → react-vite
+        - default → react-vite (NEVER html-css)
+    """
+    task_lower = (task or "").lower()
+
+    # Admin check first (highest priority)
+    if any(kw in task_lower for kw in _ADMIN_KEYWORDS):
+        return "admin-react"
+
+    # Website/landing/portfolio → nextjs (better SEO, SSR support)
+    if any(kw in task_lower for kw in _NEXTJS_KEYWORDS):
+        return "nextjs"
+
+    # Everything else → react-vite as the safe default
+    return "react-vite"
+
+
+def get_skeleton_for_stack(stack: str, is_admin: bool = False, task: str = "") -> str:
     """Map stack string + admin flag → skeleton directory path.
 
     Returns absolute path to the skeleton folder, or empty string if unknown.
     """
     stack_lower = (stack or "").strip().lower()
 
-    # Admin panel override
-    if is_admin and stack_lower in ("react", "react-vite", "vite", ""):
+    # Admin panel override — regardless of stack
+    if is_admin and stack_lower in ("react", "react-vite", "vite", "", "auto"):
         skeleton_name = "admin-react"
+    elif stack_lower in STACK_MAP:
+        skeleton_name = STACK_MAP[stack_lower]
+        # If mapped to None (auto), detect from task description
+        if skeleton_name is None:
+            skeleton_name = _detect_stack_from_description(task)
+    elif not stack_lower or stack_lower == "auto":
+        # Empty or auto stack → detect from task description
+        skeleton_name = _detect_stack_from_description(task)
     else:
-        skeleton_name = STACK_MAP.get(stack_lower, "react-vite")  # default to react-vite
+        # Unknown stack → default to react-vite (NEVER html-css)
+        skeleton_name = "react-vite"
 
     skeleton_path = os.path.normpath(os.path.join(SKELETONS_DIR, skeleton_name))
+
+    # Debug logging (requested)
+    logger.debug("Stack detected: %s → skeleton: %s", stack_lower, skeleton_name)
+    logger.debug("Skeleton path: %s", skeleton_path)
+    logger.info(
+        "get_skeleton_for_stack: stack=%s, is_admin=%s → skeleton=%s (path=%s)",
+        stack_lower, is_admin, skeleton_name, skeleton_path,
+    )
+
     if os.path.isdir(skeleton_path):
         return skeleton_path
 
-    # Fallback to react-vite
+    # Fallback to react-vite (NEVER html-css)
     fallback = os.path.normpath(os.path.join(SKELETONS_DIR, "react-vite"))
+    logger.warning("Skeleton '%s' not found, falling back to react-vite", skeleton_name)
     if os.path.isdir(fallback):
         return fallback
 
@@ -64,12 +123,8 @@ def get_skeleton_for_stack(stack: str, is_admin: bool = False) -> str:
 
 def detect_admin_from_task(task: str) -> bool:
     """Check if the task description suggests an admin panel."""
-    keywords = [
-        "admin", "dashboard", "panel", "management", "cms",
-        "backoffice", "back-office", "crm", "control panel",
-    ]
     task_lower = (task or "").lower()
-    return any(kw in task_lower for kw in keywords)
+    return any(kw in task_lower for kw in _ADMIN_KEYWORDS)
 
 
 def copy_skeleton(skeleton_path: str, workspace_path: str) -> list:
@@ -110,4 +165,13 @@ def copy_skeleton(skeleton_path: str, workspace_path: str) -> list:
             os.makedirs(dir_path, exist_ok=True)
 
     logger.info("Copied %d skeleton files from %s", len(copied), os.path.basename(skeleton_path))
+
+    # Debug logging (requested)
+    try:
+        ws_files = os.listdir(workspace_path)[:10]
+        logger.debug("Workspace files after copy: %s", ws_files)
+    except Exception:
+        pass
+
     return copied
+

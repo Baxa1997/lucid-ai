@@ -5,15 +5,17 @@ import { generateDockerfile } from '@/lib/templates/dockerfile';
 import { generateNginxConf } from '@/lib/templates/nginx';
 import { generateGitlabCI } from '@/lib/templates/cicd';
 import { generateMakefile } from '@/lib/templates/makefile';
+import { generateOpsFolder } from '@/lib/templates/ops';
 
 // ─────────────────────────────────────────────────────────
 //  POST /api/export-code
 //
-//  Clones the platform project's generated code and pushes it
-//  to a NEW repo on the user's connected provider (GitHub,
-//  GitLab, or Bitbucket) without touching the platform copy.
+//  3-step export flow:
+//    Step 1: Create repo on user's provider (GitHub/GitLab/Bitbucket)
+//    Step 2: Fetch source files → push to new repo
+//    Step 3: (optional) Add CI/CD files in a separate commit
 //
-//  Body: { projectId, provider, repoName, isPrivate }
+//  Body: { projectId, provider, repoName, isPrivate, includeCICD }
 // ─────────────────────────────────────────────────────────
 
 export async function POST(req) {
@@ -42,8 +44,6 @@ export async function POST(req) {
   }
 
   // ── Get user's integration token ───────────────────
-  // ctx.user comes from requireAuth() → supabase.auth.getUser()
-  // and already contains user_metadata with integration tokens.
   const user = ctx.user;
   if (!user) {
     return NextResponse.json({ error: 'User not found' }, { status: 404 });
@@ -58,8 +58,115 @@ export async function POST(req) {
       { status: 400 }
     );
   }
-  // ── Get project files from deployment record ───────
+
+  const cleanName = repoName.trim().toLowerCase().replace(/[^a-z0-9-_.]/g, '-');
+
+  // ══════════════════════════════════════════════════════
+  //  PRE-CHECK: Validate token before doing anything
+  //  Catches expired/revoked tokens early with clear error
+  // ══════════════════════════════════════════════════════
+  try {
+    const tokenValid = await validateProviderToken(provider, integration);
+    if (!tokenValid.ok) {
+      return NextResponse.json(
+        {
+          error: `Your ${provider === 'github' ? 'GitHub' : provider === 'gitlab' ? 'GitLab' : 'Bitbucket'} token has expired or been revoked. Please reconnect with a new token.`,
+          needsReconnect: true,
+          provider,
+        },
+        { status: 401 }
+      );
+    }
+  } catch (err) {
+    console.warn('[export-code] Token validation failed:', err.message);
+    // Non-fatal — proceed anyway, repo creation will catch actual errors
+  }
+
+  // ══════════════════════════════════════════════════════
+  //  STEP 1: Create repo FIRST (before fetching files)
+  //  This always succeeds if the token is valid.
+  // ══════════════════════════════════════════════════════
+  let repoUrl;
+  let repoId; // GitLab project ID or GitHub repo full name
+  let defaultBranch = 'main';
+  let gitlabPathWithNamespace = '';
+
+  try {
+    if (provider === 'github') {
+      const result = await createGitHubRepo({
+        token: integration.token,
+        repoName: cleanName,
+        isPrivate,
+      });
+      repoUrl = result.htmlUrl;
+      repoId = result.fullName;
+    } else if (provider === 'gitlab') {
+      const result = await createGitLabRepo({
+        token: integration.token,
+        host: integration.host || 'https://gitlab.com',
+        repoName: cleanName,
+        isPrivate,
+      });
+      repoUrl = result.webUrl;
+      repoId = result.id;
+      defaultBranch = result.defaultBranch;
+      gitlabPathWithNamespace = result.pathWithNamespace;
+    } else if (provider === 'bitbucket') {
+      const result = await createBitbucketRepo({
+        username: integration.username,
+        appPassword: integration.token,
+        repoName: cleanName,
+        isPrivate,
+      });
+      repoUrl = result.htmlUrl;
+      repoId = result.fullName;
+    }
+  } catch (err) {
+    console.error('[export-code] Step 1 failed — repo creation:', err.message);
+    const isBadCreds = /bad credentials|unauthorized|401|403|invalid token/i.test(err.message);
+    return NextResponse.json(
+      {
+        error: isBadCreds
+          ? `Your ${provider} token is invalid. Please reconnect with a new token.`
+          : `Failed to create repository: ${err.message}`,
+        needsReconnect: isBadCreds,
+        provider: isBadCreds ? provider : undefined,
+      },
+      { status: isBadCreds ? 401 : 500 }
+    );
+  }
+
+  console.log(`[export-code] ✓ Step 1 complete — repo created: ${repoUrl}`);
+
+  // ══════════════════════════════════════════════════════
+  //  STEP 2: Fetch source files + push to new repo
+  // ══════════════════════════════════════════════════════
   const supabase = await getSupabaseServerClient();
+
+  // ── Load user's deployment settings (from Settings → Deployment tab) ──
+  let deploySettings = {};
+  try {
+    const { data: settingsRow } = await supabase
+      .from('user_settings')
+      .select('gitlab_host, gitlab_group, k8s_namespace, k8s_domain, k8s_tls_secret, registry_url, ops_repo_url, ops_repo_branch')
+      .eq('user_id', ctx.userId)
+      .maybeSingle();
+    if (settingsRow) deploySettings = settingsRow;
+  } catch (e) {
+    console.warn('[export-code] Could not load user deployment settings:', e.message);
+  }
+
+  // Merge with defaults
+  const cicdConfig = {
+    registryUrl: deploySettings.registry_url || 'gitlab.udevs.io:5050',
+    k8sNamespace: deploySettings.k8s_namespace || 'frontend-prod',
+    k8sDomain: deploySettings.k8s_domain || '*.javoxir.online',
+    gitlabGroup: deploySettings.gitlab_group || body.gitlabGroup || '',
+    opsRepoBranch: deploySettings.ops_repo_branch || 'master',
+  };
+  console.log('[export-code] CI/CD config:', JSON.stringify(cicdConfig));
+
+  // Get project metadata for file fetching
   const { data: deployment } = await supabase
     .from('project_deployments')
     .select('repo_url, gitlab_project_id')
@@ -67,7 +174,6 @@ export async function POST(req) {
     .eq('project_id', projectId)
     .maybeSingle();
 
-  // ── Check if this project has a platform GitHub repo ──
   let platformRepoUrl = '';
   try {
     const { data: chatSession } = await supabase
@@ -84,151 +190,424 @@ export async function POST(req) {
     console.warn('[export-code] Could not check platform_repo_url:', e);
   }
 
-  // ── Fetch files — priority: platform GitHub → platform GitLab → workspace ──
+  // Fetch files from all sources
   let files = [];
+  let fetchWarning = '';
 
-  // 1. Try platform GitHub repo (wizard-created projects)
+  // Source 1: Platform GitHub repo (wizard-created projects)
   if (files.length === 0 && platformRepoUrl) {
     try {
-      files = await fetchPlatformGitHubFiles(platformRepoUrl);
+      // Try platform token first, then user's own GitHub token as fallback
+      const platformToken = process.env.PLATFORM_GITHUB_TOKEN || '';
+      const userGithubToken = meta.github_integration?.token || '';
+      const readToken = platformToken || userGithubToken;
+
+      console.log(`[export-code] Source 1: platformRepoUrl=${platformRepoUrl}, platformToken=${platformToken ? 'SET' : 'MISSING'}, userToken=${userGithubToken ? 'SET' : 'MISSING'}`);
+
+      if (readToken) {
+        files = await fetchGitHubRepoFiles(platformRepoUrl, readToken);
+        if (files.length > 0) {
+          console.log(`[export-code] ✓ Fetched ${files.length} files from platform GitHub`);
+        } else {
+          console.warn(`[export-code] Platform GitHub returned 0 files for ${platformRepoUrl}`);
+          fetchWarning = 'Platform repo exists but contains no readable files';
+        }
+      } else {
+        console.warn('[export-code] No token available to read platform GitHub repo');
+        fetchWarning = 'Platform GitHub token not configured. Add PLATFORM_GITHUB_TOKEN to frontend/.env';
+      }
     } catch (err) {
-      console.error('[export-code] Failed to fetch from platform GitHub:', err);
+      console.error('[export-code] Platform GitHub fetch failed:', err.message);
+      fetchWarning = `Platform GitHub read failed: ${err.message}`;
     }
   }
 
-  // 2. Try platform GitLab (legacy deployment pipeline)
-  if (files.length === 0) {
+  // Source 2: Platform GitLab (legacy deployment pipeline)
+  if (files.length === 0 && deployment?.gitlab_project_id) {
     try {
-      files = await fetchPlatformRepoFiles(deployment, ctx.userId);
+      files = await fetchPlatformGitLabFiles(deployment);
+      if (files.length > 0) {
+        console.log(`[export-code] ✓ Fetched ${files.length} files from platform GitLab`);
+      }
     } catch (err) {
-      console.error('[export-code] Failed to fetch platform GitLab files:', err);
+      console.error('[export-code] Platform GitLab fetch failed:', err.message);
     }
   }
 
-  // 3. Fallback: fetch from agent workspace (scratch sessions)
+  // Source 3: Agent workspace (scratch sessions)
   if (files.length === 0) {
     try {
       files = await fetchWorkspaceFiles(ctx.userId, ctx.accessToken, projectId);
+      if (files.length > 0) {
+        console.log(`[export-code] ✓ Fetched ${files.length} files from workspace`);
+      }
     } catch (err) {
-      console.error('[export-code] Failed to fetch workspace files:', err);
+      console.error('[export-code] Workspace fetch failed:', err.message);
     }
   }
+
+  // If still no files — track warning but DON'T return early (CI/CD files still need to be pushed)
+  let exportWarning = '';
+  let filesExported = 0;
 
   if (files.length === 0) {
-    return NextResponse.json(
-      { error: 'No files found in the project. Make sure the agent has generated code first.' },
-      { status: 404 }
-    );
-  }
-
-  // ── If CI/CD requested, generate and inject infra files ─
-  if (includeCICD) {
-    const cleanSlug = repoName.trim().toLowerCase().replace(/[^a-z0-9-_.]/g, '-');
-    const isAdmin = /admin|dashboard|panel|cms/i.test(cleanSlug);
-
-    // Determine stack from existing files
-    const hasNextConfig = files.some(f => /next\.config/i.test(f.path));
-    const hasPackageJson = files.some(f => f.path === 'package.json');
-    const stack = hasNextConfig ? 'nextjs' : hasPackageJson ? 'react' : 'html-css';
-
-    const docker = generateDockerfile({ stack });
-    const cicdFiles = [
-      { path: 'Dockerfile', content: docker.content },
-      { path: 'nginx.conf', content: generateNginxConf({ isAdmin }) },
-      { path: 'Makefile', content: generateMakefile({ projectSlug: cleanSlug }) },
-    ];
-
-    // Only add .gitlab-ci.yml for GitLab exports
-    if (provider === 'gitlab') {
-      cicdFiles.push({ path: '.gitlab-ci.yml', content: generateGitlabCI() });
-    }
-
-    // Add CI/CD files (don't overwrite existing files)
-    const existingPaths = new Set(files.map(f => f.path));
-    for (const ciFile of cicdFiles) {
-      if (!existingPaths.has(ciFile.path)) {
-        files.push(ciFile);
-      }
-    }
-
-    console.log(`[export-code] CI/CD files added: ${cicdFiles.filter(f => !existingPaths.has(f.path)).map(f => f.path).join(', ')}`);
-  }
-
-  // ── Create repo + push on user's provider ──────────
-  try {
-    let repoUrl;
-    const cleanName = repoName.trim().toLowerCase().replace(/[^a-z0-9-_.]/g, '-');
-
-    if (provider === 'github') {
-      repoUrl = await exportToGitHub({
-        token: integration.token,
-        repoName: cleanName,
-        isPrivate,
-        files,
-      });
-    } else if (provider === 'gitlab') {
-      repoUrl = await exportToGitLab({
-        token: integration.token,
-        host: integration.host || 'https://gitlab.com',
-        repoName: cleanName,
-        isPrivate,
-        files,
-      });
-    } else if (provider === 'bitbucket') {
-      repoUrl = await exportToBitbucket({
-        username: integration.username,
-        appPassword: integration.token,
-        repoName: cleanName,
-        isPrivate,
-        files,
-      });
-    }
-
-    // Save export record
-    await supabase.from('project_exports').upsert({
-      user_id: ctx.userId,
-      project_id: projectId,
-      provider,
-      repo_url: repoUrl,
-      repo_name: cleanName,
-      exported_at: new Date().toISOString(),
-    }, { onConflict: 'user_id,project_id,provider' }).catch(() => {});
-
-    // Save user repo URL to chat_sessions so workspace UI shows it
+    exportWarning = 'Repository created but no source files found to push. ' +
+      'The project may not have generated code yet, or the workspace was cleaned up. ' +
+      'You can push code manually later.' +
+      (fetchWarning ? ` (${fetchWarning})` : '');
+    console.warn('[export-code] No source files found — skipping Step 2, continuing to Step 3');
+  } else {
+    // Push application files to the new repo
     try {
-      await supabase.from('chat_sessions')
-        .update({ user_repo_url: repoUrl, user_repo_provider: provider })
-        .eq('project_id', projectId)
-        .eq('user_id', ctx.userId);
-    } catch (e) {
-      console.warn('[export-code] Could not save user_repo_url:', e);
+      if (provider === 'github') {
+        await pushToGitHub({
+          token: integration.token,
+          fullName: repoId,
+          files,
+          commitMessage: '🚀 Exported from Lucid AI',
+        });
+      } else if (provider === 'gitlab') {
+        await pushToGitLab({
+          token: integration.token,
+          host: integration.host || 'https://gitlab.com',
+          projectId: repoId,
+          files,
+          branch: defaultBranch,
+          commitMessage: '🚀 Exported from Lucid AI',
+        });
+      } else if (provider === 'bitbucket') {
+        await pushToBitbucket({
+          username: integration.username,
+          appPassword: integration.token,
+          fullName: repoId,
+          files,
+          commitMessage: '🚀 Exported from Lucid AI',
+        });
+      }
+      filesExported = files.length;
+      console.log(`[export-code] ✓ Step 2 complete — ${files.length} files pushed`);
+    } catch (err) {
+      console.error('[export-code] Step 2 failed — file push:', err.message);
+      exportWarning = `Repository created but file push failed: ${err.message}`;
+      // DON'T return — fall through to Step 3 so CI/CD files can still be pushed
     }
-
-    return NextResponse.json({
-      ok: true,
-      repoUrl,
-      provider,
-    });
-  } catch (err) {
-    console.error('[export-code] Export failed:', err);
-    return NextResponse.json(
-      { error: err.message || 'Export failed' },
-      { status: 500 }
-    );
   }
+
+  // ══════════════════════════════════════════════════════
+  //  STEP 3: Add CI/CD files (separate commit)
+  // ══════════════════════════════════════════════════════
+  let cicdAdded = false;
+
+  if (includeCICD) {
+    try {
+      const hasNextConfig = files.some(f => /next\.config/i.test(f.path));
+      const hasPackageJson = files.some(f => f.path === 'package.json');
+      const packageManager = files.some(f => f.path === 'yarn.lock') ? 'yarn' 
+        : files.some(f => f.path === 'pnpm-lock.yaml') ? 'pnpm' 
+        : files.some(f => f.path === 'bun.lockb') ? 'bun' 
+        : 'npm';
+        
+      const stack = hasNextConfig ? 'nextjs' : hasPackageJson ? 'react' : 'html-css';
+      const docker = generateDockerfile({ stack, packageManager });
+
+      // ── Step 3a: CI/CD files for the project repo ──────
+      const cicdFiles = [
+        { path: 'Dockerfile', content: docker.content },
+        { path: 'nginx.conf', content: generateNginxConf() },
+        { path: 'Makefile', content: generateMakefile({ projectSlug: cleanName, projectName: gitlabPathWithNamespace || cicdConfig.gitlabGroup || cleanName }) },
+        { path: '.gitlab-ci.yml', content: generateGitlabCI() },
+      ];
+
+      // Don't overwrite files already in the repo
+      const existingPaths = new Set(files.map(f => f.path));
+      const newCicdFiles = cicdFiles.filter(f => !existingPaths.has(f.path));
+
+      if (newCicdFiles.length > 0) {
+        if (provider === 'github') {
+          await pushToGitHub({
+            token: integration.token,
+            fullName: repoId,
+            files: newCicdFiles,
+            commitMessage: '🔧 Add CI/CD pipeline — Lucid AI',
+          });
+        } else if (provider === 'gitlab') {
+          await pushToGitLab({
+            token: integration.token,
+            host: integration.host || 'https://gitlab.com',
+            projectId: repoId,
+            files: newCicdFiles,
+            branch: defaultBranch,
+            commitMessage: '🔧 Add CI/CD pipeline — Lucid AI',
+          });
+        } else if (provider === 'bitbucket') {
+          await pushToBitbucket({
+            username: integration.username,
+            appPassword: integration.token,
+            fullName: repoId,
+            files: newCicdFiles,
+            commitMessage: '🔧 Add CI/CD pipeline — Lucid AI',
+          });
+        }
+        cicdAdded = true;
+        console.log(`[export-code] ✓ Step 3a — CI/CD files added: ${newCicdFiles.map(f => f.path).join(', ')}`);
+      }
+
+      // ── Step 3b: Create ops folder in ops repo ──────
+      // Uses the user's connected GitLab token to push to the ops deployments repo
+      const gitlabUrl = process.env.GITLAB_URL || 'https://gitlab.udevs.io';
+      const opsRepoId = process.env.OPS_REPO_PROJECT_ID || '';
+      // Use user's GitLab token if they exported to GitLab, otherwise skip
+      const opsToken = (provider === 'gitlab' && integration.token) ? integration.token : '';
+
+      if (opsToken && opsRepoId) {
+        try {
+          const repoPath = gitlabPathWithNamespace || (cicdConfig.gitlabGroup
+            ? `${cicdConfig.gitlabGroup}/${cleanName}`
+            : cleanName);
+
+          // If the domain contains a wildcard (*), replace it with the repo name. 
+          // Otherwise, use the exact domain the user provided in settings.
+          const settingDomain = cicdConfig.k8sDomain || '*.javoxir.online';
+          const projectDomain = settingDomain.includes('*.') 
+            ? settingDomain.replace('*.', `${cleanName}.`)
+            : settingDomain;
+
+          const ops = generateOpsFolder({
+            projectSlug: cleanName,
+            repoPath,
+            registryUrl: cicdConfig.registryUrl,
+            servicePort: docker.expose,
+            domain: projectDomain,
+          });
+
+          // Look up ops repo default branch (likely 'master')
+          let opsBranch = 'master';
+          const opsInfoRes = await fetch(`${gitlabUrl}/api/v4/projects/${opsRepoId}`, {
+            headers: { 'PRIVATE-TOKEN': opsToken },
+            signal: AbortSignal.timeout(10000),
+          });
+          if (opsInfoRes.ok) {
+            const opsInfo = await opsInfoRes.json();
+            if (opsInfo.default_branch) opsBranch = opsInfo.default_branch;
+          }
+
+          // Check which files already exist in the ops path
+          const opsBasePath = `clusters/cluster-prod/frontend-prod/${cleanName}`;
+          let existingOpsFiles = new Set();
+          const treeRes = await fetch(
+            `${gitlabUrl}/api/v4/projects/${opsRepoId}/repository/tree?path=${encodeURIComponent(opsBasePath)}&recursive=true&ref=${opsBranch}`,
+            { headers: { 'PRIVATE-TOKEN': opsToken }, signal: AbortSignal.timeout(10000) }
+          );
+          if (treeRes.ok) {
+            const tree = await treeRes.json();
+            tree.forEach(t => existingOpsFiles.add(t.path));
+          }
+
+          // Push ops files via GitLab Commits API
+          const opsActions = ops.files.map(f => ({
+            action: existingOpsFiles.has(f.path) ? 'update' : 'create',
+            file_path: f.path,
+            content: f.content,
+          }));
+
+          console.log(`[export-code] Step 3b — pushing ops files: ${opsActions.map(a => `${a.action} ${a.file_path}`).join(', ')}`);
+
+          const opsResp = await fetch(
+            `${gitlabUrl}/api/v4/projects/${opsRepoId}/repository/commits`,
+            {
+              method: 'POST',
+              headers: {
+                'PRIVATE-TOKEN': opsToken,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                branch: opsBranch,
+                commit_message: `Add ${cleanName} deployment — Lucid AI`,
+                actions: opsActions,
+              }),
+              signal: AbortSignal.timeout(20000),
+            }
+          );
+
+          if (opsResp.ok) {
+            console.log(`[export-code] ✓ Step 3b — ops folder created for ${cleanName}`);
+          } else {
+            const errText = await opsResp.text().catch(() => '');
+            console.warn(`[export-code] Step 3b — ops push ${opsResp.status}: ${errText.slice(0, 300)}`);
+          }
+        } catch (opsErr) {
+          console.warn('[export-code] Step 3b — ops folder (non-fatal):', opsErr.message);
+        }
+      }
+
+      // ── Step 3c: Add GitLab CI/CD variables ──────
+      if (provider === 'gitlab' && integration.token && repoId) {
+        const glHost = integration.host || 'https://gitlab.com';
+        const varsToSet = [
+          { key: 'K8S_NAMESPACE_PROD', value: cicdConfig.k8sNamespace },
+          { key: 'APP_NAME', value: cleanName },
+        ];
+
+        for (const v of varsToSet) {
+          try {
+            const varResp = await fetch(
+              `${glHost}/api/v4/projects/${repoId}/variables`,
+              {
+                method: 'POST',
+                headers: {
+                  'PRIVATE-TOKEN': integration.token,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  key: v.key,
+                  value: v.value,
+                  protected: false,
+                  masked: false,
+                  environment_scope: '*',
+                }),
+                signal: AbortSignal.timeout(10000),
+              }
+            );
+            if (varResp.ok || varResp.status === 409) {
+              console.log(`[export-code] ✓ Step 3c — variable ${v.key} set`);
+            } else {
+              console.warn(`[export-code] Step 3c — variable ${v.key}: ${varResp.status}`);
+            }
+          } catch (varErr) {
+            console.warn(`[export-code] Step 3c — variable ${v.key} (non-fatal):`, varErr.message);
+          }
+        }
+      }
+
+    } catch (err) {
+      console.warn('[export-code] Step 3 failed — CI/CD (non-fatal):', err.message);
+      // Non-fatal — repo + code already pushed successfully
+    }
+  }
+
+  // ── Save records ─────────────────────────────────────
+  await saveExportRecord(supabase, ctx.userId, projectId, provider, repoUrl, cleanName);
+
+  // Save user repo URL to chat_sessions
+  try {
+    await supabase.from('chat_sessions')
+      .update({ user_repo_url: repoUrl, user_repo_provider: provider })
+      .eq('project_id', projectId)
+      .eq('user_id', ctx.userId);
+  } catch (e) {
+    console.warn('[export-code] Could not save user_repo_url:', e);
+  }
+
+  return NextResponse.json({
+    ok: true,
+    repoUrl,
+    provider,
+    filesExported,
+    cicdAdded,
+    ...(exportWarning ? { warning: exportWarning } : {}),
+  });
 }
 
+
 // ═══════════════════════════════════════════════════════════
-//  Fetch files from the platform's GitHub repo (wizard projects)
-//  Uses PLATFORM_GITHUB_TOKEN to read from the platform-owned repo.
+//  Repo Creation (Step 1)
 // ═══════════════════════════════════════════════════════════
 
-async function fetchPlatformGitHubFiles(platformRepoUrl) {
-  const token = process.env.PLATFORM_GITHUB_TOKEN || '';
-  if (!token || !platformRepoUrl) return [];
+async function createGitHubRepo({ token, repoName, isPrivate }) {
+  const res = await fetch('https://api.github.com/user/repos', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      name: repoName,
+      private: isPrivate,
+      auto_init: true,
+      description: 'Exported from Lucid AI',
+    }),
+    signal: AbortSignal.timeout(15000),
+  });
 
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || `GitHub API error: ${res.status}`);
+  }
+
+  const repo = await res.json();
+  return { fullName: repo.full_name, htmlUrl: repo.html_url, id: repo.id };
+}
+
+async function createGitLabRepo({ token, host, repoName, isPrivate }) {
+  const api = `${host.replace(/\/+$/, '')}/api/v4`;
+  const res = await fetch(`${api}/projects`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'PRIVATE-TOKEN': token,
+    },
+    body: JSON.stringify({
+      name: repoName,
+      visibility: isPrivate ? 'private' : 'public',
+      initialize_with_readme: true,
+      description: 'Exported from Lucid AI',
+    }),
+    signal: AbortSignal.timeout(15000),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`GitLab error: ${err}`);
+  }
+
+  const project = await res.json();
+  return { 
+    id: project.id, 
+    webUrl: project.web_url, 
+    path: project.path, 
+    pathWithNamespace: project.path_with_namespace,
+    defaultBranch: project.default_branch || 'main' 
+  };
+}
+
+async function createBitbucketRepo({ username, appPassword, repoName, isPrivate }) {
+  const authHeader = `Basic ${Buffer.from(`${username}:${appPassword}`).toString('base64')}`;
+  const res = await fetch(
+    `https://api.bitbucket.org/2.0/repositories/${username}/${repoName}`,
+    {
+      method: 'POST',
+      headers: { Authorization: authHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scm: 'git',
+        is_private: isPrivate,
+        description: 'Exported from Lucid AI',
+        mainbranch: { type: 'branch', name: 'main' },
+      }),
+      signal: AbortSignal.timeout(15000),
+    }
+  );
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Bitbucket error: ${err}`);
+  }
+
+  const repo = await res.json();
+  return {
+    fullName: `${username}/${repoName}`,
+    htmlUrl: repo.links?.html?.href || `https://bitbucket.org/${username}/${repoName}`,
+  };
+}
+
+
+// ═══════════════════════════════════════════════════════════
+//  File Fetching (Step 2 — sources)
+// ═══════════════════════════════════════════════════════════
+
+async function fetchGitHubRepoFiles(repoUrl, token) {
   // Parse "https://github.com/Owner/repo-name" → Owner/repo-name
-  const repoPath = platformRepoUrl
+  const repoPath = repoUrl
     .replace('https://github.com/', '')
     .replace(/\.git$/, '')
     .replace(/\/$/, '');
@@ -240,31 +619,26 @@ async function fetchPlatformGitHubFiles(platformRepoUrl) {
     Accept: 'application/vnd.github+json',
   };
 
-  // 1. Get the full file tree recursively
-  const treeRes = await fetch(
-    `https://api.github.com/repos/${repoPath}/git/trees/main?recursive=1`,
-    { headers, signal: AbortSignal.timeout(15000) }
-  );
-
-  if (!treeRes.ok) {
-    // Try "master" branch as fallback
-    const treeRes2 = await fetch(
-      `https://api.github.com/repos/${repoPath}/git/trees/master?recursive=1`,
-      { headers, signal: AbortSignal.timeout(15000) }
-    );
-    if (!treeRes2.ok) throw new Error(`GitHub tree fetch failed: ${treeRes.status}`);
-    const treeData2 = await treeRes2.json();
-    return await fetchGitHubBlobContents(repoPath, treeData2.tree || [], headers);
+  // Get the full file tree recursively
+  let treeData;
+  for (const branch of ['main', 'master']) {
+    try {
+      const res = await fetch(
+        `https://api.github.com/repos/${repoPath}/git/trees/${branch}?recursive=1`,
+        { headers, signal: AbortSignal.timeout(15000) }
+      );
+      if (res.ok) {
+        treeData = await res.json();
+        break;
+      }
+    } catch { /* try next branch */ }
   }
 
-  const treeData = await treeRes.json();
-  return await fetchGitHubBlobContents(repoPath, treeData.tree || [], headers);
-}
+  if (!treeData) return [];
 
-async function fetchGitHubBlobContents(repoPath, tree, headers) {
-  // Filter to blobs (files) only, skip huge files
-  const blobs = tree.filter(
-    (t) => t.type === 'blob' && (t.size || 0) < 500_000
+  // Filter to blobs, skip large/binary files and .git internals
+  const blobs = (treeData.tree || []).filter(
+    (t) => t.type === 'blob' && (t.size || 0) < 500_000 && !t.path.startsWith('.git/')
   );
 
   const BATCH_SIZE = 10;
@@ -281,7 +655,6 @@ async function fetchGitHubBlobContents(repoPath, tree, headers) {
           );
           if (!res.ok) return null;
           const data = await res.json();
-          // GitHub returns base64-encoded content
           const content = data.encoding === 'base64'
             ? Buffer.from(data.content, 'base64').toString('utf-8')
             : data.content || '';
@@ -292,73 +665,56 @@ async function fetchGitHubBlobContents(repoPath, tree, headers) {
       })
     );
     files.push(...results.filter(Boolean));
+    if (i + BATCH_SIZE < blobs.length) await sleep(300);
   }
 
-  console.log(`[export-code] Fetched ${files.length} files from platform GitHub`);
   return files;
 }
 
-// ═══════════════════════════════════════════════════════════
-//  Fetch files from the platform GitLab repo
-// ═══════════════════════════════════════════════════════════
-
-async function fetchPlatformRepoFiles(deployment, userId) {
-  // If we have the GitLab project ID (from our deployment pipeline),
-  // use the platform GitLab to fetch the file tree
+async function fetchPlatformGitLabFiles(deployment) {
   const gitlabToken = process.env.SUPABASE_ACCESS_TOKEN || process.env.GITLAB_TOKEN || '';
   const gitlabHost = process.env.GITLAB_HOST || 'https://gitlab.udevs.io';
 
-  if (deployment?.gitlab_project_id && gitlabToken) {
-    const api = `${gitlabHost}/api/v4`;
+  if (!deployment?.gitlab_project_id || !gitlabToken) return [];
 
-    // Get tree
-    const treeRes = await fetch(
-      `${api}/projects/${deployment.gitlab_project_id}/repository/tree?recursive=true&per_page=100&ref=main`,
-      { headers: { 'PRIVATE-TOKEN': gitlabToken }, signal: AbortSignal.timeout(15000) }
-    );
-    if (!treeRes.ok) throw new Error('Failed to fetch repo tree');
-    const tree = await treeRes.json();
+  const api = `${gitlabHost}/api/v4`;
+  const treeRes = await fetch(
+    `${api}/projects/${deployment.gitlab_project_id}/repository/tree?recursive=true&per_page=100&ref=main`,
+    { headers: { 'PRIVATE-TOKEN': gitlabToken }, signal: AbortSignal.timeout(15000) }
+  );
+  if (!treeRes.ok) return [];
+  const tree = await treeRes.json();
+  const blobs = tree.filter(t => t.type === 'blob');
 
-    const blobs = tree.filter(t => t.type === 'blob');
+  const BATCH_SIZE = 10;
+  const files = [];
 
-    // Fetch file contents in batches (max 10 parallel)
-    const BATCH_SIZE = 10;
-    const files = [];
-
-    for (let i = 0; i < blobs.length; i += BATCH_SIZE) {
-      const batch = blobs.slice(i, i + BATCH_SIZE);
-      const results = await Promise.all(
-        batch.map(async (blob) => {
-          const fileRes = await fetch(
+  for (let i = 0; i < blobs.length; i += BATCH_SIZE) {
+    const batch = blobs.slice(i, i + BATCH_SIZE);
+    const results = await Promise.all(
+      batch.map(async (blob) => {
+        try {
+          const res = await fetch(
             `${api}/projects/${deployment.gitlab_project_id}/repository/files/${encodeURIComponent(blob.path)}/raw?ref=main`,
             { headers: { 'PRIVATE-TOKEN': gitlabToken }, signal: AbortSignal.timeout(10000) }
           );
-          if (!fileRes.ok) return null;
-          const content = await fileRes.text();
-          return { path: blob.path, content };
-        })
-      );
-      files.push(...results.filter(Boolean));
-    }
-
-    return files;
+          if (!res.ok) return null;
+          return { path: blob.path, content: await res.text() };
+        } catch {
+          return null;
+        }
+      })
+    );
+    files.push(...results.filter(Boolean));
   }
 
-  return [];
+  return files;
 }
-
-// ═══════════════════════════════════════════════════════════
-//  Fetch files from the agent workspace (scratch sessions)
-// ═══════════════════════════════════════════════════════════
 
 async function fetchWorkspaceFiles(userId, accessToken, projectId) {
   const AI_SERVICE_URL = process.env.PYTHON_BACKEND_URL || 'http://localhost:8000';
 
-  // First, find active sessions for this user+project via the sessions endpoint
-  // The workspace files are accessible via session_id.
-  // We need to find the session that matches this projectId.
   try {
-    // Try to find session by querying chat_sessions for this project
     const { getSupabaseServerClient } = await import('@/lib/supabase/server');
     const supabase = await getSupabaseServerClient();
 
@@ -370,14 +726,9 @@ async function fetchWorkspaceFiles(userId, accessToken, projectId) {
       .order('created_at', { ascending: false })
       .limit(1);
 
-    if (!chatSessions?.length || !chatSessions[0].agent_session_id) {
-      console.log('[export-code] No agent session found for project:', projectId);
-      return [];
-    }
+    if (!chatSessions?.length || !chatSessions[0].agent_session_id) return [];
 
     const sessionId = chatSessions[0].agent_session_id;
-
-    // Build headers for auth
     const headers = {};
     if (accessToken) {
       headers['Authorization'] = `Bearer ${accessToken}`;
@@ -392,225 +743,190 @@ async function fetchWorkspaceFiles(userId, accessToken, projectId) {
       { headers, signal: AbortSignal.timeout(30000) }
     );
 
-    if (!res.ok) {
-      console.error('[export-code] Workspace export failed:', res.status, await res.text());
-      return [];
-    }
-
+    if (!res.ok) return [];
     const data = await res.json();
-    console.log(`[export-code] Fetched ${data.count} files from workspace`);
     return data.files || [];
-  } catch (err) {
-    console.error('[export-code] fetchWorkspaceFiles error:', err);
+  } catch {
     return [];
   }
 }
 
+
 // ═══════════════════════════════════════════════════════════
-//  GitHub Export
+//  File Pushing (Step 2+3 — push to user's repo)
 // ═══════════════════════════════════════════════════════════
 
-async function exportToGitHub({ token, repoName, isPrivate, files }) {
+async function pushToGitHub({ token, fullName, files, commitMessage }) {
   const headers = {
     Authorization: `Bearer ${token}`,
     Accept: 'application/vnd.github+json',
     'Content-Type': 'application/json',
   };
 
-  // 1. Create repo
-  const createRes = await fetch('https://api.github.com/user/repos', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      name: repoName,
-      private: isPrivate,
-      auto_init: true,
-      description: 'Exported from Lucid AI',
-    }),
-    signal: AbortSignal.timeout(15000),
-  });
-
-  if (!createRes.ok) {
-    const err = await createRes.json();
-    throw new Error(err.message || 'Failed to create GitHub repo');
+  // Wait for auto_init to propagate
+  let baseSha;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await sleep(attempt === 0 ? 1500 : 2000);
+    for (const branch of ['main', 'master']) {
+      try {
+        const res = await fetch(
+          `https://api.github.com/repos/${fullName}/git/ref/heads/${branch}`,
+          { headers, signal: AbortSignal.timeout(10000) }
+        );
+        if (res.ok) {
+          const ref = await res.json();
+          baseSha = ref.object.sha;
+          break;
+        }
+      } catch { /* try next */ }
+    }
+    if (baseSha) break;
   }
 
-  const repo = await createRes.json();
-  const fullName = repo.full_name;
+  if (!baseSha) throw new Error('Could not get default branch ref');
 
-  // Wait for init to propagate
-  await sleep(2000);
+  // Create blobs in batches
+  const BATCH_SIZE = 10;
+  const treeItems = [];
 
-  // 2. Push files using the Git Trees/Commits API for atomic pushes
-  // Get the default branch ref
-  const refRes = await fetch(`https://api.github.com/repos/${fullName}/git/ref/heads/main`, {
-    headers,
-    signal: AbortSignal.timeout(10000),
-  });
-
-  if (!refRes.ok) {
-    // Maybe default branch is "master"
-    const refRes2 = await fetch(`https://api.github.com/repos/${fullName}/git/ref/heads/master`, {
-      headers,
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!refRes2.ok) throw new Error('Could not get default branch ref');
+  for (let i = 0; i < files.length; i += BATCH_SIZE) {
+    const batch = files.slice(i, i + BATCH_SIZE);
+    const results = await Promise.all(
+      batch.map(async (f) => {
+        for (let retry = 0; retry < 2; retry++) {
+          try {
+            const res = await fetch(
+              `https://api.github.com/repos/${fullName}/git/blobs`,
+              {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ content: f.content, encoding: 'utf-8' }),
+                signal: AbortSignal.timeout(15000),
+              }
+            );
+            if (res.status === 403 || res.status === 429) {
+              await sleep(5000);
+              continue;
+            }
+            if (!res.ok) return null;
+            const blob = await res.json();
+            return { path: f.path, sha: blob.sha, mode: '100644', type: 'blob' };
+          } catch {
+            if (retry === 0) await sleep(1000);
+          }
+        }
+        return null;
+      })
+    );
+    treeItems.push(...results.filter(Boolean));
+    if (i + BATCH_SIZE < files.length) await sleep(500);
   }
 
-  const ref = await (refRes.ok ? refRes : refRes).json();
-  const baseSha = ref.object.sha;
+  if (treeItems.length === 0) throw new Error('No files were uploaded');
 
-  // 3. Create blobs for each file
-  const blobPromises = files.map(async (f) => {
-    const blobRes = await fetch(`https://api.github.com/repos/${fullName}/git/blobs`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        content: f.content,
-        encoding: 'utf-8',
-      }),
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!blobRes.ok) return null;
-    const blob = await blobRes.json();
-    return { path: f.path, sha: blob.sha, mode: '100644', type: 'blob' };
-  });
-
-  const treeItems = (await Promise.all(blobPromises)).filter(Boolean);
-
-  // 4. Create tree
+  // Create tree → commit → update ref
   const treeRes = await fetch(`https://api.github.com/repos/${fullName}/git/trees`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({
-      base_tree: baseSha,
-      tree: treeItems,
-    }),
-    signal: AbortSignal.timeout(15000),
+    body: JSON.stringify({ base_tree: baseSha, tree: treeItems }),
+    signal: AbortSignal.timeout(30000),
   });
-
   if (!treeRes.ok) throw new Error('Failed to create git tree');
   const tree = await treeRes.json();
 
-  // 5. Create commit
   const commitRes = await fetch(`https://api.github.com/repos/${fullName}/git/commits`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({
-      message: '🚀 Exported from Lucid AI',
-      tree: tree.sha,
-      parents: [baseSha],
-    }),
-    signal: AbortSignal.timeout(10000),
+    body: JSON.stringify({ message: commitMessage, tree: tree.sha, parents: [baseSha] }),
+    signal: AbortSignal.timeout(15000),
   });
-
   if (!commitRes.ok) throw new Error('Failed to create commit');
   const commit = await commitRes.json();
 
-  // 6. Update ref
   await fetch(`https://api.github.com/repos/${fullName}/git/refs/heads/main`, {
     method: 'PATCH',
     headers,
     body: JSON.stringify({ sha: commit.sha, force: true }),
     signal: AbortSignal.timeout(10000),
   });
-
-  return repo.html_url;
 }
 
-// ═══════════════════════════════════════════════════════════
-//  GitLab Export
-// ═══════════════════════════════════════════════════════════
-
-async function exportToGitLab({ token, host, repoName, isPrivate, files }) {
+async function pushToGitLab({ token, host, projectId, files, branch = 'main', commitMessage }) {
   const api = `${host.replace(/\/+$/, '')}/api/v4`;
-  const headers = {
-    'Content-Type': 'application/json',
-    'PRIVATE-TOKEN': token,
-  };
+  const headers = { 'Content-Type': 'application/json', 'PRIVATE-TOKEN': token };
 
-  // 1. Create project
-  const createRes = await fetch(`${api}/projects`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      name: repoName,
-      visibility: isPrivate ? 'private' : 'public',
-      initialize_with_readme: false,
-      description: 'Exported from Lucid AI',
-    }),
-    signal: AbortSignal.timeout(15000),
-  });
+  // Wait for the default branch to be ready (initialize_with_readme is async)
+  let existingFiles = new Set();
+  let branchReady = false;
 
-  if (!createRes.ok) {
-    const err = await createRes.text();
-    throw new Error(`GitLab repo creation failed: ${err}`);
+  for (let attempt = 0; attempt < 6; attempt++) {
+    if (attempt > 0) await sleep(2000);
+
+    try {
+      const treeRes = await fetch(
+        `${api}/projects/${projectId}/repository/tree?recursive=true&per_page=100&ref=${branch}`,
+        { headers, signal: AbortSignal.timeout(10000) }
+      );
+      if (treeRes.ok) {
+        const tree = await treeRes.json();
+        tree.forEach(t => existingFiles.add(t.path));
+        branchReady = true;
+        break;
+      }
+      // 404 = branch not created yet, keep waiting
+      if (treeRes.status === 404) {
+        console.log(`[export-code] GitLab branch '${branch}' not ready yet (attempt ${attempt + 1}/6)…`);
+        continue;
+      }
+      // Other errors — log but try anyway
+      console.warn(`[export-code] GitLab tree fetch returned ${treeRes.status}`);
+      branchReady = true; // assume it's ready, just empty
+      break;
+    } catch (e) {
+      console.warn(`[export-code] GitLab tree fetch error (attempt ${attempt + 1}):`, e.message);
+    }
   }
 
-  const project = await createRes.json();
+  if (!branchReady) {
+    console.warn(`[export-code] Branch '${branch}' never became ready — pushing with 'create' actions`);
+  }
 
-  // 2. Push all files in a single commit
   const actions = files.map((f) => ({
-    action: 'create',
+    action: existingFiles.has(f.path) ? 'update' : 'create',
     file_path: f.path,
     content: f.content,
   }));
 
-  const commitRes = await fetch(`${api}/projects/${project.id}/repository/commits`, {
+  // If branch doesn't exist yet, use start_branch to create it from scratch
+  const commitBody = {
+    branch,
+    commit_message: commitMessage,
+    actions,
+  };
+
+  // If the branch doesn't exist, tell GitLab to create it with this commit
+  if (!branchReady) {
+    commitBody.start_branch = branch;
+  }
+
+  const res = await fetch(`${api}/projects/${projectId}/repository/commits`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({
-      branch: 'main',
-      start_branch: 'main',
-      commit_message: '🚀 Exported from Lucid AI',
-      actions,
-    }),
-    signal: AbortSignal.timeout(30000),
+    body: JSON.stringify(commitBody),
+    signal: AbortSignal.timeout(60000),
   });
 
-  if (!commitRes.ok) {
-    const err = await commitRes.text();
+  if (!res.ok) {
+    const err = await res.text();
+    console.error(`[export-code] GitLab push failed (project=${projectId}, branch=${branch}):`, err);
     throw new Error(`GitLab push failed: ${err}`);
   }
 
-  return project.web_url;
+  console.log(`[export-code] ✓ GitLab push success — ${files.length} files to project ${projectId} on branch '${branch}'`);
 }
 
-// ═══════════════════════════════════════════════════════════
-//  Bitbucket Export
-// ═══════════════════════════════════════════════════════════
-
-async function exportToBitbucket({ username, appPassword, repoName, isPrivate, files }) {
+async function pushToBitbucket({ username, appPassword, fullName, files, commitMessage }) {
   const authHeader = `Basic ${Buffer.from(`${username}:${appPassword}`).toString('base64')}`;
-
-  // 1. Create repo
-  const createRes = await fetch(
-    `https://api.bitbucket.org/2.0/repositories/${username}/${repoName}`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: authHeader,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        scm: 'git',
-        is_private: isPrivate,
-        description: 'Exported from Lucid AI',
-        mainbranch: { type: 'branch', name: 'main' },
-      }),
-      signal: AbortSignal.timeout(15000),
-    }
-  );
-
-  if (!createRes.ok) {
-    const err = await createRes.text();
-    throw new Error(`Bitbucket repo creation failed: ${err}`);
-  }
-
-  const repo = await createRes.json();
-
-  // 2. Push files using the src endpoint (multi-file upload via form-data)
-  // Bitbucket supports pushing via the "src" endpoint with multipart form
   const boundary = `----LucidExport${Date.now()}`;
   let formBody = '';
 
@@ -621,17 +937,16 @@ async function exportToBitbucket({ username, appPassword, repoName, isPrivate, f
     formBody += `${f.content}\r\n`;
   }
 
-  // Add commit message
   formBody += `--${boundary}\r\n`;
   formBody += `Content-Disposition: form-data; name="message"\r\n\r\n`;
-  formBody += `🚀 Exported from Lucid AI\r\n`;
+  formBody += `${commitMessage}\r\n`;
   formBody += `--${boundary}\r\n`;
   formBody += `Content-Disposition: form-data; name="branch"\r\n\r\n`;
   formBody += `main\r\n`;
   formBody += `--${boundary}--\r\n`;
 
-  const pushRes = await fetch(
-    `https://api.bitbucket.org/2.0/repositories/${username}/${repoName}/src`,
+  const res = await fetch(
+    `https://api.bitbucket.org/2.0/repositories/${fullName}/src`,
     {
       method: 'POST',
       headers: {
@@ -643,14 +958,67 @@ async function exportToBitbucket({ username, appPassword, repoName, isPrivate, f
     }
   );
 
-  if (!pushRes.ok && pushRes.status !== 201) {
-    const err = await pushRes.text();
+  if (!res.ok && res.status !== 201) {
+    const err = await res.text();
     throw new Error(`Bitbucket push failed: ${err}`);
   }
+}
 
-  return repo.links?.html?.href || `https://bitbucket.org/${username}/${repoName}`;
+
+// ═══════════════════════════════════════════════════════════
+//  Helpers
+// ═══════════════════════════════════════════════════════════
+
+async function saveExportRecord(supabase, userId, projectId, provider, repoUrl, repoName) {
+  try {
+    await supabase.from('project_exports').upsert({
+      user_id: userId,
+      project_id: projectId,
+      provider,
+      repo_url: repoUrl,
+      repo_name: repoName,
+      exported_at: new Date().toISOString(),
+    }, { onConflict: 'user_id,project_id,provider' });
+  } catch (e) {
+    console.warn('[export-code] Could not save export record:', e);
+  }
 }
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+async function validateProviderToken(provider, integration) {
+  try {
+    if (provider === 'github') {
+      const res = await fetch('https://api.github.com/user', {
+        headers: {
+          Authorization: `Bearer ${integration.token}`,
+          Accept: 'application/vnd.github+json',
+        },
+        signal: AbortSignal.timeout(8000),
+      });
+      return { ok: res.ok };
+    }
+    if (provider === 'gitlab') {
+      const host = (integration.host || 'https://gitlab.com').replace(/\/+$/, '');
+      const res = await fetch(`${host}/api/v4/user`, {
+        headers: { 'PRIVATE-TOKEN': integration.token },
+        signal: AbortSignal.timeout(8000),
+      });
+      return { ok: res.ok };
+    }
+    if (provider === 'bitbucket') {
+      const res = await fetch('https://api.bitbucket.org/2.0/user', {
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${integration.username}:${integration.token}`).toString('base64')}`,
+        },
+        signal: AbortSignal.timeout(8000),
+      });
+      return { ok: res.ok };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: true }; // Network error — let the real call fail with better error
+  }
 }

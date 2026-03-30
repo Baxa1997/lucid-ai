@@ -45,19 +45,20 @@ export async function GET() {
       llm_provider: 'anthropic',
       llm_model: 'anthropic/claude-3-5-sonnet-20241022',
       has_api_key: false,
+      package_manager: 'npm',
       // Deployment defaults
-      gitlab_host: '',
+      gitlab_host: 'https://gitlab.udevs.io',
       gitlab_group: '',
       has_gitlab_token: false,
       has_github_token: false,
-      ops_repo_url: '',
-      ops_repo_branch: 'main',
+      ops_repo_url: 'https://gitlab.udevs.io/ops/deployments',
+      ops_repo_branch: 'master',
       has_vercel_token: false,
       vercel_team_id: '',
       k8s_namespace: 'frontend-prod',
-      k8s_domain: '*.udevs.io',
+      k8s_domain: '*.javoxir.online',
       k8s_tls_secret: '',
-      registry_url: '',
+      registry_url: 'gitlab.udevs.io:5050',
     });
   }
 
@@ -65,19 +66,20 @@ export async function GET() {
     llm_provider: data.llm_provider,
     llm_model: data.llm_model,
     has_api_key: !!(data.api_key_enc && data.api_key_iv),
+    package_manager: data.package_manager || 'npm',
     // Deployment settings (never return raw tokens)
-    gitlab_host: data.gitlab_host || '',
+    gitlab_host: data.gitlab_host || 'https://gitlab.udevs.io',
     gitlab_group: data.gitlab_group || '',
     has_gitlab_token: !!(data.gitlab_token_enc && data.gitlab_token_iv),
     has_github_token: !!(data.github_token_enc && data.github_token_iv),
-    ops_repo_url: data.ops_repo_url || '',
-    ops_repo_branch: data.ops_repo_branch || 'main',
+    ops_repo_url: data.ops_repo_url || 'https://gitlab.udevs.io/ops/deployments',
+    ops_repo_branch: data.ops_repo_branch || 'master',
     has_vercel_token: !!(data.vercel_token_enc && data.vercel_token_iv),
     vercel_team_id: data.vercel_team_id || '',
     k8s_namespace: data.k8s_namespace || 'frontend-prod',
-    k8s_domain: data.k8s_domain || '*.udevs.io',
+    k8s_domain: data.k8s_domain || '*.javoxir.online',
     k8s_tls_secret: data.k8s_tls_secret || '',
-    registry_url: data.registry_url || '',
+    registry_url: data.registry_url || 'gitlab.udevs.io:5050',
   });
 }
 
@@ -105,6 +107,7 @@ export async function PUT(req) {
 
   const {
     llm_provider, llm_model, api_key,
+    package_manager,
     // Deployment fields (optional — only present from Deployment tab)
     gitlab_host, gitlab_group, gitlab_token,
     github_token,
@@ -150,22 +153,24 @@ export async function PUT(req) {
     llm_model: llm_model ?? existing?.llm_model ?? 'anthropic/claude-3-5-sonnet-20241022',
     api_key_enc: existing?.api_key_enc || null,
     api_key_iv: existing?.api_key_iv || null,
+    // Application settings
+    package_manager: package_manager ?? existing?.package_manager ?? 'npm',
     // Preserve existing deployment settings unless overridden
-    gitlab_host: gitlab_host ?? existing?.gitlab_host ?? '',
+    gitlab_host: gitlab_host ?? existing?.gitlab_host ?? 'https://gitlab.udevs.io',
     gitlab_group: gitlab_group ?? existing?.gitlab_group ?? '',
     gitlab_token_enc: existing?.gitlab_token_enc || null,
     gitlab_token_iv: existing?.gitlab_token_iv || null,
     github_token_enc: existing?.github_token_enc || null,
     github_token_iv: existing?.github_token_iv || null,
-    ops_repo_url: ops_repo_url ?? existing?.ops_repo_url ?? '',
-    ops_repo_branch: ops_repo_branch ?? existing?.ops_repo_branch ?? 'main',
+    ops_repo_url: ops_repo_url ?? existing?.ops_repo_url ?? 'https://gitlab.udevs.io/ops/deployments',
+    ops_repo_branch: ops_repo_branch ?? existing?.ops_repo_branch ?? 'master',
     vercel_token_enc: existing?.vercel_token_enc || null,
     vercel_token_iv: existing?.vercel_token_iv || null,
     vercel_team_id: vercel_team_id ?? existing?.vercel_team_id ?? '',
     k8s_namespace: k8s_namespace ?? existing?.k8s_namespace ?? 'frontend-prod',
-    k8s_domain: k8s_domain ?? existing?.k8s_domain ?? '',
+    k8s_domain: k8s_domain ?? existing?.k8s_domain ?? '*.javoxir.online',
     k8s_tls_secret: k8s_tls_secret ?? existing?.k8s_tls_secret ?? '',
-    registry_url: registry_url ?? existing?.registry_url ?? '',
+    registry_url: registry_url ?? existing?.registry_url ?? 'gitlab.udevs.io:5050',
   };
 
   // Encrypt sensitive tokens

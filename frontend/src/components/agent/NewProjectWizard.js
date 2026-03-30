@@ -27,12 +27,6 @@ const StackLogos = {
   react: () => (
     <img src="/icons/reactjs.svg" alt="React" className="w-6 h-6" />
   ),
-  vue: () => (
-    <svg viewBox="0 0 32 32" className="w-6 h-6"><path d="M24.4,3.925H30l-14,24.15L2,3.925H12.71L16,9.525l3.22-5.6Z" fill="#41B883"/><path d="M2,3.925l14,24.15L30,3.925H24.4L16,18.415,7.53,3.925Z" fill="#41B883"/><path d="M7.53,3.925,16,18.485,24.4,3.925H19.22L16,9.525l-3.29-5.6Z" fill="#35495E"/></svg>
-  ),
-  angular: () => (
-    <svg viewBox="0 0 32 32" className="w-6 h-6"><polygon fill="#DD0031" points="16,2 16,2 16,2 2.72,6.61 4.81,24.18 16,30 16,30 16,30 27.19,24.18 29.28,6.61"/><polygon fill="#C3002F" points="16,2 16,5.56 16,5.56 16,18.97 16,18.97 16,30 27.19,24.18 29.28,6.61"/><path fill="#fff" d="M16,5.56L7.16,25.32h3.31l1.77-4.42h7.5l1.77,4.42h3.31L16,5.56zm2.56,12.95H13.44L16,11.89Z"/></svg>
-  ),
   fastapi: () => (
     <svg viewBox="0 0 32 32" className="w-6 h-6"><path fill="#009688" d="M16 2C8.268 2 2 8.268 2 16s6.268 14 14 14 14-6.268 14-14S23.732 2 16 2zm-.6 25.2V18h-4l5.2-13.2V14h4l-5.2 13.2z"/></svg>
   ),
@@ -52,8 +46,6 @@ const STACKS = [
   { id: 'html-css', name: 'HTML & CSS', description: 'Pure static site — no framework', tag: 'Simple' },
   { id: 'nextjs', name: 'Next.js', description: 'Full-stack React with SSR', tag: 'Recommended' },
   { id: 'react', name: 'React', description: 'Component-based UI library', tag: 'Popular' },
-  { id: 'vue', name: 'Vue.js', description: 'Progressive JS framework', tag: null },
-  { id: 'angular', name: 'Angular', description: 'Enterprise platform by Google', tag: null },
   { id: 'fastapi', name: 'FastAPI', description: 'Modern Python backend', tag: 'Backend' },
   { id: 'express', name: 'Node.js + Express', description: 'Lightweight Node.js server', tag: 'Backend' },
   { id: 'django', name: 'Django', description: 'Batteries-included Python', tag: 'Backend' },

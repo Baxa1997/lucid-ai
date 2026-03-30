@@ -390,6 +390,25 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         return;
       }
 
+      // ─── Generation Progress — batched project generation ────
+      if (msg.type === 'generation_progress') {
+        window.dispatchEvent(new CustomEvent('generation_progress', { detail: msg }));
+        pushLog(`[Gen] ${msg.message || msg.batch || ''}`, 'system');
+        return;
+      }
+
+      if (msg.type === 'batch_complete') {
+        window.dispatchEvent(new CustomEvent('batch_complete', { detail: msg }));
+        pushLog(`[Gen] ✓ ${msg.batch} complete (${msg.files_created?.length || 0} files)`, 'system');
+        return;
+      }
+
+      if (msg.type === 'generation_complete') {
+        window.dispatchEvent(new CustomEvent('generation_complete', { detail: msg }));
+        pushLog(`[Gen] ✅ ${msg.message || 'Project generated!'} (${msg.total_files || 0} files)`, 'system');
+        return;
+      }
+
       // ─── Deploy Ready — Vercel auto-deploy URL ────
       if (msg.type === 'deploy_ready') {
         pushChat('system', `🚀 **Live at:** [${msg.url}](${msg.url})`);
@@ -397,12 +416,32 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         return;
       }
 
-      // ─── Repo Created — internal platform repo (not shown to user) ──
+      // ─── Repo Created ─────────────────────────────────────
       if (msg.type === 'repo_created') {
-        // Platform repos are internal storage — log only, don't show in chat
-        pushLog(`[Platform Repo] ${msg.repoUrl}`, 'system');
+        if (msg.platformOwned && msg.branch === 'main') {
+          // new_project_mode: brand-new private repo created for this project
+          pushChat('system',
+            `✅ **Project repository created!**\n` +
+            `📦 **[${msg.repoName || 'View Repository'}](${msg.repoUrl})**\n` +
+            `🌿 Branch: \`main\``
+          );
+          pushLog(`[New Repo] ${msg.repoUrl}`, 'system');
+        } else if (msg.branch && msg.branchUrl && msg.prUrl) {
+          // branch-push mode: pushed to a feature branch — show PR link
+          pushChat('system',
+            `📦 Code pushed to branch **\`${msg.branch}\`**\n` +
+            `📂 [View branch](${msg.branchUrl})\n` +
+            `🔀 **[Open Pull Request](${msg.prUrl})**`
+          );
+          pushLog(`[Repo] ${msg.repoUrl} → branch: ${msg.branch}`, 'system');
+        } else if (msg.repoUrl) {
+          // generic: repo created or updated
+          pushChat('system', `📦 Repository: [${msg.repoName || msg.repoUrl}](${msg.repoUrl})`);
+          pushLog(`[Platform Repo] ${msg.repoUrl}`, 'system');
+        }
         return;
       }
+
 
       // ─── Preview Ready ────────────────────────────
       if (msg.type === 'preview_ready') {

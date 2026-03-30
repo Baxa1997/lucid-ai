@@ -184,10 +184,22 @@ export default function ExportCodeModal({
       });
 
       const data = await res.json();
-      if (!res.ok || !data.ok) {
+
+      // Token expired — send user to reconnect flow
+      if (data.needsReconnect) {
+        setExportError(data.error || 'Token expired. Please reconnect.');
+        setToken(''); // Clear old token
+        setStep('connect'); // Go to token entry step
+        setExporting(false);
+        return;
+      }
+
+      // Hard failure — repo wasn't even created
+      if (!res.ok && !data.ok) {
         throw new Error(data.error || 'Export failed');
       }
 
+      // Partial or full success — repo was created
       setExportResult(data);
       setStep('success');
     } catch (err) {
@@ -566,14 +578,35 @@ export default function ExportCodeModal({
             {step === 'success' && exportResult && (
               <div className="px-6 py-8 space-y-5">
                 <div className="flex flex-col items-center text-center">
-                  <div className="w-16 h-16 rounded-2xl bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-100 dark:border-emerald-500/20 flex items-center justify-center mb-4">
-                    <Check className="w-7 h-7 text-emerald-600 dark:text-emerald-400" />
+                  <div className={cn(
+                    'w-16 h-16 rounded-2xl flex items-center justify-center mb-4 border',
+                    exportResult.warning
+                      ? 'bg-amber-50 dark:bg-amber-500/10 border-amber-100 dark:border-amber-500/20'
+                      : 'bg-emerald-50 dark:bg-emerald-500/10 border-emerald-100 dark:border-emerald-500/20'
+                  )}>
+                    {exportResult.warning
+                      ? <AlertCircle className="w-7 h-7 text-amber-500 dark:text-amber-400" />
+                      : <Check className="w-7 h-7 text-emerald-600 dark:text-emerald-400" />}
                   </div>
-                  <h4 className="text-lg font-bold text-slate-900 dark:text-white mb-2">Export Successful!</h4>
+                  <h4 className="text-lg font-bold text-slate-900 dark:text-white mb-2">
+                    {exportResult.warning ? 'Repo Created' : 'Export Successful!'}
+                  </h4>
                   <p className="text-sm text-slate-500 dark:text-white/40">
-                    Your code is live at:
+                    {exportResult.warning
+                      ? 'Repository created, but some steps had issues:'
+                      : `${exportResult.filesExported || 0} files exported${exportResult.cicdAdded ? ' + CI/CD pipeline' : ''}`}
                   </p>
                 </div>
+
+                {/* Warning banner (if partial success) */}
+                {exportResult.warning && (
+                  <div className="flex items-start gap-2.5 px-4 py-3 bg-amber-50 dark:bg-amber-500/10 border border-amber-100 dark:border-amber-500/20 rounded-2xl">
+                    <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                    <p className="text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
+                      {exportResult.warning}
+                    </p>
+                  </div>
+                )}
 
                 {/* Repo link */}
                 <div className="flex items-center gap-3 px-4 py-3 bg-slate-50 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] rounded-2xl">
@@ -594,13 +627,15 @@ export default function ExportCodeModal({
                   </button>
                 </div>
 
-                {/* Note */}
-                <div className="flex items-start gap-2.5 px-4 py-3 bg-amber-50 dark:bg-amber-500/10 border border-amber-100 dark:border-amber-500/20 rounded-2xl">
-                  <Info className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                  <p className="text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
-                    Changes you make here won&apos;t sync automatically — re-export anytime to push the latest code.
-                  </p>
-                </div>
+                {/* Export summary */}
+                {!exportResult.warning && (
+                  <div className="flex items-start gap-2.5 px-4 py-3 bg-slate-50 dark:bg-white/[0.03] border border-slate-200 dark:border-white/[0.06] rounded-2xl">
+                    <Info className="w-4 h-4 text-slate-400 dark:text-white/30 shrink-0 mt-0.5" />
+                    <p className="text-xs text-slate-500 dark:text-white/40 leading-relaxed">
+                      Changes you make here won&apos;t sync automatically — re-export anytime to push the latest code.
+                    </p>
+                  </div>
+                )}
 
                 <div className="flex gap-3 pt-1">
                   <button

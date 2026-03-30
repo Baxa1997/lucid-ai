@@ -8,13 +8,20 @@ import { requireAuth } from '@/lib/gatekeeper';
 
 const ANTHROPIC_BASE = 'https://api.anthropic.com/v1/messages';
 
-const SYSTEM_PROMPT = `You are a frontend framework advisor. Given a project description, pick the single best frontend framework from: Next.js, React, Vue.js, Angular.
+const SYSTEM_PROMPT = `You are a frontend framework advisor. Given a project description, pick the single best frontend framework from: Next.js, React.
 
 Rules:
-- Admin panels → Angular
-- Ecommerce or marketing sites → Next.js
-- Dashboards or SaaS → React
-- Content sites → Vue.js
+- Admin panel → React
+- Dashboard → React
+- Analytics tool → React
+- CRM → React
+- ERP → React
+- E-commerce or marketplace → Next.js
+- Website or landing page → Next.js
+- Blog or content site → Next.js
+- SaaS application → Next.js
+- Portfolio → Next.js
+- Default fallback → Next.js
 
 Reply with ONLY valid JSON: {"framework":"<name>","reason":"<one short sentence why>"}
 No markdown, no extra text.`;
@@ -55,7 +62,7 @@ export async function POST(req) {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6',
         max_tokens: 128,
         system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content: description.trim() }],
@@ -82,10 +89,6 @@ export async function POST(req) {
         'next.js': 'nextjs',
         'nextjs': 'nextjs',
         'react': 'react',
-        'vue.js': 'vue',
-        'vuejs': 'vue',
-        'vue': 'vue',
-        'angular': 'angular',
       };
       const stackId = nameMap[parsed.framework?.toLowerCase()] || 'nextjs';
       return NextResponse.json({
@@ -95,8 +98,6 @@ export async function POST(req) {
     } catch {
       // Fallback: try to extract framework name from raw text
       const lower = raw.toLowerCase();
-      if (lower.includes('angular')) return NextResponse.json({ stack: 'angular', reason: 'Best fit for your project' });
-      if (lower.includes('vue')) return NextResponse.json({ stack: 'vue', reason: 'Best fit for your project' });
       if (lower.includes('react') && !lower.includes('next')) return NextResponse.json({ stack: 'react', reason: 'Best fit for your project' });
       return NextResponse.json({ stack: 'nextjs', reason: 'Best fit for your project' });
     }

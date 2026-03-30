@@ -644,10 +644,44 @@ function ApplicationTab() {
   const [soundNotifications, setSoundNotifications] = useState(true);
   const [gitUsername, setGitUsername] = useState('openhands');
   const [gitEmail, setGitEmail] = useState('openhands@all-hands.dev');
-  const [packageManager, setPackageManager] = useState('yarn');
+  const [packageManager, setPackageManager] = useState('npm');
+  const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState(null);
 
   const languages = ['English', 'Spanish', 'French', 'German', 'Chinese', 'Japanese', 'Korean', 'Russian'];
-  const packageManagers = ['yarn', 'npm', 'pnpm', 'bun'];
+  const packageManagers = ['npm', 'yarn', 'pnpm', 'bun'];
+
+  // Load saved package manager from settings API
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const res = await fetch('/api/settings');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        if (data.package_manager) setPackageManager(data.package_manager);
+      } catch { /* ignore */ }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleSave = useCallback(async () => {
+    setSaving(true); setSaveStatus(null);
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ package_manager: packageManager }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+      setSaveStatus('success');
+      setTimeout(() => setSaveStatus(null), 3500);
+    } catch {
+      setSaveStatus('error');
+    } finally { setSaving(false); }
+  }, [packageManager]);
 
   return (
     <div className="space-y-6">
@@ -722,7 +756,7 @@ function ApplicationTab() {
         description="Default tool for managing project dependencies"
         icon={Package}
       >
-        <FieldRow label="Default Manager" description="Used for new projects">
+        <FieldRow label="Default Manager" description="Used for new projects when no lock file exists">
           <Dropdown
             value={packageManager}
             options={packageManagers}
@@ -733,15 +767,35 @@ function ApplicationTab() {
         <div className="mt-4 flex items-start gap-2 p-3 bg-blue-50 dark:bg-blue-500/10 border border-blue-100 dark:border-blue-500/20 rounded-xl">
           <Info className="w-4 h-4 text-blue-500 dark:text-blue-400 shrink-0 mt-0.5" />
           <p className="text-xs text-blue-600 dark:text-blue-400 leading-relaxed">
-            For existing projects, the agent will automatically detect the package manager from lock files (yarn.lock, package-lock.json, or pnpm-lock.yaml).
+            For existing projects, the agent will automatically detect the package manager from lock files (yarn.lock, package-lock.json, pnpm-lock.yaml, or bun.lockb).
           </p>
         </div>
       </SectionCard>
 
       {/* Save */}
-      <div className="flex justify-end">
-        <button className="px-6 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 transition-all shadow-sm shadow-blue-600/15 active:scale-[0.98]">
-          Save Changes
+      <div className="flex items-center justify-end gap-4">
+        {saveStatus === 'success' && (
+          <span className="flex items-center gap-1.5 text-sm text-emerald-600 dark:text-emerald-400 animate-fade-in">
+            <Check className="w-4 h-4" /> Settings saved!
+          </span>
+        )}
+        {saveStatus === 'error' && (
+          <span className="flex items-center gap-1.5 text-sm text-red-500 dark:text-red-400 animate-fade-in">
+            <AlertCircle className="w-4 h-4" /> Save failed.
+          </span>
+        )}
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className={cn(
+            "flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm active:scale-[0.98]",
+            saving
+              ? "bg-blue-400 text-white cursor-not-allowed"
+              : "bg-blue-600 text-white hover:bg-blue-700 shadow-blue-600/15"
+          )}
+        >
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+          {saving ? 'Saving…' : 'Save Changes'}
         </button>
       </div>
     </div>

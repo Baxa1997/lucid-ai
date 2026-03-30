@@ -14,7 +14,6 @@ import NewProjectWizard from '@/components/agent/NewProjectWizard';
 import { getSupabaseBrowserClient, clearAllSupabaseCookies } from '@/lib/supabase/client';
 import { createConversation } from '@/lib/conversations';
 
-// ── Context for wizard state (passed to children) ────────
 const WizardContext = createContext({ showWizard: false, setShowWizard: () => {} });
 export function useWizard() { return useContext(WizardContext); }
 
@@ -26,7 +25,6 @@ const navItems = [
   { label: 'Settings', icon: Settings, href: '/dashboard/engineer/settings' },
 ];
 
-/* ── Tooltip wrapper for collapsed mode ── */
 function Tooltip({ children, label, show }) {
   if (!show) return children;
   return (
@@ -40,7 +38,6 @@ function Tooltip({ children, label, show }) {
   );
 }
 
-/* ── Memoized nav item to prevent re-renders ── */
 const NavItem = memo(function NavItem({ item, active, collapsed }) {
   const Icon = item.icon;
   return (
@@ -80,13 +77,9 @@ export default function EngineerLayout({ children }) {
   const pathname = usePathname();
   const supabase = getSupabaseBrowserClient();
 
-  // ── Sidebar collapsed state (persisted in localStorage) ──
   const [collapsed, setCollapsed] = useState(false);
-
-  // ── Wizard state (managed at layout level) ──
   const [showWizard, setShowWizard] = useState(false);
 
-  // Auto-close wizard when navigating to a workspace (after wizard completion)
   useEffect(() => {
     if (showWizard && pathname.includes('/workspace/')) {
       setShowWizard(false);
@@ -108,17 +101,13 @@ export default function EngineerLayout({ children }) {
     });
   }, []);
 
-  // ── User state ──
   const [user, setUser] = useState(null);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const isLoggingOutRef = useRef(false);
 
-  // ── Toast state ──
   const [toast, setToast] = useState(null);
 
-  // Fetch user on mount + session guard
   useEffect(() => {
-    // Check session — redirect if not authenticated
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session) {
         console.warn('[Layout] No session found, redirecting to login');
@@ -133,7 +122,6 @@ export default function EngineerLayout({ children }) {
       }
     });
 
-    // Session guard: redirect to /login if session is lost mid-use
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'SIGNED_OUT' && !isLoggingOutRef.current) {
         console.warn('[Layout] Session lost (SIGNED_OUT event), redirecting to login');
@@ -142,7 +130,6 @@ export default function EngineerLayout({ children }) {
       }
     });
 
-    // Check for sign-in toast flag (one-time)
     if (typeof window !== 'undefined') {
       const justSignedIn = sessionStorage.getItem('lucid-just-signed-in');
       if (justSignedIn) {
@@ -161,7 +148,6 @@ export default function EngineerLayout({ children }) {
     };
   }, [supabase, router]);
 
-  // Derive display info from Supabase user
   const displayName = user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split('@')[0] || 'User';
   const displayEmail = user?.email || '';
   const avatarUrl = user?.user_metadata?.avatar_url || null;
@@ -187,60 +173,64 @@ export default function EngineerLayout({ children }) {
     }
   }, [supabase, router]);
 
-  // ── Wizard completion handler ──
   const handleWizardComplete = useCallback(async (wizardResult) => {
-    // NOTE: Do NOT call setShowWizard(false) here — the wizard stays
-    // visible while we create the conversation + navigate.
-    // The useEffect on pathname closes it when the workspace URL loads.
-
-    // Create a real DB conversation
     const stackLabel = wizardResult.stack || 'project';
     const title = wizardResult.description
       ? wizardResult.description.slice(0, 80)
       : `New ${stackLabel} Project`;
 
+    const {
+      stack,
+      projectType,
+      description,
+      figmaUrl,
+      backend,
+      deployment,
+      enhancedPrompt,
+    } = wizardResult;
+
     try {
+      // ── Create conversation (no repo yet — backend creates it in Phase 7) ──
       const conversation = await createConversation({
-        repoName: null,
+        repoName:     null,
         repoProvider: null,
-        repoUrl: null,
-        branch: 'main',
+        repoUrl:      null,
+        branch:       'main',
         title,
       });
 
-      if (conversation) {
-        // Store the enhanced prompt so the workspace auto-starts with it
-        const prompt = wizardResult.enhancedPrompt || wizardResult.description || '';
-        if (prompt) {
-          try {
-            sessionStorage.setItem(`wizard_prompt_${conversation.id}`, prompt);
-            sessionStorage.setItem(`wizard_meta_${conversation.id}`, JSON.stringify({
-              stack: wizardResult.stack,
-              backend: wizardResult.backend,
-              deployment: wizardResult.deployment,
-              figmaUrl: wizardState.figmaUrl,
-            }));
-            // Store original description for project naming
-            sessionStorage.setItem(`wizard_desc_${conversation.id}`, wizardResult.description || '');
-          } catch (_) {}
-        }
-        // Use replace to avoid going back to the dashboard when pressing Back
-        router.replace(`/dashboard/engineer/workspace/${conversation.id}`);
-      } else {
-        const fallbackId = `scratch-${Date.now()}`;
-        router.replace(`/dashboard/engineer/workspace/${fallbackId}`);
+      const conversationId = conversation?.id || `wizard-${Date.now()}`;
+
+      // ── Persist wizard data to sessionStorage ───────────────────────────────
+      // The backend reads stack= from the [LUCID_PROJECT] header and uses its
+      // own template registry to clone the right template — no clone_url needed.
+      const prompt = enhancedPrompt || description || '';
+      if (prompt) {
+        try {
+          sessionStorage.setItem(`wizard_prompt_${conversationId}`, prompt);
+          sessionStorage.setItem(`wizard_meta_${conversationId}`, JSON.stringify({
+            stack:       stack      || 'nextjs',
+            projectType: projectType || null,
+            backend:     backend    || 'none',
+            deployment:  deployment || null,
+            figmaUrl:    figmaUrl   || '',
+          }));
+          sessionStorage.setItem(`wizard_desc_${conversationId}`, description || '');
+        } catch (_) {}
       }
+
+      // ── Navigate to workspace ────────────────────────────────────────────────
+      router.replace(`/dashboard/engineer/workspace/${conversationId}`);
+
     } catch (err) {
       console.error('[Layout] Wizard completion error:', err);
-      // Fallback: still navigate even if conversation creation fails
-      const fallbackId = `scratch-${Date.now()}`;
+      const fallbackId = `wizard-${Date.now()}`;
       router.replace(`/dashboard/engineer/workspace/${fallbackId}`);
     }
   }, [router]);
 
-  // ── Close wizard when navigating away ──
+
   useEffect(() => {
-    // If user navigates to a workspace, close the wizard
     if (pathname.includes('/workspace/')) {
       setShowWizard(false);
     }
@@ -423,10 +413,14 @@ export default function EngineerLayout({ children }) {
         {/* ══ MAIN CONTENT ══ */}
         <main className={cn("flex-1", wizardIsActive ? "overflow-hidden" : "overflow-y-scroll")}>
           {wizardIsActive ? (
-            <NewProjectWizard
-              onClose={() => setShowWizard(false)}
-              onWizardComplete={handleWizardComplete}
-            />
+            <div className="h-full flex flex-col relative">
+              <div className="flex-1 min-h-0">
+                <NewProjectWizard
+                  onClose={() => setShowWizard(false)}
+                  onWizardComplete={handleWizardComplete}
+                />
+              </div>
+            </div>
           ) : (
             children
           )}
