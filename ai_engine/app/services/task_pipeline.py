@@ -1507,9 +1507,17 @@ async def gemini_research(
         spec_prompt = f"""You are a world-class product researcher and UX designer.
 A user wants to build a COMPLETE, PRODUCTION-READY project. Your job is to RESEARCH what this type of project actually needs in the real world, then write a detailed specification.
 
+## CRITICAL: EXPAND VAGUE REQUESTS
+The user may give a very short or vague request like "I need a CRM" or "movie website" or "build SaaS tool".
+YOUR JOB is to turn that into a COMPREHENSIVE, DETAILED specification as if you were a senior product manager.
+- "CRM system" → research what Salesforce, HubSpot, Pipedrive do → define pipelines, contacts, deals, activities, reports pages
+- "movie website" → research what IMDb, Letterboxd, Netflix do → define catalog, movie details, genres, reviews, watchlist pages
+- "restaurant" → research what real restaurant sites do → define menu, reservations, about, gallery, contact pages
+DO NOT generate a generic template. RESEARCH this specific niche.
+
 ## HOW TO RESEARCH
 1. Think about REAL examples of this type of project (e.g., if they want a "Netflix blog", think about Netflix's actual blog, Medium, Substack, Ghost)
-2. What pages do real projects like this have?
+2. What pages do REAL projects like this have? (NOT every project needs the same pages)
 3. What sections does each page include?
 4. What makes a project in this niche feel professional and complete?
 5. What features differentiate a "$50 template" from a "$5000 custom build"?
@@ -1536,12 +1544,13 @@ Write a COMPREHENSIVE specification. The template provides code structure — YO
 - 3-5 key differentiators that make it feel premium
 
 ## MVP Feature List
-List EVERY feature the project needs to feel complete:
-{"- Dashboard with real-time stats" if is_admin else "- Landing page with compelling hero"}
-{"- CRUD operations for all data models" if is_admin else "- Multiple content sections with unique layouts"}
-{"- Data tables with search, filter, sort, pagination" if is_admin else "- About/Story page"}
-{"- Forms with validation" if is_admin else "- Contact or subscription functionality"}
-{"- Charts and analytics" if is_admin else "- Blog or portfolio showcase"}
+Research what THIS SPECIFIC type of project needs. Do NOT use a generic list.
+Think: what would a real user of this product expect to see?
+- List EVERY page and feature the project needs to feel COMPLETE and PRODUCTION-READY
+- Include only pages and features that are RELEVANT to this specific project type
+- Do NOT include "Pricing" unless this project actually sells tiered services
+- Do NOT include "Testimonials" unless social proof is relevant to this project type
+- For admin panels: make features SPECIFIC to the industry (hospital→patients, school→students, CRM→contacts/deals)
 - Navigation with active states
 - Mobile responsive design
 - Loading states, empty states, error states
@@ -1557,6 +1566,12 @@ List EVERY feature the project needs to feel complete:
 - Animations: subtle translateY, opacity, scale transitions
 
 ## Pages (COMPLETE — every page the project needs)
+Determine what pages THIS SPECIFIC project needs. Examples:
+- Movie site: Home (hero+trending+genres), Movies (catalog), Movie Details, About → NO pricing
+- SaaS site: Home (hero+features+pricing+testimonials+FAQ), About, Contact → YES pricing
+- Restaurant: Home (hero+highlights+chef), Menu, Reservations, About, Contact → NO blog
+- CRM admin: Dashboard (deals+stats), Contacts, Companies, Deals (pipeline), Activities, Reports, Settings
+
 For EACH page, describe in detail:
 - Page name, route, and purpose
 - EVERY section with specific content descriptions
@@ -1590,6 +1605,7 @@ Components used across multiple pages:
 
 REMEMBER: The template is a STARTING POINT for code. Your spec defines a COMPLETE, DYNAMIC product.
 If two different users asking for "blog landing page" get the same spec, you have FAILED.
+If the user's request is short/vague, you MUST still produce a COMPREHENSIVE spec by researching the niche.
 Research the specific niche. Customize everything.
 """
         response = await asyncio.to_thread(model.generate_content, spec_prompt)
@@ -3443,11 +3459,12 @@ STOP after writing this ONE file.
             append_system_prompt=system_prompt,
         )
 
-        # ── Run Claude with a 120s timeout per file ───────────
+        # ── Run Claude with generous timeout per file ───────────
+        # 180s = ~30s per turn × 6 max_turns. Complex sections need this
         file_success = False
         for attempt in range(2):
             try:
-                async with asyncio.timeout(120):   # 120s per single file — never hits
+                async with asyncio.timeout(180):   # 180s per single file for premium quality
                     async for message in query(prompt=prompt, options=options):
                         try:
                             await websocket.send_json({
