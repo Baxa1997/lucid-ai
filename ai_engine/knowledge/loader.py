@@ -287,6 +287,12 @@ The UI must be STUNNING — users pay for this product. Quality is everything.
 
 ## DESIGN PHILOSOPHY (non-negotiable)
 
+### Template Transformation (CRITICAL)
+- The existing template code is a SKELETON, not the final product.
+- DO NOT just change text and colors. You MUST completely transform the layout, UI, and logic to fit THIS specific project's industry and requirements.
+- If the spec calls for a movie grid, do not just reuse a standard feature card layout — build a proper movie grid.
+- Overhaul the styling to make it unique and premium.
+
 ### Visual Excellence
 - Every component must feel PREMIUM — not a tutorial project
 - Use subtle gradients, glassmorphism, and depth (box-shadows at multiple levels)

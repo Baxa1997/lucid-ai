@@ -1712,8 +1712,9 @@ async def gemini_create_plan(
 
         blueprint_prompt = f"""You are a senior product architect converting a product specification into a complete implementation blueprint.
 
-The project MUST be a COMPLETE, DYNAMIC, production-ready application — NOT a template with color changes.
-The template provides starting code. YOUR blueprint defines what gets BUILT on top of it.
+The project MUST be a UNIQUE, DYNAMIC, production-ready application.
+DO NOT just return the existing template with minor text or color changes.
+You MUST instruct the AI to COMPLETELY TRANSFORM the existing components (layout, styling, logic) to fit the specific needs of this project's industry.
 
 USER REQUEST: {task}
 
@@ -3323,12 +3324,14 @@ async def execute_project_in_batches(
                 f"## EXISTING FILE CONTENT ({file_path})\n"
                 f"This file already exists in the template. You are MODIFYING it:\n"
                 f"```\n{existing_content[:6000]}\n```\n\n"
-                f"Keep the existing structure. Only change what the spec requires.\n"
-                f"Preserve all existing imports and component exports unless explicitly replacing them.\n"
+                f"CRITICAL INSTRUCTION: The template is just a starting point. DO NOT just change the text.\n"
+                f"You MUST TRANSFORM the component's layout, styling, and logic to exactly match the specific requirements below.\n"
+                f"If the spec requires a completely different layout (e.g. from a grid to a slider), change the code completely.\n"
+                f"Preserve existing imports only if they are still needed; otherwise remove them.\n"
             )
             action_instruction = (
-                f"MODIFY the file `{file_path}` using the Edit or Write tool.\n"
-                f"The current content is shown above. Make targeted changes to implement the spec below.\n"
+                f"MODIFY the file `{file_path}` using the Write or Edit tool.\n"
+                f"The current content is shown above. OVERHAUL it to implement the spec below.\n"
             )
         else:
             file_context = (
