@@ -1736,26 +1736,42 @@ Convert the spec into a concrete blueprint. Define:
 
 You do NOT specify file paths — that is handled automatically based on the framework.
 
-{"## ADMIN PANEL REQUIREMENTS" if "admin" in (detected_stack or "").lower() or "admin" in task.lower() else "## WEBSITE/LANDING PAGE REQUIREMENTS"}
-{"- Dashboard page with stat cards, charts, recent activity" if "admin" in task.lower() else "- Home/Landing page with 5-8 compelling sections (Hero, Features, About, Testimonials, Pricing, FAQ, CTA)"}
-{"- At least one data table page with search/filter/sort/pagination" if "admin" in task.lower() else "- Each section should have unique layout — not just repeated card grids"}
-{"- Create/Edit forms with validation" if "admin" in task.lower() else "- About page with team/story content"}
-{"- Settings page with profile and preferences" if "admin" in task.lower() else "- Contact page with form or Newsletter signup"}
-{"- Sidebar navigation with icons and active states" if "admin" in task.lower() else "- Clean top navigation with smooth scroll or page links"}
+## CONTEXT-AWARE ARCHITECTURE
+Think about what THIS SPECIFIC PROJECT actually needs. NOT every project is the same.
+Analyze the user request and spec to determine the RIGHT pages, sections, and navigation.
+
+EXAMPLES of how different projects need different structures:
+- "Movie streaming website" → Home (hero with featured movie, trending carousel, genre grid), Movies catalog (search/filter grid), Movie details (poster, synopsis, cast, trailer, reviews), About → NO pricing page, NO testimonials
+- "Restaurant website" → Home (hero with food photography, menu highlights, chef section), Menu (categorized food items with prices), Reservations (booking form), About (story, team), Contact (map, hours) → NO features grid, NO FAQ
+- "SaaS landing page" → Home (hero, features, how-it-works, testimonials, pricing, FAQ, CTA), About, Contact → YES pricing, YES testimonials
+- "Portfolio website" → Home (hero, selected works grid), Projects (gallery/case studies), About (bio, skills, experience), Contact → NO pricing, NO features grid
+- "E-commerce store" → Home (hero banner, featured products, categories, deals), Products (search/filter/sort grid), Product detail (images, description, reviews, add-to-cart), Cart, About → NO testimonials
+- "Hospital admin panel" → Dashboard (patient stats, appointment calendar, bed occupancy), Patients (table with search/filter), Appointments (calendar + table), Doctors (table), Settings → NOT generic "Products" table
+- "School admin panel" → Dashboard (student enrollment stats, attendance chart, upcoming events), Students (table), Classes (table), Teachers (table), Grades (table), Settings → NOT generic "Orders" table
+- "Inventory admin panel" → Dashboard (stock levels, low-stock alerts, recent transactions), Products (table with categories), Warehouses (table), Orders (table), Suppliers (table), Reports → NOT generic "Users" table
+
+YOUR RULES:
+1. Determine EXACTLY what pages this specific project needs — do NOT copy from examples above
+2. Each page must have sections that are RELEVANT to the project's purpose
+3. Include pages that make sense for this industry — skip pages that don't
+4. Only include Pricing if the project sells something with clear pricing tiers
+5. Only include Testimonials if social proof is relevant to this project type
+6. For admin panels: make the data tables, forms, and dashboard cards SPECIFIC to the industry
+7. Navigation items must match the actual pages you define — no dead links
 
 Return ONLY valid JSON (no markdown, no backticks):
 {{
   "projectName": "BriefName",
-  "projectType": "blog|ecommerce|portfolio|saas-landing|admin-dashboard|docs|marketing|other",
+  "projectType": "blog|ecommerce|portfolio|saas-landing|admin-dashboard|docs|marketing|movie|restaurant|booking|other",
   "description": "One line description of what this project does",
 
   "theme": {{
-    "--color-primary": "#hex — UNIQUE to this project. NEVER #6366f1",
+    "--color-primary": "#hex — UNIQUE to this project, matching the industry mood. Movie=dark red/purple, Restaurant=warm orange/brown, SaaS=professional blue, Medical=clean teal. NEVER #6366f1",
     "--color-primary-light": "#hex",
     "--color-primary-dark": "#hex",
-    "--color-primary-50": "#hex (very light tint)",
-    "--color-accent": "#hex (complementary accent)",
-    "--color-bg": "#hex (e.g. #ffffff or #0a0a0f)",
+    "--color-primary-50": "#hex (very light tint for backgrounds)",
+    "--color-accent": "#hex (complementary accent — adds visual interest)",
+    "--color-bg": "#hex (page background — dark for cinema/entertainment, light for business/medical)",
     "--color-bg-secondary": "#hex",
     "--color-bg-tertiary": "#hex",
     "--color-surface": "#hex (card background)",
@@ -1763,7 +1779,7 @@ Return ONLY valid JSON (no markdown, no backticks):
     "--color-text": "#hex",
     "--color-text-secondary": "#hex",
     "--color-text-muted": "#hex",
-    "--font-family": "'FontName', sans-serif",
+    "--font-family": "'FontName', sans-serif — choose a font that matches the mood (Playfair Display for luxury, Inter for SaaS, Poppins for modern, Merriweather for editorial)",
     "--font-heading": "'HeadingFont', sans-serif",
     "--radius-sm": "0.25rem",
     "--radius-md": "0.375rem",
@@ -1774,33 +1790,26 @@ Return ONLY valid JSON (no markdown, no backticks):
   "googleFonts": ["FontName"],
 
   "navigation": {{
-    "style": "top-navbar|sidebar|both",
-    "brand": "Site name",
+    "style": "top-navbar|sidebar|both — choose based on project type (sidebar for admin panels, top-navbar for websites)",
+    "brand": "Project name or brand",
     "items": [
-      {{"label": "Home", "route": "/", "icon": "Home"}},
-      {{"label": "About", "route": "/about", "icon": "Info"}}
+      {{"label": "Page Name", "route": "/route", "icon": "LucideIconName"}}
     ],
-    "ctaButton": {{"label": "Get Started", "route": "/contact"}}
+    "ctaButton": {{"label": "Primary Action", "route": "/action"}}
   }},
 
   "pages": [
     {{
-      "name": "Home",
-      "route": "/",
-      "title": "SEO page title",
-      "description": "What this page is about",
+      "name": "PageName",
+      "route": "/route",
+      "title": "SEO-optimized page title for this specific page",
+      "description": "What this specific page is about",
       "sections": [
         {{
-          "name": "Hero",
-          "type": "hero",
-          "description": "DETAILED (60+ words): Full-width hero section with dark gradient background fading to var(--color-primary). Large bold headline 'Discover Stories That Matter' in white, subtitle paragraph about curated content. Red CTA button 'Start Reading' with hover scale effect. Background uses subtle pattern overlay. Stats row below: '10K+ Readers', '500+ Articles', '50+ Categories' in a horizontal flex with dividers.",
-          "components": ["CTAButton"]
-        }},
-        {{
-          "name": "Features",
-          "type": "features",
-          "description": "DETAILED: 3-column grid of 6 feature cards. Each card has: lucide icon (BookOpen, Zap, Users, Globe, Shield, Heart) at top in var(--color-primary), bold title, 2-line description, subtle hover translateY(-4px) with shadow. Cards have var(--color-surface) background with var(--color-border) border. Section title 'Why Choose Us' centered above.",
-          "components": ["FeatureCard"]
+          "name": "SectionName",
+          "type": "hero|features|catalog|details|gallery|stats|testimonials|pricing|faq|cta|form|table|chart|calendar|timeline|team|menu|map|newsletter|custom",
+          "description": "DETAILED (80+ words): Describe the EXACT visual implementation. Include: layout structure (grid/flex/columns), specific content (real headlines, real data, real names), colors using CSS variable names, animations (hover effects, transitions), responsive behavior, and interactive states. This description must be detailed enough for an engineer to implement WITHOUT asking questions.",
+          "components": ["SharedComponentName"]
         }}
       ]
     }}
@@ -1809,7 +1818,7 @@ Return ONLY valid JSON (no markdown, no backticks):
   "sharedComponents": [
     {{
       "name": "ComponentName",
-      "description": "What it does, props, visual design, hover/active states"
+      "description": "Purpose, props it accepts, visual design (colors, spacing, hover states), where it's used"
     }}
   ],
 
@@ -1819,17 +1828,21 @@ Return ONLY valid JSON (no markdown, no backticks):
 }}
 
 ## CRITICAL RULES
-1. Theme MUST be unique — match the project's industry and mood
-2. EVERY section description MUST be 60+ words with specific content, colors (using CSS variable names), animations, layout details, and realistic text
-3. Landing pages: MINIMUM 5 sections per page — Hero, Features, About/Stats, Testimonials/Social Proof, and CTA/Newsletter. Add Pricing, FAQ, Team if relevant
-4. Admin panels: Dashboard with stats + charts, at least 2 data table pages, forms, settings
-5. Each section becomes its OWN component file — so descriptions must be self-contained and independently implementable
-6. Include REALISTIC content: real headlines, descriptions, feature names, testimonials. NO "Lorem ipsum"
-7. sharedComponents: reusable UI elements (cards, badges, buttons, modals)
-8. packages: only add what's actually needed (recharts for charts, framer-motion for animations, etc.)
-9. Routes MUST be simple flat paths: "/", "/about", "/blog", "/contact", "/pricing". NEVER use route groups like "/(marketing)/about" or nested groups
-10. Section names MUST be simple PascalCase words: "Hero", "Features", "Testimonials", "Pricing", "FAQ", "CTA", "Newsletter". No spaces, no special characters
-11. Page names MUST be simple words: "Home", "About", "Blog", "Contact", "Pricing". No spaces, no special characters
+1. Theme MUST be unique — match the project's INDUSTRY and MOOD (dark cinema palette for movies, warm earthy for restaurants, clean professional for SaaS, vibrant for social)
+2. EVERY section description MUST be 80+ words with specific content, colors (using CSS variable names), animations, layout details, and REAL text that matches the project
+3. Pages and sections must be UNIQUE to this project — a movie site needs different pages than a SaaS site
+4. Only include Pricing if the project actually sells tiered plans/services
+5. Only include Testimonials if social proof is relevant to the project type
+6. For admin panels: dashboard cards, table columns, form fields must be SPECIFIC to the industry (hospital → patients, not generic "users")
+7. Each section becomes its OWN component file — descriptions must be self-contained and independently implementable
+8. Include REALISTIC content: real headlines, descriptions, feature names specific to this industry. NO "Lorem ipsum"
+9. sharedComponents: reusable UI elements (cards, badges, buttons, modals, search bars)
+10. packages: only add what's actually needed (recharts for charts, framer-motion for animations, swiper for carousels, etc.)
+11. Routes MUST be simple flat paths: "/", "/about", "/movies", "/menu". NEVER use route groups like "/(marketing)/about"
+12. Section names MUST be simple PascalCase: "Hero", "MovieGrid", "MenuList", "PatientTable", "BookingForm". No spaces
+13. Page names MUST be simple words: "Home", "Movies", "Menu", "Patients", "Dashboard". No spaces
+14. MINIMUM pages: websites need 3-5 pages, admin panels need 4-7 pages (dashboard + 2-4 data pages + settings)
+15. Home page MINIMUM 5 sections — but they must be RELEVANT sections for this project, not generic filler
 
 Return ONLY the JSON.
 """
@@ -3154,6 +3167,34 @@ async def execute_project_in_batches(
     spec_excerpt = spec_content[:2500] if spec_content else ""
     theme_summary = json.dumps(plan_data.get("theme", {}), indent=2)
 
+    # ── Load TEMPLATE_MANIFEST.md (Layer 1 — what components exist) ──
+    _manifest_block = ""
+    _manifest_path = os.path.join(workspace_path, "TEMPLATE_MANIFEST.md")
+    if os.path.isfile(_manifest_path):
+        try:
+            with open(_manifest_path, "r", errors="replace") as _mf:
+                _manifest_content = _mf.read()[:3000]
+            _manifest_block = (
+                "\n## TEMPLATE MANIFEST (import ONLY from these paths):\n"
+                f"{_manifest_content}\n"
+            )
+        except Exception:
+            pass
+
+    # ── Load knowledge context (Layer 2 — architecture patterns) ──
+    _knowledge_context = ""
+    try:
+        from knowledge.loader import build_knowledge_context
+        _kc_result = build_knowledge_context(task, stack)
+        if isinstance(_kc_result, dict):
+            _knowledge_context = _kc_result.get("full_context", "")
+        elif isinstance(_kc_result, str):
+            _knowledge_context = _kc_result
+        if _knowledge_context:
+            _knowledge_context = f"\n## ARCHITECTURE PATTERNS (follow these exactly):\n{_knowledge_context[:2000]}\n"
+    except Exception:
+        pass
+
     # ══════════════════════════════════════════════════════════
     # PRE-CREATE: Ensure all section directories and stub files exist
     # so that page imports NEVER reference non-existent files.
@@ -3328,48 +3369,71 @@ async def execute_project_in_batches(
 
 ## WORKSPACE FILE TREE
 {file_tree}
-
-## RULES
-1. Use ONLY CSS variables (var(--color-primary), var(--color-bg), etc.) — never hardcoded colors
-2. Use lucide-react for all icons
-3. Every component must be responsive (mobile-first)
+{_manifest_block}{_knowledge_context}
+## RULES — PREMIUM QUALITY (this is a paid product, quality is everything)
+1. Use ONLY CSS variables (var(--color-primary), var(--color-bg), etc.) — never hardcoded hex colors
+2. Use lucide-react for all icons (import {{ IconName }} from 'lucide-react')
+3. Every component must be responsive — mobile-first with proper breakpoints (@media min-width: 768px, 1024px, 1280px)
 4. Follow the spec for layout, sections, and behavior
 5. Do NOT create files other than `{file_path}`
 6. Write the complete file with all imports included
-7. ARCHITECTURE RULES:
-   - Page files (page.js, Home.jsx) must be THIN — just import and compose section components
-   - Section components (src/components/sections/) contain all the actual UI and logic
-   - NEVER write 200+ lines in a page file — break content into section components
-   - Each section component should be self-contained with its own styles and layout
-   - Import from existing section components, don't duplicate their code
-8. Write PRODUCTION-QUALITY content — use realistic placeholder text, proper spacing, animations
-9. Section components: use BOTH named AND default export: `export function ComponentName() {{ ... }}` then `export default ComponentName`
-10. Page files are written automatically — do NOT create page files
-11. The file path and component name are EXACT — do not rename or restructure
+
+## ARCHITECTURE
+- Page files (page.js, Home.jsx) must be THIN — just import and compose section components
+- Section components (src/components/sections/) contain all the actual UI and logic
+- NEVER write 200+ lines in a page file — break content into section components
+- Section components: use BOTH named AND default export: `export function ComponentName() {{ ... }}` then `export default ComponentName`
+- Page files are written automatically — do NOT create page files
+- The file path and component name are EXACT — do not rename or restructure
+
+## UI/UX EXCELLENCE (non-negotiable)
+- **Spacing rhythm**: Use consistent spacing (1rem, 1.5rem, 2rem, 3rem, 4rem, 6rem). Sections need generous padding (clamp(3rem, 8vw, 6rem) 0)
+- **Typography hierarchy**: h1 (clamp(2.5rem, 5vw, 4rem)), h2 (clamp(1.75rem, 3vw, 2.5rem)), h3 (1.25rem), body (1rem), small (0.875rem)
+- **Micro-animations**: Every interactive element needs hover/focus transitions (transform, box-shadow, opacity). transition: all 0.2s ease. Cards get translateY(-4px) + shadow on hover
+- **Gradients**: Use subtle gradients for backgrounds and buttons — `linear-gradient(135deg, var(--color-primary), var(--color-primary-dark))`
+- **Glass effects**: Where appropriate, use `backdrop-filter: blur(10px); background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1)`
+- **Content is king**: Write REAL, substantial content — 3+ sentences per description, 6+ feature cards, 3+ testimonials with realistic quotes. NO placeholder lorem ipsum
+- **Empty states**: If showing data tables or lists, include realistic mock data (5-10 rows)
+- **Loading states**: Include skeleton loaders or spinner states where data would load
+- **Accessibility**: All buttons have aria-labels, images have alt text, proper heading hierarchy
+- **Grid layouts**: Use CSS Grid for card layouts (grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)))
+- **Container**: All sections use max-width: 1200px with margin: 0 auto and padding: 0 clamp(1rem, 3vw, 2rem)
 
 {action_instruction}
 STOP after writing this ONE file.
 """
 
         system_prompt = (
-            f"You are a senior software engineer implementing a single file in a {stack or 'web'} project.\n"
-            f"{FRAMEWORK_RULES}\n"
-            "ARCHITECTURE: You write clean, modular code like a professional engineer.\n"
-            "- Pages are thin composition files that import section components.\n"
-            "- Section components contain all UI logic.\n"
-            "- NEVER dump 500 lines into one file. Keep it modular.\n"
-            "- NEVER create route groups like (marketing) or (auth) folders.\n"
-            "- NEVER create additional layout.js files — only modify the existing root layout.\n"
-            "- NEVER add 'use client' to page.js files — only section components need it.\n"
-            "Write production-quality code. Use the Write tool (or Edit for modifications).\n"
-            "Complete ONLY the file specified. Stop immediately after.\n"
+            f"You are a SENIOR FRONTEND ENGINEER at a top design agency, building a premium {stack or 'web'} project.\n"
+            f"This is a PAID PRODUCT — users pay money for this. The UI must be stunning, not just functional.\n\n"
+            f"{FRAMEWORK_RULES}\n\n"
+            "## YOUR ENGINEERING STANDARDS:\n"
+            "1. ARCHITECTURE: Clean, modular code. Pages are thin. Section components hold all logic.\n"
+            "2. DESIGN: Every component must look like it belongs on Dribbble or Awwwards. Polished, modern, premium.\n"
+            "3. ANIMATIONS: Smooth micro-animations on hover, scroll, and interaction (transition: all 0.2s ease).\n"
+            "4. RESPONSIVE: Mobile-first. Test at 320px, 768px, 1024px, 1280px mentally.\n"
+            "5. CONTENT: Write real, compelling content — not lorem ipsum. Headlines that sell, descriptions that inform.\n"
+            "6. CSS VARIABLES: ALWAYS use var(--color-primary), var(--color-bg), etc. Never hardcode colors.\n"
+            "7. SPACING: Generous whitespace. Sections breathe. Cards have padding. Text is readable.\n"
+            "8. ICONS: Import from lucide-react. Use meaningful icons, not random ones.\n\n"
+            "## FORBIDDEN:\n"
+            "- NEVER create route groups like (marketing) or (auth) folders\n"
+            "- NEVER create additional layout.js files — only modify the existing root layout\n"
+            "- NEVER add 'use client' to page.js files — only section components need it\n"
+            "- NEVER use hardcoded hex colors — always CSS variables\n"
+            "- NEVER write minimal/placeholder content — write REAL, substantial content\n\n"
+            "Write the COMPLETE file using the Write tool. Stop immediately after.\n"
         )
+
+        # Quality-first: generous turns for ALL files
+        # Section components may need: read existing → plan → write full file → verify
+        _turns = 6
 
         options = ClaudeCodeOptions(
             cwd=str(workspace_path),
             env=env,
             model=model_id,
-            max_turns=6,          # generously enough: read existing → write → done
+            max_turns=_turns,
             permission_mode="bypassPermissions",
             allowed_tools=["Read", "Write", "Edit", "MultiEdit"],
             disallowed_tools=["Bash", "GitCommit", "GitPush", "GitPull"],
@@ -4668,6 +4732,32 @@ async def run_pipeline(
         model = classification.get("model", "sonnet")
         await _send_phase(3, "Classifying task", f"Assigned to {model} ({classification.get('complexity', 'medium')})", "done")
 
+        # ── Phase 3b: Generate CLAUDE.md (Knowledge Layer) ─────
+        # CLAUDE.md is read automatically by Claude Code SDK before
+        # any prompt. Contains: project rules, import safety guides,
+        # architecture patterns, and quality standards.
+        if validated.get("scratch_mode") or validated.get("new_project_mode"):
+            try:
+                from knowledge.loader import generate_claude_md, classify_project_type
+                _gen_stack = (
+                    validated.get("project_stack", "")
+                    or validated.get("skeleton_stack", "")
+                    or ""
+                )
+                _claude_md_path = generate_claude_md(task, _gen_stack, workspace_path)
+                if _claude_md_path:
+                    _proj_type = classify_project_type(task)
+                    logger.info("Generated CLAUDE.md — project_type=%s", _proj_type)
+                    try:
+                        await websocket.send_json({
+                            "type": "progress",
+                            "message": f"📚 Knowledge loaded: {_proj_type.replace('_', ' ')} patterns",
+                        })
+                    except Exception:
+                        pass
+            except Exception as _claude_md_err:
+                logger.warning("Failed to generate CLAUDE.md (non-fatal): %s", _claude_md_err)
+
         # ── Phase 4: Explore / Research ──────────────────────
         # scratch_mode: fresh local workspace + skeleton
         # new_project_mode: template repo cloned from GitHub — same full research+plan pipeline
@@ -4899,12 +4989,25 @@ Before writing ANY file, you MUST understand what already exists.
 
         # ── Phase 6: Verify build ─────────────────────────
         await _send_phase(6, "Verifying build", "Running build checks…", "active")
-        await verify_build(
-            workspace_path,
-            validated["anthropic_api_key"],
-            classification,
-            websocket,
-        )
+        _build_result = {"success": True, "needs_fix": False, "attempts": 0, "errors": "", "fixed_files": [], "error_count": 0}
+        try:
+            from app.services.build_validator import BuildValidator
+            _bv = BuildValidator(
+                api_key=validated["anthropic_api_key"],
+                classification=classification,
+                websocket=websocket,
+                max_retries=3,
+            )
+            _build_result = await _bv.validate_and_fix(workspace_path)
+            logger.info(
+                "BuildValidator result: success=%s, needs_fix=%s, attempts=%d, errors=%d",
+                _build_result.get("success"), _build_result.get("needs_fix"),
+                _build_result.get("attempts", 0), _build_result.get("error_count", 0),
+            )
+        except Exception as _bv_err:
+            logger.warning("BuildValidator failed (non-fatal, falling back): %s", _bv_err)
+            # Fallback to old verify_build
+            await verify_build(workspace_path, validated["anthropic_api_key"], classification, websocket)
         await _send_phase(6, "Verifying build", "Build verification complete", "done")
 
         # ── Phase 6.5: Verify changes ────────────────────
