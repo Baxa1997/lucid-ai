@@ -1970,6 +1970,22 @@ def blueprint_to_file_plan(blueprint: dict, stack: str, workspace_path: str) -> 
     else:
         comp_base = "src/components"
 
+    # ── Detect route group for Next.js (e.g. (marketing), (dashboard)) ──
+    # If the template uses route groups, pages should be generated INSIDE them
+    # so they inherit the correct layout (with header/footer).
+    nextjs_route_group = ""
+    if is_nextjs:
+        app_dir = os.path.join(workspace_path, "src", "app")
+        if os.path.isdir(app_dir):
+            for entry in os.listdir(app_dir):
+                # Route groups are directories wrapped in parentheses
+                if entry.startswith("(") and entry.endswith(")") and entry != "(auth)":
+                    group_path = os.path.join(app_dir, entry)
+                    if os.path.isdir(group_path):
+                        nextjs_route_group = entry  # e.g. "(marketing)"
+                        logger.info("Detected Next.js route group: %s", nextjs_route_group)
+                        break
+
     # ── 1. CSS/Globals — always first ──────────────────────────
     if is_nextjs:
         css_path = "src/app/globals.css"
@@ -1992,27 +2008,48 @@ def blueprint_to_file_plan(blueprint: dict, stack: str, workspace_path: str) -> 
         "sections": ["CSS variable overrides", "Google Font import", "Base body/html styles"],
     })
 
-    # ── 2. Root layout (navigation + footer) ───────────────────
+    # ── 2. Root layout (metadata + fonts ONLY, no Navbar/Footer) ──────
+    # The root layout.js should ONLY handle: html/body tags, metadata, fonts, Providers.
+    # Navigation and footer are handled by route group layouts (e.g. (marketing)/layout.js).
     if is_nextjs:
         layout_path = "src/app/layout.js"
         layout_exists = os.path.isfile(os.path.join(workspace_path, layout_path))
-        nav_items_str = json.dumps(navigation.get("items", []))
         files.append({
             "path": layout_path,
             "action": "modify" if layout_exists else "create",
             "priority": 2,
             "description": (
-                f"Update root layout for {project_name}. "
-                f"Navigation style: {navigation.get('style', 'top-navbar')}. "
-                f"Nav items: {nav_items_str}. "
-                f"Brand/logo: {navigation.get('brand', project_name)}. "
-                f"CTA button: {json.dumps(navigation.get('ctaButton', {}))}. "
-                f"Include Navbar component with these items. "
-                f"Update page metadata: title='{project_name}', description='{project_desc}'. "
-                f"Add Google Fonts link tags."
+                f"Update ONLY the root layout metadata for {project_name}. "
+                f"DO NOT add Navbar, Header, Footer, or any navigation components here. "
+                f"The template already has a route group layout that handles navigation. "
+                f"ONLY update: page metadata (title='{project_name}', description='{project_desc}'), "
+                f"Google Fonts import for {blueprint.get('googleFonts', ['Inter'])}, "
+                f"and ensure Providers wrapper is preserved. "
+                f"Keep the existing structure — this is a MINIMAL modification."
             ),
-            "sections": ["Navbar with navigation items", "Footer", "Page metadata", "Font imports"],
+            "sections": ["Page metadata update", "Google Font import"],
         })
+
+        # Also update the route group layout (marketing) to customize nav items
+        if nextjs_route_group:
+            group_layout_path = f"src/app/{nextjs_route_group}/layout.js"
+            group_layout_exists = os.path.isfile(os.path.join(workspace_path, group_layout_path))
+            if group_layout_exists:
+                nav_items_str = json.dumps(navigation.get("items", []))
+                files.append({
+                    "path": group_layout_path,
+                    "action": "modify",
+                    "priority": 2,
+                    "description": (
+                        f"Update the marketing layout for {project_name}. "
+                        f"This layout ALREADY has MarketingHeader and MarketingFooter — keep them. "
+                        f"Customize the navigation items: {nav_items_str}. "
+                        f"Brand/logo: {navigation.get('brand', project_name)}. "
+                        f"DO NOT rename or remove the existing header/footer components. "
+                        f"Only update the props or content passed to them if needed."
+                    ),
+                    "sections": ["Navigation items update", "Brand customization"],
+                })
     elif is_vue:
         app_path = "src/App.vue"
         app_exists = os.path.isfile(os.path.join(workspace_path, app_path))
@@ -2130,13 +2167,15 @@ def blueprint_to_file_plan(blueprint: dict, stack: str, workspace_path: str) -> 
 
         # ── 4b. Create the page file (thin — just imports sections) ──
         if is_nextjs:
+            # Use the detected route group so pages inherit the correct layout
+            route_prefix = f"src/app/{nextjs_route_group}" if nextjs_route_group else "src/app"
             if page_route == "/":
-                page_file = "src/app/page.js"
+                page_file = f"{route_prefix}/page.js"
             else:
                 clean_route = page_route.strip("/").replace(" ", "-").lower()
                 if not clean_route:
                     clean_route = safe_page.lower()
-                page_file = f"src/app/{clean_route}/page.js"
+                page_file = f"{route_prefix}/{clean_route}/page.js"
         elif is_vue:
             page_file = f"src/views/{safe_page}View.vue"
         else:
@@ -2235,6 +2274,7 @@ def blueprint_to_file_plan(blueprint: dict, stack: str, workspace_path: str) -> 
         "googleFonts": blueprint.get("googleFonts", ["Inter"]),
         "navigation": navigation,
         "packageUpdates": packages,
+        "_comp_base": comp_base,  # Pass to framework rules
         "files": files,
     }
 
@@ -3111,20 +3151,22 @@ async def execute_project_in_batches(
 
     # ── Build framework rules block (injected into every Claude call) ─
     _stk = stack.lower() if stack else ""
+    # Detect comp_base from plan_data or default
+    _comp_base = plan_data.get("_comp_base", "src/components")
     if "nextjs" in _stk or "next" in _stk:
         FRAMEWORK_RULES = (
             "## FRAMEWORK: Next.js 14 (App Router) — READ THIS FIRST\n"
-            "- Pages live in: src/app/page.js, src/app/about/page.js, src/app/blog/page.js\n"
-            "- Root layout: src/app/layout.js (ALREADY EXISTS — modify, don't recreate)\n"
+            f"- Components: {_comp_base}/ (this is the ACTUAL component path in this template)\n"
+            f"- Section components: {_comp_base}/sections/ (each page section is its own file)\n"
+            "- Layout components: already exist in the template — DO NOT create new Navbar.jsx or Footer.jsx\n"
+            "- Root layout: src/app/layout.js (modify ONLY metadata and fonts — NO navigation components)\n"
             "- Styles: src/app/globals.css (ALREADY EXISTS)\n"
-            "- Components: src/app/components/ (template uses this path)\n"
-            "- Section components: src/app/components/sections/ (each page section is its own file)\n"
             "- DO NOT create src/App.jsx — this file does NOT exist in Next.js\n"
             "- DO NOT use ReactDOM.render or BrowserRouter — Next.js handles routing\n"
-            "- DO NOT use route groups like (marketing), (auth), (dashboard) — use FLAT routes only\n"
-            "- DO NOT create additional layout.js files — ONLY the root src/app/layout.js should exist\n"
+            "- DO NOT create new layout.js files — the template already has the correct layout structure\n"
+            "- DO NOT create Navbar.jsx, Footer.jsx, Header.jsx — the template already has layout components\n"
             "- Add 'use client' at the top of any COMPONENT that uses useState, useEffect, or onClick\n"
-            "- Page files (page.js) should NOT have 'use client' — they are server components that import client components\n"
+            "- Page files (page.js) should NOT have 'use client' — they are server components\n"
             "- Routing: import Link from 'next/link' | import { useRouter, usePathname } from 'next/navigation'\n"
             "- Images: import Image from 'next/image'\n"
             "- IMPORTS: Always use RELATIVE paths (e.g. '../components/Foo', './components/sections/Bar'). Do NOT use @/ alias\n"
@@ -3226,8 +3268,15 @@ async def execute_project_in_batches(
         # Always create parent directories
         os.makedirs(os.path.dirname(abs_fp), exist_ok=True)
 
-        # For section components, create stub files so imports never break
-        if "/sections/" in fp and not direct and not os.path.isfile(abs_fp):
+        # Pre-create stub files for section AND layout components so imports never break
+        # This covers: /sections/, /layout/, and any other component directory
+        needs_stub = (
+            ("/sections/" in fp or "/layout/" in fp)
+            and not direct
+            and not os.path.isfile(abs_fp)
+            and (fp.endswith(".jsx") or fp.endswith(".vue") or fp.endswith(".tsx"))
+        )
+        if needs_stub:
             comp_name = os.path.splitext(os.path.basename(fp))[0]
             ext = os.path.splitext(fp)[1]
             if ext == ".vue":
@@ -3436,8 +3485,9 @@ STOP after writing this ONE file.
             "7. SPACING: Generous whitespace. Sections breathe. Cards have padding. Text is readable.\n"
             "8. ICONS: Import from lucide-react. Use meaningful icons, not random ones.\n\n"
             "## FORBIDDEN:\n"
-            "- NEVER create route groups like (marketing) or (auth) folders\n"
-            "- NEVER create additional layout.js files — only modify the existing root layout\n"
+            "- NEVER create new route groups — the template already has the correct structure\n"
+            "- NEVER create Navbar.jsx, Footer.jsx, or Header.jsx — the template already has layout components\n"
+            "- NEVER modify or create layout.js files — the template's layout structure is final\n"
             "- NEVER add 'use client' to page.js files — only section components need it\n"
             "- NEVER use hardcoded hex colors — always CSS variables\n"
             "- NEVER write minimal/placeholder content — write REAL, substantial content\n\n"

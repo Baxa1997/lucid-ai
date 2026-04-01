@@ -1,6 +1,8 @@
 services:
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+    pull_policy: build
     ports:
       - "3000:3000"
     volumes:
@@ -27,7 +29,9 @@ services:
         hard: 65536
 
   ai_engine:
-    build: ./ai_engine
+    build:
+      context: ./ai_engine
+    pull_policy: build
     ports:
       - "8000:8000"
       - "6080:6080"
