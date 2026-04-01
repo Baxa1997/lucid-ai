@@ -3468,12 +3468,12 @@ async def execute_project_in_batches(
     _comp_base = plan_data.get("_comp_base", "src/components")
     if "nextjs" in _stk or "next" in _stk:
         FRAMEWORK_RULES = (
-            "## FRAMEWORK: Next.js 14 (App Router) — READ THIS FIRST\n"
+            "## FRAMEWORK: Next.js 14 (App Router) + Tailwind CSS + shadcn/ui — READ THIS FIRST\n"
             f"- Components: {_comp_base}/ (this is the ACTUAL component path in this template)\n"
             f"- Section components: {_comp_base}/sections/ (each page section is its own file)\n"
             "- Layout components: already exist in the template — DO NOT create new Navbar.jsx or Footer.jsx\n"
             "- Root layout: src/app/layout.js (modify ONLY metadata and fonts — NO navigation components)\n"
-            "- Styles: src/app/globals.css (ALREADY EXISTS)\n"
+            "- Styles: src/app/globals.css (ALREADY EXISTS — uses Tailwind + shadcn/ui HSL variables)\n"
             "- DO NOT create src/App.jsx — this file does NOT exist in Next.js\n"
             "- DO NOT use ReactDOM.render or BrowserRouter — Next.js handles routing\n"
             "- DO NOT create new layout.js files — the template already has the correct layout structure\n"
@@ -3482,7 +3482,22 @@ async def execute_project_in_batches(
             "- Page files (page.js) should NOT have 'use client' — they are server components\n"
             "- Routing: import Link from 'next/link' | import { useRouter, usePathname } from 'next/navigation'\n"
             "- Images: import Image from 'next/image'\n"
-            "- IMPORTS: Always use RELATIVE paths (e.g. '../components/Foo', './components/sections/Bar'). Do NOT use @/ alias\n"
+            "- IMPORTS: Always use RELATIVE paths (e.g. '../components/Foo', './components/sections/Bar'). Do NOT use @/ alias\n\n"
+            "## STYLING: Tailwind CSS + shadcn/ui (MANDATORY)\n"
+            "- ALWAYS use Tailwind utility classes in className — NEVER use inline style={{}}\n"
+            "- Colors (shadcn HSL system): bg-primary, text-primary-foreground, bg-secondary, text-secondary-foreground, "
+            "bg-muted, text-muted-foreground, bg-accent, bg-card, text-card-foreground, bg-background, text-foreground, bg-destructive, border-border\n"
+            "- Typography: text-sm, text-base, text-lg, text-xl, text-2xl, text-3xl, text-4xl, text-5xl, font-medium, font-semibold, font-bold, tracking-tight\n"
+            "- Spacing: p-4, p-6, p-8, px-6, py-12, py-16, py-20, py-24, gap-4, gap-6, gap-8, space-y-4, space-y-6\n"
+            "- Layout: flex, grid, grid-cols-1, md:grid-cols-2, lg:grid-cols-3, max-w-7xl, mx-auto, container\n"
+            "- Responsive: sm:, md:, lg:, xl: prefixes (mobile-first)\n"
+            "- Rounded: rounded-lg, rounded-xl, rounded-2xl (uses --radius variable)\n"
+            "- Shadows: shadow-sm, shadow-md, shadow-lg, shadow-xl\n"
+            "- Hover: hover:bg-primary/90, hover:shadow-lg, hover:-translate-y-1, transition-all, duration-300\n"
+            "- Gradients: bg-gradient-to-r, from-primary, to-primary/80\n"
+            "- NEVER use var(--color-primary) or var(--color-bg) — those DON'T EXIST\n"
+            "- NEVER use inline style={{}} for colors, spacing, or layout — always Tailwind classes\n"
+            "- NEVER use hardcoded hex colors like #fff or #000 — use Tailwind's semantic colors\n"
         )
     elif "vue" in _stk:
         # Detect Vue Admin template by checking for MainLayout.vue
@@ -3837,7 +3852,7 @@ async def execute_project_in_batches(
 {file_desc}
 
 {sections_block}{imports_block}{components_block}
-## DESIGN THEME (use CSS variables, never hardcoded hex)
+## DESIGN THEME (use Tailwind classes like bg-primary, text-foreground — NEVER inline styles)
 {theme_summary}
 
 {_spec_block}## WORKSPACE FILE TREE
@@ -3854,20 +3869,22 @@ Write the COMPLETE file using the Write tool. STOP after this ONE file.
             "## YOUR ENGINEERING STANDARDS:\n"
             "1. ARCHITECTURE: Clean, modular code. Pages are thin. Section components hold all logic.\n"
             "2. DESIGN: Every component must look like it belongs on Dribbble or Awwwards. Polished, modern, premium.\n"
-            "3. ANIMATIONS: Smooth micro-animations on hover, scroll, and interaction (transition: all 0.2s ease).\n"
-            "4. RESPONSIVE: Mobile-first. Test at 320px, 768px, 1024px, 1280px mentally.\n"
+            "3. ANIMATIONS: Smooth transitions — hover:scale-105, hover:-translate-y-1, transition-all duration-300.\n"
+            "4. RESPONSIVE: Mobile-first. Use sm:, md:, lg:, xl: Tailwind breakpoints.\n"
             "5. CONTENT: Write real, compelling content — not lorem ipsum. Headlines that sell, descriptions that inform.\n"
-            "6. CSS VARIABLES: ALWAYS use var(--color-primary), var(--color-bg), etc. Never hardcode colors.\n"
-            "7. SPACING: Generous whitespace. Sections breathe. Cards have padding. Text is readable.\n"
+            "6. STYLING: Use Tailwind utility classes in className. Colors: bg-primary, text-foreground, bg-muted, bg-card, etc.\n"
+            "7. SPACING: Generous whitespace. py-16 py-20 py-24 for sections. p-6 p-8 for cards. gap-6 gap-8 for grids.\n"
             "8. ICONS: Import from lucide-react. Use meaningful icons, not random ones.\n"
             "9. INTERACTIVITY: Add useState-driven UI — tabs, filters, toggles, animated counters. Sections must feel ALIVE.\n"
-            "10. UNIQUENESS: Each section must have a DISTINCTIVE visual pattern. A hero section looks NOTHING like a features grid, which looks NOTHING like a CTA. Vary layouts (asymmetric, alternating, overlapping, staggered).\n\n"
+            "10. UNIQUENESS: Each section must have a DISTINCTIVE visual pattern. Vary layouts (asymmetric, alternating, overlapping, staggered).\n\n"
             "## FORBIDDEN:\n"
+            "- NEVER use inline style={{}} — always className with Tailwind utilities\n"
+            "- NEVER use var(--color-primary) or var(--color-bg) — use Tailwind's bg-primary, text-foreground, etc.\n"
+            "- NEVER use hardcoded hex colors (#fff, #000, #333) — use Tailwind semantic colors\n"
             "- NEVER create new route groups — the template already has the correct structure\n"
             "- NEVER create Navbar.jsx, Footer.jsx, or Header.jsx — the template already has layout components\n"
             "- NEVER modify or create layout.js files — the template's layout structure is final\n"
             "- NEVER add 'use client' to page.js files — only section components need it\n"
-            "- NEVER use hardcoded hex colors — always CSS variables\n"
             "- NEVER write minimal/placeholder content — write REAL, substantial content\n"
             "- NEVER make all sections look the same — each section type needs its OWN layout pattern\n"
             "- NEVER use identical card grids for every section — vary between grids, alternating rows, carousels, stacked layouts\n\n"

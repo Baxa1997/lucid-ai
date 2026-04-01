@@ -34,9 +34,6 @@ STACK_MAP = {
     "html": "html-css",
     "html-css": "html-css",
     "html/css": "html-css",
-    # NOTE: "static" and "vanilla" are NOT mapped to html-css anymore.
-    # They fall through to the default (react-vite) which is a better experience.
-    # Admin (detected by keywords, not just stack)
     "admin-react": "admin-react",
     # Vue Admin — no local skeleton exists; fall back to admin-react structure
     "vue": "admin-react",
