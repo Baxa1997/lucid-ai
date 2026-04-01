@@ -518,6 +518,7 @@ function ConversationPageInner({ params }) {
     steps,
     phases,
     completionSummary,
+    deployUrl,
   } = useAgentSession({
     projectId: conversationId,
     token: effectiveToken,
@@ -525,6 +526,13 @@ function ConversationPageInner({ params }) {
     gitToken,
     branch: conversation?.branch || 'main',
   });
+
+  // ── Sync deployUrl from WebSocket to repoInfo (live update) ──
+  useEffect(() => {
+    if (deployUrl) {
+      setRepoInfo(prev => ({ ...prev, vercelUrl: deployUrl }));
+    }
+  }, [deployUrl]);
 
   // ── Layout state ────────────────────────────────────────
   const [chatInput, setChatInput] = useState('');
@@ -970,6 +978,25 @@ function ConversationPageInner({ params }) {
               <ExternalLink className="w-3.5 h-3.5" />
               Export
             </button>
+
+            {/* Preview Button — always visible */}
+            <a
+              href={repoInfo.vercelUrl || '#'}
+              target={repoInfo.vercelUrl ? '_blank' : undefined}
+              rel="noopener noreferrer"
+              onClick={(e) => { if (!repoInfo.vercelUrl) e.preventDefault(); }}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold border transition-all",
+                repoInfo.vercelUrl
+                  ? "border-emerald-200 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-500/20 cursor-pointer"
+                  : "border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-slate-400 dark:text-slate-500 cursor-not-allowed opacity-60"
+              )}
+              title={repoInfo.vercelUrl ? `Preview: ${repoInfo.vercelUrl}` : 'Preview available after deployment'}
+            >
+              <Eye className="w-3.5 h-3.5" />
+              Preview
+              {repoInfo.vercelUrl && <ExternalLink className="w-3 h-3 opacity-50" />}
+            </a>
 
             <ConnectionStatus status={status} error={error} />
 

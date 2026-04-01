@@ -28,10 +28,18 @@ from app.services.workspace_manager import workspace_manager
 
 logger = logging.getLogger(__name__)
 
-# ── Centralized Gemini Model ──────────────────────────────────
-# Change this ONE constant to switch the model for ALL Gemini calls.
-# Valid options: "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"
+# ── Centralized Gemini Models ─────────────────────────────────
+# gemini-2.0-flash: fast + cheap for classification, research, analysis (8K output)
+# gemini-2.5-flash: for blueprint generation (65K output — no truncation)
 GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_BLUEPRINT_MODEL = "gemini-2.5-flash"
+
+# ── Fallback Gemini API Key ──────────────────────────────────
+# Used when the user doesn't have their own key in Settings.
+_FALLBACK_GEMINI_KEY = os.environ.get(
+    "GOOGLE_API_KEY",
+    "AIzaSyDwMFS1PUpONEyTEz_nVgCF30-lvXb3gbY"
+).strip()
 
 # ── PLATFORM_GITHUB_TOKEN — loaded ONCE at module startup ────────────────────
 # Load from environment first; fall back to the nearest .env file on disk.
@@ -79,6 +87,118 @@ PLATFORM_GITHUB_TOKEN: str = _load_platform_token()
 async def _approve_all_tools(tool_name: str, input_data: dict, context) -> PermissionResultAllow:
     return PermissionResultAllow()
 
+
+async def _fix_broken_layout_imports(workspace_path: str, websocket=None):
+    """Pre-build safety net: fix JS/JSX imports that reference non-existent component files.
+
+    Common scenario: Claude rewrites layout.js to import 'Navbar'/'Footer'
+    instead of the template's actual names (MarketingHeader/MarketingFooter).
+    This function scans layout and page files for broken imports and auto-corrects them.
+    """
+    import re as _re_fix
+    import glob
+
+    layout_dir = os.path.join(workspace_path, "src", "components", "layout")
+    if not os.path.isdir(layout_dir):
+        return  # No layout components → nothing to fix
+
+    # Map of actual component files that exist
+    actual_files = {}
+    for f in os.listdir(layout_dir):
+        name_no_ext = os.path.splitext(f)[0]
+        actual_files[name_no_ext.lower()] = name_no_ext  # lowered key → original name
+
+    # Scan layout.js / layout.jsx / layout.tsx files for broken imports
+    target_files = glob.glob(os.path.join(workspace_path, "src", "**", "layout.js"), recursive=True)
+    target_files += glob.glob(os.path.join(workspace_path, "src", "**", "layout.jsx"), recursive=True)
+    target_files += glob.glob(os.path.join(workspace_path, "src", "**", "layout.tsx"), recursive=True)
+
+    # Also check App.vue / App.jsx
+    for app_name in ["App.vue", "App.jsx", "App.tsx"]:
+        app_path = os.path.join(workspace_path, "src", app_name)
+        if os.path.isfile(app_path):
+            target_files.append(app_path)
+
+    # Known renames: Claude's generic names → likely template names
+    _rename_map = {
+        "navbar": ["marketingheader", "appheader", "header"],
+        "footer": ["marketingfooter", "appfooter"],
+        "sidebar": ["appsidebar"],
+        "header": ["marketingheader", "appheader"],
+    }
+
+    fixes_made = 0
+    for target_file in target_files:
+        try:
+            content = open(target_file, "r").read()
+            original = content
+
+            # Find all component imports from layout directory
+            import_pattern = _re_fix.compile(
+                r"""(import\s+\{?\s*)(\w+)(\s*\}?\s*from\s*['"][^'"]*?/layout/)(\w+)(['"])""",
+            )
+            for match in import_pattern.finditer(content):
+                imported_name = match.group(4)  # The component file name
+                if imported_name.lower() not in actual_files:
+                    # This import references a file that doesn't exist!
+                    # Try to find the correct name from rename map
+                    wanted = _rename_map.get(imported_name.lower(), [])
+                    replacement = None
+                    for candidate in wanted:
+                        if candidate in actual_files:
+                            replacement = actual_files[candidate]
+                            break
+
+                    if not replacement:
+                        # Fallback: find ANY file with similar purpose
+                        for key, actual_name in actual_files.items():
+                            if "header" in key and "header" in imported_name.lower():
+                                replacement = actual_name
+                                break
+                            if "footer" in key and "footer" in imported_name.lower():
+                                replacement = actual_name
+                                break
+
+                    if replacement:
+                        old_import = match.group(0)
+                        # Also fix the imported binding name
+                        old_binding = match.group(2)
+                        new_import = old_import.replace(imported_name, replacement)
+                        if old_binding.lower() != replacement.lower():
+                            new_import = new_import.replace(old_binding, replacement, 1)
+                        content = content.replace(old_import, new_import)
+
+                        # Also fix JSX usage: <Navbar /> → <MarketingHeader />
+                        content = _re_fix.sub(
+                            rf'<{old_binding}(\s|/|>)',
+                            f'<{replacement}\\1',
+                            content,
+                        )
+                        content = _re_fix.sub(
+                            rf'</{old_binding}>',
+                            f'</{replacement}>',
+                            content,
+                        )
+                        fixes_made += 1
+
+            if content != original:
+                with open(target_file, "w") as f:
+                    f.write(content)
+                rel = os.path.relpath(target_file, workspace_path)
+                logger.info("Pre-build import fixer: fixed imports in %s", rel)
+                if websocket:
+                    try:
+                        await websocket.send_json({
+                            "type": "progress",
+                            "message": f"🔧 Auto-fixed broken imports in {rel}",
+                        })
+                    except Exception:
+                        pass
+        except Exception as _e:
+            logger.warning("Pre-build import fixer: error scanning %s: %s", target_file, _e)
+
+    if fixes_made:
+        logger.info("Pre-build import fixer: %d imports auto-corrected", fixes_made)
 
 # ═══════════════════════════════════════════════════════════════
 #  HELPERS — GitHub token detection + repo creation
@@ -173,15 +293,47 @@ def detect_package_manager(workspace_path: str, user_preference: str = "npm") ->
 
     Priority: lock file detection > user preference > npm fallback.
     Supports: npm, yarn, pnpm, bun.
+
+    SAFETY: If a lock file is found but the binary doesn't exist (e.g., pnpm
+    not installed in Docker), falls back to npm and removes the conflicting
+    lock file to prevent build errors.
     """
+    import shutil
+
+    def _binary_exists(name: str) -> bool:
+        return shutil.which(name) is not None
+
+    detected = None
+    lock_file = None
+
     if os.path.exists(os.path.join(workspace_path, "yarn.lock")):
-        return "yarn"
-    if os.path.exists(os.path.join(workspace_path, "pnpm-lock.yaml")):
-        return "pnpm"
-    if os.path.exists(os.path.join(workspace_path, "bun.lockb")):
-        return "bun"
-    if os.path.exists(os.path.join(workspace_path, "package-lock.json")):
-        return "npm"
+        detected, lock_file = "yarn", "yarn.lock"
+    elif os.path.exists(os.path.join(workspace_path, "pnpm-lock.yaml")):
+        detected, lock_file = "pnpm", "pnpm-lock.yaml"
+    elif os.path.exists(os.path.join(workspace_path, "bun.lockb")):
+        detected, lock_file = "bun", "bun.lockb"
+    elif os.path.exists(os.path.join(workspace_path, "package-lock.json")):
+        detected, lock_file = "npm", "package-lock.json"
+
+    if detected:
+        if _binary_exists(detected):
+            return detected
+        else:
+            # Binary not installed — fall back to npm
+            logger.warning(
+                "detect_package_manager: %s lock file found but '%s' binary not installed — falling back to npm",
+                lock_file, detected,
+            )
+            # Remove the lock file so npm doesn't conflict
+            try:
+                lf_path = os.path.join(workspace_path, lock_file)
+                if os.path.isfile(lf_path):
+                    os.remove(lf_path)
+                    logger.info("Removed %s to allow npm install", lock_file)
+            except Exception:
+                pass
+            return "npm"
+
     # No lock file found — use user preference (from settings)
     pref = (user_preference or "npm").strip().lower()
     return pref if pref in ("npm", "yarn", "pnpm", "bun") else "npm"
@@ -515,11 +667,9 @@ async def validate_inputs(
         # ── Gemini API key ────────────────────────────────
         gemini_key = user.get("gemini_api_key")
         if gemini_key is None or str(gemini_key).strip() in ("", "None"):
-            await websocket.send_json({
-                "type": "error",
-                "message": "❌ Gemini API key not found. Add it in Settings.",
-            })
-            return None
+            # Fallback to platform key — don't block the user
+            gemini_key = _FALLBACK_GEMINI_KEY
+            logger.info("User has no Gemini key — using platform fallback")
 
         # ══════════════════════════════════════════════════════════════════
         # ── EARLY EXIT: [LUCID_PROJECT] wizard header detected ────────────
@@ -1724,7 +1874,7 @@ async def gemini_create_plan(
 
     try:
         genai.configure(api_key=gemini_key)
-        model = genai.GenerativeModel(GEMINI_MODEL)
+        model = genai.GenerativeModel(GEMINI_BLUEPRINT_MODEL)
 
         blueprint_prompt = f"""You are a senior product architect converting a product specification into a complete implementation blueprint.
 
@@ -1825,7 +1975,7 @@ Return ONLY valid JSON (no markdown, no backticks):
         {{
           "name": "SectionName",
           "type": "hero|features|catalog|details|gallery|stats|testimonials|pricing|faq|cta|form|table|chart|calendar|timeline|team|menu|map|newsletter|custom",
-          "description": "DETAILED (80+ words): Describe the EXACT visual implementation. Include: layout structure (grid/flex/columns), specific content (real headlines, real data, real names), colors using CSS variable names, animations (hover effects, transitions), responsive behavior, and interactive states. This description must be detailed enough for an engineer to implement WITHOUT asking questions.",
+          "description": "DETAILED (80+ words): Describe the EXACT visual implementation. Include: layout structure (grid/flex/columns), specific content (real headlines, real data, real names), interactive elements (tabs/carousel/accordion), animations (hover effects, transitions), responsive behavior, and interactive states. This description must be detailed enough for an engineer to implement WITHOUT asking questions.",
           "components": ["SharedComponentName"]
         }}
       ]
@@ -1846,7 +1996,7 @@ Return ONLY valid JSON (no markdown, no backticks):
 
 ## CRITICAL RULES
 1. Theme MUST be unique — match the project's INDUSTRY and MOOD (dark cinema palette for movies, warm earthy for restaurants, clean professional for SaaS, vibrant for social)
-2. EVERY section description MUST be 80+ words with specific content, colors (using CSS variable names), animations, layout details, and REAL text that matches the project
+2. EVERY section description MUST be 80+ words with specific content, layout details, interactive elements, and REAL text that matches the project
 3. Pages and sections must be UNIQUE to this project — a movie site needs different pages than a SaaS site
 4. Only include Pricing if the project actually sells tiered plans/services
 5. Only include Testimonials if social proof is relevant to the project type
@@ -1858,13 +2008,19 @@ Return ONLY valid JSON (no markdown, no backticks):
 11. Routes MUST be simple flat paths: "/", "/about", "/movies", "/menu". NEVER use route groups like "/(marketing)/about"
 12. Section names MUST be simple PascalCase: "Hero", "MovieGrid", "MenuList", "PatientTable", "BookingForm". No spaces
 13. Page names MUST be simple words: "Home", "Movies", "Menu", "Patients", "Dashboard". No spaces
-14. MINIMUM pages: websites need 3-5 pages, admin panels need 4-7 pages (dashboard + 2-4 data pages + settings)
-15. Home page MINIMUM 5 sections — but they must be RELEVANT sections for this project, not generic filler
+14. PAGES: websites need EXACTLY 3 pages (Home + 2 others). Admin panels need 4-5 pages (dashboard + 2-3 data pages)
+15. SECTIONS: Home page needs EXACTLY 5 sections. Other pages need 2-3 sections each
+16. MAX TOTAL: The entire project must have NO MORE THAN 15 sections total across all pages — this is a HARD LIMIT
+17. sharedComponents: maximum 2-3 reusable components
 
-Return ONLY the JSON.
+Return ONLY the raw JSON object. No markdown. No backticks. No explanation.
 """
         response = await asyncio.to_thread(model.generate_content, blueprint_prompt,
-            generation_config=genai.GenerationConfig(temperature=0.3, max_output_tokens=8192))
+            generation_config=genai.GenerationConfig(
+                temperature=0.3,
+                max_output_tokens=65536,
+                response_mime_type="application/json",
+            ))
         blueprint_text = response.text.strip()
 
         # Clean up markdown fences if present
@@ -1882,18 +2038,49 @@ Return ONLY the JSON.
         blueprint = json.loads(blueprint_text)
 
     except json.JSONDecodeError:
-        logger.warning("gemini_create_plan: invalid JSON from Gemini — using minimal blueprint")
-        blueprint = {
-            "projectName": "project",
-            "projectType": "other",
-            "description": task,
-            "theme": {},
-            "navigation": {"items": [{"label": "Home", "route": "/"}]},
-            "pages": [{"name": "Home", "route": "/", "sections": [
-                {"name": "Main", "type": "hero", "description": task}
-            ]}],
-            "sharedComponents": [],
-        }
+        # ── Attempt to repair truncated JSON ──────────────────
+        # Gemini may hit output token limits and truncate mid-JSON.
+        # Try to close open brackets/braces to salvage the partial response.
+        logger.warning("gemini_create_plan: invalid JSON — attempting repair")
+        _repaired = False
+        try:
+            _raw = blueprint_text
+            # Count open vs close brackets
+            _open_braces = _raw.count("{") - _raw.count("}")
+            _open_brackets = _raw.count("[") - _raw.count("]")
+            # Strip trailing comma or incomplete value
+            _raw = _raw.rstrip().rstrip(",").rstrip(":")
+            # Remove any trailing incomplete string (unmatched quote)
+            if _raw.count('"') % 2 != 0:
+                # Remove everything after last complete string
+                _last_quote = _raw.rfind('"')
+                if _last_quote > 0:
+                    _raw = _raw[:_last_quote + 1]
+            # Close brackets and braces
+            _raw += "]" * max(0, _open_brackets) + "}" * max(0, _open_braces)
+            blueprint = json.loads(_raw)
+            _repaired = True
+            logger.info("gemini_create_plan: repaired truncated JSON — %d pages recovered",
+                        len(blueprint.get("pages", [])))
+        except Exception as _repair_err:
+            logger.warning("gemini_create_plan: repair failed: %s", _repair_err)
+
+        if not _repaired:
+            logger.warning("gemini_create_plan: using minimal blueprint fallback")
+            blueprint = {
+                "projectName": "project",
+                "projectType": "other",
+                "description": task,
+                "theme": {},
+                "navigation": {"items": [{"label": "Home", "route": "/"}]},
+                "pages": [{"name": "Home", "route": "/", "sections": [
+                    {"name": "Hero", "type": "hero", "description": task},
+                    {"name": "Features", "type": "features", "description": f"Key features section for: {task}"},
+                    {"name": "About", "type": "custom", "description": f"About section for: {task}"},
+                    {"name": "CTA", "type": "cta", "description": f"Call to action section for: {task}"},
+                ]}],
+                "sharedComponents": [],
+            }
     except Exception as e:
         logger.warning("gemini_create_plan failed: %s", e)
         blueprint = {
@@ -1903,10 +2090,72 @@ Return ONLY the JSON.
             "theme": {},
             "navigation": {"items": [{"label": "Home", "route": "/"}]},
             "pages": [{"name": "Home", "route": "/", "sections": [
-                {"name": "Main", "type": "hero", "description": task}
+                {"name": "Hero", "type": "hero", "description": task},
+                {"name": "Features", "type": "features", "description": f"Key features section for: {task}"},
+                {"name": "About", "type": "custom", "description": f"About section for: {task}"},
+                {"name": "CTA", "type": "cta", "description": f"Call to action section for: {task}"},
             ]}],
             "sharedComponents": [],
         }
+    # ── POST-BLUEPRINT VALIDATION ─────────────────────────────
+    # Ensure every page has enough sections. Gemini may truncate
+    # the JSON mid-output, leaving pages with only 1-2 sections.
+    # For landing/marketing pages, we ensure at least 5 sections.
+    _project_type = blueprint.get("projectType", "other")
+    _is_admin = "admin" in _project_type or "dashboard" in _project_type
+    _default_website_sections = [
+        {"name": "Hero", "type": "hero", "description": f"Hero banner section for {blueprint.get('projectName', 'project')}. Full-width background, compelling headline, subtext, and CTA button. Visually striking, setting the tone for the entire site."},
+        {"name": "Features", "type": "features", "description": f"Key features/benefits grid for {blueprint.get('projectName', 'project')}. 6 feature cards in responsive grid with icons, titles, and descriptions. Hover effects on cards."},
+        {"name": "About", "type": "custom", "description": f"About/story section for {blueprint.get('projectName', 'project')}. Split layout with text on one side and visual on the other. Company mission, values, or background story."},
+        {"name": "Testimonials", "type": "testimonials", "description": f"Social proof section with 3+ testimonials. Horizontal scroll or card layout with quotes, names, roles. Star ratings and avatar placeholders."},
+        {"name": "CTA", "type": "cta", "description": f"Call-to-action section for {blueprint.get('projectName', 'project')}. Gradient background, bold headline, subtext, and prominent action button. Creates urgency."},
+        {"name": "FAQ", "type": "faq", "description": f"Frequently asked questions with accordion/expand-collapse. 6+ relevant questions for {blueprint.get('projectName', 'project')} with detailed answers."},
+    ]
+
+    for page in blueprint.get("pages", []):
+        sections = page.get("sections", [])
+        section_count = len(sections)
+        is_home = page.get("route") == "/" or page.get("name", "").lower() in ("home", "landing", "main")
+
+        if is_home and not _is_admin and section_count < 4:
+            # Home page needs at least 5 sections — add missing ones
+            existing_types = {(s.get("type") if isinstance(s, dict) else "") for s in sections}
+            existing_names = {(s.get("name", "").lower() if isinstance(s, dict) else str(s).lower()) for s in sections}
+            for default_sec in _default_website_sections:
+                if default_sec["type"] not in existing_types and default_sec["name"].lower() not in existing_names:
+                    sections.append(default_sec)
+                    if len(sections) >= 5:
+                        break
+            page["sections"] = sections
+            logger.info("Post-validation: Home page expanded from %d to %d sections", section_count, len(sections))
+
+    # ── HARD CAPS — prevent over-generation ($7+ builds) ──────
+    # Cap pages: max 3 for websites, max 5 for admin panels
+    _pages = blueprint.get("pages", [])
+    _max_pages = 5 if _is_admin else 3
+    if len(_pages) > _max_pages:
+        logger.info("Capping pages from %d to %d", len(_pages), _max_pages)
+        blueprint["pages"] = _pages[:_max_pages]
+
+    # Cap sections per page: max 5 for home, max 3 for other pages
+    for page in blueprint.get("pages", []):
+        sections = page.get("sections", [])
+        is_home = page.get("route") == "/" or page.get("name", "").lower() in ("home", "landing", "main")
+        _max_sections = 5 if is_home else 3
+        if len(sections) > _max_sections:
+            logger.info("Capping '%s' sections from %d to %d", page.get("name"), len(sections), _max_sections)
+            page["sections"] = sections[:_max_sections]
+
+    # Cap shared components: max 3
+    _shared = blueprint.get("sharedComponents", [])
+    if len(_shared) > 3:
+        blueprint["sharedComponents"] = _shared[:3]
+
+    # Log final counts
+    _total_sections = sum(len(p.get("sections", [])) for p in blueprint.get("pages", []))
+    _total_shared = len(blueprint.get("sharedComponents", []))
+    logger.info("Final blueprint: %d pages, %d total sections, %d shared components",
+                len(blueprint.get("pages", [])), _total_sections, _total_shared)
 
     # Convert blueprint to file-path plan (framework-aware)
     plan_data = blueprint_to_file_plan(blueprint, detected_stack, workspace_path)
@@ -2051,37 +2300,101 @@ def blueprint_to_file_plan(blueprint: dict, stack: str, workspace_path: str) -> 
                     "sections": ["Navigation items update", "Brand customization"],
                 })
     elif is_vue:
-        app_path = "src/App.vue"
-        app_exists = os.path.isfile(os.path.join(workspace_path, app_path))
-        files.append({
-            "path": app_path,
-            "action": "modify" if app_exists else "create",
-            "priority": 2,
-            "description": (
-                f"Update root App.vue for {project_name}. "
-                f"Navigation: {json.dumps(navigation)}. "
-                f"RouterView for page content."
-            ),
-            "sections": ["Navigation bar", "RouterView", "Footer"],
-        })
+        # Detect Vue Admin template
+        _vue_admin = os.path.isfile(os.path.join(workspace_path, "src", "components", "layout", "MainLayout.vue"))
+        if _vue_admin:
+            # Vue Admin: MainLayout.vue + AppSidebar + AppHeader already exist
+            routes_path = "src/router/routes.js"
+            if os.path.isfile(os.path.join(workspace_path, routes_path)):
+                files.append({
+                    "path": routes_path,
+                    "action": "modify",
+                    "priority": 2,
+                    "description": (
+                        f"Update Vue router routes for {project_name}. "
+                        f"ADD route entries as children of MainLayout for all pages: {[p['name'] for p in pages]}. "
+                        f"Use lazy imports: () => import('@/pages/<name>/<Name>Page.vue'). "
+                        f"Keep existing Dashboard, Login, and NotFound routes."
+                    ),
+                    "sections": ["Route entries for new pages"],
+                })
+            nav_config_path = "src/config/navigation.js"
+            if os.path.isfile(os.path.join(workspace_path, nav_config_path)):
+                files.append({
+                    "path": nav_config_path,
+                    "action": "modify",
+                    "priority": 2,
+                    "description": (
+                        f"Update sidebar navigation items for {project_name}. "
+                        f"Items: {json.dumps(navigation.get('items', []))}. "
+                        f"Use lucide icons. Keep the existing structure."
+                    ),
+                    "sections": ["Navigation items update"],
+                })
+        else:
+            app_path = "src/App.vue"
+            app_exists = os.path.isfile(os.path.join(workspace_path, app_path))
+            files.append({
+                "path": app_path,
+                "action": "modify" if app_exists else "create",
+                "priority": 2,
+                "description": (
+                    f"Update root App.vue for {project_name}. "
+                    f"Navigation: {json.dumps(navigation)}. "
+                    f"RouterView for page content."
+                ),
+                "sections": ["Navigation bar", "RouterView", "Footer"],
+            })
     else:
-        app_path = "src/App.jsx"
-        app_exists = os.path.isfile(os.path.join(workspace_path, app_path))
-        nav_items = navigation.get("items", [])
-        page_names = [p["name"] for p in pages]
+        # Detect React Admin template
+        _react_admin = os.path.isfile(os.path.join(workspace_path, "src", "components", "layout", "MainLayout.jsx"))
+        if _react_admin:
+            # React Admin: MainLayout.jsx + Sidebar + Header already exist
+            routes_path = "src/router/routes.jsx"
+            if os.path.isfile(os.path.join(workspace_path, routes_path)):
+                files.append({
+                    "path": routes_path,
+                    "action": "modify",
+                    "priority": 2,
+                    "description": (
+                        f"Update React router routes for {project_name}. "
+                        f"ADD entries to privateRoutes for all pages: {[p['name'] for p in pages]}. "
+                        f"Import each page component from src/pages/ or src/features/. "
+                        f"Keep existing Dashboard and Login routes."
+                    ),
+                    "sections": ["Route entries for new pages"],
+                })
+            nav_config_path = "src/config/navigation.js"
+            if os.path.isfile(os.path.join(workspace_path, nav_config_path)):
+                files.append({
+                    "path": nav_config_path,
+                    "action": "modify",
+                    "priority": 2,
+                    "description": (
+                        f"Update sidebar navigation items for {project_name}. "
+                        f"Items: {json.dumps(navigation.get('items', []))}. "
+                        f"Use lucide-react icons. Keep the existing structure."
+                    ),
+                    "sections": ["Navigation items update"],
+                })
+        else:
+            app_path = "src/App.jsx"
+            app_exists = os.path.isfile(os.path.join(workspace_path, app_path))
+            nav_items = navigation.get("items", [])
+            page_names = [p["name"] for p in pages]
 
-        files.append({
-            "path": app_path,
-            "action": "modify" if app_exists else "create",
-            "priority": 2,
-            "description": (
-                f"Update App.jsx for {project_name}. "
-                f"Add BrowserRouter with Routes for all pages: {[p['name'] for p in pages]}. "
-                f"Include Navbar with items: {json.dumps(nav_items)}. "
-                f"Include Footer."
-            ),
-            "sections": ["Navbar", "React Router Routes", "Footer"],
-        })
+            files.append({
+                "path": app_path,
+                "action": "modify" if app_exists else "create",
+                "priority": 2,
+                "description": (
+                    f"Update App.jsx for {project_name}. "
+                    f"Add BrowserRouter with Routes for all pages: {[p['name'] for p in pages]}. "
+                    f"Include Navbar with items: {json.dumps(nav_items)}. "
+                    f"Include Footer."
+                ),
+                "sections": ["Navbar", "React Router Routes", "Footer"],
+            })
 
     # ── 3. Shared components ─────────────────────────────────
     for comp in shared_components:
@@ -2147,7 +2460,7 @@ def blueprint_to_file_plan(blueprint: dict, stack: str, workspace_path: str) -> 
             sec_exists = os.path.isfile(os.path.join(workspace_path, sec_file))
             files.append({
                 "path": sec_file,
-                "action": "modify",  # stub already pre-created
+                "action": "create",  # Always CREATE — stubs are just build-safety fallbacks
                 "priority": 4,
                 "description": (
                     f"Section component for the '{page_name}' page. "
@@ -3172,22 +3485,60 @@ async def execute_project_in_batches(
             "- IMPORTS: Always use RELATIVE paths (e.g. '../components/Foo', './components/sections/Bar'). Do NOT use @/ alias\n"
         )
     elif "vue" in _stk:
-        FRAMEWORK_RULES = (
-            "## FRAMEWORK: Vue 3 + Vite — READ THIS FIRST\n"
-            "- Root: src/App.vue (ALREADY EXISTS)\n"
-            "- Entry: src/main.ts (ALREADY EXISTS — do not recreate)\n"
-            "- Routing: Vue Router — useRouter(), useRoute(), <RouterLink>\n"
-            "- Composition API: always use <script setup lang=\"ts\">\n"
-            "- Styles: src/assets/main.css (ALREADY EXISTS)\n"
-        )
+        # Detect Vue Admin template by checking for MainLayout.vue
+        _is_vue_admin = os.path.isfile(os.path.join(workspace_path, "src", "components", "layout", "MainLayout.vue"))
+        if _is_vue_admin:
+            FRAMEWORK_RULES = (
+                "## FRAMEWORK: Vue 3 + Vite Admin Panel — READ THIS FIRST\n"
+                "- Entry: src/main.js → src/App.vue → src/router/index.js\n"
+                "- Layout: src/components/layout/MainLayout.vue (wraps AppSidebar + AppHeader + router-view) — DO NOT RECREATE\n"
+                "- Sidebar: src/components/layout/AppSidebar.vue — modify NAV_ITEMS only, keep structure\n"
+                "- Header: src/components/layout/AppHeader.vue — modify branding only, keep structure\n"
+                "- Routes: src/router/routes.js (children of MainLayout) — ADD new page routes here\n"
+                "- Pages: src/pages/ or src/features/<domain>/pages/ (one .vue file per page)\n"
+                "- UI components: src/components/ui/ (shadcn-vue — import from here, DO NOT recreate)\n"
+                "- DO NOT create Navbar.vue, Footer.vue, Sidebar.vue — MainLayout.vue handles all navigation\n"
+                "- State: Pinia (src/stores/); Composables: src/composables/\n"
+                "- Config: src/config/navigation.js (sidebar nav items definition)\n"
+                "- Composition API: always use <script setup>\n"
+                "- IMPORTS: Use @/ alias (configured in vite.config.js)\n"
+            )
+        else:
+            FRAMEWORK_RULES = (
+                "## FRAMEWORK: Vue 3 + Vite — READ THIS FIRST\n"
+                "- Root: src/App.vue (ALREADY EXISTS)\n"
+                "- Entry: src/main.ts (ALREADY EXISTS — do not recreate)\n"
+                "- Routing: Vue Router — useRouter(), useRoute(), <RouterLink>\n"
+                "- Composition API: always use <script setup lang=\"ts\">\n"
+                "- Styles: src/assets/main.css (ALREADY EXISTS)\n"
+            )
     else:
-        FRAMEWORK_RULES = (
-            "## FRAMEWORK: Vite + React — READ THIS FIRST\n"
-            "- Entry: src/main.jsx (ALREADY EXISTS — do not recreate)\n"
-            "- Root with routes: src/App.jsx\n"
-            "- Routing: react-router-dom — BrowserRouter, Routes, Route, Link, useNavigate\n"
-            "- Global styles: src/index.css (ALREADY EXISTS)\n"
-        )
+        # Detect React Admin template by checking for MainLayout.jsx
+        _is_react_admin = os.path.isfile(os.path.join(workspace_path, "src", "components", "layout", "MainLayout.jsx"))
+        if _is_react_admin:
+            FRAMEWORK_RULES = (
+                "## FRAMEWORK: Vite + React Admin Panel — READ THIS FIRST\n"
+                "- Entry: src/main.jsx → src/App.jsx → src/router/index.jsx\n"
+                "- Layout: src/components/layout/MainLayout.jsx (wraps Sidebar + Header + Outlet) — DO NOT RECREATE\n"
+                "- Sidebar: src/components/layout/Sidebar.jsx — modify NAV_ITEMS/navigation config only, keep structure\n"
+                "- Header: src/components/layout/Header.jsx — modify branding only, keep structure\n"
+                "- Routes: src/router/routes.jsx (privateRoutes array) — ADD new page routes here\n"
+                "- Pages: src/pages/ or src/features/<domain>/pages/ (one .jsx file per page)\n"
+                "- UI components: src/components/ui/ (shadcn — import from here, DO NOT recreate)\n"
+                "- DO NOT create Navbar.jsx, Footer.jsx — MainLayout.jsx handles all navigation\n"
+                "- State: Zustand (src/store/); API: Axios (src/api/client.js)\n"
+                "- Config: src/config/navigation.js (sidebar nav items definition)\n"
+                "- Routing: react-router-dom (Outlet, NavLink, useNavigate, useParams)\n"
+                "- IMPORTS: Use @/ alias (configured in vite.config.js)\n"
+            )
+        else:
+            FRAMEWORK_RULES = (
+                "## FRAMEWORK: Vite + React — READ THIS FIRST\n"
+                "- Entry: src/main.jsx (ALREADY EXISTS — do not recreate)\n"
+                "- Root with routes: src/App.jsx\n"
+                "- Routing: react-router-dom — BrowserRouter, Routes, Route, Link, useNavigate\n"
+                "- Global styles: src/index.css (ALREADY EXISTS)\n"
+            )
 
     # ── Build environment for Claude SDK ──────────────────────
     import pwd
@@ -3271,7 +3622,7 @@ async def execute_project_in_batches(
         # Pre-create stub files for section AND layout components so imports never break
         # This covers: /sections/, /layout/, and any other component directory
         needs_stub = (
-            ("/sections/" in fp or "/layout/" in fp)
+            ("/sections/" in fp or "/layout/" in fp or "/components/" in fp)
             and not direct
             and not os.path.isfile(abs_fp)
             and (fp.endswith(".jsx") or fp.endswith(".vue") or fp.endswith(".tsx"))
@@ -3376,7 +3727,8 @@ async def execute_project_in_batches(
         # ── Read existing file content if this is a modify ────
         existing_content = ""
         file_abs = os.path.join(workspace_path, file_path)
-        if file_action == "modify" or os.path.isfile(file_abs):
+        if (file_action == "modify" or os.path.isfile(file_abs)) and "/sections/" not in file_path:
+            # For section files: SKIP reading stubs — they're just placeholders
             try:
                 with open(file_abs, "r", errors="replace") as _ef:
                     existing_content = _ef.read()
@@ -3384,20 +3736,58 @@ async def execute_project_in_batches(
                 pass
 
         # ── Build file-specific prompt ─────────────────────────
+        # Detect layout/navigation files — these should have DATA updated, not structure overhauled
+        _is_layout_file = any(kw in file_path.lower() for kw in [
+            "/layout/", "layout.", "navbar.", "footer.", "header.", "sidebar.",
+            "app.jsx", "app.vue", "/router/", "navigation.",
+        ])
+
         if existing_content:
-            file_context = (
-                f"## EXISTING FILE CONTENT ({file_path})\n"
-                f"This file already exists in the template. You are MODIFYING it:\n"
-                f"```\n{existing_content[:6000]}\n```\n\n"
-                f"CRITICAL INSTRUCTION: The template is just a starting point. DO NOT just change the text.\n"
-                f"You MUST TRANSFORM the component's layout, styling, and logic to exactly match the specific requirements below.\n"
-                f"If the spec requires a completely different layout (e.g. from a grid to a slider), change the code completely.\n"
-                f"Preserve existing imports only if they are still needed; otherwise remove them.\n"
-            )
-            action_instruction = (
-                f"MODIFY the file `{file_path}` using the Write or Edit tool.\n"
-                f"The current content is shown above. OVERHAUL it to implement the spec below.\n"
-            )
+            if _is_layout_file:
+                # Extract existing import lines to explicitly protect them
+                _existing_imports = [
+                    line.strip() for line in (existing_content or "").splitlines()
+                    if line.strip().startswith("import ") and ("/layout/" in line or "/components/" in line)
+                ]
+                _import_guard = ""
+                if _existing_imports:
+                    _import_guard = (
+                        f"\n⚠️ EXISTING IMPORTS — DO NOT CHANGE THESE:\n"
+                        + "\n".join(f"  {imp}" for imp in _existing_imports[:10])
+                        + "\n\nDo NOT rename MarketingHeader→Navbar, MarketingFooter→Footer, or any similar renaming.\n"
+                        "If the template uses MarketingHeader, keep importing MarketingHeader.\n"
+                    )
+                file_context = (
+                    f"## EXISTING LAYOUT FILE ({file_path})\n"
+                    f"This is a LAYOUT/NAVIGATION file. You are UPDATING ITS DATA:\n"
+                    f"```\n{existing_content[:6000]}\n```\n\n"
+                    f"CRITICAL: Keep the component structure EXACTLY intact. Only update:\n"
+                    f"- Navigation items / menu items / route definitions\n"
+                    f"- Brand name, logo text, colors\n"
+                    f"- Import statements for new page components ONLY (keep ALL existing imports)\n"
+                    f"DO NOT change the layout architecture, component hierarchy, or CSS structure.\n"
+                    f"DO NOT rename any existing component imports — keep the EXACT same import names.\n"
+                    f"DO NOT replace MarketingHeader/MarketingFooter with Navbar/Footer or any other name.\n"
+                    f"{_import_guard}"
+                )
+                action_instruction = (
+                    f"MODIFY the file `{file_path}` using the Write or Edit tool.\n"
+                    f"UPDATE only the data (nav items, brand, routes, imports) — preserve the component structure.\n"
+                )
+            else:
+                file_context = (
+                    f"## EXISTING FILE CONTENT ({file_path})\n"
+                    f"This file already exists in the template. You are MODIFYING it:\n"
+                    f"```\n{existing_content[:6000]}\n```\n\n"
+                    f"CRITICAL INSTRUCTION: The template is just a starting point. DO NOT just change the text.\n"
+                    f"You MUST TRANSFORM the component's layout, styling, and logic to exactly match the specific requirements below.\n"
+                    f"If the spec requires a completely different layout (e.g. from a grid to a slider), change the code completely.\n"
+                    f"Preserve existing imports only if they are still needed; otherwise remove them.\n"
+                )
+                action_instruction = (
+                    f"MODIFY the file `{file_path}` using the Write or Edit tool.\n"
+                    f"The current content is shown above. OVERHAUL it to implement the spec below.\n"
+                )
         else:
             file_context = (
                 f"## FILE TO CREATE: {file_path}\n"
@@ -3420,9 +3810,27 @@ async def execute_project_in_batches(
         if file_components:
             components_block = f"Components to use (already exist in template): {', '.join(file_components)}\n"
 
-        prompt = f"""{FRAMEWORK_RULES}
+        # ── Conditionally include heavy context blocks ──────────
+        # Only section components need the full spec — layouts/CSS don't
+        _is_section_file = "/sections/" in file_path
+        _spec_block = ""
+        if _is_section_file:
+            _spec_block = f"## PROJECT SPECIFICATION (follow this exactly)\n{spec_excerpt}\n\n"
 
-## YOUR TASK
+        # Only include manifest for layout/component files, not sections
+        _manifest_for_file = ""
+        if _is_layout_file and _manifest_block:
+            _manifest_for_file = _manifest_block
+
+        # Only include knowledge context for section files
+        _knowledge_for_file = ""
+        if _is_section_file and _knowledge_context:
+            _knowledge_for_file = _knowledge_context
+
+        # Slim file tree — only show relevant directories, not everything
+        _slim_tree = file_tree[:1500] if not _is_layout_file else file_tree[:3000]
+
+        prompt = f"""## YOUR TASK
 {action_instruction}
 {file_context}
 ## WHAT TO IMPLEMENT
@@ -3432,43 +3840,11 @@ async def execute_project_in_batches(
 ## DESIGN THEME (use CSS variables, never hardcoded hex)
 {theme_summary}
 
-## PROJECT SPECIFICATION (follow this exactly)
-{spec_excerpt}
-
-## WORKSPACE FILE TREE
-{file_tree}
-{_manifest_block}{_knowledge_context}
-## RULES — PREMIUM QUALITY (this is a paid product, quality is everything)
-1. Use ONLY CSS variables (var(--color-primary), var(--color-bg), etc.) — never hardcoded hex colors
-2. Use lucide-react for all icons (import {{ IconName }} from 'lucide-react')
-3. Every component must be responsive — mobile-first with proper breakpoints (@media min-width: 768px, 1024px, 1280px)
-4. Follow the spec for layout, sections, and behavior
-5. Do NOT create files other than `{file_path}`
-6. Write the complete file with all imports included
-
-## ARCHITECTURE
-- Page files (page.js, Home.jsx) must be THIN — just import and compose section components
-- Section components (src/components/sections/) contain all the actual UI and logic
-- NEVER write 200+ lines in a page file — break content into section components
-- Section components: use BOTH named AND default export: `export function ComponentName() {{ ... }}` then `export default ComponentName`
-- Page files are written automatically — do NOT create page files
-- The file path and component name are EXACT — do not rename or restructure
-
-## UI/UX EXCELLENCE (non-negotiable)
-- **Spacing rhythm**: Use consistent spacing (1rem, 1.5rem, 2rem, 3rem, 4rem, 6rem). Sections need generous padding (clamp(3rem, 8vw, 6rem) 0)
-- **Typography hierarchy**: h1 (clamp(2.5rem, 5vw, 4rem)), h2 (clamp(1.75rem, 3vw, 2.5rem)), h3 (1.25rem), body (1rem), small (0.875rem)
-- **Micro-animations**: Every interactive element needs hover/focus transitions (transform, box-shadow, opacity). transition: all 0.2s ease. Cards get translateY(-4px) + shadow on hover
-- **Gradients**: Use subtle gradients for backgrounds and buttons — `linear-gradient(135deg, var(--color-primary), var(--color-primary-dark))`
-- **Glass effects**: Where appropriate, use `backdrop-filter: blur(10px); background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1)`
-- **Content is king**: Write REAL, substantial content — 3+ sentences per description, 6+ feature cards, 3+ testimonials with realistic quotes. NO placeholder lorem ipsum
-- **Empty states**: If showing data tables or lists, include realistic mock data (5-10 rows)
-- **Loading states**: Include skeleton loaders or spinner states where data would load
-- **Accessibility**: All buttons have aria-labels, images have alt text, proper heading hierarchy
-- **Grid layouts**: Use CSS Grid for card layouts (grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)))
-- **Container**: All sections use max-width: 1200px with margin: 0 auto and padding: 0 clamp(1rem, 3vw, 2rem)
-
+{_spec_block}## WORKSPACE FILE TREE
+{_slim_tree}
+{_manifest_for_file}{_knowledge_for_file}
 {action_instruction}
-STOP after writing this ONE file.
+Write the COMPLETE file using the Write tool. STOP after this ONE file.
 """
 
         system_prompt = (
@@ -3483,20 +3859,24 @@ STOP after writing this ONE file.
             "5. CONTENT: Write real, compelling content — not lorem ipsum. Headlines that sell, descriptions that inform.\n"
             "6. CSS VARIABLES: ALWAYS use var(--color-primary), var(--color-bg), etc. Never hardcode colors.\n"
             "7. SPACING: Generous whitespace. Sections breathe. Cards have padding. Text is readable.\n"
-            "8. ICONS: Import from lucide-react. Use meaningful icons, not random ones.\n\n"
+            "8. ICONS: Import from lucide-react. Use meaningful icons, not random ones.\n"
+            "9. INTERACTIVITY: Add useState-driven UI — tabs, filters, toggles, animated counters. Sections must feel ALIVE.\n"
+            "10. UNIQUENESS: Each section must have a DISTINCTIVE visual pattern. A hero section looks NOTHING like a features grid, which looks NOTHING like a CTA. Vary layouts (asymmetric, alternating, overlapping, staggered).\n\n"
             "## FORBIDDEN:\n"
             "- NEVER create new route groups — the template already has the correct structure\n"
             "- NEVER create Navbar.jsx, Footer.jsx, or Header.jsx — the template already has layout components\n"
             "- NEVER modify or create layout.js files — the template's layout structure is final\n"
             "- NEVER add 'use client' to page.js files — only section components need it\n"
             "- NEVER use hardcoded hex colors — always CSS variables\n"
-            "- NEVER write minimal/placeholder content — write REAL, substantial content\n\n"
+            "- NEVER write minimal/placeholder content — write REAL, substantial content\n"
+            "- NEVER make all sections look the same — each section type needs its OWN layout pattern\n"
+            "- NEVER use identical card grids for every section — vary between grids, alternating rows, carousels, stacked layouts\n\n"
             "Write the COMPLETE file using the Write tool. Stop immediately after.\n"
         )
 
-        # Quality-first: generous turns for ALL files
-        # Section components may need: read existing → plan → write full file → verify
-        _turns = 6
+        # Claude just needs to Write the file. No Read needed (content is in prompt).
+        # 3 turns = think + write + done. Prevents hitting max_turns before writing.
+        _turns = 3
 
         options = ClaudeCodeOptions(
             cwd=str(workspace_path),
@@ -3504,8 +3884,8 @@ STOP after writing this ONE file.
             model=model_id,
             max_turns=_turns,
             permission_mode="bypassPermissions",
-            allowed_tools=["Read", "Write", "Edit", "MultiEdit"],
-            disallowed_tools=["Bash", "GitCommit", "GitPush", "GitPull"],
+            allowed_tools=["Write"],
+            disallowed_tools=["Read", "Bash", "Edit", "MultiEdit", "GitCommit", "GitPush", "GitPull"],
             append_system_prompt=system_prompt,
         )
 
@@ -3536,13 +3916,26 @@ STOP after writing this ONE file.
                         })
                     except Exception:
                         pass
-                    # Retry with minimal prompt
+                    # Retry with shorter but TEMPLATE-AWARE prompt
+                    _layout_guard_retry = ""
+                    if _is_layout_file and existing_content:
+                        _layout_guard_retry = (
+                            "\n⚠️ LAYOUT FILE — Keep all existing imports EXACTLY as they are.\n"
+                            "Do NOT rename MarketingHeader→Navbar or MarketingFooter→Footer.\n"
+                            "Only update nav items, brand text, and colors.\n"
+                        )
+                    _existing_block = ""
+                    if existing_content:
+                        _existing_block = f"Existing content:\n```\n{existing_content[:2000]}\n```\n\n"
                     prompt = (
                         f"{FRAMEWORK_RULES}\n\n"
                         f"{'MODIFY' if existing_content else 'CREATE'} the file `{file_path}`.\n\n"
-                        f"{'Existing content:\n```\n' + existing_content[:2000] + '\n```\n\n' if existing_content else ''}"
+                        f"{_existing_block}"
+                        f"{_layout_guard_retry}"
                         f"Task: {file_desc}\n\n"
                         f"Theme: {theme_summary[:500]}\n\n"
+                        f"IMPORTANT: Only import components that ACTUALLY EXIST in the workspace.\n"
+                        f"Do NOT create imports for Navbar, Footer, Header unless those exact files exist.\n"
                         f"Use CSS variables. Use Write tool. Stop after this one file.\n"
                     )
             except Exception as e:
@@ -4881,10 +5274,10 @@ async def run_pipeline(
             if "nextjs" in _project_stk_lower or "next" in _project_stk_lower:
                 _template_candidates = [
                     "src/app/globals.css", "src/app/layout.js", "src/app/layout.tsx",
-                    "src/app/page.js", "src/app/page.tsx",
-                    "src/lib/config.js", "src/lib/config.ts",
-                    "src/components/Navbar.jsx", "src/components/Navbar.tsx",
-                    "src/components/Footer.jsx", "src/components/Footer.tsx",
+                    "src/app/(marketing)/layout.js", "src/app/(marketing)/page.js",
+                    "src/config/site.js", "src/config/navigation.js",
+                    "src/components/layout/MarketingHeader.jsx", "src/components/layout/MarketingFooter.jsx",
+                    "src/components/Providers.jsx",
                 ]
             elif "vue" in _project_stk_lower:
                 _template_candidates = [
@@ -5059,6 +5452,16 @@ Before writing ANY file, you MUST understand what already exists.
 
         # ── Phase 6: Verify build ─────────────────────────
         await _send_phase(6, "Verifying build", "Running build checks…", "active")
+
+        # ── Pre-build: fix broken component imports ────────
+        # Claude sometimes rewrites layout.js to import 'Navbar'/'Footer'
+        # instead of the template's actual component names (e.g. MarketingHeader/MarketingFooter).
+        # This auto-fixer detects and corrects mismatched imports BEFORE the build runs.
+        try:
+            await _fix_broken_layout_imports(workspace_path, websocket)
+        except Exception as _fix_err:
+            logger.warning("Pre-build import fixer failed (non-fatal): %s", _fix_err)
+
         _build_result = {"success": True, "needs_fix": False, "attempts": 0, "errors": "", "fixed_files": [], "error_count": 0}
         try:
             from app.services.build_validator import BuildValidator

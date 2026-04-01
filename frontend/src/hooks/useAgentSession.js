@@ -47,6 +47,9 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   const [previewUrl, setPreviewUrl] = useState(null);
   const [previewTaskId, setPreviewTaskId] = useState(null);
 
+  // ── Vercel deploy URL (persists after deployment) ────────
+  const [deployUrl, setDeployUrl] = useState(null);
+
   // ── Refs ─────────────────────────────────────────────────
   const idCounter = useRef(0);
   const initialTaskRef = useRef(task);
@@ -411,6 +414,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
 
       // ─── Deploy Ready — Vercel auto-deploy URL ────
       if (msg.type === 'deploy_ready') {
+        setDeployUrl(msg.url);
         pushChat('system', `🚀 **Live at:** [${msg.url}](${msg.url})`);
         pushLog(`[Deploy] Live: ${msg.url}`, 'system');
         return;
@@ -731,5 +735,8 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     previewUrl,
     previewTaskId,
     clearPreview: () => { setPreviewUrl(null); setPreviewTaskId(null); },
+
+    // Vercel deploy URL
+    deployUrl,
   };
 }

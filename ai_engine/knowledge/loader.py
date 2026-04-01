@@ -288,10 +288,10 @@ The UI must be STUNNING — users pay for this product. Quality is everything.
 ## DESIGN PHILOSOPHY (non-negotiable)
 
 ### Template Transformation (CRITICAL)
-- The existing template code is a SKELETON, not the final product.
-- DO NOT just change text and colors. You MUST completely transform the layout, UI, and logic to fit THIS specific project's industry and requirements.
-- If the spec calls for a movie grid, do not just reuse a standard feature card layout — build a proper movie grid.
-- Overhaul the styling to make it unique and premium.
+- Section/page components (src/components/sections/*, src/pages/*): OVERHAUL completely with industry-specific content, layout, and design. Don't just change text — build the right UI for this project.
+- Layout components (MainLayout, Sidebar, Header, AppSidebar, AppHeader, MarketingHeader, MarketingFooter): MODIFY DATA ONLY — update nav items, brand name, colors. DO NOT change their structure or create replacements.
+- Router files (src/router/routes.*): ADD new page routes. DO NOT restructure the routing architecture.
+- The template is your foundation — enhance section components aggressively, but preserve the layout architecture.
 
 ### Visual Excellence
 - Every component must feel PREMIUM — not a tutorial project

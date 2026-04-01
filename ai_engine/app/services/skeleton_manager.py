@@ -38,6 +38,9 @@ STACK_MAP = {
     # They fall through to the default (react-vite) which is a better experience.
     # Admin (detected by keywords, not just stack)
     "admin-react": "admin-react",
+    # Vue Admin — no local skeleton exists; fall back to admin-react structure
+    "vue": "admin-react",
+    "vue-admin": "admin-react",
     # Auto/empty → resolved by _detect_stack_from_description() below
     "auto": None,
 }

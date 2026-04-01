@@ -41,12 +41,24 @@ try:
 except ImportError:
     # Fallback for direct import
     def detect_package_manager(workspace_path: str, default: str = "npm") -> str:
-        if os.path.isfile(os.path.join(workspace_path, "pnpm-lock.yaml")):
-            return "pnpm"
-        elif os.path.isfile(os.path.join(workspace_path, "yarn.lock")):
-            return "yarn"
-        elif os.path.isfile(os.path.join(workspace_path, "bun.lockb")):
-            return "bun"
+        import shutil
+        _pm_map = [
+            ("pnpm-lock.yaml", "pnpm"),
+            ("yarn.lock", "yarn"),
+            ("bun.lockb", "bun"),
+            ("package-lock.json", "npm"),
+        ]
+        for lock_file, pm_name in _pm_map:
+            if os.path.isfile(os.path.join(workspace_path, lock_file)):
+                if shutil.which(pm_name):
+                    return pm_name
+                else:
+                    # Binary not installed — remove lock file and use npm
+                    try:
+                        os.remove(os.path.join(workspace_path, lock_file))
+                    except Exception:
+                        pass
+                    return "npm"
         return default
 
     def _pm_install_cmd(pm: str, packages=None):
@@ -175,14 +187,27 @@ class BuildValidator:
             }
 
         except subprocess.TimeoutExpired:
-            logger.warning("BuildValidator: build timed out")
-            return {"success": True}
+            logger.warning("BuildValidator: build timed out after %ds", timeout)
+            return {
+                "success": False,
+                "errors": f"Build timed out after {timeout}s — may indicate an infinite loop or very large project.",
+                "error_count": 1,
+                "timed_out": True,
+            }
         except FileNotFoundError as e:
             logger.warning("BuildValidator: command not found: %s", e)
-            return {"success": True}
+            return {
+                "success": False,
+                "errors": f"Build command not found: {e}. Ensure npm/pnpm/yarn is installed.",
+                "error_count": 1,
+            }
         except Exception as e:
             logger.warning("BuildValidator: unexpected error: %s", e)
-            return {"success": True}
+            return {
+                "success": False,
+                "errors": f"Build validation error: {e}",
+                "error_count": 1,
+            }
 
     async def fix_errors(self, workspace_path: str, errors: str, build_cmd: list) -> list:
         """Send build errors to Claude for fixing.
@@ -381,6 +406,19 @@ STOP when all errors are fixed.
             # Build failed
             last_errors = result.get("errors", "Unknown error")
             last_error_count = result.get("error_count", 1)
+
+            # Timeout — no parseable error output for Claude to fix
+            if result.get("timed_out"):
+                await self._send("build", "warning",
+                    "⚠️ Build timed out — skipping auto-fix (no error output to parse). "
+                    "Project will be deployed as-is.")
+                return {
+                    "success": False, "needs_fix": True,
+                    "attempts": self.attempt + 1,
+                    "errors": last_errors,
+                    "fixed_files": self.fixed_files,
+                    "error_count": last_error_count,
+                }
 
             logger.warning(
                 "BuildValidator: build failed (attempt %d/%d) — %d errors",
