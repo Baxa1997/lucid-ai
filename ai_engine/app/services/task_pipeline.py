@@ -2257,6 +2257,69 @@ def blueprint_to_file_plan(blueprint: dict, stack: str, workspace_path: str) -> 
         "sections": ["CSS variable overrides", "Google Font import", "Base body/html styles"],
     })
 
+    # ── 1b. Site config (direct-write — no Claude needed) ──────────
+    # Update the brand name, description, and logo text for this project.
+    if is_nextjs:
+        _site_config_path = "src/config/site.js"
+        _site_config_content = (
+            f'export const siteConfig = {{\n'
+            f'  name: "{project_name}",\n'
+            f'  description: "{project_desc[:150]}",\n'
+            f'  url: "https://example.com",\n'
+            f'  logoText: "{project_name[:2].upper()}",\n'
+            f'  ogImage: "/og-image.png",\n'
+            f'}};\n'
+        )
+        files.append({
+            "path": _site_config_path,
+            "action": "create",
+            "priority": 1,
+            "_direct_content": _site_config_content,
+            "description": f"Site config with brand: {project_name}",
+        })
+
+    # ── 1c. Navigation header — update for this project ──────────
+    # MarketingHeader has hardcoded navLinks. Update them to match project pages.
+    if is_nextjs:
+        _header_path = "src/components/layout/MarketingHeader.jsx"
+        if os.path.isfile(os.path.join(workspace_path, _header_path)):
+            _nav_items = navigation.get("items", [])
+            _nav_links_str = ", ".join(
+                f'{{"href": "{item.get("route", "/")}", "label": "{item.get("label", "")}"}}' 
+                for item in _nav_items if item.get("route") != "/"
+            )
+            files.append({
+                "path": _header_path,
+                "action": "modify",
+                "priority": 2,
+                "description": (
+                    f"Update the navigation header for '{project_name}'. "
+                    f"Change the navLinks array to: [{_nav_links_str}]. "
+                    f"The CTA button should say '{navigation.get('cta', 'Get Started')}' and link to the most relevant page. "
+                    f"Keep the ENTIRE component structure, scroll behavior, mobile menu, and Tailwind classes intact. "
+                    f"ONLY change: (1) navLinks array values, (2) CTA button text/link. "
+                    f"DO NOT change imports, component name, or layout structure."
+                ),
+            })
+
+    # ── 1d. Footer — update for this project ──────────
+    if is_nextjs:
+        _footer_path = "src/components/layout/MarketingFooter.jsx"
+        if os.path.isfile(os.path.join(workspace_path, _footer_path)):
+            files.append({
+                "path": _footer_path,
+                "action": "modify",
+                "priority": 2,
+                "description": (
+                    f"Update the footer for '{project_name}'. "
+                    f"Change the brand name, tagline, and footer link columns to match this project. "
+                    f"Footer links should include: {json.dumps([item.get('label') for item in navigation.get('items', [])])}. "
+                    f"Add relevant footer columns (e.g., 'Quick Links', 'Services', 'Contact Info'). "
+                    f"Keep the ENTIRE component structure and Tailwind classes intact. "
+                    f"ONLY change: text content, link labels/hrefs, brand name, tagline."
+                ),
+            })
+
     # ── 2. Root layout (metadata + fonts ONLY, no Navbar/Footer) ──────
     # The root layout.js should ONLY handle: html/body tags, metadata, fonts, Providers.
     # Navigation and footer are handled by route group layouts (e.g. (marketing)/layout.js).
@@ -3895,14 +3958,23 @@ Write the COMPLETE file using the Write tool. STOP after this ONE file.
         # 3 turns = think + write + done. Prevents hitting max_turns before writing.
         _turns = 3
 
+        # Layout/modify files need Read+Write to preserve structure.
+        # Section files (create) only need Write for speed.
+        if _is_layout_file or file_action == "modify":
+            _allowed = ["Read", "Write"]
+            _disallowed = ["Bash", "Edit", "MultiEdit", "GitCommit", "GitPush", "GitPull"]
+        else:
+            _allowed = ["Write"]
+            _disallowed = ["Read", "Bash", "Edit", "MultiEdit", "GitCommit", "GitPush", "GitPull"]
+
         options = ClaudeCodeOptions(
             cwd=str(workspace_path),
             env=env,
             model=model_id,
             max_turns=_turns,
             permission_mode="bypassPermissions",
-            allowed_tools=["Write"],
-            disallowed_tools=["Read", "Bash", "Edit", "MultiEdit", "GitCommit", "GitPush", "GitPull"],
+            allowed_tools=_allowed,
+            disallowed_tools=_disallowed,
             append_system_prompt=system_prompt,
         )
 
