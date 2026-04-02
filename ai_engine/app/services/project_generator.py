@@ -255,10 +255,9 @@ def _load_skills(app_type: str, stack: str) -> str:
     """
     # Determine which skill set to use
     admin_types = {
-        "admin_panel", "dashboard", "crm", "erp", "logistics",
-        "healthcare", "finance", "education", "ecommerce",
-        "saas_app", "analytics", "booking", "social",
-        "fitness", "travel", "real_estate",
+        "admin_panel", "ecommerce", "saas_app", "analytics",
+        "education", "medical", "fitness", "booking",
+        "social", "food_restaurant", "travel", "real_estate",
     }
     
     skill_key = "admin" if app_type in admin_types else "landing"
@@ -1516,10 +1515,16 @@ Call the write_project_files tool with ALL files.
     #  All sections (landing) OR all CRUD features (admin)
     # ═══════════════════════════════════════════════════════
     await _ws_send(websocket, "progress", "🎨 Phase 2/3 — Building content...")
+    # Types that get CRUD feature modules (admin-style)
+    # vs landing page sections (marketing-style)
+    CRUD_TYPES = {
+        "admin_panel", "ecommerce", "saas_app", "analytics",
+        "education", "medical", "fitness", "booking",
+        "social", "food_restaurant", "travel", "real_estate",
+    }
+    # Landing types: landing_page, blog, entertainment, documentation, portfolio
     
-    if app_type in ("admin_panel", "ecommerce", "saas_app", "analytics",
-                     "crm", "erp", "logistics", "healthcare", "finance",
-                     "education", "dashboard"):
+    if app_type in CRUD_TYPES:
         phase2_instruction = """Generate ALL CRUD feature modules.
 For EACH entity from the research, create the COMPLETE feature folder:
   - services/[entity].service.js — API calls + MOCK DATA FALLBACK (10-20 realistic rows)

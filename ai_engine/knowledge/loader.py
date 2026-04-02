@@ -48,10 +48,19 @@ def classify_project_type(task: str) -> str:
     """
     task_lower = (task or "").lower()
 
-    # Admin/Dashboard keywords
-    admin_kw = ["admin", "dashboard", "panel", "management system", "cms", "backoffice",
-                "crm", "erp", "inventory", "manage users", "manage products",
-                "data table", "crud", "admin panel"]
+    # Admin/Dashboard/Management keywords — FIRST priority
+    # Catches: TMS, CRM, ERP, logistics, finance, fleet, warehouse, HR
+    admin_kw = [
+        "admin", "dashboard", "panel", "management system", "management",
+        "cms", "backoffice", "back office",
+        "crm", "erp", "tms", "wms", "hris", "hrms", "pos",
+        "inventory", "warehouse", "supply chain", "fleet",
+        "logistics", "transportation", "shipping", "freight",
+        "finance", "banking", "accounting", "audit", "ledger", "payroll",
+        "manage users", "manage products", "manage orders",
+        "data table", "crud", "admin panel",
+        "compliance", "inspection", "dispatch",
+    ]
     if any(kw in task_lower for kw in admin_kw):
         return "admin_panel"
 
@@ -100,16 +109,20 @@ def classify_project_type(task: str) -> str:
     if any(kw in task_lower for kw in saas_kw):
         return "saas_app"
 
-    # Travel / Tourism
+    # Travel / Tourism — must be before real_estate since "hotel" could overlap
     travel_kw = ["travel", "tourism", "hotel", "flight", "trip", "vacation",
                  "destination", "tour", "airbnb", "hostel"]
     if any(kw in task_lower for kw in travel_kw):
         return "travel"
 
-    # Real Estate
-    real_estate_kw = ["real estate", "property", "apartment", "house", "rental",
+    # Real Estate — use word-boundary check for "house" to avoid "warehouse" false match
+    import re
+    real_estate_kw = ["real estate", "property", "apartment", "rental",
                       "listing", "agent", "broker", "mortgage"]
     if any(kw in task_lower for kw in real_estate_kw):
+        return "real_estate"
+    # Special check for "house" — must not be inside "warehouse"
+    if re.search(r'\bhouse\b', task_lower) and "warehouse" not in task_lower:
         return "real_estate"
 
     # Social/Community
