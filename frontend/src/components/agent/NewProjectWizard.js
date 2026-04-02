@@ -39,13 +39,17 @@ const StackLogos = {
   nestjs: () => (
     <svg viewBox="0 0 32 32" className="w-6 h-6"><path d="M18.744 2.641a2.985 2.985 0 00-1.019.218 2.215 2.215 0 01.855.764c.152.254.256.533.308.824.019.135.026.27.022.406a5.832 5.832 0 01.131 1.3c.053.712-.032 1.5-.616 2.013a2.135 2.135 0 01-.313.224 2.244 2.244 0 01.2-.907A2.4 2.4 0 0118.744 2.641zm-2.453 4.035c-.249.5-.187 1.089-.218 1.632a4.619 4.619 0 01-.153.95 1.837 1.837 0 01-.428.7 3.485 3.485 0 01-.692.553l-.163.109A8.577 8.577 0 0110.7 13.61a7.908 7.908 0 00-1.319 2.2 6.6 6.6 0 00-.434 2.656 9.023 9.023 0 004.074 7.276c-.009-.06-.024-.117-.03-.177a5.08 5.08 0 01.045-1.308 6.081 6.081 0 01.322-1.261 8.147 8.147 0 011.3-2.191c.368-.435.773-.837 1.152-1.262a14.233 14.233 0 001.663-2.2 6.148 6.148 0 00.836-3.2c-.024.081-.044.163-.07.244a3.975 3.975 0 01-1.258 1.827A3.449 3.449 0 0115.67 17a2.672 2.672 0 01-1.028-.4 2.656 2.656 0 01-.865-.911 3.141 3.141 0 01-.382-1.343 3.739 3.739 0 01.4-2.06 4.063 4.063 0 011.066-1.271c.163-.127.334-.242.51-.349a6.289 6.289 0 00-.006-.636 3.014 3.014 0 00-.26-1.06l-.035-.075a1.64 1.64 0 00-1.357-1.213z" fill="#E0234E"/><path d="M21.6 10.9a.591.591 0 00-.268.036c.181.128.288.321.389.506a3.6 3.6 0 01.348 2.112 4.244 4.244 0 01-.675 1.883A12.06 12.06 0 0119.9 17.4a13.6 13.6 0 00-1.538 2.194 7.27 7.27 0 00-.809 2.524 6.476 6.476 0 00.2 2.618A9 9 0 0024.2 18.51a8.892 8.892 0 00.715-4.4 5.389 5.389 0 00-1.247-3.017 2.77 2.77 0 00-1.571-.97 1.159 1.159 0 00-.496-.223z" fill="#E0234E"/></svg>
   ),
+  vue: () => (
+    <svg viewBox="0 0 32 32" className="w-6 h-6"><path fill="#41B883" d="M24.4 3.925H30l-14 24.15L2 3.925h10.71l3.29 5.6 3.22-5.6z"/><path fill="#41B883" d="M2 3.925l14 24.15 14-24.15h-5.6L16 18.415 7.53 3.925z"/><path fill="#35495E" d="M7.53 3.925L16 18.485l8.4-14.56h-5.18L16 9.525l-3.29-5.6z"/></svg>
+  ),
 };
 
 // ── Stack metadata ──────────────────────────────────────
 const STACKS = [
+  { id: 'nextjs', name: 'Next.js', description: 'Full-stack React with SSR', tag: 'Popular' },
+  { id: 'react', name: 'React', description: 'Component-based admin panels', tag: 'Popular' },
+  { id: 'vue', name: 'Vue.js', description: 'Progressive admin framework', tag: 'Popular' },
   { id: 'html-css', name: 'HTML & CSS', description: 'Pure static site — no framework', tag: 'Simple' },
-  { id: 'nextjs', name: 'Next.js', description: 'Full-stack React with SSR', tag: 'Recommended' },
-  { id: 'react', name: 'React', description: 'Component-based UI library', tag: 'Popular' },
   { id: 'fastapi', name: 'FastAPI', description: 'Modern Python backend', tag: 'Backend' },
   { id: 'express', name: 'Node.js + Express', description: 'Lightweight Node.js server', tag: 'Backend' },
   { id: 'django', name: 'Django', description: 'Batteries-included Python', tag: 'Backend' },
@@ -91,7 +95,7 @@ export default function NewProjectWizard({ onClose, onWizardComplete }) {
   const [isRecommending, setIsRecommending] = useState(false);
 
   const [wizardState, setWizardState] = useState({
-    stack: null, description: '', descriptionFile: null,
+    stack: 'auto', description: '', descriptionFile: null,
     figmaUrl: '', skipFigma: true, backend: 'none', mcpUrl: '', deployment: 'hosted',
   });
 
@@ -200,6 +204,44 @@ export default function NewProjectWizard({ onClose, onWizardComplete }) {
 
 
 
+        {/* ── "Choose for me" — default, prominent, ABOVE the grid ── */}
+          <button
+            onClick={() => update({ stack: 'auto' })}
+            className={cn(
+              "group relative flex items-center gap-4 px-5 py-4 rounded-2xl text-left transition-all duration-200 w-full mb-4",
+              wizardState.stack === 'auto'
+                ? 'bg-violet-50/80 dark:bg-violet-500/10 border-2 border-violet-400 dark:border-violet-500 shadow-[0_0_0_3px_rgba(139,92,246,0.08)]'
+                : 'bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80 shadow-sm hover:shadow-md hover:border-violet-300 dark:hover:border-violet-600 hover:-translate-y-[1px]'
+            )}
+          >
+            <div className={cn("w-11 h-11 rounded-xl flex items-center justify-center shrink-0 transition-colors",
+              wizardState.stack === 'auto'
+                ? 'bg-gradient-to-br from-violet-100 to-blue-100 dark:from-violet-500/20 dark:to-blue-500/20'
+                : 'bg-slate-50 dark:bg-slate-700/80'
+            )}>
+              <Sparkles className={cn("w-5 h-5", wizardState.stack === 'auto' ? 'text-violet-600 dark:text-violet-400' : 'text-slate-400 group-hover:text-violet-400')} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className={cn("text-[14px] font-semibold", wizardState.stack === 'auto' ? 'text-violet-700 dark:text-violet-400' : 'text-slate-600 dark:text-slate-300')}>Choose for me</span>
+                <span className="px-1.5 py-0.5 text-[9px] font-bold rounded uppercase tracking-wider shrink-0 bg-violet-100 dark:bg-violet-500/20 text-violet-600 dark:text-violet-400">✨ Recommended</span>
+              </div>
+              <p className="text-[12px] text-slate-400 dark:text-slate-500 mt-0.5">AI analyzes your project and picks the best stack automatically</p>
+            </div>
+            {wizardState.stack === 'auto' && (
+              <div className="absolute top-2.5 right-2.5">
+                <CheckCircle2 className="w-5 h-5 text-violet-500" />
+              </div>
+            )}
+          </button>
+
+          {/* ── Or pick manually ── */}
+          <div className="flex items-center gap-3 mb-3">
+            <div className="flex-1 h-px bg-slate-200 dark:bg-slate-700" />
+            <span className="text-[11px] font-medium text-slate-400 dark:text-slate-500 uppercase tracking-wider">Or choose manually</span>
+            <div className="flex-1 h-px bg-slate-200 dark:bg-slate-700" />
+          </div>
+
         <div className="grid grid-cols-2 gap-3">
           {STACKS.map((s) => (
             <button
@@ -225,8 +267,7 @@ export default function NewProjectWizard({ onClose, onWizardComplete }) {
                   <span className={cn("text-[14px] font-semibold truncate", wizardState.stack === s.id ? 'text-blue-700 dark:text-blue-300' : 'text-slate-800 dark:text-slate-200')}>{s.name}</span>
                   {s.tag && (
                     <span className={cn("px-1.5 py-0.5 text-[9px] font-bold rounded uppercase tracking-wider shrink-0",
-                      s.tag === 'Recommended' ? 'bg-blue-100 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400'
-                        : s.tag === 'Popular' ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400'
+                      s.tag === 'Popular' ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400'
                         : s.tag === 'Backend' ? 'bg-slate-100 dark:bg-slate-600/40 text-slate-500 dark:text-slate-400'
                         : 'bg-slate-200 dark:bg-slate-600 text-slate-500'
                     )}>{s.tag}</span>
@@ -242,34 +283,6 @@ export default function NewProjectWizard({ onClose, onWizardComplete }) {
               )}
             </button>
           ))}
-
-          {/* Choose for me */}
-          <button
-            onClick={() => update({ stack: 'auto' })}
-            className={cn(
-              "group relative flex items-center gap-4 px-5 py-4 rounded-2xl text-left transition-all duration-200",
-              wizardState.stack === 'auto'
-                ? 'bg-violet-50/80 dark:bg-violet-500/10 border-2 border-violet-400 dark:border-violet-500 shadow-[0_0_0_3px_rgba(139,92,246,0.08)]'
-                : 'bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80 shadow-sm hover:shadow-md hover:border-violet-300 dark:hover:border-violet-600 hover:-translate-y-[1px]'
-            )}
-          >
-            <div className={cn("w-11 h-11 rounded-xl flex items-center justify-center shrink-0 transition-colors",
-              wizardState.stack === 'auto'
-                ? 'bg-gradient-to-br from-violet-100 to-blue-100 dark:from-violet-500/20 dark:to-blue-500/20'
-                : 'bg-slate-50 dark:bg-slate-700/80'
-            )}>
-              <Shuffle className={cn("w-5 h-5", wizardState.stack === 'auto' ? 'text-violet-600 dark:text-violet-400' : 'text-slate-400 group-hover:text-violet-400')} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <span className={cn("text-[14px] font-semibold", wizardState.stack === 'auto' ? 'text-violet-700 dark:text-violet-400' : 'text-slate-600 dark:text-slate-300')}>Choose for me</span>
-              <p className="text-[12px] text-slate-400 dark:text-slate-500 mt-0.5">AI picks the best stack</p>
-            </div>
-            {wizardState.stack === 'auto' && (
-              <div className="absolute top-2.5 right-2.5">
-                <CheckCircle2 className="w-5 h-5 text-violet-500" />
-              </div>
-            )}
-          </button>
         </div>
       </div>
     </div>

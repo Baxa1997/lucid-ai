@@ -724,11 +724,10 @@ async function fetchWorkspaceFiles(userId, accessToken, projectId) {
       .eq('user_id', userId)
       .eq('project_id', projectId)
       .order('created_at', { ascending: false })
-      .limit(1);
+      .limit(5);
 
-    if (!chatSessions?.length || !chatSessions[0].agent_session_id) return [];
+    if (!chatSessions?.length) return [];
 
-    const sessionId = chatSessions[0].agent_session_id;
     const headers = {};
     if (accessToken) {
       headers['Authorization'] = `Bearer ${accessToken}`;
@@ -738,14 +737,27 @@ async function fetchWorkspaceFiles(userId, accessToken, projectId) {
       if (INTERNAL_API_KEY) headers['X-Internal-Key'] = INTERNAL_API_KEY;
     }
 
-    const res = await fetch(
-      `${AI_SERVICE_URL}/api/v1/files/export?session_id=${encodeURIComponent(sessionId)}`,
-      { headers, signal: AbortSignal.timeout(30000) }
-    );
+    for (const session of chatSessions) {
+      if (!session.agent_session_id) continue;
+      
+      try {
+        const res = await fetch(
+          `${AI_SERVICE_URL}/api/v1/files/export?session_id=${encodeURIComponent(session.agent_session_id)}`,
+          { headers, signal: AbortSignal.timeout(10000) }
+        );
 
-    if (!res.ok) return [];
-    const data = await res.json();
-    return data.files || [];
+        if (res.ok) {
+          const data = await res.json();
+          if (data.files && data.files.length > 0) {
+            return data.files;
+          }
+        }
+      } catch (e) {
+        console.warn(`[export-code] Workspace fetch failed for session ${session.agent_session_id}:`, e.message);
+      }
+    }
+    
+    return [];
   } catch {
     return [];
   }

@@ -108,3 +108,23 @@ After enabling providers in the Dashboard, also set:
 - Path alias `@/` maps to `frontend/src/`
 - All ai_engine service methods use `user_jwt: str | None` — str triggers `managed_client` (RLS via anon key + JWT), None triggers `managed_admin_client` (service_role key, bypasses RLS)
 - RLS policies use `auth.uid()` — the canonical Supabase function for getting the authenticated user's UUID
+
+## Python Coding Rules (ai_engine)
+
+### Closure / nonlocal variables
+- When extracting a loop body into an inner `async def` or `def`, **always audit every variable** from the outer scope
+- If the inner function **assigns** to an outer variable (e.g. `file_tree = ...`, `counter += 1`), add it to `nonlocal`
+- If the inner function only **reads** an outer variable, no `nonlocal` is needed
+- **Always run `python3 -m py_compile`** after refactoring nested functions — it catches syntax errors but NOT `nonlocal` runtime errors, so also mentally trace the read/write flow
+
+### After every code change
+1. `python3 -m py_compile <file>` — must pass
+2. For `task_pipeline.py`: check that all `nonlocal` declarations match variables assigned in inner functions
+3. For prompt text: never reference `var(--color-*)` — templates use **Tailwind classes** (`bg-primary`, `text-foreground`, etc.)
+
+### Template styling (generated projects)
+- All 3 templates use **Tailwind CSS v3.4** + shadcn/ui HSL design tokens
+- Prompts must say: "Use Tailwind classes" — NEVER "Use CSS variables"
+- Valid: `bg-primary`, `text-foreground`, `bg-muted`, `border-border`, `bg-card`
+- Invalid: `var(--color-primary)`, `var(--color-bg)`, `style={{}}`
+

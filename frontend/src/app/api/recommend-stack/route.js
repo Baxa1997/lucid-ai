@@ -8,19 +8,21 @@ import { requireAuth } from '@/lib/gatekeeper';
 
 const ANTHROPIC_BASE = 'https://api.anthropic.com/v1/messages';
 
-const SYSTEM_PROMPT = `You are a frontend framework advisor. Given a project description, pick the single best frontend framework from: Next.js, React.
+const SYSTEM_PROMPT = `You are a frontend framework advisor. Given a project description, pick the single best frontend framework from: Next.js, React, Vue.js.
 
 Rules:
-- Admin panel → React
-- Dashboard → React
-- Analytics tool → React
-- CRM → React
-- ERP → React
-- E-commerce or marketplace → Next.js
-- Website or landing page → Next.js
-- Blog or content site → Next.js
-- SaaS application → Next.js
+- Admin panel / dashboard → React (shadcn/ui + Recharts)
+- Analytics / reporting tool → React
+- CRM / ERP / project management → React
+- Inventory / warehouse management → Vue.js (lightweight, fast iteration)
+- Internal tools / back-office → Vue.js
+- Logistics / fleet management → Vue.js
+- E-commerce or marketplace → Next.js (SEO, SSR)
+- Website or landing page → Next.js (SEO, SSR)
+- Blog or content site → Next.js (SSG)
+- SaaS marketing / product site → Next.js
 - Portfolio → Next.js
+- If description mentions "Vue" explicitly → Vue.js
 - Default fallback → Next.js
 
 Reply with ONLY valid JSON: {"framework":"<name>","reason":"<one short sentence why>"}
@@ -89,6 +91,9 @@ export async function POST(req) {
         'next.js': 'nextjs',
         'nextjs': 'nextjs',
         'react': 'react',
+        'vue': 'vue',
+        'vue.js': 'vue',
+        'vuejs': 'vue',
       };
       const stackId = nameMap[parsed.framework?.toLowerCase()] || 'nextjs';
       return NextResponse.json({
@@ -98,6 +103,7 @@ export async function POST(req) {
     } catch {
       // Fallback: try to extract framework name from raw text
       const lower = raw.toLowerCase();
+      if (lower.includes('vue')) return NextResponse.json({ stack: 'vue', reason: 'Best fit for your project' });
       if (lower.includes('react') && !lower.includes('next')) return NextResponse.json({ stack: 'react', reason: 'Best fit for your project' });
       return NextResponse.json({ stack: 'nextjs', reason: 'Best fit for your project' });
     }

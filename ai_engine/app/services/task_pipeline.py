@@ -1708,7 +1708,7 @@ Think: what would a real user of this product expect to see?
 
 ## Design System (UNIQUE to this project)
 - Primary color: MUST match the industry (red for media/entertainment, green for eco/health, blue for finance/tech, purple for creative, orange for food/energy). NEVER use default #6366f1
-- Color palette: primary + accent + neutral scale (at least 12 CSS variables)
+- Color palette: primary + accent + neutral scale (use Tailwind HSL variables in :root)
 - Background: light/dark mode with appropriate contrast
 - Typography: heading + body font that matches the mood
 - Card style: flat / raised / glass / bordered — pick ONE that fits
@@ -1791,6 +1791,81 @@ Research the specific niche. Customize everything.
 # ═══════════════════════════════════════════════════════════════
 #  STEP 4b (NEW) — Gemini Plan: generates .lucid/plan.json
 # ═══════════════════════════════════════════════════════════════
+
+def _get_fallback_sections(task: str, project_name: str) -> list:
+    """Generate project-relevant fallback sections based on task keywords."""
+    _task_lower = (task or "").lower()
+
+    # Industry-specific section sets
+    if any(kw in _task_lower for kw in ["restaurant", "food", "cafe", "bakery", "pizza", "dining"]):
+        return [
+            {"name": "Hero", "type": "hero", "description": f"Hero section for {project_name} with appetizing food imagery, restaurant tagline, and reservation CTA button."},
+            {"name": "MenuHighlights", "type": "catalog", "description": f"Featured dishes for {project_name} with tabbed categories (Appetizers, Mains, Desserts), prices, and descriptions. Interactive category filter."},
+            {"name": "ChefStory", "type": "custom", "description": f"Chef spotlight and restaurant story for {project_name}. Split layout with chef photo placeholder and compelling backstory. Warm, inviting tone."},
+            {"name": "ReservationCTA", "type": "cta", "description": f"Reservation call-to-action for {project_name}. Includes operating hours, phone number, and a prominent 'Book a Table' button."},
+            {"name": "PhotoGallery", "type": "gallery", "description": f"Photo gallery for {project_name} showing restaurant ambiance and dishes. Masonry grid with hover overlay effects."},
+        ]
+    elif any(kw in _task_lower for kw in ["movie", "film", "cinema", "streaming", "netflix"]):
+        return [
+            {"name": "Hero", "type": "hero", "description": f"Cinematic hero for {project_name} with featured movie spotlight, dark overlay, play button, and genre tags."},
+            {"name": "TrendingNow", "type": "catalog", "description": f"Trending movies carousel for {project_name}. Horizontal scroll with movie poster cards, ratings, and hover details overlay."},
+            {"name": "GenreShowcase", "type": "custom", "description": f"Genre categories grid for {project_name}. Visual cards for Action, Comedy, Drama, Horror, SciFi with background imagery."},
+            {"name": "TopRated", "type": "catalog", "description": f"Top rated movies for {project_name}. Cards with star ratings, year, duration, and brief synopsis."},
+            {"name": "Newsletter", "type": "cta", "description": f"Newsletter signup for {project_name}. Dark background with email input and 'Get Movie Updates' button."},
+        ]
+    elif any(kw in _task_lower for kw in ["saas", "software", "app", "platform", "tool", "startup"]):
+        return [
+            {"name": "Hero", "type": "hero", "description": f"Hero section for {project_name} with headline, subtext, CTA button, and product screenshot/mockup area."},
+            {"name": "FeatureShowcase", "type": "features", "description": f"Feature showcase for {project_name}. 6 cards with icons, alternating layout. Interactive hover effects."},
+            {"name": "HowItWorks", "type": "custom", "description": f"How it works section for {project_name}. 3-step numbered process with icons and descriptions. Visual flow arrows."},
+            {"name": "PricingPlans", "type": "pricing", "description": f"Pricing section for {project_name}. Monthly/yearly toggle. 3 tier cards. Highlight popular plan."},
+            {"name": "CallToAction", "type": "cta", "description": f"Final CTA for {project_name}. Gradient background, bold headline, email signup or demo button."},
+        ]
+    elif any(kw in _task_lower for kw in ["portfolio", "agency", "freelance", "designer", "developer"]):
+        return [
+            {"name": "Hero", "type": "hero", "description": f"Portfolio hero for {project_name} with name/title, brief intro, and scroll-down indicator."},
+            {"name": "SelectedWorks", "type": "gallery", "description": f"Project showcase for {project_name}. Masonry grid of project cards with category filter tabs. Hover shows project title and tech stack."},
+            {"name": "SkillsExpertise", "type": "custom", "description": f"Skills and expertise section for {project_name}. Visual skill bars or progress indicators grouped by category."},
+            {"name": "WorkProcess", "type": "custom", "description": f"Work process timeline for {project_name}. 4-step horizontal process with icons: Discovery, Design, Develop, Deploy."},
+            {"name": "ContactCTA", "type": "cta", "description": f"Contact CTA for {project_name}. 'Let's work together' headline with email and social links."},
+        ]
+    elif any(kw in _task_lower for kw in ["shop", "store", "ecommerce", "e-commerce", "product"]):
+        return [
+            {"name": "Hero", "type": "hero", "description": f"Hero banner for {project_name} with featured product, sale announcement, and shop-now button."},
+            {"name": "ProductShowcase", "type": "catalog", "description": f"Featured products grid for {project_name}. Product cards with image, name, price, rating, and add-to-cart button."},
+            {"name": "CategoryGrid", "type": "custom", "description": f"Product categories for {project_name}. Visual cards with category images and names. Hover zoom effect."},
+            {"name": "FlashDeals", "type": "custom", "description": f"Flash deals section for {project_name} with countdown timer, discounted prices, and urgency badges."},
+            {"name": "TrustBadges", "type": "cta", "description": f"Trust section for {project_name}. Free shipping, secure payment, money-back guarantee badges."},
+        ]
+    else:
+        # Generic but still descriptive
+        return [
+            {"name": "Hero", "type": "hero", "description": f"Hero section for {project_name}. Full-width with compelling headline, descriptive subtext, and prominent CTA button."},
+            {"name": "Showcase", "type": "custom", "description": f"Main showcase section for {project_name}. Present the core offering with visual cards, icons, and descriptions."},
+            {"name": "Story", "type": "custom", "description": f"Background story section for {project_name}. Split layout with text and visual placeholder. Warm, engaging tone."},
+            {"name": "SocialProof", "type": "custom", "description": f"Social proof section for {project_name}. Reviews, testimonials, or client logos with real-looking content."},
+            {"name": "GetStarted", "type": "cta", "description": f"Get started section for {project_name}. Gradient background, action-oriented headline, and button."},
+        ]
+
+
+def _build_dynamic_fallback(task: str) -> dict:
+    """Build a complete fallback blueprint with project-relevant sections."""
+    # Extract a project name from the task
+    _task_clean = (task or "project").strip()
+    _name = _task_clean[:50].split(".")[0].split(",")[0].strip()
+    if len(_name) < 3:
+        _name = "Project"
+
+    return {
+        "projectName": _name,
+        "projectType": "other",
+        "description": _task_clean,
+        "theme": {},
+        "navigation": {"items": [{"label": "Home", "route": "/"}]},
+        "pages": [{"name": "Home", "route": "/", "sections": _get_fallback_sections(_task_clean, _name)}],
+        "sharedComponents": [],
+    }
+
 
 async def gemini_create_plan(
     task: str,
@@ -1997,7 +2072,13 @@ Return ONLY valid JSON (no markdown, no backticks):
 ## CRITICAL RULES
 1. Theme MUST be unique — match the project's INDUSTRY and MOOD (dark cinema palette for movies, warm earthy for restaurants, clean professional for SaaS, vibrant for social)
 2. EVERY section description MUST be 80+ words with specific content, layout details, interactive elements, and REAL text that matches the project
-3. Pages and sections must be UNIQUE to this project — a movie site needs different pages than a SaaS site
+3. Pages and sections must be UNIQUE to this project — DO NOT use generic Hero/Features/About/Testimonials/CTA for every project. Examples:
+   - Restaurant: MenuCategories (tabbed menu with prices), ChefSpotlight, ReservationForm, DailySpecials, PhotoGallery
+   - Movie site: TrendingCarousel, GenreGrid, TopRatedList, NowPlaying, TrailerShowcase
+   - SaaS: InteractiveDemoSection, PricingToggle (monthly/yearly), IntegrationLogos, MetricsCounter, ComparisonTable
+   - Portfolio: ProjectMasonry, SkillsVisualization, ClientLogos, WorkProcess, ContactForm
+   - E-commerce: ProductShowcase, CategoryGrid, FlashDeals, ReviewsCarousel, TrustBadges
+4. Section NAMES must reflect the CONTENT, not generic patterns. "MenuCategoryTabs" not "Features". "TrailerShowcase" not "Gallery"
 4. Only include Pricing if the project actually sells tiered plans/services
 5. Only include Testimonials if social proof is relevant to the project type
 6. For admin panels: dashboard cards, table columns, form fields must be SPECIFIC to the industry (hospital → patients, not generic "users")
@@ -2008,16 +2089,16 @@ Return ONLY valid JSON (no markdown, no backticks):
 11. Routes MUST be simple flat paths: "/", "/about", "/movies", "/menu". NEVER use route groups like "/(marketing)/about"
 12. Section names MUST be simple PascalCase: "Hero", "MovieGrid", "MenuList", "PatientTable", "BookingForm". No spaces
 13. Page names MUST be simple words: "Home", "Movies", "Menu", "Patients", "Dashboard". No spaces
-14. PAGES: websites need EXACTLY 3 pages (Home + 2 others). Admin panels need 4-5 pages (dashboard + 2-3 data pages)
-15. SECTIONS: Home page needs EXACTLY 5 sections. Other pages need 2-3 sections each
-16. MAX TOTAL: The entire project must have NO MORE THAN 15 sections total across all pages — this is a HARD LIMIT
+14. PAGE COUNT: Include ALL pages that the project needs — Gemini decides based on the project type. A restaurant needs Menu, Reservations, About. A SaaS needs Features, Pricing, Blog. Include everything relevant
+15. SECTIONS PER PAGE: Home/Landing page gets 4-5 sections. Other pages get 2-3 sections each. Keep sections focused and meaningful
+16. MAX TOTAL: No more than 25 sections across ALL pages combined
 17. sharedComponents: maximum 2-3 reusable components
 
 Return ONLY the raw JSON object. No markdown. No backticks. No explanation.
 """
         response = await asyncio.to_thread(model.generate_content, blueprint_prompt,
             generation_config=genai.GenerationConfig(
-                temperature=0.3,
+                temperature=0.7,
                 max_output_tokens=65536,
                 response_mime_type="application/json",
             ))
@@ -2067,50 +2148,17 @@ Return ONLY the raw JSON object. No markdown. No backticks. No explanation.
 
         if not _repaired:
             logger.warning("gemini_create_plan: using minimal blueprint fallback")
-            blueprint = {
-                "projectName": "project",
-                "projectType": "other",
-                "description": task,
-                "theme": {},
-                "navigation": {"items": [{"label": "Home", "route": "/"}]},
-                "pages": [{"name": "Home", "route": "/", "sections": [
-                    {"name": "Hero", "type": "hero", "description": task},
-                    {"name": "Features", "type": "features", "description": f"Key features section for: {task}"},
-                    {"name": "About", "type": "custom", "description": f"About section for: {task}"},
-                    {"name": "CTA", "type": "cta", "description": f"Call to action section for: {task}"},
-                ]}],
-                "sharedComponents": [],
-            }
+            blueprint = _build_dynamic_fallback(task)
     except Exception as e:
         logger.warning("gemini_create_plan failed: %s", e)
-        blueprint = {
-            "projectName": "project",
-            "projectType": "other",
-            "description": task,
-            "theme": {},
-            "navigation": {"items": [{"label": "Home", "route": "/"}]},
-            "pages": [{"name": "Home", "route": "/", "sections": [
-                {"name": "Hero", "type": "hero", "description": task},
-                {"name": "Features", "type": "features", "description": f"Key features section for: {task}"},
-                {"name": "About", "type": "custom", "description": f"About section for: {task}"},
-                {"name": "CTA", "type": "cta", "description": f"Call to action section for: {task}"},
-            ]}],
-            "sharedComponents": [],
-        }
+        blueprint = _build_dynamic_fallback(task)
+
     # ── POST-BLUEPRINT VALIDATION ─────────────────────────────
     # Ensure every page has enough sections. Gemini may truncate
     # the JSON mid-output, leaving pages with only 1-2 sections.
-    # For landing/marketing pages, we ensure at least 5 sections.
+    # For landing/marketing pages, we ensure at least 4 sections.
     _project_type = blueprint.get("projectType", "other")
     _is_admin = "admin" in _project_type or "dashboard" in _project_type
-    _default_website_sections = [
-        {"name": "Hero", "type": "hero", "description": f"Hero banner section for {blueprint.get('projectName', 'project')}. Full-width background, compelling headline, subtext, and CTA button. Visually striking, setting the tone for the entire site."},
-        {"name": "Features", "type": "features", "description": f"Key features/benefits grid for {blueprint.get('projectName', 'project')}. 6 feature cards in responsive grid with icons, titles, and descriptions. Hover effects on cards."},
-        {"name": "About", "type": "custom", "description": f"About/story section for {blueprint.get('projectName', 'project')}. Split layout with text on one side and visual on the other. Company mission, values, or background story."},
-        {"name": "Testimonials", "type": "testimonials", "description": f"Social proof section with 3+ testimonials. Horizontal scroll or card layout with quotes, names, roles. Star ratings and avatar placeholders."},
-        {"name": "CTA", "type": "cta", "description": f"Call-to-action section for {blueprint.get('projectName', 'project')}. Gradient background, bold headline, subtext, and prominent action button. Creates urgency."},
-        {"name": "FAQ", "type": "faq", "description": f"Frequently asked questions with accordion/expand-collapse. 6+ relevant questions for {blueprint.get('projectName', 'project')} with detailed answers."},
-    ]
 
     for page in blueprint.get("pages", []):
         sections = page.get("sections", [])
@@ -2118,11 +2166,11 @@ Return ONLY the raw JSON object. No markdown. No backticks. No explanation.
         is_home = page.get("route") == "/" or page.get("name", "").lower() in ("home", "landing", "main")
 
         if is_home and not _is_admin and section_count < 4:
-            # Home page needs at least 5 sections — add missing ones
-            existing_types = {(s.get("type") if isinstance(s, dict) else "") for s in sections}
+            # Generate dynamic fallback sections based on project context
+            _fallback_sections = _get_fallback_sections(task, blueprint.get("projectName", "project"))
             existing_names = {(s.get("name", "").lower() if isinstance(s, dict) else str(s).lower()) for s in sections}
-            for default_sec in _default_website_sections:
-                if default_sec["type"] not in existing_types and default_sec["name"].lower() not in existing_names:
+            for default_sec in _fallback_sections:
+                if default_sec["name"].lower() not in existing_names:
                     sections.append(default_sec)
                     if len(sections) >= 5:
                         break
@@ -2130,21 +2178,31 @@ Return ONLY the raw JSON object. No markdown. No backticks. No explanation.
             logger.info("Post-validation: Home page expanded from %d to %d sections", section_count, len(sections))
 
     # ── HARD CAPS — prevent over-generation ($7+ builds) ──────
-    # Cap pages: max 3 for websites, max 5 for admin panels
-    _pages = blueprint.get("pages", [])
-    _max_pages = 5 if _is_admin else 3
-    if len(_pages) > _max_pages:
-        logger.info("Capping pages from %d to %d", len(_pages), _max_pages)
-        blueprint["pages"] = _pages[:_max_pages]
+    # NO page count cap — Gemini decides how many pages are needed.
+    # Only cap TOTAL sections to control API cost.
+    _MAX_TOTAL_SECTIONS = 25
 
-    # Cap sections per page: max 5 for home, max 3 for other pages
-    for page in blueprint.get("pages", []):
-        sections = page.get("sections", [])
-        is_home = page.get("route") == "/" or page.get("name", "").lower() in ("home", "landing", "main")
-        _max_sections = 5 if is_home else 3
-        if len(sections) > _max_sections:
-            logger.info("Capping '%s' sections from %d to %d", page.get("name"), len(sections), _max_sections)
-            page["sections"] = sections[:_max_sections]
+    # Count current total
+    _total_sections = sum(len(p.get("sections", [])) for p in blueprint.get("pages", []))
+
+    # If over the limit, trim sections from pages (keep home sections, trim others)
+    if _total_sections > _MAX_TOTAL_SECTIONS:
+        logger.info("Total sections %d exceeds cap %d — trimming", _total_sections, _MAX_TOTAL_SECTIONS)
+        # First pass: cap non-home pages to 2 sections each
+        for page in blueprint.get("pages", []):
+            is_home = page.get("route") == "/" or page.get("name", "").lower() in ("home", "landing", "main")
+            if not is_home:
+                sections = page.get("sections", [])
+                if len(sections) > 2:
+                    page["sections"] = sections[:2]
+        # Recount
+        _total_sections = sum(len(p.get("sections", [])) for p in blueprint.get("pages", []))
+        # Second pass: if still over, cap home to 5
+        if _total_sections > _MAX_TOTAL_SECTIONS:
+            for page in blueprint.get("pages", []):
+                is_home = page.get("route") == "/" or page.get("name", "").lower() in ("home", "landing", "main")
+                if is_home and len(page.get("sections", [])) > 5:
+                    page["sections"] = page["sections"][:5]
 
     # Cap shared components: max 3
     _shared = blueprint.get("sharedComponents", [])
@@ -2249,12 +2307,12 @@ def blueprint_to_file_plan(blueprint: dict, stack: str, workspace_path: str) -> 
         "action": "modify" if css_exists else "create",
         "priority": 1,
         "description": (
-            f"Apply the project theme: update :root CSS variables with the new color palette. "
+            f"Apply the project theme: update :root HSL values with the new color palette. "
             f"Project: {project_name}. Theme values: {json.dumps(theme)}. "
             f"Add Google Font import for {blueprint.get('googleFonts', ['Inter'])}. "
             f"Set the overall feel: {'dark mode' if theme.get('darkMode') else 'light mode'}."
         ),
-        "sections": ["CSS variable overrides", "Google Font import", "Base body/html styles"],
+        "sections": ["HSL color overrides", "Google Font import", "Base body/html styles"],
     })
 
     # ── 1b. Site config (direct-write — no Claude needed) ──────────
@@ -2532,7 +2590,7 @@ def blueprint_to_file_plan(blueprint: dict, stack: str, workspace_path: str) -> 
                     f"{'Uses components: ' + ', '.join(sec_components) + '. ' if sec_components else ''}"
                     f"This is a SELF-CONTAINED section component — it should render "
                     f"a complete section of the page with proper padding, responsive layout, "
-                    f"and beautiful design using CSS variables. "
+                    f"and beautiful design using Tailwind utility classes. "
                     f"A stub file exists — OVERWRITE it completely with the real implementation. "
                     f"Export as: export function {comp_name}() {{ ... }} and then export default {comp_name}. "
                     f"Use lucide-react for icons. Make it fully responsive. "
@@ -3727,9 +3785,9 @@ async def execute_project_in_batches(
                     f"'use client'\n\n"
                     f"export function {comp_name}() {{\n"
                     f"  return (\n"
-                    f"    <section style={{{{ padding: '4rem 2rem', textAlign: 'center' }}}}>\n"
-                    f"      <h2>{comp_name}</h2>\n"
-                    f"      <p>Loading content...</p>\n"
+                    f"    <section className=\"py-16 px-8 text-center\">\n"
+                    f"      <h2 className=\"text-2xl font-bold\">{comp_name}</h2>\n"
+                    f"      <p className=\"text-muted-foreground mt-2\">Loading content...</p>\n"
                     f"    </section>\n"
                     f"  )\n"
                     f"}}\n\n"
@@ -3743,9 +3801,16 @@ async def execute_project_in_batches(
     file_tree = _build_tree(workspace_path)
 
     # ══════════════════════════════════════════════════════════
-    # FILE-BY-FILE EXECUTION — one Claude call per file
+    # TWO-PHASE EXECUTION:
+    #   Phase 1: Sequential — config, CSS, layout files (priorities 1-3)
+    #   Phase 2: Parallel  — section components (priority 4+) in batches of 4
     # ══════════════════════════════════════════════════════════
-    for file_idx, file_spec in enumerate(files, 1):
+    _PARALLEL_BATCH_SIZE = 4  # Run 4 section files simultaneously
+
+    # Helper: process a single file (extracted from the loop body)
+    async def _process_single_file(file_idx, file_spec):
+        """Process one file. Returns True if file was written successfully."""
+        nonlocal total_files_created, completed_files, file_tree
         file_path = file_spec.get("path", "")
         file_action = file_spec.get("action", "create")   # "create" | "modify"
         file_desc = file_spec.get("description", "Implement this file")
@@ -3754,7 +3819,7 @@ async def execute_project_in_batches(
         file_components = file_spec.get("components", [])
 
         if not file_path:
-            continue
+            return False
 
         # ── Notify frontend ───────────────────────────────────
         try:
@@ -3800,7 +3865,7 @@ async def execute_project_in_batches(
                 file_tree = _build_tree(workspace_path)
             except Exception as e:
                 logger.warning("Failed to direct-write %s: %s", file_path, e)
-            continue  # Skip Claude call for this file
+            return True  # Skip Claude call for this file
 
         # ── Read existing file content if this is a modify ────
         existing_content = ""
@@ -4025,7 +4090,7 @@ Write the COMPLETE file using the Write tool. STOP after this ONE file.
                         f"Theme: {theme_summary[:500]}\n\n"
                         f"IMPORTANT: Only import components that ACTUALLY EXIST in the workspace.\n"
                         f"Do NOT create imports for Navbar, Footer, Header unless those exact files exist.\n"
-                        f"Use CSS variables. Use Write tool. Stop after this one file.\n"
+                        f"Use Tailwind classes for all styling. Use Write tool. Stop after this one file.\n"
                     )
             except Exception as e:
                 logger.warning("File '%s' failed (attempt %d): %s", file_path, attempt + 1, e)
@@ -4048,9 +4113,6 @@ Write the COMPLETE file using the Write tool. STOP after this ONE file.
 
         completed_files += 1
 
-        # Update file tree for next iteration (so Claude sees newly created files)
-        file_tree = _build_tree(workspace_path)
-
         # Send completion event per file
         try:
             await websocket.send_json({
@@ -4065,6 +4127,45 @@ Write the COMPLETE file using the Write tool. STOP after this ONE file.
             })
         except Exception:
             pass
+
+        return file_exists
+
+    # ── Phase 1: Sequential — config, CSS, layouts (priority 1-3) ──
+    # These files depend on each other (CSS must exist before sections use it)
+    _sequential_files = [(i+1, f) for i, f in enumerate(files) if f.get("priority", 5) <= 3]
+    _parallel_files = [(i+1, f) for i, f in enumerate(files) if f.get("priority", 5) > 3]
+
+    logger.info("Phase 1: %d sequential files, Phase 2: %d parallel files", len(_sequential_files), len(_parallel_files))
+
+    for file_idx, file_spec in _sequential_files:
+        await _process_single_file(file_idx, file_spec)
+
+    # Update file tree before parallel phase
+    file_tree = _build_tree(workspace_path)
+
+    # ── Phase 2: Parallel — section components in batches of 4 ──
+    # Section components are independent — they don't import each other
+    for batch_start in range(0, len(_parallel_files), _PARALLEL_BATCH_SIZE):
+        batch = _parallel_files[batch_start:batch_start + _PARALLEL_BATCH_SIZE]
+        batch_names = [f.get("path", "") for _, f in batch]
+        logger.info("Parallel batch: %s", batch_names)
+
+        try:
+            await websocket.send_json({
+                "type": "progress",
+                "message": f"⚡ Generating {len(batch)} files in parallel: {', '.join(os.path.basename(n) for n in batch_names)}",
+            })
+        except Exception:
+            pass
+
+        # Run batch concurrently
+        await asyncio.gather(
+            *[_process_single_file(idx, spec) for idx, spec in batch],
+            return_exceptions=True,
+        )
+
+        # Update file tree between batches
+        file_tree = _build_tree(workspace_path)
 
     # ── Final summary ─────────────────────────────────────────
     try:
@@ -4271,7 +4372,7 @@ Write the COMPLETE file using the Write tool. STOP after this ONE file.
             batch_prompt = f"""You are executing batch "{batch_name}" of a new project.
 
 {framework_block}
-## Theme (apply to ALL components via CSS variables):
+## Theme (apply via Tailwind classes like bg-primary, text-foreground):
 {theme_block}
 
 ## Specification:
@@ -4289,7 +4390,7 @@ Write the COMPLETE file using the Write tool. STOP after this ONE file.
 ## Rules:
 1. Use exact file paths specified above
 2. Follow design system from the specification
-3. Use CSS variables (var(--color-primary), var(--color-bg), etc.) — NEVER hardcoded hex
+3. Use Tailwind utility classes (bg-primary, text-foreground, bg-muted) — NEVER var(--color-*) or hardcoded hex
 4. Import from correct relative paths based on the skeleton files shown above
 5. Include loading and empty states where appropriate
 6. Use lucide-react for icons
@@ -4306,7 +4407,7 @@ STOP when done.
             batch_prompt = f"""You are executing batch "{batch_name}" of a new project.
 
 {framework_block}
-## Theme (apply to ALL components via CSS variables):
+## Theme (apply via Tailwind classes like bg-primary, text-foreground):
 {theme_block}
 
 ## Specification (summary):
@@ -4320,7 +4421,7 @@ STOP when done.
 
 ## Rules:
 1. Use exact file paths specified above
-2. Use CSS variables (var(--color-primary), etc.) — NEVER hardcoded hex
+2. Use Tailwind utility classes (bg-primary, text-foreground) — NEVER var(--color-*) or hardcoded hex
 3. Import from existing components (Layout, DataTable, Sidebar, etc.)
 4. Use lucide-react for icons. Components must be responsive.
 5. WRITE each file immediately — do NOT Read existing files.
@@ -4339,7 +4440,7 @@ STOP when done.
             "Skeleton file contents are provided in the prompt. Use them as reference.\n"
             "Create professional, production-ready code.\n"
             "Follow the design system exactly.\n"
-            "Use CSS variables for all colors.\n"
+            "Use Tailwind classes for all styling — NEVER inline style={{}}.\n"
         ) + anti_loop
 
         # Determine turns — fewer needed since no Read calls
@@ -4483,7 +4584,7 @@ def _simplified_prompt(batch_files: list, spec_snippet: str, stack: str = "") ->
             "- Use Vue Router for navigation\n"
         )
 
-    return f"""Create the following files. Use CSS variables for colors. Keep implementation focused.
+    return f"""Create the following files. Use Tailwind classes for all styling. Keep implementation focused.
 
 {framework_hint}
 Files to create:
@@ -5315,158 +5416,38 @@ async def run_pipeline(
         # new_project_mode: template repo cloned from GitHub — same full research+plan pipeline
         # else: existing user repo — explore and edit
         if validated.get("scratch_mode") or validated.get("new_project_mode"):
-            # NEW PIPELINE: Gemini Research + Plan for new projects
-            template_label = ""
-            if validated.get("new_project_mode"):
-                import re as _re
-                _tl = _re.search(r"template=([^|\n]+)", str(task_original or ""))
-                template_label = _tl.group(1).strip() if _tl else ""
+            # ══════════════════════════════════════════════════════
+            #  NEW v4 PIPELINE: Direct Claude API generation
+            #  Gemini research + 3-phase Opus generation + build fix
+            #  All handled inside generate_new_project()
+            # ══════════════════════════════════════════════════════
+            await _send_phase(4, "Researching project", "Gemini is analyzing top products in this domain…", "active")
 
-            await _send_phase(4, "Researching project", "Gemini is analyzing requirements…", "active")
-            spec = await gemini_research(
-                task,
-                workspace_path,
-                validated,
-                validated["gemini_api_key"],
-                websocket,
+            # Phases 4+5+6 are all handled inside generate_new_project()
+            await _send_phase(5, "Writing code", "Claude Opus is generating project (3-phase)…", "active")
+
+            from app.services.project_generator import generate_new_project
+
+            success = await generate_new_project(
+                description=task,
+                workspace_path=workspace_path,
+                validated=validated,
+                websocket=websocket,
+                chat_session_id=chat_session_id,
             )
-            await _send_phase(4, "Researching project", "Specification created", "done")
 
-            # Phase 4b: Create implementation plan
-            await _send_phase(4, "Creating plan", "Building file-by-file plan…", "active")
-            plan_json = await gemini_create_plan(
-                task,
-                workspace_path,
-                spec,
-                validated,
-                validated["gemini_api_key"],
-                websocket,
-            )
-            await _send_phase(4, "Creating plan", "Implementation plan ready", "done")
+            if not success:
+                await _send_phase(5, "Writing code", "Generation failed", "error")
+                return
 
-            # Mention the template so Claude builds ON TOP of it, not from scratch
-            template_note = (
-                f"\n\nIMPORTANT: The workspace is pre-seeded with the \"{template_label}\" template. "
-                "Build on top of its existing structure. Reuse existing components, "
-                "routing, and layout — do not recreate boilerplate that already exists."
-            ) if template_label else ""
+            await _send_phase(4, "Researching project", "Research complete", "done")
+            await _send_phase(5, "Writing code", "Code changes written", "done")
+            await _send_phase(6, "Verifying build", "Build verification complete", "done")
 
-            # Inject the full Gemini spec + plan into Claude's prompt.
-            # CRITICAL: Claude MUST first understand the template before writing.
-            # We build a comprehensive context block from the inlined template files
-            # so Claude doesn't need to Read them (saves tool calls + avoids confusion).
+            # Skip old Phase 4 plan, Phase 5 batched execution, and Phase 6 BuildValidator
+            # — they're all handled inside generate_new_project()
+            plan = ""  # Not needed, but referenced later
 
-            # Read template key files to show Claude what already exists
-            _template_key_files = {}
-            _template_candidates = []
-            _project_stk_lower = (validated.get("project_stack", "") or "").lower()
-            if "nextjs" in _project_stk_lower or "next" in _project_stk_lower:
-                _template_candidates = [
-                    "src/app/globals.css", "src/app/layout.js", "src/app/layout.tsx",
-                    "src/app/(marketing)/layout.js", "src/app/(marketing)/page.js",
-                    "src/config/site.js", "src/config/navigation.js",
-                    "src/components/layout/MarketingHeader.jsx", "src/components/layout/MarketingFooter.jsx",
-                    "src/components/Providers.jsx",
-                ]
-            elif "vue" in _project_stk_lower:
-                _template_candidates = [
-                    "src/App.vue", "src/main.ts",
-                    "src/assets/main.css", "src/router/index.ts",
-                    "src/components/layout/AppSidebar.vue",
-                ]
-            else:
-                _template_candidates = [
-                    "src/index.css", "src/App.jsx", "src/App.tsx", "src/main.jsx",
-                    "src/components/Layout.jsx", "src/components/Sidebar.jsx",
-                ]
-            for _tc in _template_candidates:
-                _tc_abs = os.path.join(workspace_path, _tc)
-                if os.path.isfile(_tc_abs):
-                    try:
-                        with open(_tc_abs, "r", errors="replace") as _f:
-                            _content = _f.read()
-                        if len(_content) < 10000:  # cap large files
-                            _template_key_files[_tc] = _content
-                    except Exception:
-                        pass
-
-            _template_ctx = ""
-            if _template_key_files:
-                _parts = []
-                for _path, _code in _template_key_files.items():
-                    _parts.append(f"### {_path}\n```\n{_code}\n```")
-                _template_ctx = (
-                    "\n\n## EXISTING TEMPLATE FILES\n"
-                    "These are the actual files already in your workspace. "
-                    "READ them before writing anything. Extend them — do NOT recreate them.\n\n"
-                    + "\n\n".join(_parts)
-                )
-
-            # Build the framework hint for Claude
-            _fw_hint = ""
-            if "nextjs" in _project_stk_lower or "next" in _project_stk_lower:
-                _fw_hint = (
-                    "\n\n## FRAMEWORK: Next.js 14 (App Router)\n"
-                    "- Pages: src/app/page.js, src/app/[route]/page.js, src/app/layout.js\n"
-                    "- DO NOT create src/App.jsx — this does NOT exist in Next.js\n"
-                    "- Use 'use client' for any component using hooks or event handlers\n"
-                    "- Import: Link from 'next/link', useRouter/usePathname from 'next/navigation'\n"
-                    "- The template already has Navbar, Footer, and layout.js — REUSE them\n"
-                )
-            elif "vue" in _project_stk_lower:
-                _fw_hint = (
-                    "\n\n## FRAMEWORK: Vue 3 + Vite\n"
-                    "- Entry: src/main.ts, Root: src/App.vue\n"
-                    "- Use Composition API (<script setup lang=\"ts\">)\n"
-                    "- Routing: Vue Router (useRouter, useRoute, RouterLink)\n"
-                )
-            else:
-                _fw_hint = (
-                    "\n\n## FRAMEWORK: Vite + React\n"
-                    "- Entry: src/main.jsx, Root with routes: src/App.jsx\n"
-                    "- Routing: react-router-dom (BrowserRouter, Routes, Route, Link)\n"
-                )
-
-            # Build Claude's guided prompt with MANDATORY template analysis step
-            plan = f"""## New Project Implementation{template_note}
-{_fw_hint}
-
-## MANDATORY WORKFLOW — Follow these steps in ORDER:
-
-### STEP 0 — Understand the Template (READ FIRST, do not skip):
-The workspace already contains a real GitHub template with existing components.
-Before writing ANY file, you MUST understand what already exists.
-- Look at the file tree and the template file contents shown below
-- Identify which files need to be MODIFIED vs which need to be CREATED fresh
-- NEVER recreate a file that already exists unless the plan explicitly says "modify"
-
-### STEP 1 — Apply the Theme:
-1. Read `.lucid/plan.json` for the theme block
-2. Update the CSS file (globals.css / index.css / style.css) :root block with ALL theme colors from plan.json
-3. Add Google Font import from plan.json["googleFonts"] if specified
-
-### STEP 2 — Implement Each File from the Plan:
-1. Read `.lucid/plan.json` for the complete file list
-2. Read `.lucid/spec.md` for detailed design requirements
-3. For EACH file in the plan:
-   - If action=\"modify\": Read the existing file FIRST, then edit it carefully
-   - If action=\"create\": Write it fresh, importing from existing template components
-4. NEVER use hardcoded hex colors — always use var(--color-primary), var(--color-bg), etc.
-5. Use lucide-react for all icons
-6. Every component must be responsive
-7. Follow the spec EXACTLY for colors, layout, and component behavior
-
-### STEP 3 — Final Wiring:
-1. Ensure all new pages are linked from the navigation
-2. Verify all imports resolve correctly
-{_template_ctx}
-
-### Plan Summary:
-{plan_json[:4000]}
-
-### Specification Summary:
-{spec[:3000]}
-"""
         else:
             # EXISTING PIPELINE: Explore codebase for edit-mode
             await _send_phase(4, "Exploring codebase", "Identifying relevant files…", "active")
@@ -5489,41 +5470,13 @@ Before writing ANY file, you MUST understand what already exists.
                 websocket,
             )
             if image_analysis:
-                plan = plan + "\n\n## Visual Context (from attached images)\n" + image_analysis
+                plan = (plan or "") + "\n\n## Visual Context (from attached images)\n" + image_analysis
             await _send_phase(4, "Analyzing images", f"Analyzed {len(images)} image(s)", "done")
 
-        # ── Phase 5: Execute with Claude ──────────────────
-        await _send_phase(5, "Writing code", f"Claude ({model}) is implementing the task…", "active")
+        # ── Phase 5: Execute with Claude (edit-mode only) ──
+        if not (validated.get("scratch_mode") or validated.get("new_project_mode")):
+            await _send_phase(5, "Writing code", f"Claude ({model}) is implementing the task…", "active")
 
-        if validated.get("scratch_mode") or validated.get("new_project_mode"):
-            # Batched execution for new projects (scratch or template-cloned)
-            _batch_stack = (
-                validated.get("skeleton_stack", "")
-                or validated.get("project_stack", "")
-                or ""
-            )
-            success = await execute_project_in_batches(
-                workspace_path,
-                task,
-                validated["anthropic_api_key"],
-                classification,
-                plan,
-                websocket,
-                stack=_batch_stack,
-            )
-            # If batched execution returned False due to empty plan,
-            # fall back to single-call execution
-            if not success and not os.path.exists(os.path.join(workspace_path, ".lucid", "plan.json")):
-                logger.info("Batched execution had no plan — falling back to single-call")
-                success = await execute_with_claude(
-                    task,
-                    workspace_path,
-                    validated["anthropic_api_key"],
-                    classification,
-                    plan,
-                    websocket,
-                )
-        else:
             # Existing repo: single-call execution (edit mode)
             success = await execute_with_claude(
                 task,
@@ -5534,43 +5487,40 @@ Before writing ANY file, you MUST understand what already exists.
                 websocket,
             )
 
-        if not success:
-            await _send_phase(5, "Writing code", "Code execution failed", "error")
-            return
-        await _send_phase(5, "Writing code", "Code changes written", "done")
+            if not success:
+                await _send_phase(5, "Writing code", "Code execution failed", "error")
+                return
+            await _send_phase(5, "Writing code", "Code changes written", "done")
 
-        # ── Phase 6: Verify build ─────────────────────────
-        await _send_phase(6, "Verifying build", "Running build checks…", "active")
+        # ── Phase 6: Verify build (edit-mode only) ─────────
+        if not (validated.get("scratch_mode") or validated.get("new_project_mode")):
+            await _send_phase(6, "Verifying build", "Running build checks…", "active")
 
-        # ── Pre-build: fix broken component imports ────────
-        # Claude sometimes rewrites layout.js to import 'Navbar'/'Footer'
-        # instead of the template's actual component names (e.g. MarketingHeader/MarketingFooter).
-        # This auto-fixer detects and corrects mismatched imports BEFORE the build runs.
-        try:
-            await _fix_broken_layout_imports(workspace_path, websocket)
-        except Exception as _fix_err:
-            logger.warning("Pre-build import fixer failed (non-fatal): %s", _fix_err)
+            # Pre-build: fix broken component imports
+            try:
+                await _fix_broken_layout_imports(workspace_path, websocket)
+            except Exception as _fix_err:
+                logger.warning("Pre-build import fixer failed (non-fatal): %s", _fix_err)
 
-        _build_result = {"success": True, "needs_fix": False, "attempts": 0, "errors": "", "fixed_files": [], "error_count": 0}
-        try:
-            from app.services.build_validator import BuildValidator
-            _bv = BuildValidator(
-                api_key=validated["anthropic_api_key"],
-                classification=classification,
-                websocket=websocket,
-                max_retries=3,
-            )
-            _build_result = await _bv.validate_and_fix(workspace_path)
-            logger.info(
-                "BuildValidator result: success=%s, needs_fix=%s, attempts=%d, errors=%d",
-                _build_result.get("success"), _build_result.get("needs_fix"),
-                _build_result.get("attempts", 0), _build_result.get("error_count", 0),
-            )
-        except Exception as _bv_err:
-            logger.warning("BuildValidator failed (non-fatal, falling back): %s", _bv_err)
-            # Fallback to old verify_build
-            await verify_build(workspace_path, validated["anthropic_api_key"], classification, websocket)
-        await _send_phase(6, "Verifying build", "Build verification complete", "done")
+            _build_result = {"success": True, "needs_fix": False, "attempts": 0, "errors": "", "fixed_files": [], "error_count": 0}
+            try:
+                from app.services.build_validator import BuildValidator
+                _bv = BuildValidator(
+                    api_key=validated["anthropic_api_key"],
+                    classification=classification,
+                    websocket=websocket,
+                    max_retries=3,
+                )
+                _build_result = await _bv.validate_and_fix(workspace_path)
+                logger.info(
+                    "BuildValidator result: success=%s, needs_fix=%s, attempts=%d, errors=%d",
+                    _build_result.get("success"), _build_result.get("needs_fix"),
+                    _build_result.get("attempts", 0), _build_result.get("error_count", 0),
+                )
+            except Exception as _bv_err:
+                logger.warning("BuildValidator failed (non-fatal, falling back): %s", _bv_err)
+                await verify_build(workspace_path, validated["anthropic_api_key"], classification, websocket)
+            await _send_phase(6, "Verifying build", "Build verification complete", "done")
 
         # ── Phase 6.5: Verify changes ────────────────────
         changed = await verify_changes(workspace_path, websocket)

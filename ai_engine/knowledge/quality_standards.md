@@ -19,11 +19,13 @@ Every file you write MUST pass this checklist:
 - [ ] Error state handled (try/catch + error message)
 - [ ] Responsive design (works on mobile 375px → desktop 1440px)
 
-### 3. CSS Variables Only
-- [ ] NEVER use hardcoded hex colors
-- [ ] All colors reference var(--color-*)
-- [ ] All border-radius reference var(--radius-*)
-- [ ] Font families reference var(--font-family) or var(--font-heading)
+### 3. Tailwind + shadcn/ui Classes Only
+- [ ] NEVER use hardcoded hex colors (#fff, #000, #333)
+- [ ] NEVER use inline style={{}} for colors, spacing, or layout
+- [ ] NEVER use var(--color-primary) or var(--color-bg) — those don't exist
+- [ ] Use Tailwind semantic classes: bg-primary, text-foreground, bg-muted, bg-card, border-border
+- [ ] Use Tailwind spacing: p-4, px-6, py-3, gap-4, space-y-4
+- [ ] Use Tailwind typography: text-sm, text-lg, font-bold, tracking-tight
 
 ### 4. Accessibility
 - [ ] Interactive elements have `cursor: pointer`
@@ -33,54 +35,45 @@ Every file you write MUST pass this checklist:
 - [ ] Focus states visible
 
 ### 5. Performance
-- [ ] No inline style objects recreated on every render
+- [ ] No inline style={{}} objects — use className with Tailwind
 - [ ] Event handlers stable (useCallback if passed as props)
 - [ ] Lists have proper `key` props
 - [ ] Images use lazy loading where appropriate
 
 ---
 
-## CSS Variable System
+## Tailwind Design Token System (shadcn/ui)
 
-Every project MUST define these variables in its CSS file:
+Every project uses HSL-based CSS variables consumed by Tailwind:
 
 ```css
 :root {
-  /* Primary palette */
-  --color-primary: #...;
-  --color-primary-light: #...;
-  --color-primary-dark: #...;
-  --color-primary-50: #...;  /* very subtle tint for backgrounds */
-
-  /* Accent (complementary to primary) */
-  --color-accent: #...;
-
-  /* Backgrounds */
-  --color-bg: #...;           /* main page background */
-  --color-bg-secondary: #...; /* card/section alternative bg */
-  --color-bg-tertiary: #...;  /* hover states, input backgrounds */
-  --color-surface: #...;      /* cards, modals, dropdowns */
-
-  /* Text */
-  --color-text: #...;            /* primary text */
-  --color-text-secondary: #...;  /* body text, paragraphs */
-  --color-text-muted: #...;      /* labels, captions, placeholders */
-
-  /* Border */
-  --color-border: #...;
-
-  /* Typography */
-  --font-family: 'Inter', sans-serif;
-  --font-heading: 'Inter', sans-serif;
-
-  /* Radius */
-  --radius-sm: 0.25rem;
-  --radius-md: 0.375rem;
-  --radius-lg: 0.5rem;
-  --radius-xl: 0.75rem;
-  --radius-full: 9999px;
+  /* These are HSL values (no hsl() wrapper) — Tailwind adds hsl() automatically */
+  --background: 0 0% 100%;
+  --foreground: 222.2 84% 4.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 222.2 84% 4.9%;
+  --primary: 221.2 83.2% 53.3%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 210 40% 96.1%;
+  --secondary-foreground: 222.2 47.4% 11.2%;
+  --muted: 210 40% 96.1%;
+  --muted-foreground: 215.4 16.3% 46.9%;
+  --accent: 210 40% 96.1%;
+  --accent-foreground: 222.2 47.4% 11.2%;
+  --destructive: 0 84.2% 60.2%;
+  --border: 214.3 31.8% 91.4%;
+  --ring: 221.2 83.2% 53.3%;
+  --radius: 0.5rem;
 }
 ```
+
+Use these via Tailwind classes:
+- `bg-primary` / `text-primary-foreground` — for primary buttons
+- `bg-background` / `text-foreground` — for page background
+- `bg-card` / `border-border` — for cards
+- `bg-muted` / `text-muted-foreground` — for subtle backgrounds and secondary text
+- `bg-destructive` — for error/delete actions
 
 ---
 
@@ -109,14 +102,16 @@ Every project MUST define these variables in its CSS file:
 
 ### CSS Anti-Patterns
 ```
-❌ style={{ color: '#6366f1' }}                   // hardcoded hex
-❌ className="text-blue-500"                      // Tailwind (unless configured)
+❌ style={{ color: '#6366f1' }}                   // hardcoded hex inline
+❌ style={{ color: 'var(--color-primary)' }}       // var(--color-*) DON'T EXIST
 ❌ var(--color-primary: #6366f1)                   // wrong CSS syntax
+❌ className="stat-card" with custom CSS            // use Tailwind utilities
 ```
 
 ```
-✅ style={{ color: 'var(--color-primary)' }}      // CSS variable
-✅ className="hero-title"                          // semantic class name
+✅ className="bg-primary text-primary-foreground"  // Tailwind semantic
+✅ className="text-foreground bg-card border"      // Tailwind + shadcn tokens
+✅ className="hover:bg-muted transition-colors"    // Tailwind hover state
 ```
 
 ### Component Anti-Patterns
@@ -125,7 +120,7 @@ Every project MUST define these variables in its CSS file:
 ❌ No loading state                                // always have skeleton/spinner
 ❌ No empty state                                  // always handle zero items
 ❌ console.log left in production code             // remove all logs
-❌ Inline styles for complex layouts               // use CSS file or CSS-in-JS
+❌ Inline style={{}} for layouts/colors             // use className with Tailwind
 ```
 
 ---

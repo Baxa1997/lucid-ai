@@ -295,18 +295,18 @@ The UI must be STUNNING — users pay for this product. Quality is everything.
 
 ### Visual Excellence
 - Every component must feel PREMIUM — not a tutorial project
-- Use subtle gradients, glassmorphism, and depth (box-shadows at multiple levels)
-- Micro-animations on EVERY interactive element (transition: all 0.2s ease)
-- Cards hover: translateY(-4px) + enhanced shadow
-- Buttons: gradient backgrounds + scale(1.02) on hover
-- Generous whitespace — sections breathe, content is scannable
-- Typography hierarchy: clamp-based fluid sizing for h1-h6
+- Use Tailwind classes for shadows (shadow-md, shadow-lg, shadow-xl), rounded corners (rounded-xl, rounded-2xl)
+- Smooth transitions: transition-all duration-300, hover:scale-105, hover:-translate-y-1
+- Cards hover: hover:shadow-xl hover:-translate-y-1 transition-all duration-300
+- Buttons: bg-primary hover:bg-primary/90 rounded-full px-6 py-3
+- Generous whitespace — py-16 py-20 py-24 for sections, p-6 p-8 for cards
+- Typography: text-4xl md:text-5xl font-bold tracking-tight for headings
 
-### Color Discipline
-- ONLY CSS variables: var(--color-primary), var(--color-bg), var(--color-text), etc.
-- NEVER hardcoded hex colors — not even in inline styles
-- Gradient buttons: linear-gradient(135deg, var(--color-primary), var(--color-primary-dark))
-- Subtle tinted backgrounds: var(--color-primary-50) for feature callouts
+### Color Discipline (Tailwind + shadcn/ui)
+- Use Tailwind semantic classes: bg-primary, text-foreground, bg-muted, bg-card, etc.
+- NEVER use var(--color-primary) or var(--color-bg) — those DON'T EXIST
+- NEVER use inline style={{}} for colors — always className with Tailwind
+- NEVER use hardcoded hex (#fff, #000, #333) — use Tailwind semantic colors
 
 ### Content Quality
 - Write REAL, compelling content — headlines that sell, descriptions that inform
@@ -316,17 +316,18 @@ The UI must be STUNNING — users pay for this product. Quality is everything.
 - NO "Lorem ipsum", NO "Sample text", NO placeholder content
 - Numbers and stats should be realistic: "$2.4M revenue", "10,000+ users", "99.9% uptime"
 
-### Layout & Spacing
-- Container: max-width 1200px, auto margins, responsive padding clamp(1rem, 3vw, 2rem)
-- Section padding: clamp(3rem, 8vw, 6rem) vertically
-- Card grids: CSS Grid with repeat(auto-fit, minmax(300px, 1fr)), gap: 1.5rem
-- Mobile: single column. Tablet: 2 columns. Desktop: 3-4 columns
+### Layout & Spacing (Tailwind)
+- Container: max-w-7xl mx-auto px-4 sm:px-6 lg:px-8
+- Section padding: py-16 md:py-20 lg:py-24
+- Card grids: grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 gap-8
+- Spacing: space-y-4 space-y-6 for vertical, gap-4 gap-6 gap-8 for grids
 
-### Responsive (mobile-first, all breakpoints)
-- 320px: single column, compact spacing
-- 768px: two columns, medium spacing
-- 1024px: full layout with sidebar (admin) or 3-column grids
-- 1280px: comfortable max-width with generous whitespace
+### Responsive (Tailwind mobile-first breakpoints)
+- Default: mobile (single column, compact)
+- sm: 640px+ (minor adjustments)
+- md: 768px+ (two columns, medium spacing)
+- lg: 1024px+ (full layout, 3-column grids)
+- xl: 1280px+ (max-width containers)
 
 ## WORKSPACE RULES
 
@@ -341,14 +342,14 @@ The UI must be STUNNING — users pay for this product. Quality is everything.
 1. Named export AND default export: `export function Name() {{ }} export default Name`
 2. Loading state (skeleton shimmer or spinner)
 3. Empty state (illustration + message + CTA)
-4. CSS variables only — zero hardcoded colors
-5. Responsive — test mentally at 320px, 768px, 1024px, 1280px
+4. Tailwind classes only — never inline style={{}}, never hardcoded hex
+5. Responsive — sm:, md:, lg:, xl: Tailwind breakpoints
 
 ### After Every File
 Ask yourself: "Would npm run build pass right now?"
 - Are all imports pointing to existing files?
 - Did I use 'use client' for components with hooks? (Next.js only)
-- Are all CSS variables defined in the globals file?
+- Am I using className with Tailwind, not inline style={{}}?
 
 """
 
