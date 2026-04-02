@@ -463,13 +463,13 @@ async def call_claude_for_json(
         "system": system_prompt,
         "messages": [{"role": "user", "content": user_prompt}],
         "tools": [write_files_tool],
-        "tool_choice": {"type": "tool", "name": "write_project_files"},
+        "tool_choice": {"type": "auto"},
     }
 
     async def _make_request(use_model: str) -> Optional[dict]:
         payload["model"] = use_model
         try:
-            async with httpx.AsyncClient(timeout=300.0) as client:
+            async with httpx.AsyncClient(timeout=600.0) as client:
                 response = await client.post(
                     CLAUDE_API_URL,
                     headers=headers,
@@ -613,13 +613,15 @@ async def gemini_deep_research(
     Analyzes 3-5 real products in the user's domain and extracts a
     CODE-READY BLUEPRINT — not a report. Returns the raw text blueprint .
     """
-    import google.generativeai as genai
-
     await _ws_send(websocket, "progress", "🔬 Researching top products in this domain...")
 
-    if app_type in ("admin_panel", "ecommerce", "saas_app", "analytics",
-                     "crm", "erp", "logistics", "healthcare", "finance",
-                     "education", "dashboard"):
+    CRUD_TYPES = {
+        "admin_panel", "ecommerce", "saas_app", "analytics",
+        "education", "medical", "fitness", "booking",
+        "social", "food_restaurant", "travel", "real_estate",
+    }
+    
+    if app_type in CRUD_TYPES:
         research_prompt = f"""
 You are a SENIOR UI/UX ARCHITECT. Your job: search the internet, study the TOP 3-5 real products 
 similar to "{description}", then output a CODE-READY BLUEPRINT for a code generator.
@@ -943,22 +945,46 @@ Do NOT invent values or use generic defaults.
 Write original copy inspired by TONE and STYLE of the best sites.
 """
 
-    # Call Gemini with internet search enabled
-    genai.configure(api_key=gemini_key)
-
-    model = genai.GenerativeModel("gemini-2.5-flash")
-    response = await asyncio.to_thread(
-        model.generate_content,
-        research_prompt,
-        generation_config=genai.GenerationConfig(
-            temperature=0.7,
-            max_output_tokens=8000,
-        ),
-        tools="google_search",
+    # Call Gemini via direct REST API (deprecated SDK removed)
+    import httpx
+    
+    await _ws_send(websocket, "progress", "🔬 Calling Gemini 2.5 Flash with search...")
+    
+    gemini_url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"gemini-2.5-flash:generateContent?key={gemini_key}"
     )
-
+    
+    gemini_payload = {
+        "contents": [{"parts": [{"text": research_prompt}]}],
+        "generationConfig": {
+            "temperature": 0.7,
+            "maxOutputTokens": 8000,
+        },
+        "tools": [{"google_search": {}}],
+    }
+    
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.post(gemini_url, json=gemini_payload)
+    
+    if response.status_code != 200:
+        logger.error("Gemini research API error %d: %s", response.status_code, response.text[:300])
+        raise RuntimeError(f"Gemini research API error: {response.status_code}")
+    
+    data = response.json()
+    # Concatenate all text parts (grounding can return multiple)
+    parts = (
+        data.get("candidates", [{}])[0]
+        .get("content", {})
+        .get("parts", [])
+    )
+    text = "\n".join(p.get("text", "") for p in parts if p.get("text"))
+    
+    if not text:
+        raise RuntimeError("Gemini returned empty research text")
+    
     await _ws_send(websocket, "progress", "✅ Research complete — building project blueprint...")
-    return response.text
+    return text
 
 
 # ╔══════════════════════════════════════════════════════════════╗
