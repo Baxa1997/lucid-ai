@@ -410,27 +410,27 @@ function ConversationPageInner({ params }) {
             console.log('[Chat] fallback messages:', msgs.length, 'items');
           }
           if (!cancelled) setSavedMessages(msgs);
+        }
 
-          // Load repo info from chat_sessions
-          try {
-            const sb = getSupabaseBrowserClient();
-            const { data: sessions } = await sb
-              .from('chat_sessions')
-              .select('platform_repo_url, user_repo_url, user_repo_provider, vercel_url')
-              .eq('project_id', conversationId)
-              .order('created_at', { ascending: false })
-              .limit(1);
-            if (!cancelled && sessions?.[0]) {
-              setRepoInfo({
-                platformRepoUrl: sessions[0].platform_repo_url || null,
-                userRepoUrl: sessions[0].user_repo_url || null,
-                userRepoProvider: sessions[0].user_repo_provider || null,
-                vercelUrl: sessions[0].vercel_url || null,
-              });
-            }
-          } catch (e) {
-            console.warn('[Workspace] Could not load repo info:', e);
+        // Load repo info from chat_sessions — always try, even without a conversation
+        try {
+          const sb = getSupabaseBrowserClient();
+          const { data: sessions } = await sb
+            .from('chat_sessions')
+            .select('platform_repo_url, user_repo_url, user_repo_provider, vercel_url')
+            .eq('project_id', conversationId)
+            .order('created_at', { ascending: false })
+            .limit(1);
+          if (!cancelled && sessions?.[0]) {
+            setRepoInfo({
+              platformRepoUrl: sessions[0].platform_repo_url || null,
+              userRepoUrl: sessions[0].user_repo_url || null,
+              userRepoProvider: sessions[0].user_repo_provider || null,
+              vercelUrl: sessions[0].vercel_url || null,
+            });
           }
+        } catch (e) {
+          console.warn('[Workspace] Could not load repo info:', e);
         }
       } catch (err) {
         console.error('Failed to load conversation:', err);

@@ -133,12 +133,28 @@ export default function EngineerDashboardPage() {
 
   // Launch from a platform-generated project ("My Projects")
   const handleLaunchPlatformRepo = async (platformRepo) => {
+    if (!platformRepo.projectId) return;
     setIsLaunching(true);
 
-    // Navigate directly to the existing conversation
-    if (platformRepo.projectId) {
-      router.push(`/dashboard/engineer/workspace/${platformRepo.projectId}`);
+    // Ensure a conversation record exists for this platform project
+    // (projects created via the wizard may not have one yet)
+    try {
+      const existing = await getConversation(platformRepo.projectId);
+      if (!existing) {
+        await createConversation({
+          repoName: platformRepo.repoName || '',
+          repoProvider: 'github',
+          repoUrl: platformRepo.repoUrl || '',
+          branch: 'main',
+          title: platformRepo.projectName || platformRepo.repoName || 'Project',
+        });
+      }
+    } catch (e) {
+      // Non-critical — workspace will still work via chat_sessions
+      console.warn('Could not ensure conversation record:', e);
     }
+
+    router.push(`/dashboard/engineer/workspace/${platformRepo.projectId}`);
   };
 
   const handleNewConversation = () => {
@@ -532,49 +548,44 @@ export default function EngineerDashboardPage() {
                     key={pr.projectId}
                     className="group relative rounded-xl bg-white dark:bg-[#161b22] border border-slate-200/80 dark:border-slate-700/40 overflow-hidden hover:border-slate-300 dark:hover:border-slate-600 hover:shadow-xl dark:hover:shadow-2xl dark:hover:shadow-black/30 transition-all duration-300 cursor-pointer"
                   >
+                    {/* Thumbnail — gradient + initials */}
                     <button
                       onClick={() => handleLaunchPlatformRepo(pr)}
                       disabled={isLaunching}
                       className="block w-full text-left"
                     >
                       <div className="aspect-[16/9] relative overflow-hidden">
-                        {pr.deployUrl ? (
-                          <>
-                            <div className="absolute inset-0 overflow-hidden pointer-events-none">
-                              <iframe
-                                src={pr.deployUrl}
-                                title={pr.projectName}
-                                className="w-[200%] h-[200%] origin-top-left border-0"
-                                style={{ transform: 'scale(0.5)' }}
-                                loading="lazy"
-                                sandbox="allow-scripts allow-same-origin"
-                                tabIndex={-1}
-                              />
-                            </div>
-                            <div className="absolute inset-0 bg-transparent group-hover:bg-black/5 dark:group-hover:bg-black/10 transition-colors duration-200 z-10" />
-                          </>
-                        ) : (
-                          <div className={`absolute inset-0 bg-gradient-to-br ${gradient} flex items-center justify-center`}>
-                            <div className="absolute inset-0 opacity-[0.07]" style={{
-                              backgroundImage: 'radial-gradient(circle at 20% 50%, rgba(255,255,255,0.3) 0%, transparent 50%), radial-gradient(circle at 80% 20%, rgba(255,255,255,0.2) 0%, transparent 40%), radial-gradient(circle at 60% 80%, rgba(255,255,255,0.15) 0%, transparent 45%)',
-                            }} />
-                            <div className="absolute inset-0 opacity-[0.03]" style={{
-                              backgroundImage: 'linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px)',
-                              backgroundSize: '32px 32px',
-                            }} />
-                            <span className={`text-4xl font-black tracking-wider ${accent} select-none drop-shadow-lg`}>
-                              {initials}
-                            </span>
-                            <div className="absolute inset-0 bg-white/0 group-hover:bg-white/[0.03] transition-colors duration-300" />
-                          </div>
-                        )}
+                        <div className={`absolute inset-0 bg-gradient-to-br ${gradient} flex items-center justify-center`}>
+                          {/* Decorative light spots */}
+                          <div className="absolute inset-0 opacity-[0.07]" style={{
+                            backgroundImage: 'radial-gradient(circle at 20% 50%, rgba(255,255,255,0.3) 0%, transparent 50%), radial-gradient(circle at 80% 20%, rgba(255,255,255,0.2) 0%, transparent 40%), radial-gradient(circle at 60% 80%, rgba(255,255,255,0.15) 0%, transparent 45%)',
+                          }} />
+                          {/* Grid pattern */}
+                          <div className="absolute inset-0 opacity-[0.03]" style={{
+                            backgroundImage: 'linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px)',
+                            backgroundSize: '32px 32px',
+                          }} />
+                          {/* Initials */}
+                          <span className={`text-4xl font-black tracking-wider ${accent} select-none drop-shadow-lg`}>
+                            {initials}
+                          </span>
+                          {/* Hover overlay */}
+                          <div className="absolute inset-0 bg-white/0 group-hover:bg-white/[0.03] transition-colors duration-300" />
+                        </div>
                       </div>
+                    </button>
 
-                      <div className="px-3.5 py-3 flex items-center gap-3">
+                    {/* Card info + Preview */}
+                    <div className="px-3.5 py-3 flex items-center gap-3">
+                      <button
+                        onClick={() => handleLaunchPlatformRepo(pr)}
+                        disabled={isLaunching}
+                        className="flex items-center gap-2.5 min-w-0 flex-1"
+                      >
                         <div className="w-7 h-7 rounded-full bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 flex items-center justify-center shrink-0">
                           <Sparkles className="w-3.5 h-3.5 text-violet-500" />
                         </div>
-                        <div className="min-w-0 flex-1">
+                        <div className="min-w-0 flex-1 text-left">
                           <p className="text-[13px] font-bold text-slate-800 dark:text-slate-100 truncate leading-tight">
                             {pr.projectName}
                           </p>
@@ -582,21 +593,21 @@ export default function EngineerDashboardPage() {
                             {pr.repoName}
                           </p>
                         </div>
-                        {pr.deployUrl && (
-                          <a
-                            href={pr.deployUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                            className="shrink-0 flex items-center gap-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 transition-colors"
-                          >
-                            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                            Preview
-                            <ExternalLink className="w-3 h-3 opacity-70" />
-                          </a>
-                        )}
-                      </div>
-                    </button>
+                      </button>
+                      {pr.deployUrl && (
+                        <a
+                          href={pr.deployUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-[11px] font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-500/20 transition-colors"
+                        >
+                          <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                          Preview
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      )}
+                    </div>
                   </div>
                 );
               })}
