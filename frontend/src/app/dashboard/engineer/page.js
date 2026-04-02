@@ -468,7 +468,7 @@ export default function EngineerDashboardPage() {
                 Your AI-generated apps and websites
               </p>
             </div>
-            {platformRepos.length > 4 && (
+            {platformRepos.length > 6 && (
               <button className="text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 px-4 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-white dark:hover:bg-slate-800 transition-all">
                 View all
               </button>
@@ -476,11 +476,11 @@ export default function EngineerDashboardPage() {
           </div>
 
           {platformLoading ? (
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              {[...Array(4)].map((_, i) => (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+              {[...Array(3)].map((_, i) => (
                 <div key={i} className="rounded-2xl bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/50 overflow-hidden animate-pulse">
                   <div className="aspect-[16/10] bg-slate-200 dark:bg-slate-700/50" />
-                  <div className="p-3.5 space-y-2">
+                  <div className="p-4 space-y-2.5">
                     <div className="h-4 bg-slate-200 dark:bg-slate-700/50 rounded w-3/4" />
                     <div className="h-3 bg-slate-200 dark:bg-slate-700/50 rounded w-1/2" />
                   </div>
@@ -502,13 +502,13 @@ export default function EngineerDashboardPage() {
               </button>
             </div>
           ) : (
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              {platformRepos.slice(0, 8).map((pr) => (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+              {platformRepos.slice(0, 9).map((pr) => (
                 <div
                   key={pr.projectId}
-                  className="group relative rounded-2xl bg-white dark:bg-[#161b22] border border-slate-200 dark:border-slate-700/60 overflow-hidden hover:border-violet-300 dark:hover:border-violet-500/40 hover:shadow-lg hover:shadow-violet-500/5 transition-all duration-200 cursor-pointer"
+                  className="group relative rounded-2xl bg-white dark:bg-[#161b22] border border-slate-200 dark:border-slate-700/60 overflow-hidden hover:border-violet-300 dark:hover:border-violet-500/40 hover:shadow-xl hover:shadow-violet-500/5 transition-all duration-200 cursor-pointer"
                 >
-                  {/* Thumbnail / Screenshot */}
+                  {/* Thumbnail / Screenshot Preview */}
                   <button
                     onClick={() => handleLaunchPlatformRepo(pr)}
                     disabled={isLaunching}
@@ -517,41 +517,45 @@ export default function EngineerDashboardPage() {
                     <div className="aspect-[16/10] relative overflow-hidden bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-800 dark:to-slate-900">
                       {pr.deployUrl ? (
                         <>
-                          <img
-                            src={`https://image.thum.io/get/width/600/crop/375/noanimate/${pr.deployUrl}`}
-                            alt={pr.projectName}
-                            className="w-full h-full object-cover object-top transition-transform duration-300 group-hover:scale-105"
-                            loading="lazy"
-                            onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex'; }}
-                          />
-                          {/* Fallback gradient shown on image error */}
-                          <div className="absolute inset-0 bg-gradient-to-br from-violet-500/20 via-blue-500/10 to-emerald-500/20 dark:from-violet-500/10 dark:via-blue-500/5 dark:to-emerald-500/10 items-center justify-center hidden">
-                            <Sparkles className="w-8 h-8 text-violet-400/60" />
+                          {/* Scaled-down iframe preview of the live site */}
+                          <div className="absolute inset-0 overflow-hidden pointer-events-none">
+                            <iframe
+                              src={pr.deployUrl}
+                              title={pr.projectName}
+                              className="w-[200%] h-[200%] origin-top-left border-0"
+                              style={{ transform: 'scale(0.5)' }}
+                              loading="lazy"
+                              sandbox="allow-scripts allow-same-origin"
+                              tabIndex={-1}
+                            />
                           </div>
+                          {/* Clickable overlay so iframe doesn't steal clicks */}
+                          <div className="absolute inset-0 bg-transparent group-hover:bg-black/5 dark:group-hover:bg-black/15 transition-colors duration-200 z-10" />
                         </>
                       ) : (
-                        <div className="absolute inset-0 bg-gradient-to-br from-violet-500/20 via-blue-500/10 to-emerald-500/20 dark:from-violet-500/10 dark:via-blue-500/5 dark:to-emerald-500/10 flex items-center justify-center">
-                          <div className="w-12 h-12 rounded-2xl bg-white/60 dark:bg-slate-800/60 backdrop-blur-sm flex items-center justify-center border border-white/30 dark:border-slate-700/30">
-                            <Sparkles className="w-5 h-5 text-violet-500/70" />
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <div className="relative">
+                            {/* Decorative background circles */}
+                            <div className="absolute -inset-8 bg-gradient-to-br from-violet-200/40 via-blue-200/20 to-emerald-200/30 dark:from-violet-500/10 dark:via-blue-500/5 dark:to-emerald-500/8 rounded-full blur-2xl" />
+                            <div className="relative w-14 h-14 rounded-2xl bg-white/80 dark:bg-slate-800/80 backdrop-blur-sm flex items-center justify-center border border-white/50 dark:border-slate-700/50 shadow-lg shadow-violet-500/10">
+                              <Sparkles className="w-6 h-6 text-violet-500/80" />
+                            </div>
                           </div>
                         </div>
                       )}
-
-                      {/* Hover overlay */}
-                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 dark:group-hover:bg-black/20 transition-colors duration-200" />
                     </div>
 
                     {/* Card info */}
-                    <div className="p-3.5">
-                      <div className="flex items-center gap-2.5 mb-1">
-                        <div className="w-6 h-6 rounded-lg bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 flex items-center justify-center shrink-0">
-                          <Sparkles className="w-3 h-3 text-violet-500" />
+                    <div className="p-4">
+                      <div className="flex items-center gap-2.5 mb-1.5">
+                        <div className="w-7 h-7 rounded-lg bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 flex items-center justify-center shrink-0">
+                          <Sparkles className="w-3.5 h-3.5 text-violet-500" />
                         </div>
-                        <span className="text-sm font-bold text-slate-800 dark:text-slate-100 truncate">
+                        <span className="text-[15px] font-bold text-slate-800 dark:text-slate-100 truncate">
                           {pr.projectName}
                         </span>
                       </div>
-                      <p className="text-xs text-slate-400 dark:text-slate-500 truncate pl-8.5 ml-[34px]">
+                      <p className="text-xs text-slate-400 dark:text-slate-500 truncate ml-[38px]">
                         {pr.repoName}
                       </p>
                     </div>
@@ -559,10 +563,10 @@ export default function EngineerDashboardPage() {
 
                   {/* Deploy status + Preview button */}
                   {pr.deployUrl && (
-                    <div className="px-3.5 pb-3 flex items-center justify-between -mt-1">
+                    <div className="px-4 pb-3.5 flex items-center justify-between -mt-1">
                       <div className="flex items-center gap-1.5">
-                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                        <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">
+                        <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">
                           Live
                         </span>
                       </div>
@@ -571,10 +575,10 @@ export default function EngineerDashboardPage() {
                         target="_blank"
                         rel="noopener noreferrer"
                         onClick={(e) => e.stopPropagation()}
-                        className="flex items-center gap-1 text-[10px] font-semibold text-slate-400 dark:text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 transition-colors group/link"
+                        className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-400 dark:text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 transition-colors group/link"
                       >
                         Preview
-                        <ExternalLink className="w-3 h-3 opacity-60 group-hover/link:opacity-100 transition-opacity" />
+                        <ExternalLink className="w-3.5 h-3.5 opacity-60 group-hover/link:opacity-100 transition-opacity" />
                       </a>
                     </div>
                   )}
