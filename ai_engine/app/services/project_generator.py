@@ -1404,8 +1404,8 @@ async def generate_new_project(
     MAX_TOKENS = MAX_TOKENS_PER_CALL
 
     # ── Step 1: Classify app type ──
-    from knowledge.loader import classify_project_type
-    app_type = classify_project_type(description)
+    from knowledge.loader import classify_project_type_ai
+    app_type = await classify_project_type_ai(description, gemini_key)
     
     await _ws_send(websocket, "progress", f"📋 App type: {app_type.replace('_', ' ').title()}")
     

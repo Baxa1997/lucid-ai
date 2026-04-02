@@ -38,18 +38,14 @@ def _read_file(filepath: str, max_chars: int = 8000) -> str:
 
 
 def classify_project_type(task: str) -> str:
-    """Classify the project type from the user's task description.
-
-    Returns one of:
-      'admin_panel', 'ecommerce', 'blog', 'saas_app', 'social',
-      'booking', 'analytics', 'documentation', 'portfolio',
-      'entertainment', 'food_restaurant', 'medical', 'education',
-      'fitness', 'travel', 'real_estate', 'landing_page'
+    """Fast static classifier — keyword-based fallback.
+    
+    Use `classify_project_type_ai()` for dynamic AI classification.
+    This static version is the instant fallback if Gemini is unavailable.
     """
     task_lower = (task or "").lower()
 
     # Admin/Dashboard/Management keywords — FIRST priority
-    # Catches: TMS, CRM, ERP, logistics, finance, fleet, warehouse, HR
     admin_kw = [
         "admin", "dashboard", "panel", "management system", "management",
         "cms", "backoffice", "back office",
@@ -64,105 +60,161 @@ def classify_project_type(task: str) -> str:
     if any(kw in task_lower for kw in admin_kw):
         return "admin_panel"
 
-    # Entertainment / Movies / Streaming
     entertainment_kw = ["movie", "film", "cinema", "streaming", "tv show", "series",
                         "netflix", "video", "entertainment", "theater", "anime",
                         "music", "podcast", "radio"]
     if any(kw in task_lower for kw in entertainment_kw):
         return "entertainment"
 
-    # Food / Restaurant
     food_kw = ["restaurant", "food", "recipe", "menu", "cooking", "chef",
                "cafe", "bakery", "catering", "dinner", "kitchen", "meal"]
     if any(kw in task_lower for kw in food_kw):
         return "food_restaurant"
 
-    # Medical / Health
     medical_kw = ["medical", "health", "hospital", "clinic", "doctor", "patient",
                   "pharmacy", "dental", "wellness", "therapy",
                   "healthcare", "telemedicine"]
     if any(kw in task_lower for kw in medical_kw):
         return "medical"
 
-    # Education
     education_kw = ["school", "education", "university", "course", "learning",
                     "student", "teacher", "academy", "training", "lms",
                     "tutorial", "e-learning", "classroom"]
     if any(kw in task_lower for kw in education_kw):
         return "education"
 
-    # E-commerce keywords
     ecom_kw = ["ecommerce", "e-commerce", "shop", "store", "product", "cart",
                "marketplace", "catalog", "checkout", "shopping"]
     if any(kw in task_lower for kw in ecom_kw):
         return "ecommerce"
 
-    # Blog/Content keywords
     blog_kw = ["blog", "articles", "posts", "news", "magazine", "content",
                "editorial", "publication"]
     if any(kw in task_lower for kw in blog_kw):
         return "blog"
 
-    # SaaS application
     saas_kw = ["saas", "application", "tool", "platform", "software", "service",
                "app builder", "automation", "workflow"]
     if any(kw in task_lower for kw in saas_kw):
         return "saas_app"
 
-    # Travel / Tourism — must be before real_estate since "hotel" could overlap
     travel_kw = ["travel", "tourism", "hotel", "flight", "trip", "vacation",
                  "destination", "tour", "airbnb", "hostel"]
     if any(kw in task_lower for kw in travel_kw):
         return "travel"
 
-    # Real Estate — use word-boundary check for "house" to avoid "warehouse" false match
     import re
     real_estate_kw = ["real estate", "property", "apartment", "rental",
                       "listing", "agent", "broker", "mortgage"]
     if any(kw in task_lower for kw in real_estate_kw):
         return "real_estate"
-    # Special check for "house" — must not be inside "warehouse"
     if re.search(r'\bhouse\b', task_lower) and "warehouse" not in task_lower:
         return "real_estate"
 
-    # Social/Community
     social_kw = ["social", "community", "forum", "feed", "chat", "messaging",
                  "network", "social media"]
     if any(kw in task_lower for kw in social_kw):
         return "social"
 
-    # Booking/Reservation
     booking_kw = ["booking", "reservation", "appointment", "scheduling",
                   "calendar", "event"]
     if any(kw in task_lower for kw in booking_kw):
         return "booking"
 
-    # Fitness / Gym
     fitness_kw = ["fitness", "gym", "workout", "exercise", "yoga", "crossfit",
                   "personal trainer", "body building"]
     if any(kw in task_lower for kw in fitness_kw):
         return "fitness"
 
-    # Analytics dashboard
     analytics_kw = ["analytics", "metrics", "reports", "monitoring", "insights",
                     "charts", "visualization", "data viz"]
     if any(kw in task_lower for kw in analytics_kw):
         return "analytics"
 
-    # Documentation
     docs_kw = ["docs", "documentation", "wiki", "knowledge base", "help center",
                "guide", "manual"]
     if any(kw in task_lower for kw in docs_kw):
         return "documentation"
 
-    # Portfolio/Creative
     portfolio_kw = ["portfolio", "showcase", "gallery", "photographer",
                     "designer", "freelance", "creative"]
     if any(kw in task_lower for kw in portfolio_kw):
         return "portfolio"
 
-    # Default: landing page / marketing website
     return "landing_page"
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  AI-Powered Classifier (Gemini Flash — 2 seconds)           ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+VALID_APP_TYPES = [
+    "admin_panel", "ecommerce", "blog", "saas_app", "social",
+    "booking", "analytics", "documentation", "portfolio",
+    "entertainment", "food_restaurant", "medical", "education",
+    "fitness", "travel", "real_estate", "landing_page",
+]
+
+
+async def classify_project_type_ai(task: str, gemini_api_key: str = "") -> str:
+    """AI-powered project classifier using Gemini Flash.
+    
+    Understands natural language intent:
+      'I need something to track deliveries' → admin_panel
+      'Create a beautiful page for my restaurant' → food_restaurant
+    
+    Falls back to static keyword classifier if Gemini is unavailable.
+    """
+    if not gemini_api_key:
+        return classify_project_type(task)
+    
+    try:
+        import httpx
+        
+        prompt = f"""Classify this project description into EXACTLY ONE of these types:
+
+{', '.join(VALID_APP_TYPES)}
+
+Rules:
+- If it involves managing data, CRUD operations, tables, dashboards → admin_panel
+- If it's a marketing/promotional website → landing_page
+- If it's a blog or content site → blog
+- Choose the MOST SPECIFIC type that fits
+- Respond with ONLY the type name, nothing else
+
+Description: "{task}"
+
+Type:"""
+
+        response = await httpx.AsyncClient(timeout=10.0).post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_api_key}",
+            json={"contents": [{"parts": [{"text": prompt}]}]},
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            result = (
+                data.get("candidates", [{}])[0]
+                .get("content", {})
+                .get("parts", [{}])[0]
+                .get("text", "")
+                .strip()
+                .lower()
+                .replace(" ", "_")
+            )
+            
+            # Validate the response is a known type
+            if result in VALID_APP_TYPES:
+                logger.info("Gemini classified '%s' → %s", task[:60], result)
+                return result
+            
+            logger.warning("Gemini returned unknown type '%s', falling back", result)
+        
+    except Exception as exc:
+        logger.warning("Gemini classifier failed: %s, using static fallback", exc)
+    
+    # Fallback to static classifier
+    return classify_project_type(task)
 
 
 def get_pattern_knowledge(project_type: str) -> str:
