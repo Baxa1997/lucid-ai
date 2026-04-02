@@ -457,7 +457,7 @@ export default function EngineerDashboardPage() {
           </div>
         </div>
 
-        {/* ── Your Projects — Lovable-style Discover Grid ── */}
+        {/* ── Your Projects — Discover Grid ── */}
         <div className="mt-2">
           <div className="flex items-center justify-between mb-5">
             <div>
@@ -478,11 +478,11 @@ export default function EngineerDashboardPage() {
           {platformLoading ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
               {[...Array(3)].map((_, i) => (
-                <div key={i} className="rounded-2xl bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/50 overflow-hidden animate-pulse">
-                  <div className="aspect-[16/10] bg-slate-200 dark:bg-slate-700/50" />
-                  <div className="p-4 space-y-2.5">
-                    <div className="h-4 bg-slate-200 dark:bg-slate-700/50 rounded w-3/4" />
-                    <div className="h-3 bg-slate-200 dark:bg-slate-700/50 rounded w-1/2" />
+                <div key={i} className="rounded-xl bg-slate-100 dark:bg-[#161b22] border border-slate-200 dark:border-slate-700/50 overflow-hidden animate-pulse">
+                  <div className="aspect-[16/9] bg-slate-200 dark:bg-slate-800" />
+                  <div className="p-3.5 space-y-2">
+                    <div className="h-4 bg-slate-200 dark:bg-slate-700/50 rounded w-2/3" />
+                    <div className="h-3 bg-slate-200 dark:bg-slate-700/50 rounded w-2/5" />
                   </div>
                 </div>
               ))}
@@ -503,87 +503,103 @@ export default function EngineerDashboardPage() {
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-              {platformRepos.slice(0, 9).map((pr) => (
-                <div
-                  key={pr.projectId}
-                  className="group relative rounded-2xl bg-white dark:bg-[#161b22] border border-slate-200 dark:border-slate-700/60 overflow-hidden hover:border-violet-300 dark:hover:border-violet-500/40 hover:shadow-xl hover:shadow-violet-500/5 transition-all duration-200 cursor-pointer"
-                >
-                  {/* Thumbnail / Screenshot Preview */}
-                  <button
-                    onClick={() => handleLaunchPlatformRepo(pr)}
-                    disabled={isLaunching}
-                    className="block w-full text-left"
-                  >
-                    <div className="aspect-[16/10] relative overflow-hidden bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-800 dark:to-slate-900">
-                      {pr.deployUrl ? (
-                        <>
-                          {/* Scaled-down iframe preview of the live site */}
-                          <div className="absolute inset-0 overflow-hidden pointer-events-none">
-                            <iframe
-                              src={pr.deployUrl}
-                              title={pr.projectName}
-                              className="w-[200%] h-[200%] origin-top-left border-0"
-                              style={{ transform: 'scale(0.5)' }}
-                              loading="lazy"
-                              sandbox="allow-scripts allow-same-origin"
-                              tabIndex={-1}
-                            />
-                          </div>
-                          {/* Clickable overlay so iframe doesn't steal clicks */}
-                          <div className="absolute inset-0 bg-transparent group-hover:bg-black/5 dark:group-hover:bg-black/15 transition-colors duration-200 z-10" />
-                        </>
-                      ) : (
-                        <div className="absolute inset-0 flex items-center justify-center">
-                          <div className="relative">
-                            {/* Decorative background circles */}
-                            <div className="absolute -inset-8 bg-gradient-to-br from-violet-200/40 via-blue-200/20 to-emerald-200/30 dark:from-violet-500/10 dark:via-blue-500/5 dark:to-emerald-500/8 rounded-full blur-2xl" />
-                            <div className="relative w-14 h-14 rounded-2xl bg-white/80 dark:bg-slate-800/80 backdrop-blur-sm flex items-center justify-center border border-white/50 dark:border-slate-700/50 shadow-lg shadow-violet-500/10">
-                              <Sparkles className="w-6 h-6 text-violet-500/80" />
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
+              {platformRepos.slice(0, 9).map((pr, idx) => {
+                const GRADIENTS = [
+                  'from-[#0f0c29] via-[#302b63] to-[#24243e]',
+                  'from-[#0d1b2a] via-[#1b263b] to-[#415a77]',
+                  'from-[#1a1a2e] via-[#16213e] to-[#0f3460]',
+                  'from-[#141e30] via-[#243b55] to-[#141e30]',
+                  'from-[#0c0c1d] via-[#1a1a3e] to-[#2d1b69]',
+                  'from-[#1b1b2f] via-[#1a2a4a] to-[#162447]',
+                  'from-[#0d0d0d] via-[#1a1a2e] to-[#3a0ca3]',
+                  'from-[#1f1c2c] via-[#928dab] to-[#1f1c2c]',
+                  'from-[#0f2027] via-[#203a43] to-[#2c5364]',
+                ];
+                const ACCENTS = [
+                  'text-violet-400', 'text-blue-400', 'text-cyan-400',
+                  'text-sky-400', 'text-purple-400', 'text-indigo-400',
+                  'text-teal-400', 'text-slate-300', 'text-emerald-400',
+                ];
+                const gradient = GRADIENTS[idx % GRADIENTS.length];
+                const accent = ACCENTS[idx % ACCENTS.length];
+                const words = (pr.projectName || 'P').replace(/[-_]/g, ' ').split(/\s+/).filter(Boolean);
+                const initials = words.length >= 2
+                  ? (words[0][0] + words[1][0]).toUpperCase()
+                  : words[0].slice(0, 2).toUpperCase();
 
-                    {/* Card info */}
-                    <div className="p-4">
-                      <div className="flex items-center gap-2.5 mb-1.5">
-                        <div className="w-7 h-7 rounded-lg bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 flex items-center justify-center shrink-0">
+                return (
+                  <div
+                    key={pr.projectId}
+                    className="group relative rounded-xl bg-white dark:bg-[#161b22] border border-slate-200/80 dark:border-slate-700/40 overflow-hidden hover:border-slate-300 dark:hover:border-slate-600 hover:shadow-xl dark:hover:shadow-2xl dark:hover:shadow-black/30 transition-all duration-300 cursor-pointer"
+                  >
+                    <button
+                      onClick={() => handleLaunchPlatformRepo(pr)}
+                      disabled={isLaunching}
+                      className="block w-full text-left"
+                    >
+                      <div className="aspect-[16/9] relative overflow-hidden">
+                        {pr.deployUrl ? (
+                          <>
+                            <div className="absolute inset-0 overflow-hidden pointer-events-none">
+                              <iframe
+                                src={pr.deployUrl}
+                                title={pr.projectName}
+                                className="w-[200%] h-[200%] origin-top-left border-0"
+                                style={{ transform: 'scale(0.5)' }}
+                                loading="lazy"
+                                sandbox="allow-scripts allow-same-origin"
+                                tabIndex={-1}
+                              />
+                            </div>
+                            <div className="absolute inset-0 bg-transparent group-hover:bg-black/5 dark:group-hover:bg-black/10 transition-colors duration-200 z-10" />
+                          </>
+                        ) : (
+                          <div className={`absolute inset-0 bg-gradient-to-br ${gradient} flex items-center justify-center`}>
+                            <div className="absolute inset-0 opacity-[0.07]" style={{
+                              backgroundImage: 'radial-gradient(circle at 20% 50%, rgba(255,255,255,0.3) 0%, transparent 50%), radial-gradient(circle at 80% 20%, rgba(255,255,255,0.2) 0%, transparent 40%), radial-gradient(circle at 60% 80%, rgba(255,255,255,0.15) 0%, transparent 45%)',
+                            }} />
+                            <div className="absolute inset-0 opacity-[0.03]" style={{
+                              backgroundImage: 'linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px)',
+                              backgroundSize: '32px 32px',
+                            }} />
+                            <span className={`text-4xl font-black tracking-wider ${accent} select-none drop-shadow-lg`}>
+                              {initials}
+                            </span>
+                            <div className="absolute inset-0 bg-white/0 group-hover:bg-white/[0.03] transition-colors duration-300" />
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="px-3.5 py-3 flex items-center gap-3">
+                        <div className="w-7 h-7 rounded-full bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 flex items-center justify-center shrink-0">
                           <Sparkles className="w-3.5 h-3.5 text-violet-500" />
                         </div>
-                        <span className="text-[15px] font-bold text-slate-800 dark:text-slate-100 truncate">
-                          {pr.projectName}
-                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[13px] font-bold text-slate-800 dark:text-slate-100 truncate leading-tight">
+                            {pr.projectName}
+                          </p>
+                          <p className="text-[11px] text-slate-400 dark:text-slate-500 truncate leading-tight mt-0.5">
+                            {pr.repoName}
+                          </p>
+                        </div>
+                        {pr.deployUrl && (
+                          <a
+                            href={pr.deployUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="shrink-0 flex items-center gap-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 transition-colors"
+                          >
+                            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                            Preview
+                            <ExternalLink className="w-3 h-3 opacity-70" />
+                          </a>
+                        )}
                       </div>
-                      <p className="text-xs text-slate-400 dark:text-slate-500 truncate ml-[38px]">
-                        {pr.repoName}
-                      </p>
-                    </div>
-                  </button>
-
-                  {/* Deploy status + Preview button */}
-                  {pr.deployUrl && (
-                    <div className="px-4 pb-3.5 flex items-center justify-between -mt-1">
-                      <div className="flex items-center gap-1.5">
-                        <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                        <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">
-                          Live
-                        </span>
-                      </div>
-                      <a
-                        href={pr.deployUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-400 dark:text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 transition-colors group/link"
-                      >
-                        Preview
-                        <ExternalLink className="w-3.5 h-3.5 opacity-60 group-hover/link:opacity-100 transition-opacity" />
-                      </a>
-                    </div>
-                  )}
-                </div>
-              ))}
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -592,3 +608,5 @@ export default function EngineerDashboardPage() {
     </div>
   );
 }
+
+
