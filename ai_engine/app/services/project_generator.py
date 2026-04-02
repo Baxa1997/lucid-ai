@@ -417,6 +417,8 @@ async def call_claude_for_json(
 ) -> Optional[dict]:
     """Call Claude Messages API and return parsed JSON dict.
     
+    Uses Claude's native tool_use for guaranteed valid JSON output.
+    The API enforces JSON schema automatically — no escaping issues.
     On failure with Opus, automatically retries with Sonnet as fallback.
     """
     import httpx
@@ -427,11 +429,42 @@ async def call_claude_for_json(
         "anthropic-version": "2023-06-01",
     }
 
+    # Define the output tool — Claude MUST call this to respond
+    write_files_tool = {
+        "name": "write_project_files",
+        "description": "Write all generated project files. Call this with the complete list of files to create or modify.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "files": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Relative file path (e.g. src/components/HeroSection.jsx)"
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "Complete file source code"
+                            }
+                        },
+                        "required": ["path", "content"]
+                    }
+                }
+            },
+            "required": ["files"]
+        }
+    }
+
     payload = {
         "model": model,
         "max_tokens": max_tokens,
         "system": system_prompt,
         "messages": [{"role": "user", "content": user_prompt}],
+        "tools": [write_files_tool],
+        "tool_choice": {"type": "tool", "name": "write_project_files"},
     }
 
     async def _make_request(use_model: str) -> Optional[dict]:
@@ -453,25 +486,35 @@ async def call_claude_for_json(
                 return None
 
             data = response.json()
+            
+            # Method 1: Extract from tool_use block (guaranteed valid JSON)
+            for block in data.get("content", []):
+                if block.get("type") == "tool_use" and block.get("name") == "write_project_files":
+                    result = block.get("input", {})
+                    if result.get("files"):
+                        logger.info(
+                            "Claude (%s) returned %d files via tool_use",
+                            use_model, len(result["files"]),
+                        )
+                        return result
+            
+            # Method 2: Fallback — extract from text content (for compatibility)
             text = ""
             for block in data.get("content", []):
                 if block.get("type") == "text":
                     text += block["text"]
-
-            if not text:
-                logger.error("Claude returned empty text content")
-                return None
-
-            result = _parse_json_response(text)
-            if result and result.get("files"):
-                logger.info(
-                    "Claude (%s) returned %d files",
-                    use_model, len(result["files"]),
-                )
-                return result
-            else:
-                logger.error("Claude response had no 'files' key or parse failed")
-                return None
+            
+            if text:
+                result = _parse_json_response(text)
+                if result and result.get("files"):
+                    logger.info(
+                        "Claude (%s) returned %d files via text fallback",
+                        use_model, len(result["files"]),
+                    )
+                    return result
+            
+            logger.error("Claude response had no files (neither tool_use nor text)")
+            return None
 
         except Exception as exc:
             logger.error("Claude API call failed (%s): %s", use_model, exc)
@@ -1168,29 +1211,21 @@ Your job: transform a template into a FULLY WORKING, DOMAIN-SPECIFIC application
 The template gives you infrastructure (routing, auth, UI components, layouts).
 You must REPLACE all demo content with real, production-quality, domain-specific content.
 
-OUTPUT FORMAT — respond with a single JSON object:
-{
-  "files": [
-    {"path": "src/components/sections/HeroSection.jsx", "content": "full file content..."},
-    {"path": "src/config/navigation.js", "content": "..."},
-    ...
-  ]
-}
+OUTPUT: Call the write_project_files tool with ALL files to create or modify.
+Each file needs a relative "path" and complete "content" (full source code).
 
 CRITICAL RULES:
-1. Return ONLY valid JSON — no markdown, no explanation, no code fences
-2. Every file must have "path" (relative) and "content" (COMPLETE file source code)
-3. REPLACE all template demo pages — no generic "Welcome" or "Sample" content should remain
-4. Use the EXACT design system from the research context (colors, fonts, spacing)
-5. Write REAL content: actual headlines, real feature descriptions, realistic data, proper metrics
-6. Every page must be logically complete and fully functional (with mock data)
-7. Admin panels: every CRUD entity needs list page (with DataTable), form page, service, hooks
-8. Landing pages: every section must have compelling, domain-specific copy and visuals
-9. Responsive: every component must work sm → xl breakpoints
-10. Include ALL files that need to change — pages, configs, styles, features, navigation
-11. Mock data must be REALISTIC — real names, real numbers, proper formatting
-12. Use framer-motion for page transitions and micro-animations
-13. Charts must have realistic data series (12 data points minimum)
+1. REPLACE all template demo pages — no generic "Welcome" or "Sample" content should remain
+2. Use the EXACT design system from the research context (colors, fonts, spacing)
+3. Write REAL content: actual headlines, real feature descriptions, realistic data, proper metrics
+4. Every page must be logically complete and fully functional (with mock data)
+5. Admin panels: every CRUD entity needs list page (with DataTable), form page, service, hooks
+6. Landing pages: every section must have compelling, domain-specific copy and visuals
+7. Responsive: every component must work sm → xl breakpoints
+8. Include ALL files that need to change — pages, configs, styles, features, navigation
+9. Mock data must be REALISTIC — real names, real numbers, proper formatting
+10. Use framer-motion for page transitions and micro-animations
+11. Charts must have realistic data series (12 data points minimum)
 """
 
 
@@ -1307,7 +1342,7 @@ FILE TREE:
 {stack_rules}
 {template_context}
 
-RESPOND WITH JSON ONLY: {{"files": [{{"path": "...", "content": "..."}}]}}
+Call the write_project_files tool with ALL files.
 """
     
     result1 = await call_claude_for_json(
@@ -1390,7 +1425,7 @@ CURRENT FILE TREE (foundation already written):
 {stack_rules}
 {skills}
 
-RESPOND WITH JSON ONLY: {{"files": [{{"path": "...", "content": "..."}}]}}
+Call the write_project_files tool with ALL files.
 """
     
     result2 = await call_claude_for_json(
@@ -1449,7 +1484,7 @@ CURRENT FILE TREE (foundation + content already written):
 
 {stack_rules}
 
-RESPOND WITH JSON ONLY: {{"files": [{{"path": "...", "content": "..."}}]}}
+Call the write_project_files tool with ALL files.
 """
     
     result3 = await call_claude_for_json(
