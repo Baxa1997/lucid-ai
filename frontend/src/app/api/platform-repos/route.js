@@ -25,7 +25,7 @@ export async function GET() {
     // Query chat_sessions with platform_repo_url for this user
     const { data: sessions, error } = await supabase
       .from('chat_sessions')
-      .select('id, project_id, platform_repo_url, created_at, updated_at')
+      .select('id, project_id, platform_repo_url, vercel_url, created_at, updated_at')
       .eq('user_id', ctx.userId)
       .not('platform_repo_url', 'is', null)
       .order('created_at', { ascending: false });
@@ -87,8 +87,8 @@ export async function GET() {
         repoName,
         projectName: conv.title || conv.project_slug || repoName,
         createdAt: s.created_at,
-        deployUrl: deploy?.deploy_url || null,
-        deployStatus: deploy?.status || null,
+        deployUrl: deploy?.deploy_url || s.vercel_url || null,
+        deployStatus: deploy?.status || (s.vercel_url ? 'deployed' : null),
       };
     });
 

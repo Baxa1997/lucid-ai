@@ -149,7 +149,7 @@ export default function EngineerDashboardPage() {
     <div className="h-full bg-[#f0f4f9] dark:bg-[#0d1117] relative flex flex-col transition-colors duration-200">
 
       {/* ── Main Content ── */}
-      <div className="max-w-3xl mx-auto px-8 py-8 flex-1 flex flex-col justify-center w-full">
+      <div className="max-w-5xl mx-auto px-8 py-8 flex-1 flex flex-col w-full">
 
         {/* Banner */}
         {showBanner && (
@@ -457,55 +457,128 @@ export default function EngineerDashboardPage() {
           </div>
         </div>
 
-        {/* ── Recent Projects ── */}
-        <div>
-          <h3 className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-4">
-            Recent Projects
-          </h3>
+        {/* ── Your Projects — Lovable-style Discover Grid ── */}
+        <div className="mt-2">
+          <div className="flex items-center justify-between mb-5">
+            <div>
+              <h2 className="text-2xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight">
+                Your Projects
+              </h2>
+              <p className="text-sm text-slate-400 dark:text-slate-500 mt-0.5">
+                Your AI-generated apps and websites
+              </p>
+            </div>
+            {platformRepos.length > 4 && (
+              <button className="text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 px-4 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-white dark:hover:bg-slate-800 transition-all">
+                View all
+              </button>
+            )}
+          </div>
+
           {platformLoading ? (
-            <div className="flex items-center gap-3 py-4">
-              <Loader2 className="w-4 h-4 text-slate-400 animate-spin" />
-              <span className="text-sm text-slate-400 dark:text-slate-500">Loading projects...</span>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              {[...Array(4)].map((_, i) => (
+                <div key={i} className="rounded-2xl bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/50 overflow-hidden animate-pulse">
+                  <div className="aspect-[16/10] bg-slate-200 dark:bg-slate-700/50" />
+                  <div className="p-3.5 space-y-2">
+                    <div className="h-4 bg-slate-200 dark:bg-slate-700/50 rounded w-3/4" />
+                    <div className="h-3 bg-slate-200 dark:bg-slate-700/50 rounded w-1/2" />
+                  </div>
+                </div>
+              ))}
             </div>
           ) : platformRepos.length === 0 ? (
-            <div className="flex items-center gap-3 py-4">
-              <div className="w-9 h-9 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center">
-                <Clock className="w-4 h-4 text-slate-300 dark:text-slate-600" />
+            <div className="flex flex-col items-center justify-center py-16 px-6 rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30">
+              <div className="w-14 h-14 rounded-2xl bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 flex items-center justify-center mb-4">
+                <Sparkles className="w-6 h-6 text-violet-500" />
               </div>
-              <span className="text-sm text-slate-400 dark:text-slate-500 italic">No recent projects — create one with the wizard!</span>
+              <h3 className="text-base font-bold text-slate-800 dark:text-slate-200 mb-1">No projects yet</h3>
+              <p className="text-sm text-slate-400 dark:text-slate-500 mb-4">Create your first AI-powered project with the wizard</p>
+              <button
+                onClick={handleNewConversation}
+                className="px-5 py-2 bg-violet-600 text-white text-sm font-bold rounded-xl hover:bg-violet-700 transition-colors shadow-sm"
+              >
+                New Project
+              </button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-              {platformRepos.slice(0, 6).map((pr) => (
-                <button
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              {platformRepos.slice(0, 8).map((pr) => (
+                <div
                   key={pr.projectId}
-                  onClick={() => handleLaunchPlatformRepo(pr)}
-                  disabled={isLaunching}
-                  className="group flex flex-col gap-2 p-4 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-violet-300 dark:hover:border-violet-500/30 hover:shadow-md transition-all text-left"
+                  className="group relative rounded-2xl bg-white dark:bg-[#161b22] border border-slate-200 dark:border-slate-700/60 overflow-hidden hover:border-violet-300 dark:hover:border-violet-500/40 hover:shadow-lg hover:shadow-violet-500/5 transition-all duration-200 cursor-pointer"
                 >
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-7 h-7 rounded-lg bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 flex items-center justify-center shrink-0">
-                      <Sparkles className="w-3.5 h-3.5 text-violet-500 dark:text-violet-400" />
+                  {/* Thumbnail / Screenshot */}
+                  <button
+                    onClick={() => handleLaunchPlatformRepo(pr)}
+                    disabled={isLaunching}
+                    className="block w-full text-left"
+                  >
+                    <div className="aspect-[16/10] relative overflow-hidden bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-800 dark:to-slate-900">
+                      {pr.deployUrl ? (
+                        <>
+                          <img
+                            src={`https://image.thum.io/get/width/600/crop/375/noanimate/${pr.deployUrl}`}
+                            alt={pr.projectName}
+                            className="w-full h-full object-cover object-top transition-transform duration-300 group-hover:scale-105"
+                            loading="lazy"
+                            onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex'; }}
+                          />
+                          {/* Fallback gradient shown on image error */}
+                          <div className="absolute inset-0 bg-gradient-to-br from-violet-500/20 via-blue-500/10 to-emerald-500/20 dark:from-violet-500/10 dark:via-blue-500/5 dark:to-emerald-500/10 items-center justify-center hidden">
+                            <Sparkles className="w-8 h-8 text-violet-400/60" />
+                          </div>
+                        </>
+                      ) : (
+                        <div className="absolute inset-0 bg-gradient-to-br from-violet-500/20 via-blue-500/10 to-emerald-500/20 dark:from-violet-500/10 dark:via-blue-500/5 dark:to-emerald-500/10 flex items-center justify-center">
+                          <div className="w-12 h-12 rounded-2xl bg-white/60 dark:bg-slate-800/60 backdrop-blur-sm flex items-center justify-center border border-white/30 dark:border-slate-700/30">
+                            <Sparkles className="w-5 h-5 text-violet-500/70" />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Hover overlay */}
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 dark:group-hover:bg-black/20 transition-colors duration-200" />
                     </div>
-                    <span className="text-sm font-bold text-slate-700 dark:text-slate-200 truncate">
-                      {pr.projectName}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 mt-auto">
-                    <span className="text-[10px] text-slate-400 dark:text-slate-500 truncate">
-                      {pr.repoName}
-                    </span>
-                    <ArrowRight className="w-3 h-3 text-slate-300 dark:text-slate-600 ml-auto opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-                  </div>
+
+                    {/* Card info */}
+                    <div className="p-3.5">
+                      <div className="flex items-center gap-2.5 mb-1">
+                        <div className="w-6 h-6 rounded-lg bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 flex items-center justify-center shrink-0">
+                          <Sparkles className="w-3 h-3 text-violet-500" />
+                        </div>
+                        <span className="text-sm font-bold text-slate-800 dark:text-slate-100 truncate">
+                          {pr.projectName}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400 dark:text-slate-500 truncate pl-8.5 ml-[34px]">
+                        {pr.repoName}
+                      </p>
+                    </div>
+                  </button>
+
+                  {/* Deploy status + Preview button */}
                   {pr.deployUrl && (
-                    <div className="flex items-center gap-1.5 mt-1">
-                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                      <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium truncate">
-                        Deployed
-                      </span>
+                    <div className="px-3.5 pb-3 flex items-center justify-between -mt-1">
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">
+                          Live
+                        </span>
+                      </div>
+                      <a
+                        href={pr.deployUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="flex items-center gap-1 text-[10px] font-semibold text-slate-400 dark:text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 transition-colors group/link"
+                      >
+                        Preview
+                        <ExternalLink className="w-3 h-3 opacity-60 group-hover/link:opacity-100 transition-opacity" />
+                      </a>
                     </div>
                   )}
-                </button>
+                </div>
               ))}
             </div>
           )}
