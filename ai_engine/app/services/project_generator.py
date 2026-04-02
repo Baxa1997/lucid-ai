@@ -218,6 +218,86 @@ def _read_key_template_files(workspace_path: str, stack: str) -> str:
 
 
 # ╔══════════════════════════════════════════════════════════════╗
+# ║  LAYER 2 — Skills (component usage knowledge)               ║
+# ║  Teaches Claude HOW to use each library correctly            ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+# Skills per project type — maps to files in knowledge/components/
+_SKILLS_BY_TYPE = {
+    "admin": [
+        "skill_datatable.md",
+        "skill_recharts.md",
+        "skill_crud_module.md",
+        "skill_framer_motion.md",
+    ],
+    "landing": [
+        "skill_landing_sections.md",
+        "skill_framer_motion.md",
+        "skill_recharts.md",  # For pricing charts, stats sections
+    ],
+}
+
+# The directory where skills are stored
+_SKILLS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+    "knowledge", "components",
+)
+
+
+def _load_skills(app_type: str, stack: str) -> str:
+    """Load relevant skill files based on project type.
+    
+    Skills teach Claude the EXACT API and usage patterns for each library.
+    This is Layer 2 of the 3-layer architecture:
+      Layer 1: MCP (live docs) — future
+      Layer 2: Skills (local expertise) — THIS
+      Layer 3: Plugins (bundled features) — future
+    """
+    # Determine which skill set to use
+    admin_types = {
+        "admin_panel", "dashboard", "crm", "erp", "logistics",
+        "healthcare", "finance", "education", "ecommerce",
+        "saas_app", "analytics", "booking", "social",
+        "fitness", "travel", "real_estate",
+    }
+    
+    skill_key = "admin" if app_type in admin_types else "landing"
+    skill_files = _SKILLS_BY_TYPE.get(skill_key, [])
+    
+    # For Vue, swap React-specific skills
+    if "vue" in stack.lower():
+        skill_files = [f for f in skill_files if f not in {"skill_recharts.md", "skill_crud_module.md"}]
+    
+    parts = []
+    total_chars = 0
+    MAX_TOTAL = 15000  # ~15KB, ~4K tokens
+
+    for filename in skill_files:
+        filepath = os.path.join(_SKILLS_DIR, filename)
+        if not os.path.isfile(filepath):
+            continue
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                content = f.read()
+            
+            total_chars += len(content)
+            if total_chars > MAX_TOTAL:
+                break
+            
+            parts.append(content)
+        except Exception:
+            continue
+
+    if not parts:
+        return ""
+
+    return (
+        "\n\n## COMPONENT USAGE SKILLS (follow these patterns EXACTLY)\n"
+        "These show the CORRECT API for each library. Copy these patterns precisely.\n\n"
+        + "\n\n---\n\n".join(parts)
+    )
+
+# ╔══════════════════════════════════════════════════════════════╗
 # ║  HELPER — Parse JSON from Claude response text               ║
 # ╚══════════════════════════════════════════════════════════════╝
 
@@ -1161,6 +1241,10 @@ async def generate_new_project(
     else:
         stack_rules = REACT_ADMIN_RULES
     
+    # ── Step 2b: Load Layer 2 Skills ──
+    skills = _load_skills(app_type, stack)
+    await _ws_send(websocket, "progress", "📚 Loading component skills...")
+    
     # ── Step 3: Gemini ULTRA-DEEP research ──
     await _ws_send(websocket, "progress", "🔬 Researching real products in this domain...")
     try:
@@ -1304,6 +1388,7 @@ CURRENT FILE TREE (foundation already written):
 {file_tree_2[:2000]}
 
 {stack_rules}
+{skills}
 
 RESPOND WITH JSON ONLY: {{"files": [{{"path": "...", "content": "..."}}]}}
 """
