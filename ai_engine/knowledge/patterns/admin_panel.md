@@ -168,15 +168,63 @@ function StatusBadge({ status }) {
 }
 ```
 
-### Mock Data
+### Mock Data (served from db.json via json-server)
+```json
+// db.json — at project root, served by json-server on port 3001
+{
+  "users": [
+    { "id": "1", "name": "Sarah Mitchell", "email": "sarah.m@company.co", "role": "admin", "status": "active", "lastLogin": "2024-03-15T10:23:00" },
+    { "id": "2", "name": "Marcus Chen", "email": "marcus.c@company.co", "role": "editor", "status": "active", "lastLogin": "2024-03-14T08:45:00" },
+    { "id": "3", "name": "Alex Rivera", "email": "alex.r@company.co", "role": "viewer", "status": "pending", "lastLogin": null },
+    { "id": "4", "name": "Priya Sharma", "email": "priya.s@company.co", "role": "admin", "status": "active", "lastLogin": "2024-03-15T09:12:00" },
+    { "id": "5", "name": "Jordan Williams", "email": "jordan.w@company.co", "role": "editor", "status": "inactive", "lastLogin": "2024-02-28T16:30:00" }
+  ]
+}
+```
+
+### API-Ready Service Pattern
 ```jsx
-const mockUsers = [
-  { id: 1, name: 'Sarah Mitchell', email: 'sarah.m@company.co', role: 'Admin', status: 'active', lastLogin: '2024-03-15T10:23:00' },
-  { id: 2, name: 'Marcus Chen', email: 'marcus.c@company.co', role: 'Editor', status: 'active', lastLogin: '2024-03-14T08:45:00' },
-  { id: 3, name: 'Alex Rivera', email: 'alex.r@company.co', role: 'Viewer', status: 'pending', lastLogin: null },
-  { id: 4, name: 'Priya Sharma', email: 'priya.s@company.co', role: 'Admin', status: 'active', lastLogin: '2024-03-15T09:12:00' },
-  { id: 5, name: 'Jordan Williams', email: 'jordan.w@company.co', role: 'Editor', status: 'inactive', lastLogin: '2024-02-28T16:30:00' },
-];
+// src/features/users/services/user.service.js
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+
+export const userService = {
+  getAll: async (params = {}) => {
+    try {
+      const query = new URLSearchParams(params).toString();
+      const res = await fetch(`${API_URL}/users${query ? `?${query}` : ''}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      return { data: Array.isArray(data) ? data : [], total: Array.isArray(data) ? data.length : 0 };
+    } catch (err) {
+      console.warn('users.getAll failed:', err.message);
+      return { data: [], total: 0 };
+    }
+  },
+  getById: async (id) => {
+    try {
+      const res = await fetch(`${API_URL}/users/${id}`);
+      return res.ok ? await res.json() : null;
+    } catch { return null; }
+  },
+  create: async (data) => {
+    try {
+      const res = await fetch(`${API_URL}/users`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+      return res.ok ? await res.json() : { ...data, id: Date.now().toString() };
+    } catch { return { ...data, id: Date.now().toString() }; }
+  },
+  update: async (id, data) => {
+    try {
+      const res = await fetch(`${API_URL}/users/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+      return res.ok ? await res.json() : { ...data, id };
+    } catch { return { ...data, id }; }
+  },
+  delete: async (id) => {
+    try {
+      await fetch(`${API_URL}/users/${id}`, { method: 'DELETE' });
+      return { success: true };
+    } catch { return { success: false }; }
+  },
+};
 ```
 
 ### Forms (Tailwind)
@@ -226,3 +274,26 @@ const mockUsers = [
   </div>
 </form>
 ```
+
+---
+
+## Design System Integration
+
+ALL components must import and use the shared design system:
+
+```jsx
+import { ds } from '@/lib/design-system'
+
+// Use ds.card instead of ad-hoc card classes
+<Card className={ds.card}>
+<Badge className={ds.badge[status]}>
+<motion.div {...ds.pageAnimation}>
+```
+
+## CRITICAL RULES
+1. **Services use fetch()** — never hardcode mock data inside service files
+2. **Mock data in db.json** — served by json-server, NOT inline constants
+3. **Design system imports** — all components import `ds` from `@/lib/design-system`
+4. **Loading/Empty/Error states** — every data component handles all three
+5. **No hardcoded colors** — use Tailwind utility classes only
+

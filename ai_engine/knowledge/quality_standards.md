@@ -138,3 +138,77 @@ Use these via Tailwind classes:
 | Utility | `formatDate.js` | `formatDate.ts` |
 | Constants | `constants.js` | `constants.ts` |
 | Types | `types.ts` | `types.ts` |
+
+---
+
+## Design System Enforcement
+
+Every project MUST generate `src/lib/design-system.js` in Phase 1, and ALL
+subsequent components MUST import and use it:
+
+```javascript
+// src/lib/design-system.js — generated per project
+export const ds = {
+  card: "rounded-xl border border-border bg-card shadow-sm hover:shadow-md transition-shadow",
+  badge: {
+    active: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400",
+    pending: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400",
+    inactive: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
+    processing: "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
+  },
+  sectionSpacing: "py-24 px-4 sm:px-6 lg:px-8",
+  maxWidth: "max-w-7xl mx-auto",
+  heading: { h1: "text-4xl md:text-5xl font-bold tracking-tight", h2: "text-3xl font-bold", h3: "text-xl font-semibold" },
+  pageAnimation: { initial: { opacity: 0, y: 8 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.15 } },
+  cardHover: { whileHover: { y: -2 }, transition: { duration: 0.1 } },
+  stagger: { container: { staggerChildren: 0.04 }, child: { initial: { opacity: 0, y: 20 }, animate: { opacity: 1, y: 0 } } },
+};
+```
+
+Usage in every component:
+```jsx
+import { ds } from '@/lib/design-system'
+
+// Cards
+<Card className={ds.card}>
+
+// Status badges
+<Badge className={ds.badge[status]}>
+
+// Page transitions
+<motion.div {...ds.pageAnimation}>
+
+// Staggered lists
+<motion.div variants={ds.stagger.container} initial="initial" animate="animate">
+  {items.map(item => <motion.div key={item.id} variants={ds.stagger.child}>)}
+```
+
+---
+
+## API-Ready Service Standards
+
+Services MUST make real HTTP calls — never hardcode mock data arrays.
+
+```javascript
+// ✅ CORRECT — real fetch calls
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+
+export const orderService = {
+  getAll: async (params) => {
+    try {
+      const res = await fetch(`${API_URL}/orders?${new URLSearchParams(params)}`);
+      return res.ok ? await res.json() : [];
+    } catch { return []; }
+  },
+  // ...
+};
+```
+
+```javascript
+// ❌ WRONG — hardcoded mock data
+const MOCK_ORDERS = [{ id: 1, customer: "John" }];
+export const getOrders = () => MOCK_ORDERS;
+```
+
+Mock data lives in `db.json` at the project root, served by `json-server`.
+

@@ -27,9 +27,9 @@ logger = logging.getLogger("lucid.project_generator")
 # ╚══════════════════════════════════════════════════════════════╝
 
 CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
-DEFAULT_MODEL = "claude-opus-4-6"
-FALLBACK_MODEL = "claude-sonnet-4-6"
-MAX_TOKENS_PER_CALL = 32000
+DEFAULT_MODEL = "claude-sonnet-4-6"        # Fast + same UI/UX quality
+FALLBACK_MODEL = "claude-opus-4-6"         # Opus fallback for edge cases
+MAX_TOKENS_PER_CALL = 32000                # 32K is enough; halves generation time
 MAX_FIX_ATTEMPTS = 2
 
 # Files that must NEVER be overwritten by the generator
@@ -463,7 +463,7 @@ async def call_claude_for_json(
         "system": system_prompt,
         "messages": [{"role": "user", "content": user_prompt}],
         "tools": [write_files_tool],
-        "tool_choice": {"type": "auto"},
+        "tool_choice": {"type": "tool", "name": "write_project_files"},
     }
 
     async def _make_request(use_model: str) -> Optional[dict]:
@@ -482,20 +482,63 @@ async def call_claude_for_json(
                     "Claude API error %d with %s: %s",
                     response.status_code, use_model, error_text,
                 )
+                # Instant user-facing error for auth/credit failures
+                if response.status_code in (401, 403):
+                    await _ws_send(websocket, "error", "❌ Anthropic API key is invalid. Check your API key in Settings.")
+                elif response.status_code == 402 or (response.status_code == 400 and "credit balance" in error_text.lower()):
+                    await _ws_send(websocket, "error", "❌ Anthropic API credits depleted. Add credits at console.anthropic.com.")
+                elif response.status_code == 429:
+                    await _ws_send(websocket, "error", "⚠️ Anthropic rate limit hit. Retrying in a moment...")
+                elif response.status_code == 529:
+                    await _ws_send(websocket, "error", "⚠️ Anthropic API overloaded. Retrying...")
+                else:
+                    await _ws_send(websocket, "error", f"❌ Claude API error ({response.status_code}). Try again.")
                 return None
 
             data = response.json()
+            
+            # Check for truncation (stop_reason == "max_tokens")
+            stop_reason = data.get("stop_reason", "")
+            is_truncated = stop_reason == "max_tokens"
+            if is_truncated:
+                logger.warning("Claude (%s) response truncated (max_tokens). Attempting salvage...", use_model)
+                await _ws_send(websocket, "progress", "⚠️ Response was long — salvaging complete files...")
             
             # Method 1: Extract from tool_use block (guaranteed valid JSON)
             for block in data.get("content", []):
                 if block.get("type") == "tool_use" and block.get("name") == "write_project_files":
                     result = block.get("input", {})
-                    if result.get("files"):
+                    if isinstance(result, dict) and result.get("files"):
+                        files = result["files"]
+                        
+                        # TRUNCATION RECOVERY: If truncated, the LAST file
+                        # likely has incomplete content. Remove it to avoid
+                        # writing a broken file to disk.
+                        if is_truncated and len(files) > 1:
+                            last_file = files[-1]
+                            last_content = last_file.get("content", "")
+                            # Heuristic: if last file content is very short or
+                            # doesn't end with a valid closing pattern, drop it
+                            if (
+                                len(last_content) < 50
+                                or not last_content.rstrip().endswith((";", "}", ">", ");", "/>", "*/", "\n"))
+                            ):
+                                dropped = files.pop()
+                                logger.warning(
+                                    "Truncation recovery: dropped incomplete file '%s' (%d chars)",
+                                    dropped.get("path", "?"), len(last_content),
+                                )
+                                await _ws_send(
+                                    websocket, "progress",
+                                    f"⚠️ Dropped 1 truncated file — {len(files)} complete files salvaged",
+                                )
+                        
                         logger.info(
-                            "Claude (%s) returned %d files via tool_use",
-                            use_model, len(result["files"]),
+                            "Claude (%s) returned %d files via tool_use%s",
+                            use_model, len(files),
+                            " (truncation-salvaged)" if is_truncated else "",
                         )
-                        return result
+                        return {"files": files}
             
             # Method 2: Fallback — extract from text content (for compatibility)
             text = ""
@@ -968,17 +1011,44 @@ Write original copy inspired by TONE and STYLE of the best sites.
         response = await client.post(gemini_url, json=gemini_payload)
     
     if response.status_code != 200:
-        logger.error("Gemini research API error %d: %s", response.status_code, response.text[:300])
+        error_snippet = response.text[:300]
+        logger.error("Gemini research API error %d: %s", response.status_code, error_snippet)
+        if response.status_code in (400, 403):
+            await _ws_send(websocket, "error", "❌ Google API key invalid. Check GOOGLE_API_KEY in .env.")
+        elif response.status_code == 429:
+            await _ws_send(websocket, "error", "⚠️ Gemini rate limit hit. Waiting before retry...")
         raise RuntimeError(f"Gemini research API error: {response.status_code}")
     
     data = response.json()
     # Concatenate all text parts (grounding can return multiple)
-    parts = (
-        data.get("candidates", [{}])[0]
-        .get("content", {})
-        .get("parts", [])
-    )
-    text = "\n".join(p.get("text", "") for p in parts if p.get("text"))
+    # DEFENSIVE: Gemini can return unexpected structures (safety filters,
+    # grounding errors, string content instead of dict) — handle gracefully.
+    candidates = data.get("candidates", [])
+    if not candidates:
+        finish_reason = data.get("promptFeedback", {}).get("blockReason", "unknown")
+        raise RuntimeError(f"Gemini returned no candidates (blockReason={finish_reason})")
+    
+    candidate = candidates[0]
+    # Check if the candidate was blocked by safety filters
+    finish_reason = candidate.get("finishReason", "")
+    if finish_reason == "SAFETY":
+        logger.warning("Gemini response blocked by safety filter")
+        raise RuntimeError("Gemini blocked response due to safety filter")
+    
+    content = candidate.get("content", {})
+    if isinstance(content, str):
+        # Gemini returned a string instead of structured response
+        logger.warning("Gemini returned string content (len=%d), using as-is", len(content))
+        text = content
+    elif isinstance(content, dict):
+        parts = content.get("parts", [])
+        text = "\n".join(
+            p.get("text", "") for p in parts
+            if isinstance(p, dict) and p.get("text")
+        )
+    else:
+        logger.error("Gemini returned unexpected content type: %s", type(content).__name__)
+        text = ""
     
     if not text:
         raise RuntimeError("Gemini returned empty research text")
@@ -1068,7 +1138,7 @@ Return JSON: {{"files": [{{"path": "...", "content": "..."}}]}}
             user_prompt=fix_prompt,
             api_key=api_key,
             websocket=websocket,
-            max_tokens=16000,
+            max_tokens=32000,
             model=DEFAULT_MODEL,
         )
 
@@ -1398,6 +1468,38 @@ POLISHING (non-negotiable)
 - HOVER: Every interactive element has hover state.
 - TRANSITIONS: transition-colors duration-150 on all hover/focus.
 - MOCK DATA: Realistic names, numbers, dates, statuses. Never lorem ipsum.
+
+====================================
+DESIGN SYSTEM (critical for consistency)
+====================================
+If the project has src/lib/design-system.js, ALL components MUST:
+  import { ds } from '@/lib/design-system'
+
+Then use:
+  <Card className={ds.card}>        instead of ad-hoc card classes
+  <Badge className={ds.badge[status]}>  instead of inline badge styles
+  <motion.div {...ds.pageAnimation}>    for consistent page transitions
+  ds.stagger for list animations
+  ds.maxWidth, ds.sectionSpacing for layout
+
+This ensures EVERY card, badge, and animation looks identical across the entire project.
+
+====================================
+API-READY SERVICES (non-negotiable for admin/CRUD apps)
+====================================
+Services must make REAL HTTP fetch() calls:
+  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+
+Pattern:
+  getAll: (params) => fetch(`${API_URL}/entity?${new URLSearchParams(params)}`).then(r => r.json())
+  getById: (id) => fetch(`${API_URL}/entity/${id}`).then(r => r.json())
+  create: (data) => fetch(`${API_URL}/entity`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)}).then(r => r.json())
+  update: (id, data) => fetch(`${API_URL}/entity/${id}`, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)}).then(r => r.json())
+  delete: (id) => fetch(`${API_URL}/entity/${id}`, {method:'DELETE'})
+
+Services should CATCH errors and return empty arrays/objects (graceful degradation).
+NEVER hardcode mock data arrays inside service files.
+Mock data lives in db.json at the project root (served by json-server).
 """
 
 
@@ -1422,6 +1524,24 @@ async def generate_new_project(
     Between each call, the file tree is rebuilt so imports resolve correctly.
     The template is ALREADY cloned into workspace_path by Phase 2.
     """
+    try:
+        return await _generate_new_project_inner(
+            description, workspace_path, validated, websocket, chat_session_id,
+        )
+    except Exception as exc:
+        logger.error("generate_new_project crashed: %s", exc, exc_info=True)
+        await _ws_send(websocket, "error", f"❌ Generation failed: {str(exc)[:200]}")
+        return False
+
+
+async def _generate_new_project_inner(
+    description: str,
+    workspace_path: str,
+    validated: dict,
+    websocket,
+    chat_session_id: str = "",
+) -> bool:
+    """Inner implementation of generate_new_project (wrapped in try/except above)."""
     api_key = validated["anthropic_api_key"]
     gemini_key = validated["gemini_api_key"]
     stack = validated.get("project_stack", "") or validated.get("skeleton_stack", "")
@@ -1463,6 +1583,53 @@ async def generate_new_project(
         await _ws_send(websocket, "progress", "⚠️ Research failed — proceeding with basic generation...")
         research = f"Project: {description}\nApp type: {app_type}\nStack: {stack}"
     
+    # ── Step 3b: Build structured project schema ──
+    # This is the SINGLE SOURCE OF TRUTH for all 3 generation phases.
+    # It eliminates consistency bugs (entities ↔ nav ↔ routes ↔ forms).
+    from app.services.project_schema import (
+        build_project_schema,
+        schema_to_entity_spec,
+        schema_to_navigation_spec,
+        schema_to_dashboard_spec,
+        schema_to_theme_spec,
+        schema_to_design_system_spec,
+        schema_to_api_spec,
+        schema_to_mock_db_json,
+        schema_to_sections_spec,
+    )
+    
+    project_schema = await build_project_schema(
+        research=research,
+        description=description,
+        stack=stack,
+        app_type=app_type,
+        api_key=api_key,
+        websocket=websocket,
+    )
+    
+    # Build schema-derived prompt sections (used in all 3 phases)
+    schema_entity_spec = schema_to_entity_spec(project_schema)
+    schema_nav_spec = schema_to_navigation_spec(project_schema)
+    schema_dashboard_spec = schema_to_dashboard_spec(project_schema)
+    schema_theme_spec = schema_to_theme_spec(project_schema)
+    schema_design_spec = schema_to_design_system_spec(project_schema)
+    schema_api_spec = schema_to_api_spec(project_schema)
+    schema_sections_spec = schema_to_sections_spec(project_schema)
+    
+    # ── Step 3c: Write db.json (API mock data) ──
+    # This makes the generated app API-ready from day one.
+    # json-server serves this as a real REST API at localhost:3001.
+    mock_db_json = schema_to_mock_db_json(project_schema)
+    if mock_db_json:
+        db_json_path = os.path.join(workspace_path, "db.json")
+        try:
+            with open(db_json_path, "w", encoding="utf-8") as f:
+                f.write(mock_db_json)
+            await _ws_send(websocket, "progress", "📦 Generated db.json (mock API data)")
+            logger.info("Wrote db.json (%d bytes)", len(mock_db_json))
+        except Exception as e:
+            logger.warning("Failed to write db.json: %s", e)
+    
     total_files = []
     
     # ═══════════════════════════════════════════════════════
@@ -1471,6 +1638,27 @@ async def generate_new_project(
     # ═══════════════════════════════════════════════════════
     await _ws_send(websocket, "progress", "🏗️ Phase 1/3 — Building foundation...")
     
+    # Design system file instruction — generates src/lib/design-system.js
+    design_system_instruction = ""
+    if schema_design_spec:
+        design_system_instruction = f"""\n7. DESIGN SYSTEM FILE — Generate src/lib/design-system.js (or .ts for Vue):
+   Export a `ds` object with deterministic Tailwind class tokens:
+   - card: exact classes for ALL cards in the project
+   - badge variants: status → Tailwind classes mapping
+   - section spacing, max width, heading sizes
+   - animation presets (page transition, card hover, stagger)
+   ALL components in Phase 2 and 3 MUST import {{ ds }} from '@/lib/design-system' and use these tokens.
+   This guarantees visual consistency across the entire project.
+
+{schema_design_spec}\n"""
+
+    # API-ready service instruction
+    api_instruction = ""
+    if schema_api_spec:
+        api_instruction = f"""\n8. ENV FILE — Generate .env with API URL:
+   {project_schema.get('api_config', {}).get('base_url_env', 'VITE_API_URL')}={project_schema.get('api_config', {}).get('base_url_default', 'http://localhost:3001')}
+\n"""
+
     phase1_prompt = f"""PHASE 1 OF 3 — FOUNDATION FILES ONLY
 
 Generate ONLY these foundation files (Phases 2 and 3 will handle sections/features/extra pages):
@@ -1481,9 +1669,15 @@ Generate ONLY these foundation files (Phases 2 and 3 will handle sections/featur
    - Border radius, ring offset, sidebar colors
    - Import BOTH Google Fonts (heading + body) via @import url()
 
+{schema_theme_spec}
+
 2. SITE CONFIG — Brand name, tagline, meta description, URL, social links
+   Brand: {project_schema.get('brand', {}).get('name', description[:30])}
+   Tagline: {project_schema.get('brand', {}).get('tagline', '')}
 
 3. NAVIGATION CONFIG — Full domain-specific navigation with Lucide icon names, grouping, badges
+
+{schema_nav_spec}
 
 4. LAYOUT COMPONENTS — FULLY REWRITE Sidebar/Header/Footer for this project's unique design:
    - Sidebar: custom width, brand colors, logo area, nav groups, user profile area
@@ -1494,10 +1688,13 @@ Generate ONLY these foundation files (Phases 2 and 3 will handle sections/featur
 5. MAIN PAGE:
    - Landing: page.js that imports section components (sections come in Phase 2)
    - Admin: DashboardPage with KPI cards, charts (recharts/vue-chartjs), activity table
-     Include 4 KPI cards with realistic values, 2 charts with 12+ data points, 8-row activity table
+
+{schema_dashboard_spec}
 
 6. ROUTER — Add routes for ALL planned pages/features (pages themselves come in Phase 2-3)
-
+   All routes from schema:
+{chr(10).join(f'   {p.get("path", "")} → {p.get("component", "")} ({p.get("type", "")})' for p in project_schema.get('pages', []))}
+{design_system_instruction}{api_instruction}
 PROJECT: {description}
 APP TYPE: {app_type}
 STACK: {stack}
@@ -1551,32 +1748,45 @@ Call the write_project_files tool with ALL files.
     # Landing types: landing_page, blog, entertainment, documentation, portfolio
     
     if app_type in CRUD_TYPES:
-        phase2_instruction = """Generate ALL CRUD feature modules.
-For EACH entity from the research, create the COMPLETE feature folder:
-  - services/[entity].service.js — API calls + MOCK DATA FALLBACK (10-20 realistic rows)
+        _api_cfg = project_schema.get('api_config', {})
+        _api_env = _api_cfg.get('base_url_env', 'VITE_API_URL')
+        _api_default = _api_cfg.get('base_url_default', 'http://localhost:3001')
+        phase2_instruction = f"""Generate ALL CRUD feature modules from the schema below.
+For EACH entity, create the COMPLETE feature folder:
+  - services/[entity].service.js — REAL fetch() calls to the API (NOT hardcoded mock data)
   - hooks/use[Entity].js — React Query / Vue Query wrappers
-  - pages/[Entity]ListPage — DataTable with columns, actions, filters, search, pagination
-  - pages/[Entity]FormPage — Full form with validation (react-hook-form + zod / vee-validate + zod)
+  - pages/[Entity]ListPage — DataTable with schema-defined columns, actions, filters, search
+  - pages/[Entity]FormPage — Form with schema-defined fields + validation (react-hook-form + zod)
 
-Create as many entities as the research specifies — NO LIMIT.
-Every service must include realistic mock data with real names, numbers, dates, statuses.
-Every list page must have column definitions, status badges, action buttons.
-Every form must have proper field types, placeholders, and validation rules.
+IMPORTANT — API-READY SERVICES:
+  Services must use REAL HTTP fetch() calls:
+    const API_URL = import.meta.env.{_api_env} || '{_api_default}';
+    getAll: (params) => fetch(`${{API_URL}}/entity?${{new URLSearchParams(params)}}`).then(r => r.json())
+  DO NOT hardcode mock data arrays inside services.
+  The mock data lives in db.json (already generated) and is served by json-server.
+  Services should catch errors and return empty arrays on failure (graceful degradation).
+
+IMPORTANT — DESIGN SYSTEM:
+  Import {{ ds }} from '@/lib/design-system' in ALL components.
+  Use ds.card for card wrappers, ds.badge[status] for status badges.
+
+{schema_entity_spec}
+{schema_api_spec}
 
 ALSO: Create any domain-specific specialized views from DOMAIN_MUST_HAVES in the research:
-- Maps (react-leaflet), calendars (react-big-calendar), kanban boards, timelines, etc.
-- If the research lists must-have features, CREATE the components for them."""
+- Maps, calendars, kanban boards, timelines, etc."""
     else:
-        phase2_instruction = """Generate ALL section components for the landing page.
-Create EVERY section the research specifies — NO LIMIT.
-Typical sections: Hero, Logos/SocialProof, Features, HowItWorks, Pricing, Testimonials, FAQ, CTA, Stats.
+        phase2_instruction = f"""Generate ALL section components for the landing page.
+Create EVERY section listed in the schema — NO LIMIT.
+
+{schema_sections_spec}
 
 Each section must be:
 - A complete, self-contained component
 - Fully responsive (mobile-first: sm: md: lg: xl:)
 - Animated with framer-motion (fade-up on scroll, hover effects)
 - Using REAL domain-specific copy (not lorem ipsum)
-- Using the EXACT design system from the research (colors, fonts, spacing)
+- Import {{ ds }} from '@/lib/design-system' and use ds.sectionSpacing, ds.maxWidth, ds.card
 - With realistic mock data (testimonials with i.pravatar.cc avatars, pricing with real USD)
 
 ALSO: Create any domain-specific must-have sections from the research:
@@ -1606,18 +1816,25 @@ CURRENT FILE TREE (foundation already written):
 Call the write_project_files tool with ALL files.
 """
     
+    # Phase 2 is the heaviest — all CRUD modules or all sections in one call.
+    # Give it 2x the normal token budget to avoid truncation on big admin panels.
+    PHASE2_MAX_TOKENS = 64000
+    
     result2 = await call_claude_for_json(
         system_prompt=SYSTEM_PROMPT,
         user_prompt=phase2_prompt,
         api_key=api_key,
         websocket=websocket,
-        max_tokens=MAX_TOKENS,
+        max_tokens=PHASE2_MAX_TOKENS,
         model=MODEL,
     )
     if result2:
         written = write_files_from_json(result2, workspace_path)
         total_files += written
         await _ws_send(websocket, "progress", f"✅ Content: {len(written)} files")
+    else:
+        await _ws_send(websocket, "progress", "⚠️ Phase 2 returned no files — continuing with Phase 3...")
+        logger.warning("Phase 2 (content) returned no files")
     
     # Rebuild file tree for Phase 3
     file_tree_3 = _build_file_tree(workspace_path)
@@ -1627,6 +1844,12 @@ Call the write_project_files tool with ALL files.
     # ═══════════════════════════════════════════════════════
     await _ws_send(websocket, "progress", "✨ Phase 3/3 — Building additional pages...")
     
+    # Build the list of schema-required pages that may still be missing
+    schema_pages_list = "\n".join(
+        f"   {p.get('path', '')} → {p.get('component', '')} ({p.get('type', '')})"
+        for p in project_schema.get('pages', [])
+    )
+
     phase3_prompt = f"""PHASE 3 OF 3 — ADDITIONAL PAGES + COMPLETENESS CHECK
 
 The foundation and content are built (see file tree below). DO NOT regenerate existing files.
@@ -1635,17 +1858,23 @@ Generate:
 1. ALL ADDITIONAL PAGES not yet created:
    - Landing: About (team, mission, stats), Pricing (expanded), Contact (form + info), Blog (listing)
    - Admin: Settings (profile/notifications/security tabs), Profile, Help/docs
-   - Any other pages the research or navigation config references
+   - Any other pages referenced in the schema or navigation
 
-2. COMPLETENESS CHECK — scan the current file tree and fix gaps:
-   - Any navigation items that don't have corresponding pages → CREATE the page
-   - Any imports in existing files that reference missing files → CREATE those files
-   - Any placeholder sections in the main page that reference missing components → CREATE them
+2. COMPLETENESS CHECK — verify EVERY schema page exists in the file tree:
+   Schema-required pages:
+{schema_pages_list}
+   - For each page above: if the component file does NOT exist in the file tree → CREATE it
+   - Any navigation items without corresponding pages → CREATE the page
+   - Any imports referencing missing files → CREATE those files
    - If router has routes to pages that don't exist → CREATE those pages
 
 3. CUSTOM COMPONENTS (if needed by any page):
    - Kanban board, calendar view, timeline, progress tracker
    - Any specialized component not in shadcn/ui → CREATE from scratch with Tailwind
+
+4. IMPORT DESIGN SYSTEM — all new components must:
+   - import {{ ds }} from '@/lib/design-system'
+   - Use ds.card, ds.badge, ds.pageAnimation for consistency
 
 PROJECT: {description}
 APP TYPE: {app_type}
@@ -1677,8 +1906,31 @@ Call the write_project_files tool with ALL files.
         written = write_files_from_json(result3, workspace_path)
         total_files += written
         await _ws_send(websocket, "progress", f"✅ Pages: {len(written)} files")
+    else:
+        await _ws_send(websocket, "progress", "⚠️ Phase 3 returned no files — proceeding with build...")
+        logger.warning("Phase 3 (extra pages) returned no files")
+    
+    if not total_files:
+        await _ws_send(websocket, "error", "❌ No files were generated. Check API key and credits.")
+        return False
     
     await _ws_send(websocket, "progress", f"💾 Total: {len(total_files)} files generated")
+    
+    # ── Post-generation fixers (before build) ──
+    # Automatically fix the 3 most common build error causes:
+    #   1. Missing 'use client' directives
+    #   2. Banned lucide-react icon imports
+    #   3. Unresolved imports (create stub files)
+    try:
+        from app.services.post_generation_fixer import run_all_fixers
+        fix_results = await run_all_fixers(workspace_path, websocket)
+        if fix_results["total_fixes"] > 0:
+            await _ws_send(
+                websocket, "progress",
+                f"🔧 Auto-fixed {fix_results['total_fixes']} potential build issues",
+            )
+    except Exception as pgf_err:
+        logger.warning("Post-generation fixers failed (non-fatal): %s", pgf_err)
     
     # ── Build verification ──
     build_ok = await verify_and_fix_build(
@@ -1687,6 +1939,24 @@ Call the write_project_files tool with ALL files.
         websocket=websocket,
     )
     
+    # ── Quality scoring (non-blocking) ──
+    try:
+        from app.services.quality_scorer import score_project
+        quality_result = await score_project(workspace_path, websocket)
+        # Send quality score to frontend
+        try:
+            await websocket.send_json({
+                "type": "quality_score",
+                "score": quality_result["score"],
+                "grade": quality_result["grade"],
+                "checks": {k: {"label": v["label"], "score": v["score"], "value": v["value"]} for k, v in quality_result.get("checks", {}).items()},
+                "warnings": quality_result.get("warnings", []),
+            })
+        except Exception:
+            pass
+    except Exception as qs_err:
+        logger.warning("Quality scoring failed (non-fatal): %s", qs_err)
+
     # ── Send file list to frontend ──
     try:
         all_files = []

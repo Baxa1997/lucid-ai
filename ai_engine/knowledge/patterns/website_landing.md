@@ -229,13 +229,15 @@ export default FAQSection;
 
 ### Section Layout
 ```jsx
-{/* Standard section wrapper */}
-<section className="py-20 px-6">
-  <div className="max-w-6xl mx-auto">
+{/* Standard section wrapper — use design system tokens */}
+import { ds } from '@/lib/design-system'
+
+<section className={ds.sectionSpacing}>
+  <div className={ds.maxWidth}>
     {/* Section header */}
     <div className="text-center mb-12">
       <span className="text-xs font-semibold uppercase tracking-widest text-primary">Label</span>
-      <h2 className="text-3xl font-bold text-foreground mt-2">Section Title</h2>
+      <h2 className={ds.heading.h2 + " text-foreground mt-2"}>Section Title</h2>
       <p className="text-muted-foreground mt-3 max-w-2xl mx-auto">Description text</p>
     </div>
     {/* Content grid */}
@@ -245,3 +247,84 @@ export default FAQSection;
   </div>
 </section>
 ```
+
+---
+
+## Design System Integration
+
+ALL section components must import and use the shared design system:
+
+```jsx
+'use client'
+import { motion } from 'framer-motion'
+import { ds } from '@/lib/design-system'
+
+export default function FeaturesSection() {
+  return (
+    <section className={ds.sectionSpacing}>
+      <div className={ds.maxWidth}>
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          className="text-center mb-16"
+        >
+          <h2 className={ds.heading.h2}>Features</h2>
+        </motion.div>
+        <motion.div
+          variants={ds.stagger.container}
+          initial="initial"
+          whileInView="animate"
+          viewport={{ once: true }}
+          className="grid grid-cols-1 md:grid-cols-3 gap-6"
+        >
+          {features.map((f, i) => (
+            <motion.div key={i} variants={ds.stagger.child}>
+              <div className={ds.card + " p-6 h-full"}>
+                {/* feature content */}
+              </div>
+            </motion.div>
+          ))}
+        </motion.div>
+      </div>
+    </section>
+  )
+}
+```
+
+## Animation Patterns (framer-motion)
+
+```jsx
+// Page-level transition
+<motion.div {...ds.pageAnimation}>
+
+// Scroll reveal (single element)
+<motion.div
+  initial={{ opacity: 0, y: 20 }}
+  whileInView={{ opacity: 1, y: 0 }}
+  viewport={{ once: true }}
+  transition={{ duration: 0.5 }}
+>
+
+// Staggered list
+<motion.div variants={ds.stagger.container} initial="initial" whileInView="animate" viewport={{ once: true }}>
+  {items.map((item, i) => (
+    <motion.div key={i} variants={ds.stagger.child}>
+  ))}
+</motion.div>
+
+// Card hover
+<motion.div {...ds.cardHover}>
+```
+
+## CRITICAL RULES
+1. **Every section** must have `'use client'` at the top
+2. **Every section** must import `{ ds }` from `@/lib/design-system`
+3. **Every section** must use `ds.sectionSpacing` and `ds.maxWidth`
+4. **Every card** must use `ds.card` for consistent styling
+5. **Every section** must have framer-motion scroll animations
+6. **No hardcoded colors** — use Tailwind utility classes only
+7. **Responsive** — every section must use sm: md: lg: breakpoints
+8. **Avatars** must use `https://i.pravatar.cc/150?u=uniquestring`
+9. **Social icons** — NEVER import from lucide-react, use inline SVG
+
