@@ -1,628 +1,581 @@
 'use client';
 
-import { 
-  GitBranch, Plus, ChevronDown, Check, 
-  Github, Rocket, Clock, Sparkles, MessageSquare, 
-  ArrowRight, Folder, Search, X,
-  CircleDot, Loader2, Layers, ExternalLink
+// ─────────────────────────────────────────────────────────
+//  Lucid AI — Engineer Dashboard (v3 — Production Grade)
+//  Prompt Hero → Stats → Project Cards → Activity
+// ─────────────────────────────────────────────────────────
+
+import {
+  Plus, Github, Rocket, Clock, Sparkles,
+  MessageSquare, ArrowRight, Loader2, Layers,
+  Globe, Zap, Activity, BarChart3,
+  ExternalLink, ChevronDown, ChevronUp,
+  MoreHorizontal, Code2, Play,
+  Lightbulb, Eye, Paperclip, Link2, SlidersHorizontal, Image,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
-import useFlowStore from '@/store/useFlowStore';
-import {
-  getIntegrations,
-  fetchGitHubRepos,
-  fetchGitHubBranches,
-  fetchGitLabRepos,
-  fetchGitLabBranches,
-} from '@/lib/integrations';
-import { createConversation } from '@/lib/conversations';
+import { createConversation, listConversations } from '@/lib/conversations';
 import { useWizard } from './layout';
+import CustomSelect from '@/components/ui/CustomSelect';
+import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 
-export default function EngineerDashboardPage() {
-  const router = useRouter();
-  const {
-    selectedRepo, setSelectedRepo,
-    sourceBranch, setSourceBranch,
-    setSessionActive,
-  } = useFlowStore();
+// ── Helpers ──────────────────────────────────────
+function formatTime(dateStr) {
+  if (!dateStr) return '';
+  const diff = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
+  if (diff < 60) return 'Just now';
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
+  return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
 
-  const [showRepoDropdown, setShowRepoDropdown] = useState(false);
-  const [showBranchDropdown, setShowBranchDropdown] = useState(false);
-  const [showProviderDropdown, setShowProviderDropdown] = useState(false);
-  const [repoSearch, setRepoSearch] = useState('');
-  const [localRepo, setLocalRepo] = useState(null);
-  const [localBranch, setLocalBranch] = useState('');
-  const [selectedProvider, setSelectedProvider] = useState('github');
-  const [isLaunching, setIsLaunching] = useState(false);
-  const [showBanner, setShowBanner] = useState(true);
+const IDEAS = [
+  { label: 'CRM dashboard', emoji: '📊', prompt: 'A modern CRM dashboard with contact management, deal pipeline view, activity tracking, and analytics charts. Clean professional design with sidebar navigation.' },
+  { label: 'E-commerce store', emoji: '🛒', prompt: 'An e-commerce storefront with product catalog, shopping cart, checkout flow, user accounts, and order history. Modern design with hero banner and category filtering.' },
+  { label: 'Portfolio website', emoji: '🎨', prompt: 'A personal portfolio website with hero section, project showcase grid, about me page, skills section, and contact form. Minimal, elegant design with dark mode.' },
+  { label: 'SaaS landing', emoji: '🚀', prompt: 'A SaaS product landing page with hero section, feature grid, pricing table, testimonials, FAQ accordion, and footer. Modern gradient design with CTAs.' },
+  { label: 'Blog platform', emoji: '📝', prompt: 'A blog platform with article listing, rich text editor, categories/tags, comment system, and author profiles. Clean typography-focused design.' },
+  { label: 'Admin panel', emoji: '⚙️', prompt: 'A full-featured admin dashboard with data tables, CRUD forms, user management, role-based access, charts/analytics, and settings page. Professional enterprise design.' },
+];
 
-  // Platform-generated repos ("My Projects")
-  const [platformRepos, setPlatformRepos] = useState([]);
-  const [platformLoading, setPlatformLoading] = useState(true);
-  const { setShowWizard } = useWizard();
+// Emoji icons for projects (deterministic based on name hash)
+const PROJECT_EMOJIS = ['🔥', '⚡', '🚀', '💎', '🎯', '🌟', '🎨', '🔮', '🌊', '🍀', '🦊', '🎪'];
+const EMOJI_BG_COLORS = [
+  'bg-orange-50 dark:bg-orange-500/10',
+  'bg-amber-50 dark:bg-amber-500/10',
+  'bg-blue-50 dark:bg-blue-500/10',
+  'bg-violet-50 dark:bg-violet-500/10',
+  'bg-emerald-50 dark:bg-emerald-500/10',
+  'bg-rose-50 dark:bg-rose-500/10',
+  'bg-cyan-50 dark:bg-cyan-500/10',
+  'bg-indigo-50 dark:bg-indigo-500/10',
+  'bg-teal-50 dark:bg-teal-500/10',
+  'bg-pink-50 dark:bg-pink-500/10',
+  'bg-lime-50 dark:bg-lime-500/10',
+  'bg-fuchsia-50 dark:bg-fuchsia-500/10',
+];
 
-  // Real repos from integrations
-  const [allRepos, setAllRepos] = useState([]);
-  const [reposLoading, setReposLoading] = useState(true);
-  const [branches, setBranches] = useState([]);
-  const [branchesLoading, setBranchesLoading] = useState(false);
-  const [integrations, setIntegrations] = useState({ github: null, gitlab: null });
+function getProjectHash(name) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = (hash << 5) - hash + name.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
 
-  // Fetch repos + platform projects on mount
-  useEffect(() => {
-    (async () => {
-      setReposLoading(true);
-      setPlatformLoading(true);
-
-      // Fetch platform repos ("My Projects") in parallel
-      fetch('/api/platform-repos')
-        .then(r => r.json())
-        .then(d => setPlatformRepos(d.repos || []))
-        .catch(() => setPlatformRepos([]))
-        .finally(() => setPlatformLoading(false));
-
-      const intg = await getIntegrations();
-      setIntegrations(intg);
-
-      const repos = [];
-
-      // GitHub repos
-      if (intg.github?.connected && intg.github?.token) {
-        const ghRepos = await fetchGitHubRepos(intg.github.token);
-        repos.push(...ghRepos);
-      }
-
-      // GitLab repos
-      if (intg.gitlab?.connected && intg.gitlab?.token) {
-        const glRepos = await fetchGitLabRepos(intg.gitlab.host, intg.gitlab.token);
-        repos.push(...glRepos);
-      }
-
-      setAllRepos(repos);
-      setReposLoading(false);
-    })();
-  }, []);
-
-  // Fetch branches when a repo is selected
-  const loadBranches = useCallback(async (repo) => {
-    if (!repo) return;
-    setBranchesLoading(true);
-    setBranches([]);
-    let branchList = [];
-
-    if (repo.provider === 'github' && integrations.github?.token) {
-      branchList = await fetchGitHubBranches(integrations.github.token, repo.name);
-    } else if (repo.provider === 'gitlab' && integrations.gitlab?.token) {
-      branchList = await fetchGitLabBranches(integrations.gitlab.host, integrations.gitlab.token, repo.name);
-    }
-
-    setBranches(branchList.length > 0 ? branchList : [repo.defaultBranch || 'main']);
-    setBranchesLoading(false);
-  }, [integrations]);
-
-  const filteredRepos = allRepos.filter(r => 
-    r.name.toLowerCase().includes(repoSearch.toLowerCase())
-  );
-
-
-  const handleLaunch = async () => {
-    if (!localRepo) return;
-    setIsLaunching(true);
-    setSelectedRepo(localRepo);
-    setSourceBranch(localBranch || localRepo.defaultBranch || 'main');
-    setSessionActive(true);
-
-    // Create conversation in Supabase
-    const conversation = await createConversation({
-      repoName: localRepo.name,
-      repoProvider: localRepo.provider,
-      repoUrl: localRepo.url || '',
-      branch: localBranch || localRepo.defaultBranch || 'main',
-      title: 'New Conversation',
-    });
-
-    if (conversation) {
-      router.push(`/dashboard/engineer/workspace/${conversation.id}`);
-    } else {
-      // Fallback to old URL-based routing
-      router.push(`/dashboard/engineer/workspace/${encodeURIComponent(localRepo.name)}`);
-    }
-  };
-
-  // Launch from a platform-generated project ("My Projects")
-  const handleLaunchPlatformRepo = async (platformRepo) => {
-    if (!platformRepo.projectId) return;
-    setIsLaunching(true);
-
-    // Ensure a conversation record exists for this platform project
-    // (projects created via the wizard may not have one yet)
-    try {
-      const existing = await getConversation(platformRepo.projectId);
-      if (!existing) {
-        await createConversation({
-          repoName: platformRepo.repoName || '',
-          repoProvider: 'github',
-          repoUrl: platformRepo.repoUrl || '',
-          branch: 'main',
-          title: platformRepo.projectName || platformRepo.repoName || 'Project',
-        });
-      }
-    } catch (e) {
-      // Non-critical — workspace will still work via chat_sessions
-      console.warn('Could not ensure conversation record:', e);
-    }
-
-    router.push(`/dashboard/engineer/workspace/${platformRepo.projectId}`);
-  };
-
-  const handleNewConversation = () => {
-    setShowWizard(true);
-  };
+/* ════════════════════════════════════════════════════════
+   PROJECT CARD — Base44 clean "Apps" style
+   ════════════════════════════════════════════════════════ */
+function ProjectCard({ project, index, onClick, isLaunching }) {
+  const [showMenu, setShowMenu] = useState(false);
+  const hasDeployment = !!project.deployUrl;
+  const rawName = project.projectName || project.repoName || 'Untitled';
+  const displayName = rawName
+    .replace(/[-_]/g, ' ')
+    .replace(/\b\w/g, l => l.toUpperCase())
+    .slice(0, 50);
+  const hash = getProjectHash(rawName);
+  const emoji = PROJECT_EMOJIS[hash % PROJECT_EMOJIS.length];
+  const bgColor = EMOJI_BG_COLORS[hash % EMOJI_BG_COLORS.length];
 
   return (
-    <div className="h-full bg-[#f0f4f9] dark:bg-[#0d1117] relative flex flex-col transition-colors duration-200">
-
-      {/* ── Main Content ── */}
-      <div className="flex-1 w-full overflow-y-auto">
-
-        {/* ── Hero Section ── */}
-        <div className="px-6 lg:px-8 pt-12 pb-10">
-          <div className="max-w-[900px] mx-auto">
-          
-            {/* Banner */}
-            {showBanner && (
-              <div className="flex items-center justify-center mb-8">
-                <div className="flex items-center gap-2 px-5 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-full shadow-soft">
-                  <span className="text-sm text-slate-500 dark:text-slate-400">New around here? Not sure where to start?</span>
-                  <button className="text-sm text-slate-800 dark:text-slate-200 font-bold underline underline-offset-2 hover:text-blue-600 dark:hover:text-blue-400 transition-colors">Click here</button>
-                </div>
-              </div>
-            )}
-            
-            {/* Title */}
-            <div className="text-center mb-3">
-              <h1 className="text-4xl sm:text-[44px] font-extrabold text-slate-900 dark:text-slate-100 tracking-tight leading-tight">
-                Let&apos;s Start Building!
-              </h1>
-            </div>
-
-            {/* Subtitle */}
-            <div className="text-center mb-10">
-              <p className="text-[15px] text-slate-400 dark:text-slate-500 max-w-xl mx-auto leading-relaxed">
-                Select a repository to begin an autonomous engineering session or start a fresh environment from scratch.
-              </p>
-            </div>
-
-            {/* ── Two Cards ── */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 relative z-30">
-          
-          {/* LEFT: Open Repository */}
-          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-soft relative z-30">
-            <div className="flex items-center gap-3 mb-1">
-              <div className="w-8 h-8 rounded-lg bg-blue-50 dark:bg-blue-500/10 border border-blue-100 dark:border-blue-500/20 flex items-center justify-center">
-                <GitBranch className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-              </div>
-              <h2 className="text-[15px] font-bold text-slate-900 dark:text-slate-100">Open Repository</h2>
-            </div>
-            
-            {/* Select URL label */}
-            <p className="text-[11px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider mt-4 mb-3">Select or insert a URL</p>
-
-            <div className="space-y-2.5 mb-4">
-              {/* Provider Dropdown */}
-              <div className="relative">
-                <button
-                  onClick={() => { setShowProviderDropdown(!showProviderDropdown); setShowRepoDropdown(false); setShowBranchDropdown(false); }}
-                  className="w-full flex items-center justify-between px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-600 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-600 transition-all"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <Github className="w-4 h-4 text-slate-700 dark:text-slate-300" />
-                    <span className="font-medium">{selectedProvider === 'github' ? 'GitHub' : 'GitLab'}</span>
-                  </div>
-                  <ChevronDown className={cn("w-4 h-4 text-slate-400 transition-transform", showProviderDropdown && "rotate-180")} />
-                </button>
-
-                {showProviderDropdown && (
-                  <>
-                    <div className="fixed inset-0 z-40" onClick={() => setShowProviderDropdown(false)} />
-                    <div className="absolute right-0 top-full mt-1.5 w-full bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden z-50 shadow-lg">
-                      <button
-                        onClick={() => { setSelectedProvider('github'); setShowProviderDropdown(false); }}
-                        className={cn("w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-left hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors", selectedProvider === 'github' && "bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400")}
-                      >
-                        <Github className="w-4 h-4" /> GitHub
-                        {selectedProvider === 'github' && <Check className="w-3.5 h-3.5 ml-auto" />}
-                      </button>
-                      <button
-                        onClick={() => { setSelectedProvider('gitlab'); setShowProviderDropdown(false); }}
-                        className={cn("w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-left hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors", selectedProvider === 'gitlab' && "bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400")}
-                      >
-                        <GitBranch className="w-4 h-4" /> GitLab
-                        {selectedProvider === 'gitlab' && <Check className="w-3.5 h-3.5 ml-auto" />}
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Repository Dropdown */}
-              <div className="relative">
-                <button
-                  onClick={() => { setShowRepoDropdown(!showRepoDropdown); setShowBranchDropdown(false); setShowProviderDropdown(false); }}
-                  className="w-full flex items-center justify-between px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-600 dark:text-slate-300 hover:border-blue-300 dark:hover:border-blue-500/50 transition-all"
-                >
-                  <div className="flex items-center gap-2.5 truncate">
-                    <Folder className="w-4 h-4 text-slate-400 shrink-0" />
-                    <span className={cn("truncate", localRepo ? "text-slate-700 font-medium" : "text-slate-400")}>
-                      {localRepo ? localRepo.name : 'user/repo'}
-                    </span>
-                  </div>
-                  <ChevronDown className={cn("w-4 h-4 text-slate-400 shrink-0 transition-transform", showRepoDropdown && "rotate-180")} />
-                </button>
-
-                {showRepoDropdown && (
-                  <>
-                    <div className="fixed inset-0 z-40" onClick={() => setShowRepoDropdown(false)} />
-                    <div className="absolute top-full left-0 right-0 mt-1.5 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden z-50 shadow-lg">
-                      <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-700">
-                        <div className="relative">
-                          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-                          <input
-                            value={repoSearch}
-                            onChange={(e) => setRepoSearch(e.target.value)}
-                            className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-100 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-700 outline-none focus:border-blue-300 dark:focus:border-blue-500 text-slate-700 dark:text-slate-200"
-                            placeholder="Search repositories..."
-                            autoFocus
-                          />
-                        </div>
-                      </div>
-                      <div className="max-h-64 overflow-y-auto">
-                        {/* ── My Projects (Platform repos) ── */}
-                        {platformRepos.length > 0 && (
-                          <>
-                            <div className="px-3 py-1.5 bg-violet-50 dark:bg-violet-500/5 border-b border-violet-100 dark:border-violet-500/10">
-                              <span className="text-[10px] font-bold text-violet-500 dark:text-violet-400 uppercase tracking-wider flex items-center gap-1.5">
-                                <Layers className="w-3 h-3" />
-                                My Projects
-                              </span>
-                            </div>
-                            {platformRepos
-                              .filter(p => !repoSearch || p.projectName.toLowerCase().includes(repoSearch.toLowerCase()) || p.repoName.toLowerCase().includes(repoSearch.toLowerCase()))
-                              .map((pr) => (
-                              <button
-                                key={pr.projectId}
-                                onClick={() => { setShowRepoDropdown(false); handleLaunchPlatformRepo(pr); }}
-                                className="w-full flex items-center gap-3 px-3.5 py-2.5 text-sm transition-all text-left hover:bg-violet-50 dark:hover:bg-violet-500/5 text-slate-600 dark:text-slate-300"
-                              >
-                                <div className="w-5 h-5 rounded bg-violet-100 dark:bg-violet-500/15 flex items-center justify-center shrink-0">
-                                  <Sparkles className="w-3 h-3 text-violet-500" />
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <span className="font-medium truncate block text-slate-700 dark:text-slate-200">{pr.projectName}</span>
-                                  <span className="text-[10px] text-slate-400 dark:text-slate-500 truncate block">{pr.repoName}</span>
-                                </div>
-                                <ArrowRight className="w-3.5 h-3.5 text-slate-300 dark:text-slate-600 shrink-0" />
-                              </button>
-                            ))}
-                            <div className="border-b border-slate-100 dark:border-slate-700" />
-                          </>
-                        )}
-
-                        {/* ── Connected repos ── */}
-                        {reposLoading ? (
-                          <div className="flex items-center justify-center py-6">
-                            <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
-                          </div>
-                        ) : filteredRepos.length === 0 && platformRepos.length === 0 ? (
-                          <div className="py-6 text-center">
-                            <p className="text-xs text-slate-400 dark:text-slate-500">
-                              {allRepos.length === 0 ? 'No integrations connected' : 'No matching repositories'}
-                            </p>
-                            {allRepos.length === 0 && (
-                              <button
-                                onClick={() => { setShowRepoDropdown(false); router.push('/dashboard/engineer/integrations'); }}
-                                className="text-xs text-blue-600 dark:text-blue-400 font-medium mt-1 hover:underline"
-                              >
-                                Connect GitHub or GitLab →
-                              </button>
-                            )}
-                          </div>
-                        ) : filteredRepos.length > 0 ? (
-                          <>
-                            {platformRepos.length > 0 && (
-                              <div className="px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border-b border-slate-100 dark:border-slate-700">
-                                <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Connected Repos</span>
-                              </div>
-                            )}
-                            {filteredRepos.map((repo) => (
-                              <button
-                                key={`${repo.provider}-${repo.name}`}
-                                onClick={() => { setLocalRepo(repo); setLocalBranch(''); setShowRepoDropdown(false); setRepoSearch(''); loadBranches(repo); }}
-                                className={cn(
-                                  "w-full flex items-center gap-3 px-3.5 py-2.5 text-sm transition-all text-left hover:bg-slate-50 dark:hover:bg-slate-700",
-                                  localRepo?.name === repo.name ? "bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400" : "text-slate-600 dark:text-slate-300"
-                                )}
-                              >
-                                {repo.provider === 'github'
-                                  ? <Github className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                                  : <GitBranch className="w-3.5 h-3.5 text-orange-400 shrink-0" />
-                                }
-                                <div className="flex-1 min-w-0">
-                                  <span className="font-medium truncate block">{repo.name}</span>
-                                  {repo.language && <span className="text-[10px] text-slate-400">{repo.language}</span>}
-                                </div>
-                                {repo.private && <span className="text-[9px] px-1.5 py-0.5 bg-slate-100 dark:bg-white/[0.06] rounded text-slate-400 font-medium">Private</span>}
-                                {localRepo?.name === repo.name && <Check className="w-3.5 h-3.5 ml-auto text-blue-600 shrink-0" />}
-                              </button>
-                            ))}
-                          </>
-                        ) : null}
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Branch Selector */}
-              <div className="relative">
-                <button
-                  onClick={() => { setShowBranchDropdown(!showBranchDropdown); setShowRepoDropdown(false); setShowProviderDropdown(false); }}
-                  className="w-full flex items-center justify-between px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-600 dark:text-slate-300 hover:border-blue-300 dark:hover:border-blue-500/50 transition-all"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <GitBranch className="w-4 h-4 text-slate-400" />
-                    <span className={cn(localBranch ? "text-slate-700 font-medium" : "text-slate-400")}>{localBranch || 'Select branch...'}</span>
-                  </div>
-                  <ChevronDown className={cn("w-4 h-4 text-slate-400 shrink-0 transition-transform", showBranchDropdown && "rotate-180")} />
-                </button>
-
-                {showBranchDropdown && (
-                  <>
-                    <div className="fixed inset-0 z-40" onClick={() => setShowBranchDropdown(false)} />
-                    <div className="absolute top-full left-0 right-0 mt-1.5 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden z-50 shadow-lg max-h-48 overflow-y-auto">
-                      {branchesLoading ? (
-                        <div className="flex items-center justify-center py-6">
-                          <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
-                        </div>
-                      ) : branches.length === 0 ? (
-                        <div className="py-6 text-center text-xs text-slate-400 dark:text-slate-500">
-                          {localRepo ? 'No branches found' : 'Select a repository first'}
-                        </div>
-                      ) : (
-                      branches.map((branch) => (
-                        <button
-                          key={branch}
-                          onClick={() => { setLocalBranch(branch); setShowBranchDropdown(false); }}
-                            className={cn(
-                              "w-full flex items-center gap-3 px-3.5 py-2.5 text-sm transition-all text-left hover:bg-slate-50 dark:hover:bg-slate-700",
-                              localBranch === branch ? "bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400" : "text-slate-600 dark:text-slate-300"
-                            )}
-                        >
-                          <GitBranch className="w-3.5 h-3.5 text-slate-400" />
-                          <span className="font-medium">{branch}</span>
-                          {localBranch === branch && <Check className="w-3.5 h-3.5 ml-auto text-blue-600" />}
-                        </button>
-                      ))
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-
-            {/* Launch Button */}
-            <button
-              onClick={handleLaunch}
-              disabled={!localRepo || isLaunching}
-              className={cn(
-                "w-full py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all duration-300",
-                localRepo && !isLaunching
-                  ? "bg-gradient-to-r from-blue-600 to-blue-700 text-white hover:from-blue-700 hover:to-blue-800 shadow-sm shadow-blue-600/15"
-                  : "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed border border-slate-200 dark:border-slate-700"
-              )}
-            >
-              {isLaunching ? (
-                <>
-                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  Launching...
-                </>
-              ) : (
-                'Launch'
-              )}
-            </button>
-          </div>
-
-          {/* RIGHT: New Project (Wizard) */}
-          <div className="bg-gradient-to-br from-violet-50 via-white to-blue-50 dark:from-slate-900 dark:via-slate-900 dark:to-slate-900 rounded-2xl border-2 border-violet-200 dark:border-violet-500/20 p-6 shadow-soft relative overflow-hidden flex flex-col">
-            {/* Subtle glow accent */}
-            <div className="absolute -top-20 -right-20 w-40 h-40 bg-violet-200/40 dark:bg-violet-500/5 rounded-full blur-3xl pointer-events-none" />
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-8 h-8 rounded-lg bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 flex items-center justify-center">
-                <Sparkles className="w-4 h-4 text-violet-600 dark:text-violet-400" />
-              </div>
-              <h2 className="text-[15px] font-bold text-slate-900 dark:text-slate-100">New Project</h2>
-            </div>
-            <p className="text-sm text-slate-400 leading-relaxed flex-1">
-              Set up a brand-new project with the guided wizard. Pick your stack, describe your idea, and let AI generate fully production-ready code.
-            </p>
-
-            {/* New Project Button */}
-            <button
-              onClick={handleNewConversation}
-              disabled={isLaunching}
-              className={cn(
-                "w-full mt-6 py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all active:scale-[0.98]",
-                isLaunching
-                  ? "bg-slate-100 dark:bg-slate-800 text-slate-400 cursor-not-allowed"
-                  : "bg-gradient-to-r from-violet-600 to-blue-600 text-white hover:from-violet-700 hover:to-blue-700 shadow-sm shadow-violet-600/20"
-              )}
-            >
-              {isLaunching ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Creating...
-                </>
-              ) : (
-                <>
-                  New Project
-                  <ArrowRight className="w-4 h-4" />
-                </>
-              )}
-            </button>
-          </div> {/* end RIGHT card */}
-          </div> {/* end cards grid */}
-          </div> {/* end max-w wrapper */}
-        </div> {/* end hero section */}
-
-        {/* ── Your Projects — Discover Grid ── */}
-        <div className="px-6 lg:px-8 pb-8">
-          <div className="border-t border-slate-200/60 dark:border-slate-800/40 pt-6">
-          <div className="flex items-center justify-between mb-5">
-            <div>
-              <h2 className="text-2xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight">
-                Your Projects
-              </h2>
-              <p className="text-sm text-slate-400 dark:text-slate-500 mt-0.5">
-                Your AI-generated apps and websites
-              </p>
-            </div>
-            {platformRepos.length > 6 && (
-              <button className="text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 px-4 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg hover:bg-white dark:hover:bg-slate-800 transition-all">
-                View all
-              </button>
-            )}
-          </div>
-
-          {platformLoading ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-              {[...Array(3)].map((_, i) => (
-                <div key={i} className="rounded-xl bg-slate-100 dark:bg-[#161b22] border border-slate-200 dark:border-slate-700/50 overflow-hidden animate-pulse">
-                  <div className="aspect-[16/9] bg-slate-200 dark:bg-slate-800" />
-                  <div className="p-3.5 space-y-2">
-                    <div className="h-4 bg-slate-200 dark:bg-slate-700/50 rounded w-2/3" />
-                    <div className="h-3 bg-slate-200 dark:bg-slate-700/50 rounded w-2/5" />
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : platformRepos.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 px-6 rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/30">
-              <div className="w-14 h-14 rounded-2xl bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 flex items-center justify-center mb-4">
-                <Sparkles className="w-6 h-6 text-violet-500" />
-              </div>
-              <h3 className="text-base font-bold text-slate-800 dark:text-slate-200 mb-1">No projects yet</h3>
-              <p className="text-sm text-slate-400 dark:text-slate-500 mb-4">Create your first AI-powered project with the wizard</p>
-              <button
-                onClick={handleNewConversation}
-                className="px-5 py-2 bg-violet-600 text-white text-sm font-bold rounded-xl hover:bg-violet-700 transition-colors shadow-sm"
-              >
-                New Project
-              </button>
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-              {platformRepos.slice(0, 12).map((pr, idx) => {
-                const GRADIENTS = [
-                  'from-[#0f0c29] via-[#302b63] to-[#24243e]',
-                  'from-[#0d1b2a] via-[#1b263b] to-[#415a77]',
-                  'from-[#1a1a2e] via-[#16213e] to-[#0f3460]',
-                  'from-[#141e30] via-[#243b55] to-[#141e30]',
-                  'from-[#0c0c1d] via-[#1a1a3e] to-[#2d1b69]',
-                  'from-[#1b1b2f] via-[#1a2a4a] to-[#162447]',
-                  'from-[#0d0d0d] via-[#1a1a2e] to-[#3a0ca3]',
-                  'from-[#1f1c2c] via-[#928dab] to-[#1f1c2c]',
-                  'from-[#0f2027] via-[#203a43] to-[#2c5364]',
-                ];
-                const ACCENTS = [
-                  'text-violet-400', 'text-blue-400', 'text-cyan-400',
-                  'text-sky-400', 'text-purple-400', 'text-indigo-400',
-                  'text-teal-400', 'text-slate-300', 'text-emerald-400',
-                ];
-                const gradient = GRADIENTS[idx % GRADIENTS.length];
-                const accent = ACCENTS[idx % ACCENTS.length];
-                const words = (pr.projectName || 'P').replace(/[-_]/g, ' ').split(/\s+/).filter(Boolean);
-                const initials = words.length >= 2
-                  ? (words[0][0] + words[1][0]).toUpperCase()
-                  : words[0].slice(0, 2).toUpperCase();
-
-                return (
-                  <div
-                    key={pr.projectId}
-                    className="group relative rounded-xl bg-white dark:bg-[#161b22] border border-slate-200/80 dark:border-slate-700/40 overflow-hidden hover:border-slate-300 dark:hover:border-slate-600 hover:shadow-xl dark:hover:shadow-2xl dark:hover:shadow-black/30 transition-all duration-300 cursor-pointer"
-                  >
-                    {/* Thumbnail — gradient + initials */}
-                    <button
-                      onClick={() => handleLaunchPlatformRepo(pr)}
-                      disabled={isLaunching}
-                      className="block w-full text-left"
-                    >
-                      <div className="aspect-[2/1] relative overflow-hidden">
-                        <div className={`absolute inset-0 bg-gradient-to-br ${gradient} flex items-center justify-center`}>
-                          {/* Decorative light spots */}
-                          <div className="absolute inset-0 opacity-[0.07]" style={{
-                            backgroundImage: 'radial-gradient(circle at 20% 50%, rgba(255,255,255,0.3) 0%, transparent 50%), radial-gradient(circle at 80% 20%, rgba(255,255,255,0.2) 0%, transparent 40%), radial-gradient(circle at 60% 80%, rgba(255,255,255,0.15) 0%, transparent 45%)',
-                          }} />
-                          {/* Grid pattern */}
-                          <div className="absolute inset-0 opacity-[0.03]" style={{
-                            backgroundImage: 'linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px)',
-                            backgroundSize: '32px 32px',
-                          }} />
-                          {/* Initials */}
-                          <span className={`text-3xl font-black tracking-wider ${accent} select-none drop-shadow-lg`}>
-                            {initials}
-                          </span>
-                          {/* Hover overlay */}
-                          <div className="absolute inset-0 bg-white/0 group-hover:bg-white/[0.03] transition-colors duration-300" />
-                        </div>
-                      </div>
-                    </button>
-
-                    {/* Card info + Preview */}
-                    <div className="px-3.5 py-3 flex items-center gap-3">
-                      <button
-                        onClick={() => handleLaunchPlatformRepo(pr)}
-                        disabled={isLaunching}
-                        className="flex items-center gap-2.5 min-w-0 flex-1"
-                      >
-                        <div className="w-7 h-7 rounded-full bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 flex items-center justify-center shrink-0">
-                          <Sparkles className="w-3.5 h-3.5 text-violet-500" />
-                        </div>
-                        <div className="min-w-0 flex-1 text-left">
-                          <p className="text-[13px] font-bold text-slate-800 dark:text-slate-100 truncate leading-tight">
-                            {pr.projectName}
-                          </p>
-                          <p className="text-[11px] text-slate-400 dark:text-slate-500 truncate leading-tight mt-0.5">
-                            {pr.repoName}
-                          </p>
-                        </div>
-                      </button>
-                      {pr.deployUrl && (
-                        <a
-                          href={pr.deployUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 text-[11px] font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-500/20 transition-colors"
-                        >
-                          <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                          Preview
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+    <div className="group bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200/80 dark:border-[#2d333b] p-5 hover:shadow-md dark:hover:shadow-black/20 hover:border-slate-300 dark:hover:border-[#444c56] transition-all duration-200 cursor-pointer"
+      onClick={() => !isLaunching && onClick()}>
+      {/* Top row: icon + name + menu */}
+      <div className="flex items-start gap-3 mb-2.5">
+        <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center shrink-0", bgColor)}>
+          <span className="text-base leading-none">{emoji}</span>
         </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between">
+            <h3 className="text-[14px] font-semibold text-slate-900 dark:text-white truncate leading-tight">{displayName}</h3>
+            <div className="relative shrink-0 ml-2" onClick={(e) => e.stopPropagation()}>
+              <button onClick={() => setShowMenu(!showMenu)} className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors opacity-0 group-hover:opacity-100">
+                <MoreHorizontal className="w-4 h-4" />
+              </button>
+              {showMenu && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setShowMenu(false)} />
+                  <div className="absolute right-0 top-full mt-1 z-40 w-44 bg-white dark:bg-[#1c2128] rounded-xl border border-slate-200 dark:border-[#444c56] shadow-xl dark:shadow-black/50 overflow-hidden py-1 animate-scale-in">
+                    <button onClick={() => { setShowMenu(false); onClick(); }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[12px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04]">
+                      <Play className="w-3.5 h-3.5" /> Open Workspace
+                    </button>
+                    {hasDeployment && (
+                      <a href={project.deployUrl} target="_blank" rel="noopener noreferrer" className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[12px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04]">
+                        <Eye className="w-3.5 h-3.5" /> View Live
+                      </a>
+                    )}
+                    <button className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[12px] font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04]">
+                      <Code2 className="w-3.5 h-3.5" /> Export Code
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
+      {/* Description */}
+      <p className="text-[12px] text-slate-500 dark:text-slate-400 line-clamp-2 leading-relaxed mb-3">
+        {project.description || `An AI-generated application based on ${rawName.replace(/[-_]/g, ' ')}.`}
+      </p>
+
+      {/* Footer */}
+      <div className="flex items-center gap-1.5 text-[11px] text-slate-400 dark:text-slate-500">
+        <span>By {project.ownerEmail || 'you'}</span>
+        <span className="mx-0.5">·</span>
+        <span>Created {formatTime(project.createdAt || project.updatedAt)}</span>
+      </div>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════
+   GHOST CARD (+ New Project)
+   ════════════════════════════════════════════════════════ */
+function GhostCard({ onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className="group rounded-2xl border-2 border-dashed border-slate-200 dark:border-[#2d333b] hover:border-orange-300 dark:hover:border-orange-500/30 hover:bg-slate-50/50 dark:hover:bg-[#161b22]/50 transition-all duration-200 flex flex-col items-center justify-center min-h-[160px] p-5"
+    >
+      <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-[#21262d] flex items-center justify-center mb-2 group-hover:bg-orange-100 dark:group-hover:bg-orange-500/20 transition-colors">
+        <Plus className="w-5 h-5 text-slate-400 group-hover:text-orange-500 transition-colors" />
+      </div>
+      <span className="text-[13px] font-semibold text-slate-500 dark:text-slate-400 group-hover:text-orange-600 dark:group-hover:text-orange-400 transition-colors">
+        New Project
+      </span>
+    </button>
+  );
+}
+
+/* ════════════════════════════════════════════════════════
+   ACTIVITY ROW
+   ════════════════════════════════════════════════════════ */
+function ActivityRow({ conversation, onClick }) {
+  return (
+    <button onClick={onClick} className="w-full flex items-center gap-3.5 px-4 py-3.5 hover:bg-slate-50 dark:hover:bg-white/[0.015] transition-colors group text-left">
+      <div className={cn("w-2 h-2 rounded-full shrink-0", conversation.status === 'active' ? 'bg-blue-500' : conversation.status === 'completed' ? 'bg-emerald-500' : 'bg-slate-400')} />
+      <div className="flex-1 min-w-0">
+      <p className="text-[13px] font-semibold text-slate-700 dark:text-slate-200 truncate group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
+          {conversation.title || conversation.repo_name || 'Conversation'}
+        </p>
+        <div className="flex items-center gap-2.5 mt-0.5 text-[11px] text-slate-400 dark:text-slate-500">
+          {conversation.repo_name && (
+            <span className="flex items-center gap-1 truncate max-w-[200px]"><Github className="w-3 h-3 shrink-0" />{conversation.repo_name}</span>
+          )}
+          <span className="flex items-center gap-1 shrink-0"><Clock className="w-3 h-3" />{formatTime(conversation.updated_at)}</span>
+        </div>
+      </div>
+      <ArrowRight className="w-3.5 h-3.5 text-slate-300 dark:text-slate-700 shrink-0 opacity-0 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all" />
+    </button>
+  );
+}
+
+/* ════════════════════════════════════════════════════════
+   HOW IT WORKS
+   ════════════════════════════════════════════════════════ */
+function HowItWorks() {
+  const steps = [
+    { n: '01', label: 'Describe your idea', desc: 'Type what you want in plain English', icon: Lightbulb, color: 'from-violet-500 to-indigo-500' },
+    { n: '02', label: 'AI generates it', desc: 'Full-stack app built in minutes', icon: Sparkles, color: 'from-blue-500 to-cyan-500' },
+    { n: '03', label: 'Deploy live', desc: 'Ship to production in one click', icon: Rocket, color: 'from-emerald-500 to-teal-500' },
+  ];
+  return (
+    <div className="grid grid-cols-3 gap-4 stagger-children">
+      {steps.map((s) => (
+        <div key={s.n} className="relative p-6 rounded-2xl bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] text-center">
+          <div className={`w-11 h-11 rounded-xl bg-gradient-to-br ${s.color} mx-auto mb-3 flex items-center justify-center shadow-md`}>
+            <s.icon className="w-5 h-5 text-white" />
+          </div>
+          <span className="text-[10px] font-extrabold text-slate-300 dark:text-slate-600 uppercase tracking-widest">{s.n}</span>
+          <h4 className="text-[14px] font-bold text-slate-800 dark:text-slate-100 mt-1">{s.label}</h4>
+          <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1.5 leading-relaxed">{s.desc}</p>
+        </div>
+      ))}
     </div>
   );
 }
 
 
+/* ════════════════════════════════════════════════════════
+   MAIN PAGE
+   ════════════════════════════════════════════════════════ */
+export default function EngineerDashboardPage() {
+  const router = useRouter();
+  const { setShowWizard } = useWizard();
+  const promptRef = useRef(null);
+
+  const [isLaunching, setIsLaunching] = useState(false);
+  const [platformRepos, setPlatformRepos] = useState([]);
+  const [platformLoading, setPlatformLoading] = useState(true);
+  const [conversations, setConversations] = useState([]);
+  const [convoLoading, setConvoLoading] = useState(true);
+  const [user, setUser] = useState(null);
+  const [promptText, setPromptText] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
+  const fileInputRef = useRef(null);
+  const [advancedOpts, setAdvancedOpts] = useState({ stack: 'auto', backend: 'none', figmaUrl: '' });
+
+  useEffect(() => {
+    const supabase = getSupabaseBrowserClient();
+    supabase.auth.getUser().then(({ data: { user: u } }) => { if (u) setUser(u); });
+    fetch('/api/platform-repos').then(r => r.json()).then(d => setPlatformRepos(d.repos || [])).catch(() => setPlatformRepos([])).finally(() => setPlatformLoading(false));
+    listConversations().then(data => setConversations(data || [])).catch(() => setConversations([])).finally(() => setConvoLoading(false));
+    // Check for pre-filled template prompt
+    try {
+      const templatePrompt = sessionStorage.getItem('lucid_template_prompt');
+      if (templatePrompt) {
+        setPromptText(templatePrompt);
+        sessionStorage.removeItem('lucid_template_prompt');
+        setTimeout(() => promptRef.current?.focus(), 100);
+      }
+    } catch {}
+  }, []);
+
+  const totalProjects = platformRepos.length;
+  const activeCount = conversations.filter(c => c.status === 'active').length;
+  const deployedCount = platformRepos.filter(pr => pr.deployUrl).length;
+  const thisMonthCount = (() => {
+    const s = new Date(); s.setDate(1); s.setHours(0,0,0,0);
+    return conversations.filter(c => new Date(c.created_at) >= s).length;
+  })();
+
+  /* ── Build from prompt ── */
+  const handleBuildFromPrompt = async () => {
+    const text = promptText.trim();
+    if (!text) return;
+    setIsLaunching(true);
+    try {
+      let resolvedStack = advancedOpts.stack;
+      if (resolvedStack === 'auto') {
+        try {
+          const res = await fetch('/api/recommend-stack', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: text }) });
+          if (res.ok) { const d = await res.json(); resolvedStack = d.stack || 'nextjs'; }
+        } catch { resolvedStack = 'nextjs'; }
+      }
+      let enhancedPrompt = text;
+      try {
+        const res = await fetch('/api/enhance-prompt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stack: resolvedStack, backend: advancedOpts.backend, description: text, figmaUrl: advancedOpts.figmaUrl || undefined }) });
+        if (res.ok) { const d = await res.json(); enhancedPrompt = d.enhancedPrompt || text; }
+      } catch { /* fallback */ }
+      const conversation = await createConversation({ repoName: null, repoProvider: null, repoUrl: null, branch: 'main', title: text.slice(0, 80) });
+      const cid = conversation?.id || `wizard-${Date.now()}`;
+      try {
+        sessionStorage.setItem(`wizard_prompt_${cid}`, enhancedPrompt);
+        sessionStorage.setItem(`wizard_meta_${cid}`, JSON.stringify({ stack: resolvedStack, projectType: null, backend: advancedOpts.backend, deployment: 'hosted', figmaUrl: advancedOpts.figmaUrl || '' }));
+        sessionStorage.setItem(`wizard_desc_${cid}`, text);
+      } catch {}
+      router.replace(`/dashboard/engineer/workspace/${cid}`);
+    } catch (err) {
+      console.error('[Dashboard] Build error:', err);
+      setIsLaunching(false);
+    }
+  };
+
+  const handleLaunchProject = async (pr) => {
+    if (!pr.projectId) return;
+    setIsLaunching(true);
+    try {
+      const { getConversation } = await import('@/lib/conversations');
+      const existing = await getConversation(pr.projectId);
+      if (!existing) {
+        await createConversation({ repoName: pr.repoName || '', repoProvider: 'github', repoUrl: pr.repoUrl || '', branch: 'main', title: pr.projectName || pr.repoName || 'Project' });
+      }
+    } catch {}
+    router.push(`/dashboard/engineer/workspace/${pr.projectId}`);
+  };
+
+  const hasProjects = platformRepos.length > 0 || conversations.length > 0;
+  const isLoaded = !platformLoading && !convoLoading;
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  return (
+    <div className="h-full bg-white dark:bg-[#0d1117] flex flex-col">
+      <div className="flex-1 overflow-y-auto">
+
+        {/* ═══════════════════════════════════════════
+            HERO — Full-width gradient band
+            ═══════════════════════════════════════════ */}
+        <section className="relative bg-gradient-to-b from-slate-50 via-white to-white dark:from-[#161b22] dark:via-[#0d1117] dark:to-[#0d1117]">
+          <div className="max-w-[860px] mx-auto px-8 lg:px-10 pt-16 pb-10">
+            {/* Heading */}
+            <div className="text-center mb-10">
+              <h1 className="text-[38px] sm:text-[46px] font-extrabold text-slate-900 dark:text-white tracking-tight leading-[1.1]">
+                What will you{' '}
+                <span className="text-gradient-accent">build next</span>?
+              </h1>
+              <p className="text-[16px] text-slate-500 dark:text-slate-400 mt-4 max-w-lg mx-auto">
+                Describe your app idea below or get inspired by our{' '}
+                <button onClick={() => router.push('/dashboard/engineer/templates')} className="text-orange-600 dark:text-orange-400 underline underline-offset-2 hover:text-orange-700 transition-colors">templates</button>.
+              </p>
+            </div>
+
+            {/* ── Big Prompt Box (Base44 style) ── */}
+            <div className="relative bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200 dark:border-[#2d333b] shadow-[0_2px_20px_rgba(0,0,0,0.04)] dark:shadow-[0_2px_20px_rgba(0,0,0,0.3)] focus-within:border-orange-300 dark:focus-within:border-orange-500/40 focus-within:shadow-[0_2px_24px_rgba(249,115,22,0.06)] transition-all duration-200 z-10">
+              <textarea
+                ref={promptRef}
+                value={promptText}
+                onChange={(e) => setPromptText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey && promptText.trim()) {
+                    e.preventDefault();
+                    handleBuildFromPrompt();
+                  }
+                }}
+                rows={5}
+                placeholder="Describe the app you want to create..."
+                className="w-full px-6 pt-6 pb-3 text-[16px] leading-relaxed bg-transparent text-slate-800 dark:text-slate-200 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none resize-none relative z-10"
+              />
+
+              {/* Bottom Toolbar */}
+              <div className="flex items-center justify-between px-5 pb-4 pt-1 relative z-10">
+                <div className="flex items-center gap-1">
+                  {/* Attach button (+) */}
+                  <div className="relative">
+                    <button
+                      onClick={() => { setShowAttachMenu(!showAttachMenu); setShowAdvanced(false); }}
+                      type="button"
+                      className="flex items-center justify-center w-8 h-8 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors border border-slate-200 dark:border-[#2d333b]"
+                      title="Attach"
+                    >
+                      <Plus className="w-4 h-4" />
+                    </button>
+                    {showAttachMenu && (
+                      <>
+                        <div className="fixed inset-0 z-30" onClick={() => setShowAttachMenu(false)} />
+                        <div className="absolute left-0 bottom-full mb-2 z-40 w-52 bg-white dark:bg-[#1c2128] rounded-xl border border-slate-200 dark:border-[#444c56] shadow-xl dark:shadow-black/50 overflow-hidden py-1 animate-scale-in">
+                          <button
+                            onClick={() => { setShowAttachMenu(false); fileInputRef.current?.click(); }}
+                            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04] transition-colors"
+                          >
+                            <Paperclip className="w-4 h-4 text-slate-400" />
+                            Attach
+                          </button>
+                          <button
+                            onClick={() => { setShowAttachMenu(false); const url = prompt('Enter a URL to clone:'); if (url) setPromptText(`I need website like this: ${url}`); }}
+                            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04] transition-colors"
+                          >
+                            <Link2 className="w-4 h-4 text-slate-400" />
+                            Start from URL
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <input ref={fileInputRef} type="file" accept="image/*,video/*" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) setPromptText(prev => prev + `\n[Attached: ${file.name}]`); }} />
+                  {/* Settings button */}
+                  <button
+                    onClick={() => { setShowAdvanced(!showAdvanced); setShowAttachMenu(false); }}
+                    type="button"
+                    className={cn(
+                      "flex items-center justify-center w-8 h-8 hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors border border-slate-200 dark:border-[#2d333b]",
+                      showAdvanced ? "text-slate-700 dark:text-white bg-slate-100 dark:bg-white/[0.06]" : "text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300"
+                    )}
+                    title="Advanced settings"
+                  >
+                    <SlidersHorizontal className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setShowWizard(true)}
+                    type="button"
+                    className="text-[13px] font-semibold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-white transition-colors"
+                  >
+                    Plan
+                  </button>
+                  <button
+                    onClick={handleBuildFromPrompt}
+                    type="button"
+                    disabled={!promptText.trim() || isLaunching}
+                    className={cn(
+                      "flex items-center justify-center w-9 h-9 rounded-full transition-all duration-200 relative z-20",
+                      promptText.trim() && !isLaunching
+                        ? "bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-slate-100 shadow-md active:scale-[0.95]"
+                        : "bg-slate-200 dark:bg-[#21262d] text-slate-400 dark:text-slate-600 cursor-not-allowed"
+                    )}
+                  >
+                    {isLaunching ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <ArrowRight className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Advanced panel */}
+              {showAdvanced && (
+                <div className="mx-5 mb-4 p-4 bg-slate-50 dark:bg-[#0d1117] rounded-xl border border-slate-200 dark:border-[#21262d] animate-slide-up relative z-10">
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 block">Stack</label>
+                      <CustomSelect
+                        value={advancedOpts.stack}
+                        onChange={(v) => setAdvancedOpts(p => ({ ...p, stack: v }))}
+                        size="sm"
+                        options={[
+                          { value: 'auto', label: '✨ Auto-detect' },
+                          { value: 'nextjs', label: 'Next.js' },
+                          { value: 'react', label: 'React' },
+                          { value: 'vue', label: 'Vue.js' },
+                          { value: 'html-css', label: 'HTML & CSS' },
+                        ]}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 block">Backend</label>
+                      <CustomSelect
+                        value={advancedOpts.backend}
+                        onChange={(v) => setAdvancedOpts(p => ({ ...p, backend: v }))}
+                        size="sm"
+                        options={[
+                          { value: 'none', label: 'No backend' },
+                          { value: 'supabase', label: 'Supabase' },
+                          { value: 'own', label: 'Own backend (MCP)' },
+                        ]}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 block">Figma URL</label>
+                      <input type="url" value={advancedOpts.figmaUrl} onChange={(e) => setAdvancedOpts(p => ({ ...p, figmaUrl: e.target.value }))}
+                        placeholder="Optional..."
+                        className="w-full px-3 py-2 text-[12px] bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-lg text-slate-700 dark:text-slate-300 placeholder:text-slate-400 outline-none focus:border-orange-400" />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Chips — Base44 style "What would you like to create?" */}
+            <div className="mt-5">
+              <p className="text-[13px] text-slate-500 dark:text-slate-400 mb-3">
+                What would you like to create?
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                {IDEAS.map((chip) => (
+                  <button key={chip.label} type="button" onClick={() => { setPromptText(chip.prompt); promptRef.current?.focus(); }}
+                    className="px-4 py-2 text-[13px] font-medium text-slate-700 dark:text-slate-300 bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-full hover:border-slate-400 dark:hover:border-[#444c56] hover:shadow-sm transition-all">
+                    {chip.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* ═══════════════════════════════════════════
+            MAIN CONTENT
+            ═══════════════════════════════════════════ */}
+        <div className="px-8 lg:px-10 py-8">
+
+          {isLoaded && !hasProjects ? (
+            /* ── EMPTY STATE ── */
+            <div>
+              <h3 className="text-[12px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-[0.12em] mb-5 text-center">
+                Or start from a template
+              </h3>
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-10 stagger-children">
+                {IDEAS.map((chip) => (
+                  <button key={chip.label} type="button" onClick={() => { setPromptText(chip.prompt); promptRef.current?.focus(); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                    className="group p-5 rounded-xl bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] hover:border-orange-300 dark:hover:border-orange-500/30 hover:shadow-lg transition-all text-center">
+                    <span className="text-2xl mb-2 block">{chip.emoji}</span>
+                    <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300 group-hover:text-orange-600 dark:group-hover:text-orange-400 transition-colors">{chip.label}</span>
+                  </button>
+                ))}
+              </div>
+              <HowItWorks />
+            </div>
+          ) : (
+            <>
+              {/* Stats — inline */}
+              <div className="flex items-center gap-8 mb-8 px-1">
+                {[
+                  { label: 'Projects', value: totalProjects, icon: Layers, color: 'text-indigo-500' },
+                  { label: 'Active', value: activeCount, icon: Activity, color: 'text-emerald-500' },
+                  { label: 'Deployed', value: deployedCount, icon: Globe, color: 'text-violet-500' },
+                  { label: 'This Month', value: thisMonthCount, icon: BarChart3, color: 'text-amber-500' },
+                ].map((s) => (
+                  <div key={s.label} className="flex items-center gap-2.5">
+                    <s.icon className={cn("w-4 h-4", s.color)} />
+                    <span className="text-[20px] font-extrabold text-slate-800 dark:text-white leading-none">{platformLoading ? '·' : s.value}</span>
+                    <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">{s.label}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Projects Grid */}
+              <div className="mb-10">
+                <div className="flex items-center justify-between mb-5">
+                  <h2 className="text-[18px] font-extrabold text-slate-800 dark:text-white tracking-tight">Your Projects</h2>
+                  {platformRepos.length > 8 && (
+                    <button onClick={() => router.push('/dashboard/engineer/projects')} className="text-[12px] font-bold text-orange-500 hover:text-orange-700 dark:hover:text-orange-400 transition-colors">View all →</button>
+                  )}
+                </div>
+
+                {platformLoading ? (
+                  <div className="max-w-sm">
+                    <div className="bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200/80 dark:border-[#2d333b] p-5">
+                      <div className="flex items-start gap-3 mb-2.5">
+                        <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-[#21262d] animate-pulse shrink-0" />
+                        <div className="flex-1 space-y-2 pt-1">
+                          <div className="h-4 bg-slate-100 dark:bg-[#21262d] rounded w-3/5 animate-pulse" />
+                        </div>
+                      </div>
+                      <div className="space-y-2 mb-3">
+                        <div className="h-3 bg-slate-100 dark:bg-[#21262d] rounded w-4/5 animate-pulse" />
+                        <div className="h-3 bg-slate-100 dark:bg-[#21262d] rounded w-2/3 animate-pulse" />
+                      </div>
+                      <div className="h-3 bg-slate-100 dark:bg-[#21262d] rounded w-1/2 animate-pulse" />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                    {platformRepos.slice(0, 8).map((pr, idx) => (
+                      <ProjectCard key={pr.projectId} project={pr} index={idx} onClick={() => handleLaunchProject(pr)} isLaunching={isLaunching} />
+                    ))}
+                    <GhostCard onClick={() => setShowWizard(true)} />
+                  </div>
+                )}
+              </div>
+
+              {/* Activity */}
+              <div className="mb-8">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-[18px] font-extrabold text-slate-800 dark:text-white tracking-tight">Recent Activity</h2>
+                  <button onClick={() => router.push('/dashboard/engineer/conversations')} className="text-[12px] font-bold text-orange-500 hover:text-orange-700 dark:hover:text-orange-400 transition-colors">
+                    All conversations →
+                  </button>
+                </div>
+                <div className="bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200 dark:border-[#2d333b] overflow-hidden">
+                  {convoLoading ? (
+                    <div className="flex items-center justify-center py-10"><Loader2 className="w-5 h-5 text-indigo-500 animate-spin" /></div>
+                  ) : conversations.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-10 text-center">
+                      <MessageSquare className="w-8 h-8 text-slate-200 dark:text-slate-700 mb-2" />
+                      <p className="text-[13px] font-medium text-slate-400 dark:text-slate-500">No conversations yet</p>
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-slate-100 dark:divide-[#21262d]">
+                      {conversations.slice(0, 8).map((conv) => (
+                        <ActivityRow key={conv.id} conversation={conv} onClick={() => router.push(`/dashboard/engineer/workspace/${conv.id}`)} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

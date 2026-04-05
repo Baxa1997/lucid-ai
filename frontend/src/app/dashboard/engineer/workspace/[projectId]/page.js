@@ -2,7 +2,7 @@
 
 // ─────────────────────────────────────────────────────────
 //  Lucid AI — Full Page Conversation Workspace
-//  Layout: [Chat] | [Terminal / FileViewer]
+//  3-Panel IDE Layout: [FileExplorer] | [Chat] | [Build/Preview/Code/Terminal]
 // ─────────────────────────────────────────────────────────
 
 import { useState, useRef, useEffect, useCallback, use } from 'react';
@@ -17,6 +17,7 @@ import {
   FileCheck2, AlertCircle, TriangleAlert, Sparkles, Activity,
   ExternalLink, GitPullRequest, FileImage, Eye,
   Video, Globe, Camera, Link2, Layers, Paperclip, Plus,
+  FolderOpen, PanelLeftClose, PanelLeftOpen, Hammer, Monitor,
 } from 'lucide-react';
 import { useAgentSession } from '@/hooks/useAgentSession';
 import {
@@ -32,6 +33,8 @@ import TaskProgress from '@/components/TaskProgress';
 import StopTaskButton from '@/components/StopTaskButton';
 import ExportCodeModal from '@/components/ExportCodeModal';
 import GenerationProgress from '@/components/GenerationProgress';
+import FileExplorer from '@/components/agent/FileExplorer';
+import BuildProgressPanel from '@/components/agent/BuildProgressPanel';
 
 // ── Status Component ───────────────────────────────────────
 function ConnectionStatus({ status, error }) {
@@ -646,8 +649,29 @@ function ConversationPageInner({ params }) {
     }
   }, [status, conversationId, messages.length]);
 
-  // rightPanel: null | 'terminal' | 'file'
+  // ── 3-Panel IDE Layout State ─────────────────────────────
+  // rightPanel: null | 'build' | 'preview' | 'code' | 'terminal'
   const [rightPanel, setRightPanel] = useState(null);
+  const [showFileExplorer, setShowFileExplorer] = useState(false);
+
+  // Auto-show right panel with 'build' tab during generation
+  const prevStatusForPanel = useRef(null);
+  useEffect(() => {
+    if (prevStatusForPanel.current === status) return;
+    prevStatusForPanel.current = status;
+
+    if (status === 'running' || status === 'preparing') {
+      setRightPanel('build');
+      setShowFileExplorer(true);
+    }
+  }, [status]);
+
+  // Auto-switch to preview when build completes and vercelUrl is available
+  useEffect(() => {
+    if (repoInfo.vercelUrl && rightPanel === 'build') {
+      setRightPanel('preview');
+    }
+  }, [repoInfo.vercelUrl, rightPanel]);
 
   // ── File viewer state ───────────────────────────────────
   const [selectedFile, setSelectedFile] = useState(null);
@@ -862,7 +886,7 @@ function ConversationPageInner({ params }) {
   // ── File select: load content from backend ──────────────
   const handleFileSelect = useCallback(async (path) => {
     setSelectedFile(path);
-    setRightPanel('file');
+    setRightPanel('code');
     setFileLoading(true);
     setFileContent('');
 
@@ -920,6 +944,44 @@ function ConversationPageInner({ params }) {
           </div>
         </div>
       )}
+
+      {/* ════════════════════════════════════════════════
+          LEFT — File Explorer Panel (collapsible)
+      ════════════════════════════════════════════════ */}
+      {showFileExplorer && (
+        <div className="w-[240px] shrink-0 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0f1118] flex flex-col transition-all duration-300 animate-in slide-in-from-left-2 fade-in duration-300">
+          {/* Explorer header */}
+          <div className="shrink-0 h-12 flex items-center justify-between px-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-white/[0.02]">
+            <div className="flex items-center gap-2">
+              <FolderOpen className="w-3.5 h-3.5 text-amber-500" />
+              <span className="text-[11px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">Explorer</span>
+              {files.length > 0 && (
+                <span className="px-1.5 py-0.5 bg-slate-100 dark:bg-white/[0.06] rounded text-[9px] font-bold text-slate-400 dark:text-slate-500">
+                  {files.length}
+                </span>
+              )}
+            </div>
+            <button
+              onClick={() => setShowFileExplorer(false)}
+              className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded transition-colors"
+              title="Hide explorer"
+            >
+              <PanelLeftClose className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* File tree */}
+          <div className="flex-1 overflow-hidden">
+            <FileExplorer
+              files={files}
+              selectedFile={selectedFile}
+              onFileSelect={handleFileSelect}
+              projectName={conversation?.title || 'Project'}
+            />
+          </div>
+        </div>
+      )}
+
       {/* ════════════════════════════════════════════════
           CENTER — Chat Area
       ════════════════════════════════════════════════ */}
@@ -934,14 +996,41 @@ function ConversationPageInner({ params }) {
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
+
+            {/* File explorer toggle */}
+            {!showFileExplorer && (
+              <button
+                onClick={() => setShowFileExplorer(true)}
+                className="p-2 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 transition-colors"
+                title="Show file explorer"
+              >
+                <PanelLeftOpen className="w-4 h-4" />
+              </button>
+            )}
+
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate max-w-[200px]">
                   {conversation?.title || 'New Conversation'}
                 </h1>
-                <span className="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400 text-[9px] font-bold uppercase tracking-wider border border-blue-100 dark:border-blue-500/20">
+                <span className={cn(
+                  "px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider border",
+                  status === 'running' || status === 'preparing'
+                    ? "bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-100 dark:border-blue-500/20"
+                    : status === 'ready'
+                    ? "bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-100 dark:border-emerald-500/20"
+                    : status === 'error'
+                    ? "bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-400 border-red-100 dark:border-red-500/20"
+                    : "bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700"
+                )}>
                   {status || 'Idle'}
                 </span>
+                {/* File count badge */}
+                {files.length > 0 && (
+                  <span className="px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400 text-[9px] font-bold border border-amber-100 dark:border-amber-500/20">
+                    {files.length} files
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-3 mt-0.5 text-[10px] text-slate-400 dark:text-slate-500 font-medium">
                 <span className="flex items-center gap-1">
@@ -979,40 +1068,69 @@ function ConversationPageInner({ params }) {
               Export
             </button>
 
-            {/* Preview Button — always visible */}
-            <a
-              href={repoInfo.vercelUrl || '#'}
-              target={repoInfo.vercelUrl ? '_blank' : undefined}
-              rel="noopener noreferrer"
-              onClick={(e) => { if (!repoInfo.vercelUrl) e.preventDefault(); }}
-              className={cn(
-                "flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold border transition-all",
-                repoInfo.vercelUrl
-                  ? "border-emerald-200 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-500/20 cursor-pointer"
-                  : "border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 text-slate-400 dark:text-slate-500 cursor-not-allowed opacity-60"
-              )}
-              title={repoInfo.vercelUrl ? `Preview: ${repoInfo.vercelUrl}` : 'Preview available after deployment'}
-            >
-              <Eye className="w-3.5 h-3.5" />
-              Preview
-              {repoInfo.vercelUrl && <ExternalLink className="w-3 h-3 opacity-50" />}
-            </a>
-
             <ConnectionStatus status={status} error={error} />
 
-            {/* Terminal toggle */}
-            <button
-              onClick={() => setRightPanel(rightPanel === 'terminal' ? null : 'terminal')}
-              className={cn(
-                "p-2 rounded-lg transition-all border",
-                rightPanel === 'terminal'
-                  ? "bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 border-slate-300 dark:border-slate-600"
-                  : "bg-white dark:bg-slate-900 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800"
-              )}
-              title="Toggle Terminal"
-            >
-              <Terminal className="w-4 h-4" />
-            </button>
+            {/* ── Right Panel Tab Buttons ── */}
+            <div className="flex items-center gap-0.5 bg-slate-100 dark:bg-slate-800/60 rounded-lg p-0.5 border border-slate-200 dark:border-slate-700">
+              {/* Build tab */}
+              <button
+                onClick={() => setRightPanel(rightPanel === 'build' ? null : 'build')}
+                className={cn(
+                  "p-1.5 rounded-md transition-all",
+                  rightPanel === 'build'
+                    ? "bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow-sm"
+                    : "text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300"
+                )}
+                title="Build Progress"
+              >
+                <Hammer className="w-3.5 h-3.5" />
+              </button>
+              {/* Preview tab */}
+              <button
+                onClick={() => {
+                  if (repoInfo.vercelUrl) {
+                    setRightPanel(rightPanel === 'preview' ? null : 'preview');
+                  }
+                }}
+                className={cn(
+                  "p-1.5 rounded-md transition-all",
+                  rightPanel === 'preview'
+                    ? "bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-sm"
+                    : repoInfo.vercelUrl
+                    ? "text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300"
+                    : "text-slate-300 dark:text-slate-600 cursor-not-allowed"
+                )}
+                title={repoInfo.vercelUrl ? "Live Preview" : "Preview available after deployment"}
+              >
+                <Monitor className="w-3.5 h-3.5" />
+              </button>
+              {/* Code tab */}
+              <button
+                onClick={() => setRightPanel(rightPanel === 'code' ? null : 'code')}
+                className={cn(
+                  "p-1.5 rounded-md transition-all",
+                  rightPanel === 'code'
+                    ? "bg-white dark:bg-slate-700 text-violet-600 dark:text-violet-400 shadow-sm"
+                    : "text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300"
+                )}
+                title="Code Viewer"
+              >
+                <Code2 className="w-3.5 h-3.5" />
+              </button>
+              {/* Terminal tab */}
+              <button
+                onClick={() => setRightPanel(rightPanel === 'terminal' ? null : 'terminal')}
+                className={cn(
+                  "p-1.5 rounded-md transition-all",
+                  rightPanel === 'terminal'
+                    ? "bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-sm"
+                    : "text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300"
+                )}
+                title="Terminal"
+              >
+                <Terminal className="w-3.5 h-3.5" />
+              </button>
+            </div>
 
             <button
               onClick={() => router.push('/dashboard/engineer/settings')}
@@ -1557,44 +1675,69 @@ function ConversationPageInner({ params }) {
       </div>
 
       {/* ════════════════════════════════════════════════
-          RIGHT — Terminal OR File Viewer Panel
+          RIGHT — Tabbed IDE Panel (Build/Preview/Code/Terminal)
       ════════════════════════════════════════════════ */}
       {rightPanel && (
-        <div className="w-[400px] bg-[#1e1e2e] flex flex-col border-l border-slate-800 shadow-2xl shrink-0">
+        <div className="w-[420px] bg-white dark:bg-[#0f1118] flex flex-col border-l border-slate-200 dark:border-slate-800 shadow-xl shrink-0 animate-in slide-in-from-right-2 duration-200">
 
           {/* Panel header with tab buttons */}
-          <div className="h-12 flex items-center justify-between px-4 border-b border-slate-800 bg-[#181825]">
-            <div className="flex items-center gap-1">
+          <div className="h-12 flex items-center justify-between px-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-white/[0.02]">
+            <div className="flex items-center gap-0.5">
+              <button
+                onClick={() => setRightPanel('build')}
+                className={cn(
+                  "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-all",
+                  rightPanel === 'build'
+                    ? "bg-white dark:bg-slate-800 text-blue-600 dark:text-blue-400 shadow-sm border border-slate-200 dark:border-slate-700"
+                    : "text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300"
+                )}
+              >
+                <Hammer className="w-3 h-3" />
+                Build
+              </button>
+              <button
+                onClick={() => repoInfo.vercelUrl && setRightPanel('preview')}
+                className={cn(
+                  "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-all",
+                  rightPanel === 'preview'
+                    ? "bg-white dark:bg-slate-800 text-emerald-600 dark:text-emerald-400 shadow-sm border border-slate-200 dark:border-slate-700"
+                    : repoInfo.vercelUrl
+                    ? "text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300"
+                    : "text-slate-300 dark:text-slate-600 cursor-not-allowed"
+                )}
+              >
+                <Monitor className="w-3 h-3" />
+                Preview
+                {repoInfo.vercelUrl && <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
+              </button>
+              <button
+                onClick={() => setRightPanel('code')}
+                className={cn(
+                  "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-all",
+                  rightPanel === 'code'
+                    ? "bg-white dark:bg-slate-800 text-violet-600 dark:text-violet-400 shadow-sm border border-slate-200 dark:border-slate-700"
+                    : "text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300"
+                )}
+              >
+                <Code2 className="w-3 h-3" />
+                Code
+              </button>
               <button
                 onClick={() => setRightPanel('terminal')}
                 className={cn(
-                  "flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-bold transition-colors",
+                  "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-all",
                   rightPanel === 'terminal'
-                    ? "bg-slate-700 text-white"
-                    : "text-slate-500 hover:text-slate-300"
+                    ? "bg-white dark:bg-slate-800 text-emerald-600 dark:text-emerald-400 shadow-sm border border-slate-200 dark:border-slate-700"
+                    : "text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300"
                 )}
               >
-                <Terminal className="w-3.5 h-3.5 text-emerald-500" />
+                <Terminal className="w-3 h-3" />
                 Terminal
               </button>
-              {selectedFile && (
-                <button
-                  onClick={() => setRightPanel('file')}
-                  className={cn(
-                    "flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-bold transition-colors",
-                    rightPanel === 'file'
-                      ? "bg-slate-700 text-white"
-                      : "text-slate-500 hover:text-slate-300"
-                  )}
-                >
-                  <FileText className="w-3.5 h-3.5 text-blue-400" />
-                  {selectedFile.split('/').pop()}
-                </button>
-              )}
             </div>
             <button
               onClick={() => setRightPanel(null)}
-              className="p-1.5 text-slate-500 hover:text-white transition-colors"
+              className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors rounded hover:bg-slate-100 dark:hover:bg-white/[0.06]"
               title="Close panel"
             >
               <X className="w-4 h-4" />
@@ -1603,8 +1746,70 @@ function ConversationPageInner({ params }) {
 
           {/* Panel content */}
           <div className="flex-1 overflow-hidden">
-            {rightPanel === 'terminal' ? (
+
+            {/* BUILD tab — BuildProgressPanel */}
+            {rightPanel === 'build' && (
+              <BuildProgressPanel
+                isVisible={true}
+                onComplete={() => {
+                  // Auto-switch to preview if available
+                  if (repoInfo.vercelUrl) {
+                    setTimeout(() => setRightPanel('preview'), 1500);
+                  }
+                }}
+              />
+            )}
+
+            {/* PREVIEW tab — Live iframe preview */}
+            {rightPanel === 'preview' && (
               <div className="h-full flex flex-col">
+                {repoInfo.vercelUrl ? (
+                  <>
+                    <div className="flex items-center gap-2 px-4 py-2 bg-slate-50/80 dark:bg-white/[0.02] border-b border-slate-200 dark:border-slate-800">
+                      <div className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+                      <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Live</span>
+                      <span className="flex-1 text-[11px] text-slate-500 dark:text-slate-400 font-mono truncate">{repoInfo.vercelUrl}</span>
+                      <a
+                        href={repoInfo.vercelUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="p-1 text-slate-400 hover:text-blue-500 transition-colors"
+                        title="Open in new tab"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    </div>
+                    <iframe
+                      src={repoInfo.vercelUrl}
+                      title="Live Preview"
+                      className="flex-1 w-full border-0 bg-white"
+                      sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+                    />
+                  </>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-full text-center p-8">
+                    <div className="w-14 h-14 rounded-2xl bg-slate-100 dark:bg-white/[0.04] flex items-center justify-center mb-4">
+                      <Monitor className="w-6 h-6 text-slate-300 dark:text-white/15" />
+                    </div>
+                    <p className="text-sm font-bold text-slate-600 dark:text-slate-400 mb-1">No preview available</p>
+                    <p className="text-xs text-slate-400 dark:text-slate-500">Preview will appear after the project is deployed</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* CODE tab — File Viewer */}
+            {rightPanel === 'code' && (
+              <FileViewer
+                path={selectedFile}
+                content={fileContent}
+                loading={fileLoading}
+              />
+            )}
+
+            {/* TERMINAL tab */}
+            {rightPanel === 'terminal' && (
+              <div className="h-full flex flex-col bg-[#1e1e2e]">
                 <div className="flex-1 overflow-y-auto p-4 font-mono text-xs leading-relaxed custom-scrollbar">
                   {terminalLogs.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-3">
@@ -1651,12 +1856,6 @@ function ConversationPageInner({ params }) {
                   </div>
                 </div>
               </div>
-            ) : (
-              <FileViewer
-                path={selectedFile}
-                content={fileContent}
-                loading={fileLoading}
-              />
             )}
           </div>
         </div>

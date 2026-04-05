@@ -306,12 +306,11 @@ export default function ConversationsPage() {
                 <p className="text-sm text-slate-400 dark:text-slate-500 font-medium mt-0.5">All your AI conversations in one place.</p>
               </div>
             </div>
-            <button 
+            <button
               onClick={() => router.push('/dashboard/engineer')}
-              className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 transition-all shadow-sm shadow-blue-600/20 active:scale-[0.98]"
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-white dark:hover:bg-slate-800 transition-all"
             >
-              <Plus className="w-4 h-4" strokeWidth={2.5} />
-              New Conversation
+              ← Back to Home
             </button>
           </div>
 

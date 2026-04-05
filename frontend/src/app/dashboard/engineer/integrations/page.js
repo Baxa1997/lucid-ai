@@ -3,7 +3,7 @@
 import {
   Github, Check, User, Mail, Loader2, ExternalLink,
   Unlink, Eye, EyeOff, RefreshCw, AlertCircle, X,
-  Plus, Settings2, Shield, Globe, Lock, Zap,
+  Plus, Settings2, Shield, Globe, Lock, Zap, Search,
   GitBranch, Database, Activity, ArrowUpRight,
   Trash2, Edit3, ServerCrash
 } from 'lucide-react';
@@ -805,7 +805,7 @@ export default function IntegrationsPage() {
   }
 
   return (
-    <div className="min-h-full bg-[#f8f9fb] dark:bg-[#0d1117] transition-colors duration-200">
+    <div className="h-full bg-white dark:bg-[#0d1117] overflow-y-auto">
       {toast && <Toast message={toast.message} type={toast.type} onDone={() => setToast(null)} />}
 
       <IntegrationModal
@@ -825,243 +825,196 @@ export default function IntegrationsPage() {
         onToast={(msg) => setToast({ message: msg, type: 'success' })}
       />
 
-      <div className="px-6 lg:px-8 py-6">
+      <div className="px-8 lg:px-10 py-10">
 
         {/* ══ Page Header ══ */}
-        <div className="flex items-start justify-between mb-5">
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900 dark:text-white tracking-tight mb-1">
-              Integrations
-            </h1>
-            <p className="text-sm text-slate-500 dark:text-white/40 max-w-md">
-              Connect your code hosting platforms and DNS providers. All credentials are encrypted at rest.
-            </p>
-          </div>
+        <div className="mb-8">
+          <h1 className="text-[32px] font-extrabold text-slate-900 dark:text-white tracking-tight">
+            Integrations
+          </h1>
+          <p className="text-[15px] text-slate-500 dark:text-slate-400 mt-2 max-w-lg">
+            Discover pre-built integrations that let you connect to APIs, services, and tools to extend your app&apos;s capabilities.
+          </p>
+        </div>
 
-          {/* Status widget */}
-          <div className="flex items-center gap-3 px-4 py-2.5 bg-white dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08] rounded-xl">
-            <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_6px_2px_rgba(52,211,153,0.25)]" />
-            <div>
-              <p className="text-[11px] font-semibold text-slate-600 dark:text-white/60 uppercase tracking-wider leading-none">All Systems Operational</p>
-              <p className="text-[11px] text-slate-400 dark:text-white/25 mt-0.5">
-                <span className="font-bold text-slate-700 dark:text-white/50">{connectedCount}/{totalServices}</span> authorized
+        {/* ══ Search ══ */}
+        <div className="mb-8">
+          <div className="relative max-w-sm">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <input
+              placeholder="Search integrations..."
+              className="w-full pl-10 pr-4 py-2.5 text-[13px] bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-xl text-slate-700 dark:text-slate-300 placeholder:text-slate-400 outline-none focus:border-indigo-400 transition"
+            />
+          </div>
+        </div>
+
+        {/* ══ Connectors Section ══ */}
+        <div className="mb-10">
+          <h2 className="text-[20px] font-bold text-slate-900 dark:text-white mb-1">Connectors</h2>
+          <p className="text-[14px] text-slate-500 dark:text-slate-400 mb-6">Quick OAuth connections to popular services, supported by Lucid AI.</p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            {/* GitHub Card */}
+            <div className="bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200 dark:border-[#2d333b] p-6 flex flex-col hover:shadow-md dark:hover:shadow-black/20 hover:border-slate-300 dark:hover:border-[#444c56] transition-all">
+              <div className="w-12 h-12 rounded-xl bg-slate-100 dark:bg-white/[0.06] border border-slate-200/60 dark:border-[#2d333b] flex items-center justify-center mb-4">
+                <Github className="w-6 h-6 text-slate-800 dark:text-white" />
+              </div>
+              <h3 className="text-[16px] font-bold text-slate-900 dark:text-white mb-1">GitHub</h3>
+              <p className="text-[13px] text-slate-500 dark:text-slate-400 leading-relaxed mb-4 flex-1">
+                {integrations.github?.connected
+                  ? <>Connected as <span className="font-semibold text-slate-700 dark:text-slate-300">{integrations.github.username}</span></>
+                  : 'Push code, create repos, and manage your projects on GitHub.'}
               </p>
-            </div>
-          </div>
-        </div>
-
-        {/* ══ Stat Tiles ══ */}
-        <div className="grid grid-cols-3 gap-4 mb-5">
-          {/* GitHub tile */}
-          <div className={cn(
-            'bg-white dark:bg-[#161b22] border rounded-xl p-5 transition-all',
-            integrations.github?.connected
-              ? 'border-slate-200 dark:border-white/[0.08]'
-              : 'border-dashed border-slate-300 dark:border-white/[0.06]'
-          )}>
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-lg bg-slate-100 dark:bg-white/[0.06] flex items-center justify-center">
-                  <Github className="w-5 h-5 text-slate-700 dark:text-white/70" />
-                </div>
-                <div>
-                  <p className="text-sm font-bold text-slate-900 dark:text-white">GitHub</p>
-                  {integrations.github?.connected && (
-                    <p className="text-[11px] text-slate-400 dark:text-white/30">Auth as <span className="font-semibold text-slate-600 dark:text-white/50">{integrations.github.username}</span></p>
-                  )}
-                </div>
-              </div>
-              {integrations.github?.connected ? (
-                <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/25">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase">Live</span>
-                </span>
-              ) : (
-                <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08]">
-                  <span className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-white/20" />
-                  <span className="text-[10px] font-bold text-slate-400 dark:text-white/30 uppercase">Inactive</span>
-                </span>
-              )}
-            </div>
-            {integrations.github?.connected && (
-              <div className="flex items-center gap-2 mb-4">
-                <span className="text-[11px] font-medium text-slate-500 dark:text-white/30 flex items-center gap-1"><GitBranch className="w-3 h-3" /> Repo access</span>
-                <span className="text-slate-300 dark:text-white/10">·</span>
-                <span className="text-[11px] font-medium text-slate-500 dark:text-white/30 flex items-center gap-1"><Database className="w-3 h-3" /> Push & Pull</span>
-              </div>
-            )}
-            <button
-              onClick={() => setModalState({ isOpen: true, type: 'github' })}
-              className={cn(
-                'w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all',
-                integrations.github?.connected
-                  ? 'bg-slate-100 dark:bg-white/[0.04] text-slate-700 dark:text-white/60 hover:bg-slate-200 dark:hover:bg-white/[0.08] border border-slate-200 dark:border-white/[0.08]'
-                  : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm'
-              )}
-            >
-              <Settings2 className="w-4 h-4" />
-              {integrations.github?.connected ? 'Manage' : 'Connect'}
-            </button>
-          </div>
-
-          {/* GitLab tile */}
-          <div className={cn(
-            'bg-white dark:bg-[#161b22] border rounded-xl p-5 transition-all',
-            integrations.gitlab?.connected
-              ? 'border-slate-200 dark:border-white/[0.08]'
-              : 'border-dashed border-slate-300 dark:border-white/[0.06]'
-          )}>
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-lg bg-orange-50 dark:bg-orange-500/10 flex items-center justify-center">
-                  <GitLabIcon className="w-5 h-5 text-orange-500" />
-                </div>
-                <div>
-                  <p className="text-sm font-bold text-slate-900 dark:text-white">GitLab</p>
-                  {integrations.gitlab?.connected && (
-                    <p className="text-[11px] text-slate-400 dark:text-white/30">Auth as <span className="font-semibold text-slate-600 dark:text-white/50">{integrations.gitlab.username}</span></p>
-                  )}
-                </div>
-              </div>
-              {integrations.gitlab?.connected ? (
-                <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/25">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase">Live</span>
-                </span>
-              ) : (
-                <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08]">
-                  <span className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-white/20" />
-                  <span className="text-[10px] font-bold text-slate-400 dark:text-white/30 uppercase">Inactive</span>
-                </span>
-              )}
-            </div>
-            {integrations.gitlab?.connected && (
-              <div className="flex items-center gap-2 mb-4">
-                <span className="text-[11px] font-medium text-slate-500 dark:text-white/30 flex items-center gap-1"><GitBranch className="w-3 h-3" /> Repo access</span>
-                <span className="text-slate-300 dark:text-white/10">·</span>
-                <span className="text-[11px] font-medium text-slate-500 dark:text-white/30 flex items-center gap-1"><Database className="w-3 h-3" /> Push & Pull</span>
-              </div>
-            )}
-            <button
-              onClick={() => setModalState({ isOpen: true, type: 'gitlab' })}
-              className={cn(
-                'w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all',
-                integrations.gitlab?.connected
-                  ? 'bg-slate-100 dark:bg-white/[0.04] text-slate-700 dark:text-white/60 hover:bg-slate-200 dark:hover:bg-white/[0.08] border border-slate-200 dark:border-white/[0.08]'
-                  : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm'
-              )}
-            >
-              <Settings2 className="w-4 h-4" />
-              {integrations.gitlab?.connected ? 'Manage' : 'Connect'}
-            </button>
-          </div>
-
-          {/* GoDaddy summary tile */}
-          <div className={cn(
-            'bg-white dark:bg-[#161b22] border rounded-xl p-5 transition-all',
-            gdAccounts.length > 0
-              ? 'border-slate-200 dark:border-white/[0.08]'
-              : 'border-dashed border-slate-300 dark:border-white/[0.06]'
-          )}>
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-lg bg-teal-50 dark:bg-teal-500/10 flex items-center justify-center">
-                  <GoDaddyIcon className="w-5 h-5 text-teal-600 dark:text-teal-400" />
-                </div>
-                <div>
-                  <p className="text-sm font-bold text-slate-900 dark:text-white">GoDaddy DNS</p>
-                  <p className="text-[11px] text-slate-400 dark:text-white/30">
-                    {gdAccounts.length > 0
-                      ? `${gdAccounts.length} account${gdAccounts.length > 1 ? 's' : ''} connected`
-                      : 'No accounts yet'}
-                  </p>
-                </div>
-              </div>
-              {gdAccounts.length > 0 ? (
-                <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/25">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase">Active</span>
-                </span>
-              ) : (
-                <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 dark:bg-white/[0.04] border border-slate-200 dark:border-white/[0.08]">
-                  <span className="w-1.5 h-1.5 rounded-full bg-slate-300 dark:bg-white/20" />
-                  <span className="text-[10px] font-bold text-slate-400 dark:text-white/30 uppercase">Inactive</span>
-                </span>
-              )}
-            </div>
-            {gdAccounts.length > 0 && (
-              <div className="flex items-center gap-2 mb-4 flex-wrap">
-                {gdAccounts.slice(0, 2).map(a => (
-                  <span key={a.id} className="text-[11px] font-medium text-slate-500 dark:text-white/30 flex items-center gap-1">
-                    <Globe className="w-3 h-3" /> {a.domain}
-                  </span>
-                ))}
-                {gdAccounts.length > 2 && (
-                  <span className="text-[11px] text-slate-400 dark:text-white/20">+{gdAccounts.length - 2} more</span>
+              <button
+                onClick={() => setModalState({ isOpen: true, type: 'github' })}
+                className={cn(
+                  "w-full py-3 rounded-xl text-[13px] font-semibold transition-all border",
+                  integrations.github?.connected
+                    ? "bg-white dark:bg-[#0d1117] border-slate-200 dark:border-[#2d333b] text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04]"
+                    : "bg-slate-900 dark:bg-white border-slate-900 dark:border-white text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-slate-100"
                 )}
+              >
+                {integrations.github?.connected ? 'Manage' : 'How to use'}
+              </button>
+            </div>
+
+            {/* GitLab Card */}
+            <div className="bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200 dark:border-[#2d333b] p-6 flex flex-col hover:shadow-md dark:hover:shadow-black/20 hover:border-slate-300 dark:hover:border-[#444c56] transition-all">
+              <div className="w-12 h-12 rounded-xl bg-orange-50 dark:bg-orange-500/10 border border-orange-200/60 dark:border-orange-500/20 flex items-center justify-center mb-4">
+                <GitLabIcon className="w-6 h-6 text-orange-500" />
               </div>
-            )}
-            <button
-              onClick={() => { setGdEditAccount(null); setGdModalOpen(true); }}
-              className={cn(
-                'w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all',
-                gdAccounts.length > 0
-                  ? 'bg-slate-100 dark:bg-white/[0.04] text-slate-700 dark:text-white/60 hover:bg-slate-200 dark:hover:bg-white/[0.08] border border-slate-200 dark:border-white/[0.08]'
-                  : 'bg-teal-600 text-white hover:bg-teal-700 shadow-sm'
-              )}
-            >
-              <Plus className="w-4 h-4" />
-              Add Account
-            </button>
+              <h3 className="text-[16px] font-bold text-slate-900 dark:text-white mb-1">GitLab</h3>
+              <p className="text-[13px] text-slate-500 dark:text-slate-400 leading-relaxed mb-4 flex-1">
+                {integrations.gitlab?.connected
+                  ? <>Connected as <span className="font-semibold text-slate-700 dark:text-slate-300">{integrations.gitlab.username}</span></>
+                  : 'Push code to self-hosted or cloud GitLab instances.'}
+              </p>
+              <button
+                onClick={() => setModalState({ isOpen: true, type: 'gitlab' })}
+                className={cn(
+                  "w-full py-3 rounded-xl text-[13px] font-semibold transition-all border",
+                  integrations.gitlab?.connected
+                    ? "bg-white dark:bg-[#0d1117] border-slate-200 dark:border-[#2d333b] text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04]"
+                    : "bg-slate-900 dark:bg-white border-slate-900 dark:border-white text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-slate-100"
+                )}
+              >
+                {integrations.gitlab?.connected ? 'Manage' : 'How to use'}
+              </button>
+            </div>
+
+            {/* GoDaddy Card */}
+            <div className="bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200 dark:border-[#2d333b] p-6 flex flex-col hover:shadow-md dark:hover:shadow-black/20 hover:border-slate-300 dark:hover:border-[#444c56] transition-all">
+              <div className="w-12 h-12 rounded-xl bg-teal-50 dark:bg-teal-500/10 border border-teal-200/60 dark:border-teal-500/20 flex items-center justify-center mb-4">
+                <GoDaddyIcon className="w-6 h-6 text-teal-600 dark:text-teal-400" />
+              </div>
+              <h3 className="text-[16px] font-bold text-slate-900 dark:text-white mb-1">GoDaddy DNS</h3>
+              <p className="text-[13px] text-slate-500 dark:text-slate-400 leading-relaxed mb-4 flex-1">
+                {gdAccounts.length > 0
+                  ? <>{gdAccounts.length} account{gdAccounts.length > 1 ? 's' : ''} connected</>
+                  : 'Manage your domain DNS records and deploy to custom domains.'}
+              </p>
+              <button
+                onClick={() => { setGdEditAccount(null); setGdModalOpen(true); }}
+                className={cn(
+                  "w-full py-3 rounded-xl text-[13px] font-semibold transition-all border",
+                  gdAccounts.length > 0
+                    ? "bg-white dark:bg-[#0d1117] border-slate-200 dark:border-[#2d333b] text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04]"
+                    : "bg-slate-900 dark:bg-white border-slate-900 dark:border-white text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-slate-100"
+                )}
+              >
+                {gdAccounts.length > 0 ? 'How to use' : 'How to use'}
+              </button>
+            </div>
+
+            {/* Coming Soon — Stripe */}
+            <div className="bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200 dark:border-[#2d333b] p-6 flex flex-col opacity-60">
+              <div className="w-12 h-12 rounded-xl bg-purple-50 dark:bg-purple-500/10 border border-purple-200/60 dark:border-purple-500/20 flex items-center justify-center mb-4">
+                <span className="text-[20px] font-black text-purple-600 dark:text-purple-400">S</span>
+              </div>
+              <h3 className="text-[16px] font-bold text-slate-900 dark:text-white mb-1">Stripe</h3>
+              <p className="text-[13px] text-slate-500 dark:text-slate-400 leading-relaxed mb-4 flex-1">
+                Sell products or subscriptions and get paid online.
+              </p>
+              <button disabled className="w-full py-3 rounded-xl text-[13px] font-semibold border bg-white dark:bg-[#0d1117] border-slate-200 dark:border-[#2d333b] text-slate-400 dark:text-slate-600 cursor-not-allowed">
+                Coming Soon
+              </button>
+            </div>
+
+            {/* Coming Soon — Slack */}
+            <div className="bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200 dark:border-[#2d333b] p-6 flex flex-col opacity-60">
+              <div className="w-12 h-12 rounded-xl bg-yellow-50 dark:bg-yellow-500/10 border border-yellow-200/60 dark:border-yellow-500/20 flex items-center justify-center mb-4">
+                <span className="text-[18px]">💬</span>
+              </div>
+              <h3 className="text-[16px] font-bold text-slate-900 dark:text-white mb-1">Slack</h3>
+              <p className="text-[13px] text-slate-500 dark:text-slate-400 leading-relaxed mb-4 flex-1">
+                Send messages and manage Slack as a user.
+              </p>
+              <button disabled className="w-full py-3 rounded-xl text-[13px] font-semibold border bg-white dark:bg-[#0d1117] border-slate-200 dark:border-[#2d333b] text-slate-400 dark:text-slate-600 cursor-not-allowed">
+                Coming Soon
+              </button>
+            </div>
+
+            {/* Coming Soon — Notion */}
+            <div className="bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200 dark:border-[#2d333b] p-6 flex flex-col opacity-60">
+              <div className="w-12 h-12 rounded-xl bg-slate-100 dark:bg-white/[0.06] border border-slate-200/60 dark:border-[#2d333b] flex items-center justify-center mb-4">
+                <span className="text-[20px] font-black text-slate-800 dark:text-white">N</span>
+              </div>
+              <h3 className="text-[16px] font-bold text-slate-900 dark:text-white mb-1">Notion</h3>
+              <p className="text-[13px] text-slate-500 dark:text-slate-400 leading-relaxed mb-4 flex-1">
+                Organize and sync knowledge or project data.
+              </p>
+              <button disabled className="w-full py-3 rounded-xl text-[13px] font-semibold border bg-white dark:bg-[#0d1117] border-slate-200 dark:border-[#2d333b] text-slate-400 dark:text-slate-600 cursor-not-allowed">
+                Coming Soon
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* ══ GoDaddy Accounts List ══ */}
+        {/* ══ GoDaddy Domain Accounts (if any) ══ */}
         {gdAccounts.length > 0 && (
-          <div className="bg-white dark:bg-[#161b22] border border-slate-200 dark:border-white/[0.08] rounded-xl mb-5 overflow-hidden">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-white/[0.06]">
-              <div className="flex items-center gap-2.5">
-                <GoDaddyIcon className="w-4 h-4 text-teal-600 dark:text-teal-400" />
-                <h3 className="text-sm font-bold text-slate-900 dark:text-white">Domain Accounts</h3>
-                <span className="text-[11px] text-slate-400 dark:text-white/25">{gdAccounts.length} total</span>
+          <div className="mb-10">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-[20px] font-bold text-slate-900 dark:text-white mb-1">Domain Accounts</h2>
+                <p className="text-[14px] text-slate-500 dark:text-slate-400">{gdAccounts.length} GoDaddy account{gdAccounts.length > 1 ? 's' : ''} configured.</p>
               </div>
+              <button
+                onClick={() => { setGdEditAccount(null); setGdModalOpen(true); }}
+                className="flex items-center gap-2 px-4 py-2 text-[13px] font-semibold text-white bg-slate-900 dark:bg-white dark:text-slate-900 rounded-full hover:bg-slate-800 dark:hover:bg-slate-100 shadow-sm transition-all"
+              >
+                <Plus className="w-4 h-4" /> Add Account
+              </button>
             </div>
-            <div className="divide-y divide-slate-100 dark:divide-white/[0.05]">
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
               {gdAccounts.map(acc => (
-                <div key={acc.id} className="flex items-center gap-4 px-6 py-4 hover:bg-slate-50/50 dark:hover:bg-white/[0.02] transition-colors">
-                  <div className="w-8 h-8 rounded-lg bg-teal-50 dark:bg-teal-500/10 flex items-center justify-center shrink-0">
-                    <Globe className="w-4 h-4 text-teal-600 dark:text-teal-400" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className="text-sm font-semibold text-slate-900 dark:text-white">{acc.label || 'Default'}</span>
-                      <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-white/[0.06] text-[10px] font-bold text-slate-500 dark:text-white/40 uppercase">{acc.record_type}</span>
+                <div key={acc.id} className="bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200 dark:border-[#2d333b] p-6 flex flex-col hover:shadow-md dark:hover:shadow-black/20 hover:border-slate-300 dark:hover:border-[#444c56] transition-all">
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="w-10 h-10 rounded-xl bg-teal-50 dark:bg-teal-500/10 border border-teal-200/60 dark:border-teal-500/20 flex items-center justify-center">
+                      <Globe className="w-5 h-5 text-teal-600 dark:text-teal-400" />
                     </div>
-                    <div className="flex items-center gap-2 text-[12px] text-slate-400 dark:text-white/30">
-                      <span className="font-medium text-slate-600 dark:text-white/50">{acc.domain}</span>
-                      {acc.target && (
-                        <>
-                          <span className="text-slate-300 dark:text-white/10">→</span>
-                          <span>{acc.target}</span>
-                        </>
-                      )}
-                    </div>
+                    <span className="px-2 py-0.5 rounded-md bg-teal-50 dark:bg-teal-500/10 border border-teal-200 dark:border-teal-500/20 text-[10px] font-bold text-teal-600 dark:text-teal-400 uppercase">{acc.record_type}</span>
                   </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
+                  <h3 className="text-[15px] font-bold text-slate-900 dark:text-white mb-1">{acc.label || 'Default'}</h3>
+                  <p className="text-[13px] text-slate-500 dark:text-slate-400 mb-1">
+                    <span className="font-semibold text-slate-700 dark:text-slate-300">{acc.domain}</span>
+                  </p>
+                  {acc.target && (
+                    <p className="text-[12px] text-slate-400 dark:text-slate-500 mb-4">→ {acc.target}</p>
+                  )}
+                  <div className="flex items-center gap-2 mt-auto pt-3">
                     <button
                       onClick={() => { setGdEditAccount(acc); setGdModalOpen(true); }}
-                      className="p-2 rounded-lg text-slate-400 dark:text-white/30 hover:bg-slate-100 dark:hover:bg-white/[0.06] hover:text-slate-600 dark:hover:text-white/60 transition-all"
-                      title="Edit"
+                      className="flex-1 py-2.5 rounded-xl text-[12px] font-semibold border bg-white dark:bg-[#0d1117] border-slate-200 dark:border-[#2d333b] text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04] transition-all"
                     >
-                      <Edit3 className="w-4 h-4" />
+                      Edit
                     </button>
                     <button
                       onClick={() => handleGdDelete(acc.id)}
                       disabled={gdDeleting === acc.id}
-                      className="p-2 rounded-lg text-slate-400 dark:text-white/30 hover:bg-red-50 dark:hover:bg-red-500/10 hover:text-red-500 dark:hover:text-red-400 transition-all disabled:opacity-50"
-                      title="Delete"
+                      className="py-2.5 px-4 rounded-xl text-[12px] font-semibold border border-red-200 dark:border-red-500/20 text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-all disabled:opacity-50"
                     >
-                      {gdDeleting === acc.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                      {gdDeleting === acc.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Delete'}
                     </button>
                   </div>
                 </div>
@@ -1070,87 +1023,54 @@ export default function IntegrationsPage() {
           </div>
         )}
 
-        {/* ══ Coming Soon ══ */}
-        <div className="bg-white dark:bg-[#161b22] border border-dashed border-slate-300 dark:border-white/[0.06] rounded-xl px-6 py-4 mb-5 flex items-center gap-4">
-          <div className="w-9 h-9 rounded-lg bg-slate-50 dark:bg-white/[0.03] border border-slate-200 dark:border-white/[0.06] flex items-center justify-center shrink-0">
-            <Plus className="w-4 h-4 text-slate-300 dark:text-white/15" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-slate-400 dark:text-white/25">More Integrations</p>
-            <p className="text-[12px] text-slate-300 dark:text-white/15">Bitbucket, Jira, Slack & more coming soon...</p>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {['Bitbucket', 'Jira', 'Slack'].map(name => (
-              <span key={name} className="px-2.5 py-1 rounded-md border border-slate-200 dark:border-white/[0.06] bg-white dark:bg-white/[0.02] text-[10px] font-bold text-slate-400 dark:text-white/20 uppercase tracking-wider">
-                {name}
-              </span>
-            ))}
-          </div>
-        </div>
-
         {/* ══ Git Identity ══ */}
-        <div className="bg-white dark:bg-[#161b22] border border-slate-200 dark:border-white/[0.08] rounded-xl overflow-hidden">
-          <div className="flex flex-col lg:flex-row">
-            {/* Left panel */}
-            <div className={cn(
-              'p-6 lg:w-[220px] shrink-0',
-              'border-b lg:border-b-0 lg:border-r',
-              'border-slate-100 dark:border-white/[0.06]'
-            )}>
-              <div className="w-9 h-9 rounded-lg border border-indigo-100 dark:border-indigo-500/25 bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center mb-3">
-                <User className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+        <div className="mb-10">
+          <h2 className="text-[20px] font-bold text-slate-900 dark:text-white mb-1">Git Identity</h2>
+          <p className="text-[14px] text-slate-500 dark:text-slate-400 mb-6">The author details attached to every commit made by Lucid AI on your behalf.</p>
+
+          <div className="bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200 dark:border-[#2d333b] p-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5">
+              <div className="space-y-1.5">
+                <label className="text-[12px] font-semibold text-slate-500 dark:text-slate-400">Author Name</label>
+                <div className="relative group">
+                  <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-300 dark:text-white/20 group-focus-within:text-indigo-500 transition-colors" />
+                  <input
+                    value={gitUsername}
+                    onChange={(e) => setGitUsername(e.target.value)}
+                    placeholder="John Doe"
+                    className="w-full pl-9 pr-4 py-2.5 rounded-xl text-sm outline-none transition-all bg-white dark:bg-[#0d1117] border border-slate-200 dark:border-[#2d333b] text-slate-800 dark:text-white placeholder-slate-300 dark:placeholder-white/15 hover:border-slate-300 dark:hover:border-[#444c56] focus:border-indigo-400 dark:focus:border-indigo-500/50"
+                  />
+                </div>
               </div>
-              <h3 className="text-sm font-bold text-slate-900 dark:text-white mb-1.5">Git Identity</h3>
-              <p className="text-[12px] text-slate-500 dark:text-white/30 leading-relaxed">
-                The author details attached to every commit made by Lucid AI on your behalf.
-              </p>
+              <div className="space-y-1.5">
+                <label className="text-[12px] font-semibold text-slate-500 dark:text-slate-400">Author Email</label>
+                <div className="relative group">
+                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-300 dark:text-white/20 group-focus-within:text-indigo-500 transition-colors" />
+                  <input
+                    value={gitEmail}
+                    onChange={(e) => setGitEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    className="w-full pl-9 pr-4 py-2.5 rounded-xl text-sm outline-none transition-all bg-white dark:bg-[#0d1117] border border-slate-200 dark:border-[#2d333b] text-slate-800 dark:text-white placeholder-slate-300 dark:placeholder-white/15 hover:border-slate-300 dark:hover:border-[#444c56] focus:border-indigo-400 dark:focus:border-indigo-500/50"
+                  />
+                </div>
+              </div>
             </div>
 
-            {/* Right panel */}
-            <div className="flex-1 p-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-5">
-                <div className="space-y-1.5">
-                  <label className="text-[11px] font-semibold text-slate-500 dark:text-white/30 uppercase tracking-wider">Author Name</label>
-                  <div className="relative group">
-                    <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-300 dark:text-white/20 group-focus-within:text-indigo-500 transition-colors" />
-                    <input
-                      value={gitUsername}
-                      onChange={(e) => setGitUsername(e.target.value)}
-                      placeholder="John Doe"
-                      className="w-full pl-9 pr-4 py-2.5 rounded-lg text-sm outline-none transition-all bg-white dark:bg-white/[0.03] border border-slate-200 dark:border-white/[0.08] text-slate-800 dark:text-white placeholder-slate-300 dark:placeholder-white/15 hover:border-slate-300 dark:hover:border-white/15 focus:border-indigo-400 dark:focus:border-indigo-500/50 focus:ring-2 focus:ring-indigo-500/10"
-                    />
-                  </div>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-[11px] font-semibold text-slate-500 dark:text-white/30 uppercase tracking-wider">Author Email</label>
-                  <div className="relative group">
-                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-300 dark:text-white/20 group-focus-within:text-indigo-500 transition-colors" />
-                    <input
-                      value={gitEmail}
-                      onChange={(e) => setGitEmail(e.target.value)}
-                      placeholder="you@example.com"
-                      className="w-full pl-9 pr-4 py-2.5 rounded-lg text-sm outline-none transition-all bg-white dark:bg-white/[0.03] border border-slate-200 dark:border-white/[0.08] text-slate-800 dark:text-white placeholder-slate-300 dark:placeholder-white/15 hover:border-slate-300 dark:hover:border-white/15 focus:border-indigo-400 dark:focus:border-indigo-500/50 focus:ring-2 focus:ring-indigo-500/10"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <p className="text-[12px] italic text-slate-400 dark:text-white/20">Changes apply on the next commit</p>
-                <button
-                  onClick={saveGitSettings}
-                  disabled={savingGit}
-                  className="flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 shadow-sm transition-all active:scale-[0.98] disabled:opacity-60"
-                >
-                  {savingGit ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                  Save Identity
-                </button>
-              </div>
+            <div className="flex items-center justify-between">
+              <p className="text-[12px] italic text-slate-400 dark:text-white/20">Changes apply on the next commit</p>
+              <button
+                onClick={saveGitSettings}
+                disabled={savingGit}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 shadow-sm transition-all active:scale-[0.98] disabled:opacity-60"
+              >
+                {savingGit ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                Save Identity
+              </button>
             </div>
           </div>
         </div>
-
       </div>
     </div>
   );
 }
+
