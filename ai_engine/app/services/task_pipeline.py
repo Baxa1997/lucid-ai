@@ -5537,6 +5537,24 @@ async def run_pipeline(
             await _send_phase(6, "Verifying build", "No changes detected", "error")
             return
 
+        # ── Phase 6.7: Start Live Preview (dev server + tunnel) ────
+        # Launch an instant live preview so the user doesn't have to wait
+        # for the full GitHub push + Vercel deploy cycle.
+        preview_url = None
+        try:
+            from app.services.dev_server import start_dev_preview
+            _pm = validated.get("package_manager", "npm")
+            preview_url = await start_dev_preview(
+                workspace_path=workspace_path,
+                websocket=websocket,
+                chat_session_id=chat_session_id,
+                package_manager=_pm,
+            )
+            if preview_url:
+                logger.info("Live preview started: %s", preview_url)
+        except Exception as _preview_err:
+            logger.warning("Live preview failed (non-fatal): %s", _preview_err)
+
         # ── Phase 7: Commit + Create Repo + Push ──────────
         # CORRECT ORDER: code is already generated (Phase 5)
         # 1. Commit locally  2. Create repo  3. Push

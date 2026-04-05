@@ -570,7 +570,18 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     }
 
     if (state === 'idle') {
-      connect('');
+      // Pass initial task (from wizard) in the handshake so backend
+      // starts the pipeline immediately — no second message needed.
+      const taskToSend = initialTaskRef.current || '';
+      if (taskToSend) {
+        // Show user message in chat so the chat isn't empty during building.
+        // Strip the [LUCID_PROJECT] header for display — show only the prompt.
+        const displayText = taskToSend.includes('\n\n')
+          ? taskToSend.split('\n\n').slice(1).join('\n\n')
+          : taskToSend;
+        pushChat('user', displayText);
+      }
+      connect(taskToSend);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);

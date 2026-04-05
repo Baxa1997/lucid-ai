@@ -18,6 +18,8 @@ import {
   ExternalLink, GitPullRequest, FileImage, Eye,
   Video, Globe, Camera, Link2, Layers, Paperclip, Plus,
   FolderOpen, PanelLeftClose, PanelLeftOpen, Hammer, Monitor,
+  Mic, Pencil, MessageCircle, Lightbulb, History, Diamond, MoreHorizontal,
+  Wand2, Palette, RefreshCw, Maximize, Smartphone, Download,
 } from 'lucide-react';
 import { useAgentSession } from '@/hooks/useAgentSession';
 import {
@@ -131,17 +133,25 @@ function MessageBubble({ msg, isLatest }) {
 
   // User message
   if (msg.role === 'user') {
+    const cleanContent = msg.content?.replace(/\[LUCID_PROJECT\][\s\S]*?(?=\n\n(?:I need|Create)|\n)/i, '').replace(/\[LUCID_PROJECT\][\s\S]*?(?=\n\n|\n)/i, '').trim() || msg.content;
+    
     return (
-      <div className="flex justify-end px-4 py-2">
-        <div className="flex items-end gap-3 max-w-[85%]">
-          <div className="flex flex-col items-end gap-1">
-            <span className="text-[10px] uppercase font-bold tracking-widest text-slate-400 px-1">You</span>
-            <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl rounded-br-sm px-4 py-3 shadow-sm">
-              <p className="text-sm leading-relaxed whitespace-pre-wrap text-slate-800 dark:text-slate-200">{msg.content}</p>
-            </div>
-          </div>
-          <div className="w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center shrink-0 border border-slate-200 dark:border-slate-700 shadow-sm">
+      <div className="flex flex-col pl-4 pr-3 py-3 w-full">
+        <div className="flex justify-end mb-1">
+          <div className="w-6 h-6 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center shrink-0 overflow-hidden">
             <User className="w-4 h-4 text-slate-500" />
+            {/* If we have a user image, we can use an img tag here */}
+          </div>
+        </div>
+        <div className="bg-[#f0f4f9] dark:bg-slate-800/80 rounded-[20px] p-4 w-full relative">
+          <p className="text-[13px] font-medium leading-relaxed whitespace-pre-wrap text-slate-800 dark:text-slate-200">
+            {cleanContent}
+          </p>
+          <div className="mt-4 flex justify-between items-center text-[11px] text-slate-400 dark:text-slate-500 font-medium">
+            <span>Just now</span>
+            <button className="hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
+              <Copy className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
       </div>
@@ -353,11 +363,19 @@ function MessageBubble({ msg, isLatest }) {
   };
 
   return (
-    <div className="flex items-start gap-3 px-4 py-2 animate-in fade-in duration-300">
-      <div className="mt-0.5 text-blue-500 shrink-0">
-        <Bot className="w-5 h-5" />
+    <div className="flex flex-col px-4 py-4 w-full animate-in fade-in duration-300 border-b border-slate-100 dark:border-[#1c2128]/50 last:border-0">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2.5">
+          <div className="w-6 h-6 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center shrink-0 shadow-sm shadow-orange-500/20">
+            <Sparkles className="w-3.5 h-3.5 text-white" />
+          </div>
+          <span className="font-semibold text-slate-800 dark:text-slate-200 text-[13px]">Base44</span>
+        </div>
+        <button className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-1 rounded hover:bg-slate-100 dark:hover:bg-white/[0.04] transition-colors">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+        </button>
       </div>
-      <div className="flex-1 text-sm leading-relaxed">
+      <div className="text-[13px] leading-relaxed text-slate-700 dark:text-slate-300 pl-[34px]">
         {renderContent(msg.content)}
       </div>
     </div>
@@ -378,6 +396,65 @@ function ConversationPageInner({ params }) {
   const router = useRouter();
   const conversationId = decodeURIComponent(projectId || 'unknown');
 
+  // ── Detect wizard mode IMMEDIATELY (sync, before any async work) ──
+  // If sessionStorage has a wizard_prompt, this is a brand-new project from
+  // the wizard. We skip blocking on conversation/git-token loading and
+  // connect the WebSocket immediately.
+  const [isWizardMode] = useState(() => {
+    try {
+      return !!sessionStorage.getItem(`wizard_prompt_${decodeURIComponent(projectId || 'unknown')}`);
+    } catch { return false; }
+  });
+
+  // Build the wizard prompt eagerly so we can pass it in the WS handshake
+  // Also store the user-visible description (without [LUCID_PROJECT] header)
+  const [wizardDesc] = useState(() => {
+    try {
+      const descKey = `wizard_desc_${decodeURIComponent(projectId || 'unknown')}`;
+      return sessionStorage.getItem(descKey) || '';
+    } catch { return ''; }
+  });
+
+  const [wizardTask] = useState(() => {
+    try {
+      const key = `wizard_prompt_${decodeURIComponent(projectId || 'unknown')}`;
+      const prompt = sessionStorage.getItem(key);
+      if (!prompt) return '';
+
+      const cid = decodeURIComponent(projectId || 'unknown');
+      const metaKey = `wizard_meta_${cid}`;
+      const metaStr = sessionStorage.getItem(metaKey);
+      const descKey = `wizard_desc_${cid}`;
+
+      let finalPrompt = prompt;
+      if (metaStr) {
+        try {
+          const meta = JSON.parse(metaStr);
+          const origDesc = sessionStorage.getItem(descKey) || '';
+
+          const parts = [
+            `description=${origDesc || 'project'}`,
+            `stack=${meta.stack || 'nextjs'}`,
+            `backend=${meta.backend || 'none'}`,
+          ];
+          if (meta.projectType) parts.push(`project_type=${meta.projectType}`);
+          if (meta.deployment)  parts.push(`deployment=${meta.deployment}`);
+          if (meta.figmaUrl)    parts.push(`figma_url=${meta.figmaUrl}`);
+
+          const header = `[LUCID_PROJECT] ${parts.join(' | ')}`;
+          finalPrompt = `${header}\n\n${prompt}`;
+        } catch (_) {}
+      }
+
+      // Clean up sessionStorage now that we've read it
+      sessionStorage.removeItem(key);
+      sessionStorage.removeItem(metaKey);
+      sessionStorage.removeItem(descKey);
+
+      return finalPrompt;
+    } catch { return ''; }
+  });
+
   // ── Conversation data from Supabase ─────────────────────
   const [conversation, setConversation] = useState(null);
   const [savedMessages, setSavedMessages] = useState([]);
@@ -393,11 +470,13 @@ function ConversationPageInner({ params }) {
   });
 
   // Load conversation and messages on mount (with timeout)
+  // For wizard mode, use a much shorter timeout since we don't need this data to connect.
   useEffect(() => {
     let cancelled = false;
+    const timeoutMs = isWizardMode ? 1500 : 5000;
     const timeout = setTimeout(() => {
       if (!cancelled) setConvLoading(false);
-    }, 5000); // 5s safety timeout
+    }, timeoutMs);
 
     (async () => {
       try {
@@ -446,7 +525,7 @@ function ConversationPageInner({ params }) {
     })();
 
     return () => { cancelled = true; clearTimeout(timeout); };
-  }, [conversationId]);
+  }, [conversationId, isWizardMode]);
 
   // ── Auth token for WebSocket ────────────────────────────
   const [token, setToken] = useState('');
@@ -459,11 +538,25 @@ function ConversationPageInner({ params }) {
       .catch(() => {});
   }, []);
 
-  // Load git token from integrations when conversation is available
+  // Load git token from integrations — runs in PARALLEL, not blocked by conversation
   const [gitTokenLoaded, setGitTokenLoaded] = useState(false);
   useEffect(() => {
-    // For new conversations that don't exist in the DB yet,
-    // conversation will be null. Mark git token as "loaded" (nothing to load).
+    // For wizard mode, mark as loaded immediately — backend uses its own token
+    if (isWizardMode) {
+      setGitTokenLoaded(true);
+      // Still try to load in background for follow-up tasks
+      (async () => {
+        try {
+          const { getIntegrations } = await import('@/lib/integrations');
+          const intg = await getIntegrations();
+          if (intg.github?.token) setGitToken(intg.github.token);
+          else if (intg.gitlab?.token) setGitToken(intg.gitlab.token);
+        } catch {}
+      })();
+      return;
+    }
+
+    // For non-wizard: wait for conversation, but also handle null (new conv)
     if (!conversation && !convLoading) {
       setGitTokenLoaded(true);
       return;
@@ -480,13 +573,8 @@ function ConversationPageInner({ params }) {
         } else if (conversation.repo_provider === 'gitlab' && intg.gitlab?.token) {
           setGitToken(intg.gitlab.token);
         } else if (!conversation.repo_provider) {
-          // Scratch session — still load GitHub token if available so
-          // the backend can auto-create a repository for this project.
-          if (intg.github?.token) {
-            setGitToken(intg.github.token);
-          } else if (intg.gitlab?.token) {
-            setGitToken(intg.gitlab.token);
-          }
+          if (intg.github?.token) setGitToken(intg.github.token);
+          else if (intg.gitlab?.token) setGitToken(intg.gitlab.token);
         }
       } catch (err) {
         console.error('Failed to load git token:', err);
@@ -494,18 +582,17 @@ function ConversationPageInner({ params }) {
         setGitTokenLoaded(true);
       }
     })();
-  }, [conversation, convLoading]);
+  }, [conversation, convLoading, isWizardMode]);
 
   // ── Agent session hook ──────────────────────────────────
-  // IMPORTANT: Don't pass the token until ALL data has loaded:
-  //   1. Auth token (from /api/agent/token)
-  //   2. Conversation metadata (from Supabase — has repoUrl, branch)
-  //   3. Git token (from user_metadata — needed for cloning)
-  // This prevents race conditions where the WebSocket connects before
-  // the backend has the repo URL and git credentials.
-  const effectiveToken = (convLoading || !gitTokenLoaded) ? '' : token;
+  // For WIZARD projects: connect immediately with just the auth token.
+  //   No repo URL or git token needed — backend handles everything.
+  // For EXISTING projects: wait for conversation + git token before connecting.
+  const effectiveToken = isWizardMode
+    ? token  // Fast path: connect as soon as auth token is ready
+    : (convLoading || !gitTokenLoaded) ? '' : token;
 
-  const {
+   const {
     status,
     sessionId,
     messages,
@@ -522,20 +609,29 @@ function ConversationPageInner({ params }) {
     phases,
     completionSummary,
     deployUrl,
+    previewUrl,
   } = useAgentSession({
     projectId: conversationId,
     token: effectiveToken,
+    task: wizardTask,  // Pass wizard prompt in handshake for instant start
     repoUrl: conversation?.repo_url || '',
     gitToken,
     branch: conversation?.branch || 'main',
   });
 
-  // ── Sync deployUrl from WebSocket to repoInfo (live update) ──
+  // ── Sync deployUrl / previewUrl from WebSocket to repoInfo (live update) ──
   useEffect(() => {
     if (deployUrl) {
       setRepoInfo(prev => ({ ...prev, vercelUrl: deployUrl }));
     }
   }, [deployUrl]);
+
+  // Live Preview URL from dev server tunnel (takes priority during dev)
+  useEffect(() => {
+    if (previewUrl && !repoInfo.vercelUrl) {
+      setRepoInfo(prev => ({ ...prev, vercelUrl: previewUrl }));
+    }
+  }, [previewUrl]);
 
   // ── Layout state ────────────────────────────────────────
   const [chatInput, setChatInput] = useState('');
@@ -549,6 +645,7 @@ function ConversationPageInner({ params }) {
   const [showFigmaInput, setShowFigmaInput] = useState(false);
   const [figmaUrl, setFigmaUrl] = useState('');
   const [showExportModal, setShowExportModal] = useState(false);
+  const [chatMode, setChatMode] = useState('edit'); // 'edit' or 'discuss'
   const fileInputRef = useRef(null);
   const videoInputRef = useRef(null);
   const toolsMenuRef = useRef(null);
@@ -561,53 +658,32 @@ function ConversationPageInner({ params }) {
   }, [savedMessages, setInitialMessages]);
 
   // ── Auto-start wizard task when workspace becomes ready ──
-  const wizardAutoStarted = useRef(false);
+  // NOTE: For wizard mode, the task is now sent in the WebSocket handshake
+  // (via the `task` prop to useAgentSession). This effect is kept as a
+  // fallback for edge cases where the handshake task wasn't received.
+  const wizardAutoStarted = useRef(isWizardMode); // Already started if wizard mode
   useEffect(() => {
     if (status !== 'ready' || wizardAutoStarted.current) return;
 
+    // Double-check: if wizard task was passed in handshake, skip
+    if (wizardTask) {
+      wizardAutoStarted.current = true;
+      return;
+    }
+
+    // Fallback: check sessionStorage (shouldn't happen in normal flow)
     try {
       const key = `wizard_prompt_${conversationId}`;
       const prompt = sessionStorage.getItem(key);
       if (prompt) {
         wizardAutoStarted.current = true;
-        // Read wizard metadata for project naming + pre-cloned repo info
-        const metaKey = `wizard_meta_${conversationId}`;
-        const metaStr = sessionStorage.getItem(metaKey);
-        // Clean up storage
         sessionStorage.removeItem(key);
-        sessionStorage.removeItem(metaKey);
-
-        // Prepend metadata header so backend can derive the right GitHub template.
-        // Format: [LUCID_PROJECT] description=... | stack=... | backend=... | ...
-        // The backend uses stack= to look up the template in its own registry —
-        // no clone_url or repo_url needed from the frontend.
-        let finalPrompt = prompt;
-        if (metaStr) {
-          try {
-            const meta = JSON.parse(metaStr);
-            const descKey = `wizard_desc_${conversationId}`;
-            const origDesc = sessionStorage.getItem(descKey) || '';
-            sessionStorage.removeItem(descKey);
-
-            const parts = [
-              `description=${origDesc || 'project'}`,
-              `stack=${meta.stack || 'nextjs'}`,
-              `backend=${meta.backend || 'none'}`,
-            ];
-            if (meta.projectType) parts.push(`project_type=${meta.projectType}`);
-            if (meta.deployment)  parts.push(`deployment=${meta.deployment}`);
-            if (meta.figmaUrl)    parts.push(`figma_url=${meta.figmaUrl}`);
-
-            const header = `[LUCID_PROJECT] ${parts.join(' | ')}`;
-            finalPrompt = `${header}\n\n${prompt}`;
-          } catch (_) {}
-        }
-        // Auto-send the enhanced prompt with metadata
-        setTimeout(() => sendMessage(finalPrompt), 300);
-
+        sessionStorage.removeItem(`wizard_meta_${conversationId}`);
+        sessionStorage.removeItem(`wizard_desc_${conversationId}`);
+        setTimeout(() => sendMessage(prompt), 300);
       }
     } catch (_) {}
-  }, [status, conversationId, sendMessage]);
+  }, [status, conversationId, sendMessage, wizardTask]);
 
   // ── Frontend save (guaranteed backup) ────────────────────
   // Backend also saves to chat_messages, but those saves can fail
@@ -901,7 +977,12 @@ function ConversationPageInner({ params }) {
         `/api/files/read?session_id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`
       );
       const data = await res.json();
-      setFileContent(res.ok ? (data.content || '') : `// Error: ${data.error || 'Could not load file'}`);
+      if (res.ok) {
+        setFileContent(data.content || '');
+      } else {
+        const errorMsg = data.detail || data.error || 'Could not load file';
+        setFileContent(`// Workspace Offline\n// Error: ${errorMsg}\n\n// The active development container for this project has spun down.\n// Your generated code is completely safe.\n\n// -> Click 'Export' in the top right to download the complete source code.\n// -> Or provide your VERCEL_TOKEN to the backend to enable Live Previews.`);
+      }
     } catch {
       setFileContent('// Failed to load file content');
     } finally {
@@ -948,127 +1029,110 @@ function ConversationPageInner({ params }) {
       {/* ════════════════════════════════════════════════
           TOP HEADER BAR — Base44 style
       ════════════════════════════════════════════════ */}
-      <header className="shrink-0 h-14 bg-white dark:bg-[#161b22] border-b border-slate-200 dark:border-[#2d333b] flex items-center justify-between px-4 z-20">
-        {/* Left: Back + Project Name */}
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => router.push('/dashboard/engineer')}
-            className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors"
-          >
-            <ArrowLeft className="w-4 h-4" />
-          </button>
-
-          {/* File explorer toggle */}
-          <button
-            onClick={() => setShowFileExplorer(!showFileExplorer)}
-            className={cn(
-              "p-1.5 rounded-lg border transition-colors",
-              showFileExplorer
-                ? "bg-slate-100 dark:bg-white/[0.06] border-slate-200 dark:border-[#2d333b] text-slate-700 dark:text-white"
-                : "border-transparent text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06]"
-            )}
-            title={showFileExplorer ? "Hide explorer" : "Show explorer"}
-          >
-            {showFileExplorer ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
-          </button>
-
-          <div className="h-5 w-px bg-slate-200 dark:bg-[#2d333b]" />
-
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-[14px] font-bold text-slate-900 dark:text-white truncate max-w-[200px]">
-                {conversation?.title || 'New Conversation'}
-              </h1>
-              <span className={cn(
-                "px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider",
-                status === 'running' || status === 'preparing'
-                  ? "bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400"
-                  : status === 'ready'
-                  ? "bg-emerald-50 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                  : status === 'error'
-                  ? "bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400"
-                  : "bg-slate-100 dark:bg-white/[0.06] text-slate-500 dark:text-slate-400"
-              )}>
-                {status || 'Idle'}
+      <header className="shrink-0 h-[60px] bg-white dark:bg-[#161b22] border-b border-slate-200 dark:border-[#2d333b] flex items-center px-4 z-20">
+        
+        {/* Left: Logo + Project Name + Sidebar Toggles */}
+        <div className="flex items-center gap-4 flex-1">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => window.history.back()}
+              className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 hover:bg-slate-100 dark:hover:bg-white/[0.06] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+              title="Go Back"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center shrink-0 shadow-sm shadow-orange-500/20 ml-1">
+              <Sparkles className="w-4 h-4 text-white" />
+            </div>
+            <div className="flex flex-col justify-center">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[13px] font-bold text-slate-800 dark:text-white leading-tight truncate max-w-[150px]">
+                  {conversation?.title || 'Ember & Hearth'}
+                </span>
+              </div>
+              <span className="text-[11px] font-medium text-slate-400 dark:text-slate-500 leading-tight truncate max-w-[150px]">
+                Bakhriddin's Workspace Work...
               </span>
             </div>
-            <p className="text-[11px] text-slate-400 dark:text-slate-500 flex items-center gap-1.5 mt-0.5">
-              <Github className="w-3 h-3" />
-              {conversation?.repo_name || 'local'}
-              <span className="mx-0.5">·</span>
-              <GitBranch className="w-3 h-3 text-emerald-500" />
-              {conversation?.branch || 'main'}
-              {files.length > 0 && (
-                <span className="ml-1 text-amber-500 font-semibold">{files.length} files</span>
-              )}
-            </p>
+          </div>
+
+          <div className="flex items-center ml-2 border-l border-slate-200 dark:border-[#2d333b] pl-3 gap-1">
+            <button className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors">
+              <History className="w-4 h-4" />
+            </button>
           </div>
         </div>
 
-        {/* Center: Tab Switcher */}
-        <div className="flex items-center bg-slate-100 dark:bg-[#21262d] rounded-lg p-0.5 border border-slate-200/60 dark:border-[#2d333b]">
-          {[
-            { key: 'preview', label: 'Preview', icon: Monitor, hasLive: !!repoInfo.vercelUrl },
-            { key: 'build', label: 'Dashboard', icon: Hammer },
-            { key: 'code', label: 'Code', icon: Code2 },
-          ].map(tab => (
-            <button
-              key={tab.key}
-              onClick={() => {
-                if (tab.key === 'preview' && !repoInfo.vercelUrl) return;
-                setRightPanel(rightPanel === tab.key ? 'preview' : tab.key);
-              }}
-              className={cn(
-                "flex items-center gap-1.5 px-3.5 py-1.5 rounded-md text-[12px] font-semibold transition-all",
-                rightPanel === tab.key
-                  ? "bg-white dark:bg-[#2d333b] text-slate-900 dark:text-white shadow-sm"
-                  : tab.key === 'preview' && !repoInfo.vercelUrl
-                  ? "text-slate-300 dark:text-slate-600 cursor-not-allowed"
-                  : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-white"
-              )}
-            >
-              <tab.icon className="w-3.5 h-3.5" />
-              {tab.label}
-              {tab.hasLive && <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
-            </button>
-          ))}
+        {/* Center: Tab Switcher (Preview | Dashboard | Code) */}
+        <div className="flex justify-center flex-1">
+          <div className="flex items-center bg-slate-100 dark:bg-[#21262d] rounded-[20px] p-[3px] border border-slate-200/60 dark:border-[#2d333b]">
+            {[
+              { key: 'preview', label: 'Preview', hasLive: !!repoInfo.vercelUrl },
+              { key: 'code', label: 'Code', hasLive: false },
+            ].map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => setRightPanel(rightPanel === tab.key ? 'preview' : tab.key)}
+                className={cn(
+                  "flex items-center gap-1.5 px-4 py-1.5 rounded-[18px] text-[13px] font-bold transition-all",
+                  rightPanel === tab.key
+                    ? "bg-white dark:bg-[#2d333b] text-slate-900 dark:text-white shadow-sm"
+                    : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-white"
+                )}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Right: Actions */}
-        <div className="flex items-center gap-2">
-          <StopTaskButton 
-            status={status} 
-            websocket={{
-              send: () => { try { stopSession(); } catch(e) {} }
-            }} 
-            currentTaskId={sessionId} 
-          />
+        <div className="flex items-center justify-end flex-1 gap-1.5">
+          {/* Avatar Stack */}
+          <div className="flex items-center -space-x-1 mr-1">
+            <div className="w-7 h-7 rounded-full bg-slate-200 border border-white dark:border-[#161b22] flex items-center justify-center overflow-hidden shrink-0">
+              <User className="w-4 h-4 text-slate-500" />
+            </div>
+            <div className="w-7 h-7 rounded-full bg-slate-100 dark:bg-slate-800 border border-white dark:border-[#161b22] flex items-center justify-center z-10 text-slate-500 cursor-pointer shadow-sm shrink-0">
+              <Plus className="w-3.5 h-3.5" />
+            </div>
+          </div>
 
-          <ConnectionStatus status={status} error={error} />
+          <button className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors">
+            <MoreHorizontal className="w-4 h-4" />
+          </button>
+          
+          <button className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors mr-1">
+            <Github className="w-4 h-4" />
+          </button>
+
+          <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-[18px] text-[12px] font-bold text-orange-500 bg-orange-50 dark:bg-orange-500/10 border border-orange-200 dark:border-orange-500/20 hover:bg-orange-100 dark:hover:bg-orange-500/20 transition-all mr-1">
+            <Diamond className="w-3.5 h-3.5 fill-current" />
+            30% off
+          </button>
 
           <button
             onClick={() => setShowExportModal(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold border border-slate-200 dark:border-[#2d333b] text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04] transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-[18px] text-[13px] font-bold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-all border border-transparent mr-0.5"
+            title="Export Code"
           >
-            <ExternalLink className="w-3.5 h-3.5" />
             Export
           </button>
 
-          {repoInfo.vercelUrl ? (
-            <a
-              href={repoInfo.vercelUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[12px] font-bold text-white bg-orange-500 hover:bg-orange-600 shadow-sm transition-all"
-            >
-              <Globe className="w-3.5 h-3.5" />
-              Publish
-            </a>
-          ) : (
-            <span className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[12px] font-bold text-slate-400 bg-slate-100 dark:bg-[#21262d] dark:text-slate-500 cursor-not-allowed">
-              Publish
-            </span>
-          )}
+          <button
+            onClick={() => {
+              if (repoInfo.vercelUrl) window.open(repoInfo.vercelUrl, '_blank');
+            }}
+            className={cn(
+              "flex items-center px-4 py-1.5 rounded-[18px] text-[13px] font-bold shadow-sm transition-all",
+              repoInfo.vercelUrl 
+                ? "bg-slate-900 text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100" 
+                : "bg-slate-200 text-slate-400 dark:bg-slate-800 dark:text-slate-500 cursor-not-allowed"
+            )}
+            title="Publish to Vercel"
+          >
+            Publish
+          </button>
         </div>
       </header>
 
@@ -1077,30 +1141,7 @@ function ConversationPageInner({ params }) {
       ════════════════════════════════════════════════ */}
       <div className="flex-1 flex min-h-0 overflow-hidden">
 
-      {/* ── LEFT: File Explorer (collapsible) ── */}
-      {showFileExplorer && (
-        <div className="w-[220px] shrink-0 border-r border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0f1118] flex flex-col animate-in slide-in-from-left-2 fade-in duration-200">
-          <div className="shrink-0 h-10 flex items-center justify-between px-3 border-b border-slate-200 dark:border-[#2d333b] bg-slate-50/80 dark:bg-white/[0.02]">
-            <div className="flex items-center gap-2">
-              <FolderOpen className="w-3.5 h-3.5 text-amber-500" />
-              <span className="text-[11px] font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wider">Explorer</span>
-              {files.length > 0 && (
-                <span className="px-1.5 py-0.5 bg-slate-100 dark:bg-white/[0.06] rounded text-[9px] font-bold text-slate-400 dark:text-slate-500">
-                  {files.length}
-                </span>
-              )}
-            </div>
-          </div>
-          <div className="flex-1 overflow-hidden">
-            <FileExplorer
-              files={files}
-              selectedFile={selectedFile}
-              onFileSelect={handleFileSelect}
-              projectName={conversation?.title || 'Project'}
-            />
-          </div>
-        </div>
-      )}
+
 
       {/* ══ CHAT PANEL (left, 380px) ══ */}
       <div className="w-[380px] shrink-0 flex flex-col min-w-0 border-r border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117]">
@@ -1192,42 +1233,41 @@ function ConversationPageInner({ params }) {
               </div>
             ))}
 
-            {/* Structured progress steps from TaskProgress */}
-            <TaskProgress phases={phases} status={status} completionSummary={completionSummary} />
-
-            {/* Generation progress — real-time batch progress during new project creation */}
-            <GenerationProgress isVisible={status === 'running' || status === 'preparing'} />
 
             {/* Thinking indicator — shown while agent processes before first phase */}
             {phases.length === 0 && status === 'running' && (
-              <div className="flex items-start gap-3 px-4 py-3 animate-in fade-in duration-300">
-                <div className="mt-0.5 text-blue-500 shrink-0">
-                  <Bot className="w-5 h-5" />
-                </div>
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl px-5 py-4 shadow-sm">
-                    <div className="flex gap-1">
-                      <div className="w-2 h-2 rounded-full bg-blue-500 animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <div className="w-2 h-2 rounded-full bg-blue-500 animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <div className="w-2 h-2 rounded-full bg-blue-500 animate-bounce" style={{ animationDelay: '300ms' }} />
-                    </div>
-                    <span className="text-sm text-slate-500 dark:text-slate-400 font-medium">
-                      Thinking and analyzing your request...
-                    </span>
+              <div className="flex flex-col px-4 py-4 w-full animate-in fade-in duration-300">
+                <div className="flex items-center mb-3 gap-2.5">
+                  <div className="w-6 h-6 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center shrink-0 shadow-sm shadow-orange-500/20">
+                    <Sparkles className="w-3.5 h-3.5 text-white" />
                   </div>
+                  <span className="font-semibold text-slate-800 dark:text-slate-200 text-[13px]">Base44</span>
+                </div>
+                <div className="pl-[34px] flex items-center gap-3">
+                  <div className="flex gap-1.5">
+                    <div className="w-1.5 h-1.5 rounded-full bg-orange-500/80 animate-bounce" style={{ animationDelay: '0ms' }} />
+                    <div className="w-1.5 h-1.5 rounded-full bg-orange-500/80 animate-bounce" style={{ animationDelay: '150ms' }} />
+                    <div className="w-1.5 h-1.5 rounded-full bg-orange-500/80 animate-bounce" style={{ animationDelay: '300ms' }} />
+                  </div>
+                  <span className="text-[13px] text-slate-500 dark:text-slate-400">
+                    Thinking and analyzing your request...
+                  </span>
                 </div>
               </div>
             )}
 
             {/* Preparing/connecting indicator (no steps yet) */}
             {steps.length === 0 && phases.length === 0 && (status === 'preparing' || status === 'connecting') && (
-              <div className="flex items-center gap-3 px-4 py-2 animate-in fade-in duration-300">
-                <div className="mt-0.5 text-blue-500 shrink-0">
-                  <Bot className="w-5 h-5" />
+              <div className="flex flex-col px-4 py-4 w-full animate-in fade-in duration-300">
+                <div className="flex items-center mb-3 gap-2.5">
+                  <div className="w-6 h-6 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center shrink-0 shadow-sm shadow-orange-500/20">
+                    <Sparkles className="w-3.5 h-3.5 text-white" />
+                  </div>
+                  <span className="font-semibold text-slate-800 dark:text-slate-200 text-[13px]">Base44</span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Loader2 className="w-4 h-4 text-amber-500 animate-spin" />
-                  <span className="text-sm text-slate-500 dark:text-slate-400">
+                <div className="pl-[34px] flex items-center gap-3">
+                  <Loader2 className="w-3.5 h-3.5 text-orange-500 animate-spin" />
+                  <span className="text-[13px] text-slate-500 dark:text-slate-400">
                     {status === 'preparing' ? 'Preparing workspace…' : 'Connecting…'}
                   </span>
                 </div>
@@ -1238,358 +1278,118 @@ function ConversationPageInner({ params }) {
           </div>
         </div>
 
-        {/* Input Area */}
-        <div className="shrink-0 px-3 pb-3 pt-2 bg-[#f8f9fb] dark:bg-[#0d1117]">
-          <div className="relative">
-            {showScrollBtn && (
-              <button
-                onClick={() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })}
-                className="absolute -top-12 left-1/2 -translate-x-1/2 bg-slate-900/80 text-white px-4 py-1.5 rounded-full text-xs font-semibold backdrop-blur-md shadow-lg flex items-center gap-2 hover:bg-slate-900 transition-colors z-20"
-              >
-                <ArrowDown className="w-3 h-3" />
-                Scroll to latest
+        {/* ── Suggestion Chips (Base44 style) ── */}
+        {messages.length > 0 && status !== 'running' && status !== 'preparing' && (
+          <div className="shrink-0 px-3 py-2 border-t border-slate-100 dark:border-[#1c2128] bg-white dark:bg-[#0d1117]">
+            <div className="flex items-center gap-1.5 mb-2">
+              <Lightbulb className="w-3 h-3 text-slate-400" />
+              <span className="text-[11px] font-semibold text-slate-400 dark:text-slate-500">Suggestions</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {['Add Admin Dashboard', 'Build Dedicated Menu', 'Improve Mobile Design'].map(s => (
+                <button key={s} type="button" onClick={() => setChatInput(s)}
+                  className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-[#2d333b] text-[11px] font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-white/[0.04] hover:border-slate-300 dark:hover:border-[#444c56] transition-colors"
+                >{s}</button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── Bottom Input Bar (Base44 style) ── */}
+        <div className="shrink-0 bg-white dark:bg-[#0d1117] border-t border-slate-200 dark:border-[#1c2128]">
+          {showScrollBtn && (
+            <div className="flex justify-center -mt-3 relative z-10">
+              <button onClick={() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })}
+                className="bg-slate-800/80 text-white px-3 py-1 rounded-full text-[10px] font-semibold backdrop-blur-md shadow-lg flex items-center gap-1.5 hover:bg-slate-900 transition-colors">
+                <ArrowDown className="w-3 h-3" /> Latest messages
               </button>
+            </div>
+          )}
+
+          {attachedImages.length > 0 && (
+            <div className="px-3 pt-2">
+              <div className="flex gap-2 flex-wrap">
+                {attachedImages.map((img, i) => (
+                  <div key={i} className="relative group flex items-center gap-2 bg-slate-50 dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-lg px-2 py-1.5">
+                    <div className="relative w-8 h-8 rounded overflow-hidden shrink-0 bg-slate-200 dark:bg-[#21262d]">
+                      {img.data ? <img src={img.data} alt={img.name} className="w-full h-full object-cover" /> : <Loader2 className="w-3 h-3 text-slate-400 animate-spin m-auto" />}
+                    </div>
+                    <span className="text-[10px] text-slate-500 truncate max-w-[60px]">{img.name}</span>
+                    <button type="button" onClick={() => removeImage(i)} className="p-0.5 text-slate-400 hover:text-red-500 rounded transition-colors"><X className="w-3 h-3" /></button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <form onSubmit={handleSend} className="relative">
+            {(isPreparing || status === 'running') && (
+              <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80 dark:bg-[#0d1117]/85 backdrop-blur-sm">
+                <div className="flex items-center gap-2">
+                  <Loader2 className={cn("w-4 h-4 animate-spin", isPreparing ? "text-amber-500" : "text-blue-500")} />
+                  <span className="text-[12px] font-medium text-slate-500">{isPreparing ? 'Preparing workspace…' : 'Agent working…'}</span>
+                </div>
+              </div>
             )}
 
-            <form
-              onSubmit={handleSend}
-              className={cn(
-                "relative bg-white dark:bg-[#151b23] border rounded-2xl shadow-sm transition-all",
-                isPreparing
-                  ? "border-amber-300 dark:border-amber-600/40"
-                  : status === 'running'
-                    ? "border-blue-300 dark:border-blue-600/40"
-                    : "border-slate-300 dark:border-slate-700/60 focus-within:ring-4 focus-within:ring-blue-500/10 focus-within:border-blue-500 dark:focus-within:border-blue-500"
-              )}
-            >
-              {/* Preparing overlay */}
-              {isPreparing && (
-                <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80 dark:bg-[#151b23]/85 backdrop-blur-sm rounded-2xl">
-                  <div className="flex items-center gap-3">
-                    <div className="relative">
-                      <div className="w-8 h-8 rounded-full border-[3px] border-amber-200 dark:border-amber-800/50 border-t-amber-500 dark:border-t-amber-400 animate-spin" />
-                    </div>
-                    <div>
-                      <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
-                        Setting up workspace
-                      </p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Please wait — cloning repo and preparing environment…
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Running task overlay */}
-              {status === 'running' && (
-                <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80 dark:bg-[#151b23]/85 backdrop-blur-sm rounded-2xl">
-                  <div className="flex items-center gap-3">
-                    <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
-                    <div>
-                      <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
-                        Processing task…
-                      </p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400">
-                        The agent is working — please wait
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <textarea
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder={
-                  isPreparing ? "Waiting for workspace…" :
-                  status === 'running' ? "Agent is working…" :
-                  "What do you want to build?"
-                }
+            <div className="px-3 py-2">
+              <textarea value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={handleKeyDown}
+                placeholder={isPreparing ? "Waiting for workspace…" : status === 'running' ? "Agent is working…" : "What would you like to change?"}
                 disabled={isPreparing || status === 'running'}
-                className={cn(
-                  "w-full px-5 py-4 min-h-[56px] max-h-[200px] outline-none text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 resize-none font-medium leading-relaxed bg-transparent",
+                className={cn("w-full px-0 py-1.5 min-h-[32px] max-h-[120px] outline-none text-[13px] text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 resize-none font-medium leading-relaxed bg-transparent",
                   (isPreparing || status === 'running') && "opacity-40 cursor-not-allowed pointer-events-none"
-                )}
-                rows={1}
-              />
+                )} rows={1} />
+            </div>
 
-              {/* Image previews — Claude-style cards */}
-              {attachedImages.length > 0 && (
-                <div className="px-4 pb-2">
-                  <div className="flex gap-2 flex-wrap">
-                    {attachedImages.map((img, i) => (
-                      <div
-                        key={i}
-                        className="relative group flex items-center gap-2 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl px-2 py-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                      >
-                        {/* Thumbnail */}
-                        <div className="relative w-10 h-10 rounded-lg overflow-hidden shrink-0 bg-slate-200 dark:bg-slate-700">
-                          {img.data ? (
-                            <img src={img.data} alt={img.name} className="w-full h-full object-cover" />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center">
-                              <Loader2 className="w-4 h-4 text-slate-400 animate-spin" />
-                            </div>
-                          )}
-                          {img.data && (
-                            <button
-                              type="button"
-                              onClick={(e) => { e.stopPropagation(); setPreviewImage(img); }}
-                              className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                            >
-                              <Eye className="w-3.5 h-3.5 text-white" />
-                            </button>
-                          )}
-                        </div>
-                        {/* File info */}
-                        <div className="flex flex-col min-w-0">
-                          <span className="text-[11px] font-medium text-slate-700 dark:text-slate-300 truncate max-w-[100px]">
-                            {img.name}
-                          </span>
-                          <span className="text-[10px] text-slate-400 dark:text-slate-500">
-                            {formatFileSize(img.size)}
-                          </span>
-                        </div>
-                        {/* Remove */}
-                        <button
-                          type="button"
-                          onClick={() => removeImage(i)}
-                          className="ml-1 p-0.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-md transition-colors"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
+            {/* Bottom toolbar: [⚙️] [+] [✏️ Edit] [💬 Discuss] ··· [🎙] [→] */}
+            <div className="flex items-center justify-between px-3 pb-2.5">
+              <div className="flex items-center gap-1">
+                <div className="relative" ref={toolsMenuRef}>
+                  <button type="button" onClick={() => { setShowToolsMenu(!showToolsMenu); setShowFigmaInput(false); }}
+                    className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors" title="Tools">
+                    <Settings className="w-4 h-4" />
+                  </button>
+                  {showToolsMenu && (
+                    <div className="absolute bottom-full left-0 mb-2 w-56 bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-xl shadow-2xl overflow-hidden z-30 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                      <div className="py-1">
+                        <button type="button" onClick={() => { fileInputRef.current?.click(); setShowToolsMenu(false); }} className="w-full flex items-center gap-3 px-3 py-2 text-[12px] text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04] text-left"><Paperclip className="w-3.5 h-3.5 text-slate-400" /><span className="font-medium">Add files or photos</span></button>
+                        <button type="button" onClick={() => { videoInputRef.current?.click(); setShowToolsMenu(false); }} className="w-full flex items-center gap-3 px-3 py-2 text-[12px] text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04] text-left"><Video className="w-3.5 h-3.5 text-slate-400" /><span className="font-medium">Add video</span></button>
+                        <button type="button" onClick={() => setShowFigmaInput(!showFigmaInput)} className="w-full flex items-center gap-3 px-3 py-2 text-[12px] text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04] text-left"><Layers className="w-3.5 h-3.5 text-slate-400" /><span className="font-medium">Paste Figma link</span></button>
                       </div>
-                    ))}
-                    {attachedImages.length < 5 && (
-                      <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        className="flex items-center justify-center w-10 h-[52px] border border-dashed border-slate-300 dark:border-slate-600 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:border-slate-400 dark:hover:border-slate-500 transition-colors"
-                        title="Add more images"
-                      >
-                        <span className="text-lg font-light">+</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              <div className="flex items-center justify-between px-4 pb-3">
-                <div className="flex items-center gap-2 text-xs font-semibold text-slate-400 dark:text-slate-500">
-                  {/* Tools dropdown */}
-                  <div className="relative" ref={toolsMenuRef}>
-                    <button
-                      type="button"
-                      onClick={() => { setShowToolsMenu(!showToolsMenu); setShowFigmaInput(false); }}
-                      className={cn(
-                        "flex items-center gap-1.5 px-2 py-1 rounded transition-all",
-                        showToolsMenu
-                          ? "bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200"
-                          : "hover:bg-slate-100 dark:hover:bg-white/[0.04] cursor-pointer"
-                      )}
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      Tools
-                    </button>
-
-                    {showToolsMenu && (
-                      <div className="absolute bottom-full left-0 mb-2 w-64 bg-white dark:bg-[#2b2b3b] border border-slate-200 dark:border-slate-700/60 rounded-2xl shadow-2xl overflow-hidden z-30 animate-in fade-in slide-in-from-bottom-2 duration-200">
-                        {/* Group 1: Files */}
-                        <div className="py-1.5">
-                          <button
-                            type="button"
-                            onClick={() => fileInputRef.current?.click()}
-                            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors text-left"
-                          >
-                            <Paperclip className="w-4 h-4 text-slate-500 dark:text-slate-400" />
-                            <span className="font-medium">Add files or photos</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => videoInputRef.current?.click()}
-                            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors text-left"
-                          >
-                            <Video className="w-4 h-4 text-slate-500 dark:text-slate-400" />
-                            <span className="font-medium">Add video</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setShowFigmaInput(!showFigmaInput)}
-                            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors text-left"
-                          >
-                            <Layers className="w-4 h-4 text-slate-500 dark:text-slate-400" />
-                            <span className="flex-1 font-medium">Paste Figma link</span>
-                            <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-                          </button>
-                        </div>
-
-                        {/* Figma URL input (appears inline) */}
-                        {showFigmaInput && (
-                          <div className="px-3 pb-2">
-                            <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-800/60 rounded-lg px-2.5 py-1.5 border border-slate-200 dark:border-slate-600">
-                              <Link2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                              <input
-                                type="url"
-                                value={figmaUrl}
-                                onChange={(e) => setFigmaUrl(e.target.value)}
-                                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleFigmaSubmit(); } }}
-                                placeholder="https://figma.com/..."
-                                className="flex-1 bg-transparent outline-none text-xs text-slate-700 dark:text-slate-200 placeholder:text-slate-400"
-                                autoFocus
-                              />
-                              <button
-                                type="button"
-                                onClick={handleFigmaSubmit}
-                                disabled={!figmaUrl.trim()}
-                                className={cn(
-                                  "px-2 py-0.5 rounded text-[10px] font-bold transition-colors",
-                                  figmaUrl.trim()
-                                    ? "bg-blue-600 text-white hover:bg-blue-700"
-                                    : "bg-slate-200 dark:bg-slate-700 text-slate-400 cursor-not-allowed"
-                                )}
-                              >
-                                Add
-                              </button>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Divider */}
-                        <div className="border-t border-slate-200 dark:border-slate-700/50" />
-
-                        {/* Group 2: Capture */}
-                        <div className="py-1.5">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setShowToolsMenu(false);
-                              setChatInput((prev) => prev + (prev ? '\n' : '') + '[Screenshot requested — paste or drag an image]');
-                            }}
-                            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors text-left"
-                          >
-                            <Camera className="w-4 h-4 text-slate-500 dark:text-slate-400" />
-                            <span className="font-medium">Take a screenshot</span>
-                          </button>
-                        </div>
-
-                        {/* Divider */}
-                        <div className="border-t border-slate-200 dark:border-slate-700/50" />
-
-                        {/* Group 3: Search & Context */}
-                        <div className="py-1.5">
-                          <button
-                            type="button"
-                            onClick={() => setWebSearchEnabled(!webSearchEnabled)}
-                            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-left transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.06]"
-                          >
-                            <Globe className={cn("w-4 h-4", webSearchEnabled ? "text-blue-500" : "text-slate-400")} />
-                            <span className={cn("flex-1 font-medium", webSearchEnabled ? "text-blue-600 dark:text-blue-400" : "text-slate-800 dark:text-slate-200")}>
-                              Web search
-                            </span>
-                            {webSearchEnabled && <Check className="w-4 h-4 text-blue-500" />}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setShowToolsMenu(false);
-                              setChatInput((prev) => prev + (prev ? '\n' : '') + 'Context: ');
-                            }}
-                            className="w-full flex items-center gap-3 px-4 py-2.5 text-[13px] text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors text-left"
-                          >
-                            <FileText className="w-4 h-4 text-slate-500 dark:text-slate-400" />
-                            <span className="font-medium">Add context</span>
-                          </button>
-                        </div>
+                      <div className="border-t border-slate-100 dark:border-[#2d333b]" />
+                      <div className="py-1">
+                        <button type="button" onClick={() => setWebSearchEnabled(!webSearchEnabled)} className="w-full flex items-center gap-3 px-3 py-2 text-[12px] text-left hover:bg-slate-50 dark:hover:bg-white/[0.04]"><Globe className={cn("w-3.5 h-3.5", webSearchEnabled ? "text-blue-500" : "text-slate-400")} /><span className={cn("flex-1 font-medium", webSearchEnabled ? "text-blue-600 dark:text-blue-400" : "text-slate-700 dark:text-slate-300")}>Web search</span>{webSearchEnabled && <Check className="w-3.5 h-3.5 text-blue-500" />}</button>
                       </div>
-                    )}
-                  </div>
-
-                  {/* Hidden file inputs */}
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    onChange={handleImageSelect}
-                    className="hidden"
-                  />
-                  <input
-                    ref={videoInputRef}
-                    type="file"
-                    accept="video/*"
-                    multiple
-                    onChange={handleVideoSelect}
-                    className="hidden"
-                  />
-
-                  {status === 'ready' && (
-                    <button
-                      type="button"
-                      onClick={() => pushToBranch()}
-                      className="flex items-center gap-1.5 px-2 py-1 rounded text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 transition-colors"
-                    >
-                      <Zap className="w-3.5 h-3.5" />
-                      Push to {conversation?.branch || 'main'}
-                    </button>
+                    </div>
                   )}
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-xs text-slate-400 dark:text-slate-500 font-medium flex items-center gap-1.5">
-                    {isPreparing ? (
-                      <><Loader2 className="w-3.5 h-3.5 animate-spin text-amber-500" /> Preparing workspace…</>
-                    ) : status === 'running' ? (
-                      <><Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" /> Agent working…</>
-                    ) : isReady ? (
-                      <><Clock className="w-3.5 h-3.5" /> Ready for task</>
-                    ) : (
-                      <><Clock className="w-3.5 h-3.5" /> Waiting</>
-                    )}
-                  </span>
-                  <button
-                    type="submit"
-                    disabled={(!chatInput.trim() && attachedImages.length === 0) || isPreparing || status === 'running'}
-                    className={cn(
-                      "p-2.5 rounded-xl transition-all",
-                      (chatInput.trim() || attachedImages.length > 0) && !isPreparing && status !== 'running'
-                        ? "bg-blue-600 text-white shadow-md shadow-blue-600/20 hover:bg-blue-700 hover:scale-105"
-                        : "bg-slate-100 dark:bg-white/[0.06] text-slate-300 dark:text-slate-600 cursor-not-allowed"
-                    )}
-                  >
-                    <Send className="w-4 h-4" />
-                  </button>
-                </div>
+                <button type="button" onClick={() => fileInputRef.current?.click()} className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors" title="Add files"><Plus className="w-4 h-4" /></button>
+                <div className="h-4 w-px bg-slate-200 dark:bg-[#2d333b] mx-0.5" />
+                <button type="button" onClick={() => setChatMode('edit')} className={cn("flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all", chatMode === 'edit' ? "bg-slate-100 dark:bg-[#21262d] text-slate-800 dark:text-white border border-slate-200 dark:border-[#2d333b]" : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300")}><Pencil className="w-3 h-3" />Edit</button>
+                <button type="button" onClick={() => setChatMode('discuss')} className={cn("flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all", chatMode === 'discuss' ? "bg-slate-100 dark:bg-[#21262d] text-slate-800 dark:text-white border border-slate-200 dark:border-[#2d333b]" : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300")}><MessageCircle className="w-3 h-3" />Discuss</button>
               </div>
-            </form>
+              <div className="flex items-center gap-1">
+                <button type="button" className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors" title="Voice input"><Mic className="w-4 h-4" /></button>
+                <button type="submit" disabled={(!chatInput.trim() && attachedImages.length === 0) || isPreparing || status === 'running'}
+                  className={cn("p-2 rounded-full transition-all", (chatInput.trim() || attachedImages.length > 0) && !isPreparing && status !== 'running' ? "bg-orange-500 text-white shadow-md shadow-orange-500/20 hover:bg-orange-600 hover:scale-105" : "bg-slate-100 dark:bg-[#21262d] text-slate-300 dark:text-slate-600 cursor-not-allowed")}>
+                  <Send className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+            <input ref={fileInputRef} type="file" accept="image/*" multiple onChange={handleImageSelect} className="hidden" />
+            <input ref={videoInputRef} type="file" accept="video/*" multiple onChange={handleVideoSelect} className="hidden" />
+          </form>
 
-            {/* Image Preview Modal */}
-            {previewImage && (
-              <div
-                className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 animate-in fade-in duration-200"
-                onClick={() => setPreviewImage(null)}
-              >
-                <div className="relative max-w-[80vw] max-h-[80vh]" onClick={(e) => e.stopPropagation()}>
-                  <img
-                    src={previewImage.data}
-                    alt={previewImage.name}
-                    className="max-w-full max-h-[80vh] rounded-xl shadow-2xl"
-                  />
-                  <button
-                    onClick={() => setPreviewImage(null)}
-                    className="absolute -top-3 -right-3 w-8 h-8 bg-white text-slate-600 rounded-full flex items-center justify-center shadow-lg hover:bg-slate-100 transition-colors"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                  <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent rounded-b-xl px-4 py-3">
-                    <p className="text-white text-sm font-medium">{previewImage.name}</p>
-                    <p className="text-white/70 text-xs">{formatFileSize(previewImage.size)}</p>
-                  </div>
-                </div>
+          {previewImage && (
+            <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 animate-in fade-in duration-200" onClick={() => setPreviewImage(null)}>
+              <div className="relative max-w-[80vw] max-h-[80vh]" onClick={(e) => e.stopPropagation()}>
+                <img src={previewImage.data} alt={previewImage.name} className="max-w-full max-h-[80vh] rounded-xl shadow-2xl" />
+                <button onClick={() => setPreviewImage(null)} className="absolute -top-3 -right-3 w-8 h-8 bg-white text-slate-600 rounded-full flex items-center justify-center shadow-lg hover:bg-slate-100 transition-colors"><X className="w-4 h-4" /></button>
               </div>
-            )}
-          </div>
-        </div>
+            </div>
+          )}
+
+        </div>{/* end bottom input bar */}
 
       </div>{/* end chat panel */}
 
@@ -1601,30 +1401,45 @@ function ConversationPageInner({ params }) {
 
         {/* Preview edit toolbar */}
         {rightPanel === 'preview' && repoInfo.vercelUrl && (
-          <div className="shrink-0 flex items-center gap-3 px-4 py-2 bg-white dark:bg-[#161b22] border-b border-slate-200 dark:border-[#2d333b]">
-            <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-slate-100 dark:bg-[#21262d] text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-[#2d333b] transition-colors">
-              <Play className="w-3.5 h-3.5" />
-              Edit
-            </button>
-            <div className="h-4 w-px bg-slate-200 dark:bg-[#2d333b]" />
-            <div className="flex items-center gap-1.5 px-3 py-1.5 bg-white dark:bg-[#21262d] border border-slate-200 dark:border-[#2d333b] rounded-lg">
-              <Globe className="w-3.5 h-3.5 text-slate-400" />
-              <span className="text-[12px] text-slate-500 dark:text-slate-400 font-mono truncate max-w-[300px]">/</span>
-              <ChevronDown className="w-3 h-3 text-slate-400" />
+          <div className="shrink-0 h-14 flex items-center justify-between px-4 bg-white dark:bg-[#161b22] border-b border-slate-200 dark:border-[#2d333b]">
+            
+            {/* Left: Edit / Palette */}
+            <div className="flex items-center gap-2 flex-1">
+              <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors">
+                <Wand2 className="w-3.5 h-3.5" />
+                Edit
+              </button>
+              <button className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors">
+                <Palette className="w-4 h-4" />
+              </button>
             </div>
-            <div className="ml-auto flex items-center gap-1">
-              <div className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Live</span>
+
+            {/* Center: URL Bar style */}
+            <div className="flex justify-center flex-1">
+              <div className="flex items-center w-full max-w-[360px] h-9 bg-[#f0f4f9] dark:bg-[#21262d] rounded-full px-3 border border-slate-200/50 dark:border-[#2d333b] hover:border-slate-300 dark:hover:border-slate-600 transition-colors">
+                <button className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors">
+                  <RefreshCw className="w-3.5 h-3.5" />
+                </button>
+                <div className="flex-1 text-center font-medium text-[13px] text-slate-700 dark:text-slate-200 px-2 cursor-text select-none">
+                  /
+                </div>
+                <button className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors">
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
-            <a
-              href={repoInfo.vercelUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="p-1.5 text-slate-400 hover:text-blue-500 transition-colors rounded-lg hover:bg-slate-100 dark:hover:bg-white/[0.06]"
-              title="Open in new tab"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-            </a>
+
+            {/* Right: Device / Fullscreen / Exit */}
+            <div className="flex items-center justify-end flex-1 gap-1">
+              <button className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors">
+                <Monitor className="w-4 h-4" />
+                <ChevronDown className="w-3 h-3 ml-0.5" />
+              </button>
+              <div className="h-4 w-px bg-slate-200 dark:bg-[#2d333b] mx-1" />
+              <button className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors">
+                <Maximize className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         )}
 
@@ -1643,7 +1458,7 @@ function ConversationPageInner({ params }) {
             />
           )}
 
-          {/* PREVIEW tab — Live iframe */}
+          {/* PREVIEW tab — Live iframe or Building Space */}
           {rightPanel === 'preview' && (
             <div className="h-full flex flex-col">
               {repoInfo.vercelUrl ? (
@@ -1653,13 +1468,45 @@ function ConversationPageInner({ params }) {
                   className="flex-1 w-full border-0 bg-white"
                   sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
                 />
-              ) : (
-                <div className="flex flex-col items-center justify-center h-full text-center p-8">
-                  <div className="w-16 h-16 rounded-2xl bg-slate-100 dark:bg-white/[0.04] flex items-center justify-center mb-4">
-                    <Monitor className="w-7 h-7 text-slate-300 dark:text-white/15" />
+              ) : status === 'running' || status === 'preparing' || phases.length > 0 ? (
+                <div className="h-full overflow-y-auto bg-white dark:bg-[#0d1117] p-6 lg:p-10 custom-scrollbar">
+                  <div className="max-w-4xl mx-auto space-y-8">
+                    {/* Header */}
+                    <div className="flex items-center gap-4 border-b border-slate-100 dark:border-[#1c2128] pb-6">
+                      <div className="w-12 h-12 rounded-xl bg-blue-500 flex items-center justify-center shrink-0">
+                        <Sparkles className="w-6 h-6 text-white" />
+                      </div>
+                      <div>
+                        <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100">
+                          Building Your Project
+                        </h2>
+                        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                          {status === 'preparing' ? 'Preparing workspace...' : status === 'running' ? 'Agent actively working...' : 'Setting up the environment.'}
+                        </p>
+                      </div>
+                    </div>
+                    
+                    {/* Progress Indicators */}
+                    <TaskProgress phases={phases} status={status} completionSummary={completionSummary} />
+                    <GenerationProgress isVisible={status === 'running' || status === 'preparing'} />
                   </div>
-                  <p className="text-[15px] font-bold text-slate-600 dark:text-slate-400 mb-1">No preview available</p>
-                  <p className="text-[13px] text-slate-400 dark:text-slate-500">Preview will appear after the project is deployed</p>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center h-full text-center p-8 bg-slate-50/50 dark:bg-[#0d1117]">
+                  <div className="w-16 h-16 rounded-2xl bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] shadow-sm flex items-center justify-center mb-5">
+                    <Monitor className="w-7 h-7 text-slate-400 dark:text-slate-500" />
+                  </div>
+                  <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-2">Preview Not Available</h3>
+                  <p className="text-[14px] text-slate-500 dark:text-slate-400 max-w-sm mb-6">
+                    This project has not been deployed to Vercel yet, or the preview URL is missing.
+                  </p>
+                  <button
+                    onClick={() => setRightPanel('code')}
+                    className="px-5 py-2.5 bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-[13px] font-bold rounded-[18px] hover:bg-slate-800 dark:hover:bg-slate-100 transition-all shadow-sm flex items-center gap-2"
+                  >
+                    <Code2 className="w-4 h-4" />
+                    View Source Code
+                  </button>
                 </div>
               )}
             </div>
@@ -1667,11 +1514,28 @@ function ConversationPageInner({ params }) {
 
           {/* CODE tab */}
           {rightPanel === 'code' && (
-            <FileViewer
-              path={selectedFile}
-              content={fileContent}
-              loading={fileLoading}
-            />
+            <div className="flex h-full w-full">
+              <div className="w-[260px] shrink-0 border-r border-slate-200 dark:border-[#2d333b] bg-[#f8f9fb] dark:bg-[#0f1118] flex flex-col">
+                <div className="h-10 flex items-center px-4 border-b border-slate-200 dark:border-[#1c2128]">
+                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Code Files</span>
+                </div>
+                <div className="flex-1 overflow-hidden">
+                  <FileExplorer
+                    files={files}
+                    selectedFile={selectedFile}
+                    onFileSelect={handleFileSelect}
+                    projectName={conversation?.title || 'Project'}
+                  />
+                </div>
+              </div>
+              <div className="flex-1 min-w-0 bg-white">
+                <FileViewer
+                  path={selectedFile}
+                  content={fileContent}
+                  loading={fileLoading}
+                />
+              </div>
+            </div>
           )}
 
           {/* TERMINAL tab */}

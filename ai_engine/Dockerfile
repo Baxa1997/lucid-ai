@@ -34,7 +34,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && rm -rf /var/lib/apt/lists/*
 
 # Install pnpm + yarn (templates may use any of these)
-RUN npm install -g pnpm@latest yarn@latest
+# Install localtunnel for live preview during development
+RUN npm install -g pnpm@latest yarn@latest localtunnel
 
 # Install Claude Code CLI (required by claude-code-sdk Python package)
 RUN npm install -g @anthropic-ai/claude-code

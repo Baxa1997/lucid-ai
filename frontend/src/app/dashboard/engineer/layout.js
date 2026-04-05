@@ -309,6 +309,8 @@ export default function EngineerLayout({ children }) {
     setPendingNavHref(null);
   }, []);
 
+  const isWorkspace = pathname.includes('/workspace/');
+
   return (
     <WizardContext.Provider value={{ showWizard, setShowWizard }}>
       <div className="h-screen flex bg-[#f0f4f9] dark:bg-[#0d1117] overflow-hidden transition-colors duration-200">
@@ -328,6 +330,7 @@ export default function EngineerLayout({ children }) {
           />
         )}
 
+        {!isWorkspace && (
         <aside
           className={cn(
             "h-full bg-white dark:bg-[#0d1117] border-r border-slate-200/60 dark:border-slate-800/40 flex flex-col shrink-0",
@@ -590,9 +593,10 @@ export default function EngineerLayout({ children }) {
             </div>
           </div>
         </aside>
+        )}
 
         {/* ══ MAIN CONTENT ══ */}
-        <main className="flex-1 min-w-0 overflow-y-scroll">
+        <main className={cn("flex-1 min-w-0", isWorkspace ? "overflow-hidden" : "overflow-y-scroll")}>
           {children}
         </main>
 

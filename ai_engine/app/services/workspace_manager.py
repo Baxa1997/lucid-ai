@@ -335,6 +335,13 @@ class WorkspaceManager:
         if info is None:
             return
 
+        # Clean up any running dev server for this workspace
+        try:
+            from app.services.dev_server import stop_dev_preview
+            await stop_dev_preview(info.path)
+        except Exception:
+            pass
+
         if os.path.isdir(info.path):
             try:
                 shutil.rmtree(info.path)
