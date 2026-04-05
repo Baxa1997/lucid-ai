@@ -292,11 +292,11 @@ export default function ConversationsPage() {
     <div className="h-full flex flex-col bg-[#f5f7fa] dark:bg-[#0d1117] overflow-hidden transition-colors duration-200">
       
       {/* ── Sticky Header Section ── */}
-      <div className="shrink-0 bg-[#f5f7fa] dark:bg-[#0d1117] px-8 pt-10 pb-0 transition-colors duration-200">
-        <div className="max-w-5xl mx-auto">
+      <div className="shrink-0 bg-[#f5f7fa] dark:bg-[#0d1117] px-6 lg:px-8 pt-6 pb-0 transition-colors duration-200">
+        <div>
           
           {/* Page Header */}
-          <div className="flex items-center justify-between mb-8">
+          <div className="flex items-center justify-between mb-5">
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 rounded-2xl bg-white dark:bg-[#151b23] border border-slate-200 dark:border-slate-700/50 flex items-center justify-center shadow-sm">
                 <MessageSquare className="w-6 h-6 text-blue-600 dark:text-blue-400" />
@@ -316,7 +316,7 @@ export default function ConversationsPage() {
           </div>
 
           {/* Quick Stats */}
-          <div className="grid grid-cols-4 gap-3 mb-6">
+          <div className="grid grid-cols-4 gap-3 mb-4">
             {[
               { label: 'TOTAL', value: stats.total, color: 'text-slate-100', dotColor: null },
               { label: 'ACTIVE', value: stats.active, color: 'text-blue-400', dotColor: 'bg-blue-500' },
@@ -382,8 +382,8 @@ export default function ConversationsPage() {
       </div>
 
       {/* ── Scrollable Content ── */}
-      <div className="flex-1 overflow-y-auto px-8 pb-10 min-h-0">
-        <div className="max-w-5xl mx-auto">
+      <div className="flex-1 overflow-y-auto px-6 lg:px-8 pb-8 min-h-0">
+        <div>
           {loading ? (
             <div className="flex items-center justify-center py-20">
               <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />

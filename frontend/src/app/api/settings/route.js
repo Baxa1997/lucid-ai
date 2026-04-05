@@ -59,6 +59,12 @@ export async function GET() {
       k8s_domain: '*.javoxir.online',
       k8s_tls_secret: '',
       registry_url: 'gitlab.udevs.io:5050',
+      gitlab_invite_username: 'udevs',
+      godaddy_domain: '',
+      godaddy_record_type: 'A',
+      godaddy_target: '',
+      has_godaddy_api_key: false,
+      has_godaddy_api_secret: false,
     });
   }
 
@@ -80,6 +86,12 @@ export async function GET() {
     k8s_domain: data.k8s_domain || '*.javoxir.online',
     k8s_tls_secret: data.k8s_tls_secret || '',
     registry_url: data.registry_url || 'gitlab.udevs.io:5050',
+    gitlab_invite_username: data.gitlab_invite_username || 'udevs',
+    godaddy_domain: data.godaddy_domain || '',
+    godaddy_record_type: data.godaddy_record_type || 'A',
+    godaddy_target: data.godaddy_target || '',
+    has_godaddy_api_key: !!(data.godaddy_api_key_enc && data.godaddy_api_key_iv),
+    has_godaddy_api_secret: !!(data.godaddy_api_secret_enc && data.godaddy_api_secret_iv),
   });
 }
 
@@ -115,6 +127,9 @@ export async function PUT(req) {
     vercel_token, vercel_team_id,
     k8s_namespace, k8s_domain, k8s_tls_secret,
     registry_url,
+    gitlab_invite_username,
+    godaddy_domain, godaddy_record_type, godaddy_target,
+    godaddy_api_key, godaddy_api_secret,
   } = body;
 
   // LLM fields are required if present
@@ -171,6 +186,14 @@ export async function PUT(req) {
     k8s_domain: k8s_domain ?? existing?.k8s_domain ?? '*.javoxir.online',
     k8s_tls_secret: k8s_tls_secret ?? existing?.k8s_tls_secret ?? '',
     registry_url: registry_url ?? existing?.registry_url ?? 'gitlab.udevs.io:5050',
+    gitlab_invite_username: gitlab_invite_username ?? existing?.gitlab_invite_username ?? 'udevs',
+    godaddy_domain: godaddy_domain ?? existing?.godaddy_domain ?? '',
+    godaddy_record_type: godaddy_record_type ?? existing?.godaddy_record_type ?? 'A',
+    godaddy_target: godaddy_target ?? existing?.godaddy_target ?? '',
+    godaddy_api_key_enc: existing?.godaddy_api_key_enc || null,
+    godaddy_api_key_iv: existing?.godaddy_api_key_iv || null,
+    godaddy_api_secret_enc: existing?.godaddy_api_secret_enc || null,
+    godaddy_api_secret_iv: existing?.godaddy_api_secret_iv || null,
   };
 
   // Encrypt sensitive tokens
@@ -196,6 +219,16 @@ export async function PUT(req) {
       const { encrypted, iv } = encrypt(vercel_token.trim());
       updatePayload.vercel_token_enc = encrypted;
       updatePayload.vercel_token_iv = iv;
+    }
+    if (godaddy_api_key?.trim()) {
+      const { encrypted, iv } = encrypt(godaddy_api_key.trim());
+      updatePayload.godaddy_api_key_enc = encrypted;
+      updatePayload.godaddy_api_key_iv = iv;
+    }
+    if (godaddy_api_secret?.trim()) {
+      const { encrypted, iv } = encrypt(godaddy_api_secret.trim());
+      updatePayload.godaddy_api_secret_enc = encrypted;
+      updatePayload.godaddy_api_secret_iv = iv;
     }
   } catch (encErr) {
     console.error('[settings PUT] Encryption error:', encErr);

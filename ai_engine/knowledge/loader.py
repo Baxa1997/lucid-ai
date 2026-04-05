@@ -186,22 +186,39 @@ Description: "{task}"
 
 Type:"""
 
-        response = await httpx.AsyncClient(timeout=10.0).post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_api_key}",
-            json={"contents": [{"parts": [{"text": prompt}]}]},
-        )
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_api_key}",
+                json={"contents": [{"parts": [{"text": prompt}]}]},
+            )
         
         if response.status_code == 200:
             data = response.json()
-            result = (
-                data.get("candidates", [{}])[0]
-                .get("content", {})
-                .get("parts", [{}])[0]
-                .get("text", "")
-                .strip()
-                .lower()
-                .replace(" ", "_")
-            )
+            # DEFENSIVE: Gemini can return unexpected structures (safety
+            # filters, string content instead of dict) — handle gracefully.
+            candidates = data.get("candidates", [])
+            if not candidates:
+                logger.warning("Gemini classifier: no candidates returned")
+                raise RuntimeError("No candidates")
+            
+            candidate = candidates[0]
+            content = candidate.get("content", {})
+            
+            # Extract text safely — content or parts could be strings
+            if isinstance(content, str):
+                result_text = content
+            elif isinstance(content, dict):
+                parts = content.get("parts", [])
+                if parts and isinstance(parts[0], dict):
+                    result_text = parts[0].get("text", "")
+                elif parts and isinstance(parts[0], str):
+                    result_text = parts[0]
+                else:
+                    result_text = ""
+            else:
+                result_text = ""
+            
+            result = result_text.strip().lower().replace(" ", "_")
             
             # Validate the response is a known type
             if result in VALID_APP_TYPES:
@@ -396,12 +413,27 @@ The UI must be STUNNING — users pay for this product. Quality is everything.
 
 ## WORKSPACE RULES
 
+### 'use client' Directive (MANDATORY for Next.js App Router)
+**EVERY .jsx/.tsx file that uses ANY of these MUST start with 'use client' on line 1:**
+- React hooks: useState, useEffect, useRef, useCallback, useMemo, useContext
+- Event handlers: onClick, onChange, onSubmit, onKeyDown, etc.
+- Browser APIs: window, document, localStorage, sessionStorage
+- Third-party client libraries: framer-motion, react-hook-form, etc.
+
+**If in doubt, ADD 'use client'. It never hurts, but MISSING it crashes the build.**
+
 ### Import Safety (CRITICAL — build MUST pass)
 1. Before writing ANY import, verify the target file exists in the workspace
 2. If a file doesn't exist, create it before importing
 3. Use RELATIVE imports only (../components/X, ./sections/Y)
 4. Never use @/ alias — it may not be configured
 5. Icons: import {{ IconName }} from 'lucide-react'
+6. **BANNED ICONS — lucide-react does NOT export these (will crash build):**
+   Facebook, Instagram, Twitter, Linkedin, Youtube, Tiktok, Pinterest, Github (brand icon)
+   For social media icons, create inline SVG components:
+   ```
+   const FacebookIcon = ({{ className }}) => (<svg className={{className}} viewBox="0 0 24 24" fill="currentColor"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>)
+   ```
 
 ### Component Architecture
 1. Named export AND default export: `export function Name() {{ }} export default Name`
@@ -412,9 +444,11 @@ The UI must be STUNNING — users pay for this product. Quality is everything.
 
 ### After Every File
 Ask yourself: "Would npm run build pass right now?"
+- Does the file start with 'use client' if it uses hooks or events? (MOST COMMON FAILURE)
 - Are all imports pointing to existing files?
-- Did I use 'use client' for components with hooks? (Next.js only)
 - Am I using className with Tailwind, not inline style={{}}?
+- Am I importing any social brand icons from lucide-react? (BANNED — use inline SVG)
+
 
 """
 

@@ -976,6 +976,8 @@ function DeploymentTab() {
   const [k8sDomain, setK8sDomain] = useState('*.udevs.io');
   const [k8sTlsSecret, setK8sTlsSecret] = useState('');
   const [registryUrl, setRegistryUrl] = useState('');
+  const [gitlabInviteUsername, setGitlabInviteUsername] = useState('udevs');
+  
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null);
@@ -1000,6 +1002,7 @@ function DeploymentTab() {
         setK8sDomain(data.k8s_domain || '*.udevs.io');
         setK8sTlsSecret(data.k8s_tls_secret || '');
         setRegistryUrl(data.registry_url || '');
+        setGitlabInviteUsername(data.gitlab_invite_username || 'udevs');
       } catch (err) {
         if (!cancelled) setError('Could not load deployment settings.');
       } finally {
@@ -1023,6 +1026,7 @@ function DeploymentTab() {
         k8s_domain: k8sDomain,
         k8s_tls_secret: k8sTlsSecret,
         registry_url: registryUrl,
+        gitlab_invite_username: gitlabInviteUsername,
       };
       if (gitlabToken.trim()) body.gitlab_token = gitlabToken.trim();
       if (vercelToken.trim()) body.vercel_token = vercelToken.trim();
@@ -1041,7 +1045,11 @@ function DeploymentTab() {
     } catch (err) {
       setError(err.message); setSaveStatus('error');
     } finally { setSaving(false); }
-  }, [gitlabHost, gitlabGroup, gitlabToken, opsRepoUrl, opsRepoBranch, vercelToken, vercelTeamId, k8sNamespace, k8sDomain, k8sTlsSecret, registryUrl]);
+  }, [
+    gitlabHost, gitlabGroup, gitlabToken, opsRepoUrl, opsRepoBranch,
+    vercelToken, vercelTeamId, k8sNamespace, k8sDomain, k8sTlsSecret, registryUrl,
+    gitlabInviteUsername
+  ]);
 
   if (loading) {
     return (
@@ -1088,6 +1096,10 @@ function DeploymentTab() {
                 {showGitlabToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
+          </FieldRow>
+          <div className="border-t border-slate-100 dark:border-slate-800" />
+          <FieldRow label="Invite Username" description="GitLab user invited to new repos automatically">
+            <input type="text" value={gitlabInviteUsername} onChange={(e) => setGitlabInviteUsername(e.target.value)} placeholder="e.g. udevs" className={inputCls} />
           </FieldRow>
         </div>
       </SectionCard>

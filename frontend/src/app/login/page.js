@@ -63,6 +63,14 @@ export default function LoginPage() {
         />
       )}
 
+      {/* Logo — back to landing page */}
+      <Link href="/" className="absolute top-5 left-5 z-20 flex items-center gap-2 hover:opacity-80 transition-opacity">
+        <div className="w-8 h-8 bg-gradient-to-br from-blue-600 to-blue-700 rounded-lg flex items-center justify-center">
+          <Zap className="w-4 h-4 text-white fill-current" />
+        </div>
+        <span className="text-[15px] font-bold text-slate-900 dark:text-slate-100 hidden sm:inline">Lucid AI</span>
+      </Link>
+
       {/* Theme Toggle */}
       <div className="absolute top-5 right-5 z-20">
         <ThemeModeSelector />

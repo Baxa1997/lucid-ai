@@ -30,7 +30,7 @@ export async function POST(req) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { projectId, provider, repoName, isPrivate = true, includeCICD = false } = body;
+  const { projectId, provider, repoName, isPrivate = true, includeCICD = false, gitlabInviteUser, godaddyAccountId } = body;
 
   if (!projectId || !provider || !repoName?.trim()) {
     return NextResponse.json(
@@ -148,12 +148,52 @@ export async function POST(req) {
   try {
     const { data: settingsRow } = await supabase
       .from('user_settings')
-      .select('gitlab_host, gitlab_group, k8s_namespace, k8s_domain, k8s_tls_secret, registry_url, ops_repo_url, ops_repo_branch')
+      .select(`
+        gitlab_host, gitlab_group, k8s_namespace, k8s_domain, k8s_tls_secret, registry_url, ops_repo_url, ops_repo_branch,
+        gitlab_invite_username, godaddy_domain, godaddy_record_type, godaddy_target,
+        godaddy_api_key_enc, godaddy_api_key_iv, godaddy_api_secret_enc, godaddy_api_secret_iv
+      `)
       .eq('user_id', ctx.userId)
       .maybeSingle();
     if (settingsRow) deploySettings = settingsRow;
   } catch (e) {
     console.warn('[export-code] Could not load user deployment settings:', e.message);
+  }
+
+  // Load GoDaddy account if selected
+  let gdAccount = null;
+  let godaddyApiKey = '';
+  let godaddyApiSecret = '';
+  if (godaddyAccountId) {
+    try {
+      const { data: acc } = await supabase
+        .from('godaddy_accounts')
+        .select('domain, record_type, target, api_key_enc, api_key_iv, api_secret_enc, api_secret_iv')
+        .eq('id', godaddyAccountId)
+        .eq('user_id', ctx.userId)
+        .maybeSingle();
+      if (acc) {
+        gdAccount = acc;
+        const { decrypt } = await import('@/lib/crypto');
+        if (acc.api_key_enc && acc.api_key_iv) godaddyApiKey = decrypt(acc.api_key_enc, acc.api_key_iv);
+        if (acc.api_secret_enc && acc.api_secret_iv) godaddyApiSecret = decrypt(acc.api_secret_enc, acc.api_secret_iv);
+      }
+    } catch (e) {
+      console.warn('[export-code] Failed to load GoDaddy account:', e.message);
+    }
+  } else {
+    // Legacy fallback: decrypt from user_settings
+    try {
+      const { decrypt } = await import('@/lib/crypto');
+      if (deploySettings.godaddy_api_key_enc && deploySettings.godaddy_api_key_iv) {
+        godaddyApiKey = decrypt(deploySettings.godaddy_api_key_enc, deploySettings.godaddy_api_key_iv);
+      }
+      if (deploySettings.godaddy_api_secret_enc && deploySettings.godaddy_api_secret_iv) {
+        godaddyApiSecret = decrypt(deploySettings.godaddy_api_secret_enc, deploySettings.godaddy_api_secret_iv);
+      }
+    } catch (e) {
+      console.warn('[export-code] Failed to decrypt GoDaddy API keys:', e.message);
+    }
   }
 
   // Merge with defaults
@@ -193,6 +233,8 @@ export async function POST(req) {
   // Fetch files from all sources
   let files = [];
   let fetchWarning = '';
+
+  console.log(`[export-code] File sources: platformRepoUrl=${platformRepoUrl || 'NONE'}, gitlabProjectId=${deployment?.gitlab_project_id || 'NONE'}, chatSessions=checking...`);
 
   // Source 1: Platform GitHub repo (wizard-created projects)
   if (files.length === 0 && platformRepoUrl) {
@@ -485,6 +527,136 @@ export async function POST(req) {
     }
   }
 
+  // ══════════════════════════════════════════════════════
+  //  STEP 4: Automations (GitLab auto-invite & GoDaddy DNS)
+  // ══════════════════════════════════════════════════════
+  let automationsWarning = '';
+
+  // ── Auto Invite ──
+  const targetInviteUser = gitlabInviteUser?.trim() || deploySettings.gitlab_invite_username?.trim();
+  
+  if (repoId && integration?.token && targetInviteUser) {
+    if (provider === 'gitlab') {
+      try {
+        const glHost = (deploySettings.gitlab_host || integration.host || 'https://gitlab.com').replace(/\/+$/, '');
+        
+        // 1. Look up user ID by username
+        const userRes = await fetch(`${glHost}/api/v4/users?username=${encodeURIComponent(targetInviteUser)}`, {
+          headers: { 'PRIVATE-TOKEN': integration.token },
+          signal: AbortSignal.timeout(8000),
+        });
+
+        if (userRes.ok) {
+          const users = await userRes.json();
+          if (users && users.length > 0) {
+            const inviteUserId = users[0].id;
+            
+            // 2. Add as Owner (Access Level 50)
+            const inviteRes = await fetch(`${glHost}/api/v4/projects/${repoId}/members`, {
+              method: 'POST',
+              headers: {
+                'PRIVATE-TOKEN': integration.token,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                user_id: inviteUserId,
+                access_level: 50,
+              }),
+              signal: AbortSignal.timeout(8000),
+            });
+
+            if (inviteRes.ok || inviteRes.status === 409) {
+              console.log(`[export-code] ✓ Step 4a — GitLab user '${targetInviteUser}' invited to project.`);
+            } else {
+              const errBody = await inviteRes.text().catch(() => '');
+              console.warn(`[export-code] Step 4a — Failed to invite user (${inviteRes.status}):`, errBody.slice(0, 200));
+              automationsWarning += `Failed to invite GitLab user '${targetInviteUser}'. `;
+            }
+          } else {
+            console.warn(`[export-code] Step 4a — GitLab user '${targetInviteUser}' not found.`);
+            automationsWarning += `GitLab user '${targetInviteUser}' not found. `;
+          }
+        }
+      } catch (e) {
+        console.warn(`[export-code] Step 4a — GitLab invite error:`, e.message);
+        automationsWarning += `GitLab invite error: ${e.message}. `;
+      }
+    } else if (provider === 'github') {
+      try {
+        // GitHub: add as admin collaborator — repoId is "owner/repo"
+        const inviteRes = await fetch(`https://api.github.com/repos/${repoId}/collaborators/${encodeURIComponent(targetInviteUser)}`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${integration.token}`,
+            'Accept': 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+          },
+          body: JSON.stringify({ permission: 'admin' }),
+          signal: AbortSignal.timeout(8000),
+        });
+
+        if (inviteRes.ok || inviteRes.status === 201 || inviteRes.status === 204) {
+          console.log(`[export-code] ✓ Step 4a — GitHub user '${targetInviteUser}' invited as collaborator.`);
+        } else {
+          const errBody = await inviteRes.text().catch(() => '');
+          console.warn(`[export-code] Step 4a — Failed to invite GitHub user (${inviteRes.status}):`, errBody.slice(0, 200));
+          automationsWarning += `Failed to invite GitHub user '${targetInviteUser}'. `;
+        }
+      } catch (e) {
+        console.warn(`[export-code] Step 4a — GitHub invite error:`, e.message);
+        automationsWarning += `GitHub invite error: ${e.message}. `;
+      }
+    }
+  }
+
+  // ── GoDaddy DNS Automation ──
+  // Prefer the selected gdAccount; fallback to deploySettings
+  const gdDomain = gdAccount?.domain?.trim() || deploySettings.godaddy_domain?.trim();
+  const gdTarget = gdAccount?.target?.trim() || deploySettings.godaddy_target?.trim();
+  const gdType = gdAccount?.record_type?.trim() || deploySettings.godaddy_record_type?.trim() || 'A';
+
+  if (gdDomain && gdTarget && godaddyApiKey && godaddyApiSecret) {
+    try {
+      console.log(`[export-code] Step 4b — Configuring GoDaddy DNS for ${cleanName}.${gdDomain} -> ${gdTarget} (${gdType})`);
+      
+      const godaddyUrl = `https://api.godaddy.com/v1/domains/${encodeURIComponent(gdDomain)}/records/${gdType}/${encodeURIComponent(cleanName)}`;
+      
+      const dnsRes = await fetch(godaddyUrl, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `sso-key ${godaddyApiKey}:${godaddyApiSecret}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify([{
+          data: gdTarget,
+          name: cleanName,
+          ttl: 600,
+        }]),
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (dnsRes.ok) {
+        console.log(`[export-code] ✓ Step 4b — GoDaddy DNS record configured successfully.`);
+      } else {
+        const errBody = await dnsRes.text().catch(() => '');
+        console.warn(`[export-code] Step 4b — GoDaddy DNS error (${dnsRes.status}):`, errBody.slice(0, 300));
+        
+        if (dnsRes.status === 403) {
+          automationsWarning += `GoDaddy API access denied. Your account may need 10+ domains for API access, or regenerate your API key at developer.godaddy.com/keys with Production access. DNS record not created — add it manually: Type=${gdType}, Name=${cleanName}, Value=${gdTarget}, TTL=600. `;
+        } else if (dnsRes.status === 401) {
+          automationsWarning += `GoDaddy API key is invalid or expired. Please update your credentials in Settings. `;
+        } else if (dnsRes.status === 422) {
+          automationsWarning += `GoDaddy rejected the DNS record. Check that domain "${gdDomain}" is in your account. `;
+        } else {
+          automationsWarning += `GoDaddy DNS error (${dnsRes.status}). `;
+        }
+      }
+    } catch (e) {
+      console.warn(`[export-code] Step 4b — GoDaddy DNS error:`, e.message);
+      automationsWarning += `GoDaddy DNS API error: ${e.message}. `;
+    }
+  }
+
   // ── Save records ─────────────────────────────────────
   await saveExportRecord(supabase, ctx.userId, projectId, provider, repoUrl, cleanName);
 
@@ -504,7 +676,7 @@ export async function POST(req) {
     provider,
     filesExported,
     cicdAdded,
-    ...(exportWarning ? { warning: exportWarning } : {}),
+    ...(exportWarning || automationsWarning ? { warning: [exportWarning, automationsWarning].filter(Boolean).join(' | ') } : {}),
   });
 }
 
@@ -619,8 +791,9 @@ async function fetchGitHubRepoFiles(repoUrl, token) {
     Accept: 'application/vnd.github+json',
   };
 
-  // Get the full file tree recursively
+  // Get the full file tree recursively — track which branch works
   let treeData;
+  let foundBranch = 'main';
   for (const branch of ['main', 'master']) {
     try {
       const res = await fetch(
@@ -629,17 +802,24 @@ async function fetchGitHubRepoFiles(repoUrl, token) {
       );
       if (res.ok) {
         treeData = await res.json();
+        foundBranch = branch;
+        console.log(`[export-code] GitHub tree found on branch '${branch}', ${(treeData.tree || []).length} items`);
         break;
       }
     } catch { /* try next branch */ }
   }
 
-  if (!treeData) return [];
+  if (!treeData) {
+    console.warn(`[export-code] GitHub tree not found for ${repoPath} on main/master`);
+    return [];
+  }
 
   // Filter to blobs, skip large/binary files and .git internals
   const blobs = (treeData.tree || []).filter(
     (t) => t.type === 'blob' && (t.size || 0) < 500_000 && !t.path.startsWith('.git/')
   );
+
+  console.log(`[export-code] Fetching ${blobs.length} blobs from ${repoPath} (branch: ${foundBranch})`);
 
   const BATCH_SIZE = 10;
   const files = [];
@@ -649,8 +829,9 @@ async function fetchGitHubRepoFiles(repoUrl, token) {
     const results = await Promise.all(
       batch.map(async (blob) => {
         try {
+          // Use blob SHA directly — works regardless of branch name
           const res = await fetch(
-            `https://api.github.com/repos/${repoPath}/contents/${blob.path.split('/').map(s => encodeURIComponent(s)).join('/')}?ref=main`,
+            `https://api.github.com/repos/${repoPath}/git/blobs/${blob.sha}`,
             { headers, signal: AbortSignal.timeout(10000) }
           );
           if (!res.ok) return null;

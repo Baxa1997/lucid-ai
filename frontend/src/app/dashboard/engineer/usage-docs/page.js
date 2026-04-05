@@ -24,8 +24,8 @@ export default function UsageDocsPage() {
     <div className="h-full flex bg-[#f5f7fa] dark:bg-[#0d1117] overflow-hidden transition-colors duration-200">
 
       {/* ── Sidebar TOC ── */}
-      <aside className="w-[220px] shrink-0 border-r border-slate-200 dark:border-slate-800/60 bg-white dark:bg-[#0d1117] overflow-y-auto py-8 px-4">
-        <div className="flex items-center gap-2 px-3 mb-6">
+      <aside className="w-[200px] shrink-0 border-r border-slate-200 dark:border-slate-800/60 bg-white dark:bg-[#0d1117] overflow-y-auto py-6 px-3">
+        <div className="flex items-center gap-2 px-3 mb-5">
           <BookOpen className="w-4 h-4 text-blue-600 dark:text-blue-400" />
           <span className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-[0.1em]">
             Usage Guide
@@ -56,10 +56,10 @@ export default function UsageDocsPage() {
 
       {/* ── Main Content ── */}
       <main className="flex-1 overflow-y-auto">
-        <div className="max-w-3xl mx-auto px-10 py-12">
+        <div className="max-w-4xl px-8 py-8">
 
           {/* Title */}
-          <div className="mb-12">
+          <div className="mb-8">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-600/20">
                 <Zap className="w-5 h-5 text-white fill-current" />
@@ -79,7 +79,7 @@ export default function UsageDocsPage() {
           {/* ═══════════════════════════════════════════════
               SECTION 1: Getting Started
           ═══════════════════════════════════════════════ */}
-          <section id="getting-started" className="mb-16 scroll-mt-8">
+          <section id="getting-started" className="mb-10 scroll-mt-8">
             <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-4 flex items-center gap-3">
               <Play className="w-5 h-5 text-blue-600 dark:text-blue-400" />
               Getting Started
@@ -124,7 +124,7 @@ export default function UsageDocsPage() {
           {/* ═══════════════════════════════════════════════
               SECTION 2: Connect Integration
           ═══════════════════════════════════════════════ */}
-          <section id="connect-integration" className="mb-16 scroll-mt-8">
+          <section id="connect-integration" className="mb-10 scroll-mt-8">
             <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-4 flex items-center gap-3">
               <Plug className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
               Connect Integration
@@ -163,7 +163,7 @@ export default function UsageDocsPage() {
           {/* ═══════════════════════════════════════════════
               SECTION 3: Select Project & Branch
           ═══════════════════════════════════════════════ */}
-          <section id="select-project" className="mb-16 scroll-mt-8">
+          <section id="select-project" className="mb-10 scroll-mt-8">
             <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-4 flex items-center gap-3">
               <FolderGit2 className="w-5 h-5 text-violet-600 dark:text-violet-400" />
               Select Project & Branch
@@ -228,7 +228,7 @@ export default function UsageDocsPage() {
           {/* ═══════════════════════════════════════════════
               SECTION 4: Give a Task
           ═══════════════════════════════════════════════ */}
-          <section id="give-task" className="mb-16 scroll-mt-8">
+          <section id="give-task" className="mb-10 scroll-mt-8">
             <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-4 flex items-center gap-3">
               <MessageSquare className="w-5 h-5 text-blue-600 dark:text-blue-400" />
               Give a Task
@@ -269,7 +269,7 @@ export default function UsageDocsPage() {
           {/* ═══════════════════════════════════════════════
               SECTION 5: Review & Process
           ═══════════════════════════════════════════════ */}
-          <section id="review-process" className="mb-16 scroll-mt-8">
+          <section id="review-process" className="mb-10 scroll-mt-8">
             <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-4 flex items-center gap-3">
               <Terminal className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
               Review & Process
@@ -320,7 +320,7 @@ export default function UsageDocsPage() {
           {/* ═══════════════════════════════════════════════
               SECTION 6: How Documentation Works
           ═══════════════════════════════════════════════ */}
-          <section id="documentation" className="mb-16 scroll-mt-8">
+          <section id="documentation" className="mb-10 scroll-mt-8">
             <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-4 flex items-center gap-3">
               <FileText className="w-5 h-5 text-slate-600 dark:text-slate-400" />
               How Documentation Works

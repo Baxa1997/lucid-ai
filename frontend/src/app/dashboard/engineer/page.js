@@ -165,37 +165,38 @@ export default function EngineerDashboardPage() {
     <div className="h-full bg-[#f0f4f9] dark:bg-[#0d1117] relative flex flex-col transition-colors duration-200">
 
       {/* ── Main Content ── */}
-      <div className="max-w-5xl mx-auto px-8 py-8 flex-1 flex flex-col w-full">
+      <div className="flex-1 w-full overflow-y-auto">
 
-        {/* Banner */}
-        {showBanner && (
-          <div className="flex items-center justify-center mb-6">
-            <div className="flex items-center gap-2 px-5 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-full shadow-soft">
-              <span className="text-sm text-slate-500 dark:text-slate-400">New around here? Not sure where to start?</span>
-              <button className="text-sm text-slate-800 dark:text-slate-200 font-bold underline underline-offset-2 hover:text-blue-600 dark:hover:text-blue-400 transition-colors">Click here</button>
+        {/* ── Hero Section ── */}
+        <div className="px-6 lg:px-8 pt-12 pb-10">
+          <div className="max-w-[900px] mx-auto">
+          
+            {/* Banner */}
+            {showBanner && (
+              <div className="flex items-center justify-center mb-8">
+                <div className="flex items-center gap-2 px-5 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-full shadow-soft">
+                  <span className="text-sm text-slate-500 dark:text-slate-400">New around here? Not sure where to start?</span>
+                  <button className="text-sm text-slate-800 dark:text-slate-200 font-bold underline underline-offset-2 hover:text-blue-600 dark:hover:text-blue-400 transition-colors">Click here</button>
+                </div>
+              </div>
+            )}
+            
+            {/* Title */}
+            <div className="text-center mb-3">
+              <h1 className="text-4xl sm:text-[44px] font-extrabold text-slate-900 dark:text-slate-100 tracking-tight leading-tight">
+                Let&apos;s Start Building!
+              </h1>
             </div>
-            {/* <button onClick={() => setShowBanner(false)} className="ml-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400 transition-colors">
-              <X className="w-4 h-4" />
-            </button> */}
-          </div>
-        )}
-        
-        {/* Title */}
-        <div className="text-center mb-2">
-          <h1 className="text-4xl sm:text-[44px] font-extrabold text-slate-900 dark:text-slate-100 tracking-tight leading-tight">
-            Let&apos;s Start Building!
-          </h1>
-        </div>
 
-        {/* Subtitle */}
-        <div className="text-center mb-10">
-          <p className="text-[15px] text-slate-400 dark:text-slate-500 max-w-xl mx-auto leading-relaxed">
-            Select a repository to begin an autonomous engineering session or start a fresh environment from scratch.
-          </p>
-        </div>
+            {/* Subtitle */}
+            <div className="text-center mb-10">
+              <p className="text-[15px] text-slate-400 dark:text-slate-500 max-w-xl mx-auto leading-relaxed">
+                Select a repository to begin an autonomous engineering session or start a fresh environment from scratch.
+              </p>
+            </div>
 
-        {/* ── Two Cards ── */}
-        <div className="grid grid-cols-1 md:grid-cols-[400px_400px] justify-center gap-5 mb-14 relative z-30">
+            {/* ── Two Cards ── */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 relative z-30">
           
           {/* LEFT: Open Repository */}
           <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-soft relative z-30">
@@ -470,11 +471,14 @@ export default function EngineerDashboardPage() {
                 </>
               )}
             </button>
-          </div>
-        </div>
+          </div> {/* end RIGHT card */}
+          </div> {/* end cards grid */}
+          </div> {/* end max-w wrapper */}
+        </div> {/* end hero section */}
 
         {/* ── Your Projects — Discover Grid ── */}
-        <div className="mt-2">
+        <div className="px-6 lg:px-8 pb-8">
+          <div className="border-t border-slate-200/60 dark:border-slate-800/40 pt-6">
           <div className="flex items-center justify-between mb-5">
             <div>
               <h2 className="text-2xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight">
@@ -492,7 +496,7 @@ export default function EngineerDashboardPage() {
           </div>
 
           {platformLoading ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
               {[...Array(3)].map((_, i) => (
                 <div key={i} className="rounded-xl bg-slate-100 dark:bg-[#161b22] border border-slate-200 dark:border-slate-700/50 overflow-hidden animate-pulse">
                   <div className="aspect-[16/9] bg-slate-200 dark:bg-slate-800" />
@@ -518,8 +522,8 @@ export default function EngineerDashboardPage() {
               </button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-              {platformRepos.slice(0, 9).map((pr, idx) => {
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+              {platformRepos.slice(0, 12).map((pr, idx) => {
                 const GRADIENTS = [
                   'from-[#0f0c29] via-[#302b63] to-[#24243e]',
                   'from-[#0d1b2a] via-[#1b263b] to-[#415a77]',
@@ -554,7 +558,7 @@ export default function EngineerDashboardPage() {
                       disabled={isLaunching}
                       className="block w-full text-left"
                     >
-                      <div className="aspect-[16/9] relative overflow-hidden">
+                      <div className="aspect-[2/1] relative overflow-hidden">
                         <div className={`absolute inset-0 bg-gradient-to-br ${gradient} flex items-center justify-center`}>
                           {/* Decorative light spots */}
                           <div className="absolute inset-0 opacity-[0.07]" style={{
@@ -566,7 +570,7 @@ export default function EngineerDashboardPage() {
                             backgroundSize: '32px 32px',
                           }} />
                           {/* Initials */}
-                          <span className={`text-4xl font-black tracking-wider ${accent} select-none drop-shadow-lg`}>
+                          <span className={`text-3xl font-black tracking-wider ${accent} select-none drop-shadow-lg`}>
                             {initials}
                           </span>
                           {/* Hover overlay */}
@@ -613,6 +617,7 @@ export default function EngineerDashboardPage() {
               })}
             </div>
           )}
+        </div>
         </div>
       </div>
 

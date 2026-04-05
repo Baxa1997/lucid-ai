@@ -3288,7 +3288,16 @@ Stop when fully done.
         "Read only what is directly needed for the next action.\n\n"
         "These rules are non-negotiable and override any other instinct\n"
         "to \"explore more\" or \"double check\". Act like a senior engineer\n"
-        "who has already seen this codebase. Be decisive.\n"
+        "who has already seen this codebase. Be decisive.\n\n"
+        "RULE 6 — ICON SAFETY:\n"
+        "lucide-react does NOT export brand/social icons (Facebook, Instagram, Twitter, Linkedin, Youtube, Tiktok, Github).\n"
+        "These will cause 'Unsupported Server Component type: undefined' on build.\n"
+        "For social icons, create inline SVG components instead.\n\n"
+        "RULE 7 — 'use client' (Next.js App Router):\n"
+        "EVERY .jsx/.tsx file that uses React hooks (useState, useEffect, useRef, useCallback),\n"
+        "event handlers (onClick, onChange), browser APIs (window, document), or client libraries\n"
+        "(framer-motion) MUST have 'use client' as the VERY FIRST line. Missing it crashes the build.\n"
+        "When in doubt, ADD IT. It never hurts.\n"
     )
 
     import sys
@@ -5424,7 +5433,7 @@ async def run_pipeline(
             await _send_phase(4, "Researching project", "Gemini is analyzing top products in this domain…", "active")
 
             # Phases 4+5+6 are all handled inside generate_new_project()
-            await _send_phase(5, "Writing code", "Claude Opus is generating project (3-phase)…", "active")
+            await _send_phase(5, "Writing code", "Claude Sonnet is generating project (3-phase)…", "active")
 
             from app.services.project_generator import generate_new_project
 
@@ -5746,6 +5755,7 @@ async def run_pipeline(
                     .replace("https://github.com/", f"https://{git_token}@github.com/")
                 )
                 logger.info("new_project_mode: repo created: %s", new_repo_html_url)
+                validated["auto_created_repo_id"] = new_repo.get("id", 0)  # Needed by Vercel Phase 8
 
                 await websocket.send_json({
                     "type": "progress",

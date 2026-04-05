@@ -101,7 +101,7 @@ class BuildValidator:
         api_key: str,
         classification: dict,
         websocket: WebSocket,
-        max_retries: int = 3,
+        max_retries: int = 1,
     ):
         self.api_key = api_key
         self.classification = classification
@@ -272,7 +272,7 @@ STOP when all errors are fixed.
             cwd=str(workspace_path),
             env=fix_env,
             model=str(self.classification.get("model_id", "claude-sonnet-4-6")),
-            max_turns=8,
+            max_turns=4,
             permission_mode="bypassPermissions",
             allowed_tools=[
                 "Read", "Write", "Edit", "MultiEdit",
