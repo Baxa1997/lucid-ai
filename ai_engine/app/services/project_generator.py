@@ -1054,6 +1054,29 @@ Write original copy inspired by TONE and STYLE of the best sites.
         raise RuntimeError("Gemini returned empty research text")
     
     await _ws_send(websocket, "progress", "✅ Research complete — building project blueprint...")
+    
+    # Send research summary to chat panel so user can see what was analyzed
+    try:
+        # Extract analyzed products section for display
+        products_section = ""
+        if "===PRODUCTS_ANALYZED===" in text:
+            start = text.index("===PRODUCTS_ANALYZED===") + len("===PRODUCTS_ANALYZED===")
+            end = text.index("===", start) if "===" in text[start:] else start + 500
+            products_section = text[start:end].strip()
+        
+        if products_section:
+            summary = f"🔍 **Research Complete**\n\n**Products Analyzed:**\n{products_section[:500]}"
+        else:
+            summary = f"🔍 **Research Complete** — Analyzed top products in the {app_type.replace('_', ' ')} domain"
+        
+        await websocket.send_json({
+            "type": "chat_message",
+            "role": "agent",
+            "content": summary,
+        })
+    except Exception:
+        pass
+    
     return text
 
 

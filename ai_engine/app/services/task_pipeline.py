@@ -84,6 +84,72 @@ def _load_platform_token() -> str:
 
 PLATFORM_GITHUB_TOKEN: str = _load_platform_token()
 
+
+# ── Helper: send file tree to frontend via WebSocket ─────────
+# This is the ONLY way the frontend Code tab gets populated.
+# Must be called after any workspace change (clone, generation, etc.)
+_FILE_TREE_EXCLUDE = {
+    ".git", "node_modules", "__pycache__", ".next",
+    ".venv", "venv", ".mypy_cache", ".pytest_cache",
+    "dist", "build", ".tox", ".eggs", ".claude",
+}
+
+
+def _build_ws_file_tree(root_dir: str) -> list:
+    """Recursively build a file tree suitable for the frontend Code tab."""
+    def walk(dir_path: str) -> list:
+        entries = []
+        try:
+            items = sorted(os.listdir(dir_path))
+        except (PermissionError, FileNotFoundError):
+            return entries
+        for item in items:
+            full = os.path.join(dir_path, item)
+            rel = os.path.relpath(full, root_dir)
+            if os.path.isdir(full):
+                if item in _FILE_TREE_EXCLUDE or item.startswith("."):
+                    continue
+                entries.append({
+                    "name": item,
+                    "type": "folder",
+                    "path": "/" + rel,
+                    "children": walk(full),
+                })
+            else:
+                entries.append({
+                    "name": item,
+                    "type": "file",
+                    "path": "/" + rel,
+                })
+        return entries
+    return walk(root_dir)
+
+
+async def _send_file_tree(websocket, workspace_path: str):
+    """Emit a file_tree event to the frontend so the Code tab updates."""
+    try:
+        tree = _build_ws_file_tree(workspace_path)
+        await websocket.send_json({
+            "type": "file_tree",
+            "tree": tree,
+        })
+        logger.info("Sent file_tree event (%d top-level entries)", len(tree))
+    except Exception as e:
+        logger.warning("Failed to send file_tree: %s", e)
+
+
+async def _send_chat_message(websocket, content: str, role: str = "agent"):
+    """Emit a chat message that appears in the frontend chat panel."""
+    try:
+        await websocket.send_json({
+            "type": "chat_message",
+            "role": role,
+            "content": content,
+        })
+    except Exception:
+        pass
+
+
 async def _approve_all_tools(tool_name: str, input_data: dict, context) -> PermissionResultAllow:
     return PermissionResultAllow()
 
@@ -1782,6 +1848,21 @@ Research the specific niche. Customize everything.
             "type": "progress",
             "message": "📋 Specification created",
         })
+        # Send a summary of the research to the chat panel
+        # Extract the first meaningful section (Project Overview) for display
+        spec_lines = spec.split('\n')
+        summary_lines = []
+        for line in spec_lines[:30]:
+            if line.strip() and not line.startswith('#'):
+                summary_lines.append(line.strip())
+            if len(summary_lines) >= 5:
+                break
+        if summary_lines:
+            research_summary = '\n'.join(summary_lines[:5])
+            await _send_chat_message(
+                websocket,
+                f"🔍 **Research Complete**\n\n{research_summary}\n\n_Full spec saved to `.lucid/spec.md`_"
+            )
     except Exception:
         pass
 
@@ -4987,6 +5068,7 @@ async def run_pipeline(
     conversation_id: str = "",
     chat_session_id: str = "",
     images: list = None,
+    session=None,
 ) -> str | None:
     """Run all pipeline steps sequentially.
 
@@ -5379,6 +5461,15 @@ async def run_pipeline(
             return
         await _send_phase(2, "Preparing workspace", "Repository ready", "done")
 
+        # ── Set session workspace_dir EARLY so REST file API works mid-pipeline ──
+        if session and workspace_path:
+            session.workspace_dir = workspace_path
+            logger.info("Session workspace_dir set early: %s", workspace_path)
+
+        # ── Send file tree to frontend immediately after workspace is ready ──
+        # This populates the Code tab so the user can see template files.
+        await _send_file_tree(websocket, workspace_path)
+
         # ── HANDOFF POINT: OpenHands is now DEAD ──────────
         if await openhands_manager.is_active():
             await openhands_manager.destroy_all()
@@ -5453,6 +5544,9 @@ async def run_pipeline(
             await _send_phase(5, "Writing code", "Code changes written", "done")
             await _send_phase(6, "Verifying build", "Build verification complete", "done")
 
+            # ── Send updated file tree after code generation ──
+            await _send_file_tree(websocket, workspace_path)
+
             # Skip old Phase 4 plan, Phase 5 batched execution, and Phase 6 BuildValidator
             # — they're all handled inside generate_new_project()
             plan = ""  # Not needed, but referenced later
@@ -5500,6 +5594,9 @@ async def run_pipeline(
                 await _send_phase(5, "Writing code", "Code execution failed", "error")
                 return
             await _send_phase(5, "Writing code", "Code changes written", "done")
+
+            # ── Send updated file tree after code generation ──
+            await _send_file_tree(websocket, workspace_path)
 
         # ── Phase 6: Verify build (edit-mode only) ─────────
         if not (validated.get("scratch_mode") or validated.get("new_project_mode")):

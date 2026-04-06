@@ -502,6 +502,7 @@ async def websocket_agent(websocket: WebSocket):
                     conversation_id=conversation_id,
                     chat_session_id=chat_session_id or "",
                     images=initial_images,
+                    session=session,
                 )
             )
 
@@ -755,6 +756,7 @@ async def websocket_agent(websocket: WebSocket):
                     conversation_id=conversation_id,
                     chat_session_id=chat_session_id or "",
                     images=followup_images,
+                    session=session,
                 )
             )
 

@@ -516,6 +516,37 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
 
       if (msg.type === 'pong' || msg.type === 'ack') return;
 
+      // ─── Chat message — direct chat bubble from backend ────
+      if (msg.type === 'chat_message') {
+        const role = msg.role || 'agent';
+        const content = msg.content || '';
+        if (content.trim()) {
+          pushChat(role, content);
+        }
+        return;
+      }
+
+      // ─── Progress — route important steps to chat ────
+      if (msg.type === 'progress') {
+        const text = msg.message || '';
+        pushLog(text, 'system');
+        // Show key milestones in chat so the user can follow along
+        if (text.includes('✅') || text.includes('📦') || text.includes('🔍') || 
+            text.includes('📊') || text.includes('🔨') || text.includes('📚') ||
+            text.includes('⚠️')) {
+          pushChat('system', text);
+        }
+        return;
+      }
+
+      // ─── Warning — show in chat ───────────────────────
+      if (msg.type === 'warning') {
+        const text = msg.message || '';
+        pushLog(text, 'warning');
+        pushChat('system', `⚠️ ${text}`);
+        return;
+      }
+
       pushLog(JSON.stringify(msg), 'system');
     },
     [pushLog, pushChat, flushPhasesToChat]
