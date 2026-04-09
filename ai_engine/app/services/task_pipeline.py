@@ -13,6 +13,7 @@ Complete handoff via workspace_path only. No shared state.
 import os
 import json
 import asyncio
+import signal
 import subprocess
 import shutil
 import logging
@@ -2931,6 +2932,36 @@ Be specific and technical. Your description will be used by another AI to implem
     return "\n\n".join(descriptions)
 
 
+def _kill_claude_subprocesses() -> None:
+    """Best-effort SIGKILL of any orphaned claude/node child processes.
+
+    The claude_code_sdk sends SIGTERM via transport.close() when the async
+    generator is cancelled, but the Node.js process (and its children) may
+    survive SIGTERM.  This function sends SIGKILL to any direct children of
+    this process that look like claude/node workers.
+
+    Called synchronously from a CancelledError handler so it must not await.
+    """
+    try:
+        current_pid = os.getpid()
+        result = subprocess.run(
+            ["pgrep", "-P", str(current_pid)],
+            capture_output=True, text=True, timeout=2,
+        )
+        for pid_str in result.stdout.strip().splitlines():
+            pid_str = pid_str.strip()
+            if not pid_str:
+                continue
+            try:
+                pid = int(pid_str)
+                os.kill(pid, signal.SIGKILL)
+                logger.debug("Force-killed orphaned subprocess PID %d after cancellation", pid)
+            except (ProcessLookupError, PermissionError, ValueError):
+                pass
+    except Exception as exc:
+        logger.debug("_kill_claude_subprocesses: %s", exc)
+
+
 async def execute_with_claude(
     task: str,
     workspace_path: str,
@@ -3409,10 +3440,12 @@ Stop when fully done.
         capture_output=True
     )
 
-    # --- FIX OS PERMISSIONS (chmod 755 on workspace) ---
+    # --- FIX OS PERMISSIONS (chmod 750 — owner+group only, no world read) ---
+    # 750 instead of 755 so other OS users cannot read potentially-secret files
+    # (.env, credentials) that were cloned from the user's repo.
     try:
-        subprocess.run(["chmod", "-R", "755", str(workspace_path)], capture_output=True)
-        logger.info("chmod -R 755 applied to %s", workspace_path)
+        subprocess.run(["chmod", "-R", "750", str(workspace_path)], capture_output=True)
+        logger.info("chmod -R 750 applied to %s", workspace_path)
     except Exception as e:
         logger.error("chmod failed: %s", e)
 
@@ -3499,6 +3532,39 @@ Stop when fully done.
                             pass
                         break
 
+                    # ── Parse SDK message for structured events ──────
+                    # Send file-write events so the frontend can show
+                    # Base44-style "Writing filename" pills in the chat.
+                    try:
+                        msg_content = getattr(message, "content", None)
+                        if isinstance(msg_content, list):
+                            for block in msg_content:
+                                bname = getattr(block, "name", None)
+                                binput = getattr(block, "input", None) or {}
+                                btext = getattr(block, "text", None)
+                                # File-write tool call → structured event
+                                if bname and str(bname).lower() in ("write", "edit", "multiedit"):
+                                    fpath = (
+                                        binput.get("file_path")
+                                        or binput.get("path")
+                                        or ""
+                                    )
+                                    if fpath:
+                                        await websocket.send_json({
+                                            "type": "file_write_event",
+                                            "filename": fpath,
+                                            "action": str(bname).lower(),
+                                        })
+                                # Text block → send as chat message if meaningful
+                                elif btext and len(str(btext).strip()) > 20:
+                                    await websocket.send_json({
+                                        "type": "chat_message",
+                                        "role": "agent",
+                                        "content": str(btext).strip()[:800],
+                                    })
+                    except Exception:
+                        pass
+                    # Also send raw for terminal logs (kept for debugging)
                     try:
                         await websocket.send_json({
                             "type": "claude_message",
@@ -3512,14 +3578,22 @@ Stop when fully done.
                 return False
 
             return True
-            
+
+        except asyncio.CancelledError:
+            # Pipeline task cancelled (user stopped or WebSocket disconnected).
+            # The SDK sends SIGTERM via transport.close() but Node.js worker
+            # processes may survive.  Force-kill remaining children now.
+            _kill_claude_subprocesses()
+            raise  # Propagate so the caller's finally block runs normally
+
         except Exception as e:
             last_error = e
             exit_code = getattr(e, 'returncode', None)
             
-            print(f"Claude attempt {attempt + 1} failed:")
-            print(f"Error: {str(e)}")
-            print(f"Exit code: {exit_code}")
+            logger.warning(
+                "Claude attempt %d/%d failed (exit_code=%s): %s",
+                attempt + 1, max_retries, exit_code, str(e),
+            )
             
             if attempt < max_retries - 1:
                 try:
@@ -5384,7 +5458,36 @@ async def run_pipeline(
 
             # Fallback: no clone_url → use local skeleton (same as scratch_mode)
             if not workspace_path or not os.path.exists(workspace_path) or not os.listdir(workspace_path):
-                logger.warning("new_project_mode: falling back to local skeleton for workspace")
+                # Diagnose WHY we're falling back
+                _fallback_reason = "unknown"
+                if not template_clone_url:
+                    _fallback_reason = "no template_clone_url provided"
+                elif not workspace_path:
+                    _fallback_reason = "workspace_path is None (clone failed)"
+                elif not os.path.exists(workspace_path):
+                    _fallback_reason = "workspace_path does not exist"
+                elif not os.listdir(workspace_path):
+                    _fallback_reason = "workspace is empty after clone attempt"
+
+                logger.warning(
+                    "new_project_mode: falling back to local skeleton — reason: %s, "
+                    "clone_url: %s, git_token_present: %s",
+                    _fallback_reason,
+                    template_clone_url[:40] if template_clone_url else "NONE",
+                    bool(git_token),
+                )
+
+                # Tell the user clearly what happened
+                await websocket.send_json({
+                    "type": "chat_message",
+                    "role": "system",
+                    "content": (
+                        f"⚠️ **Template clone failed** ({_fallback_reason}). "
+                        "Using local skeleton instead. The project will still generate correctly, "
+                        "but may use a generic starter structure."
+                    ),
+                })
+
                 workspace_path = workspace_path or f"/tmp/lucid_new_{task_id}_fb"
                 os.makedirs(workspace_path, exist_ok=True)
                 os.chmod(workspace_path, 0o777)
@@ -5412,6 +5515,8 @@ async def run_pipeline(
                             "type": "progress",
                             "message": f"📦 Local skeleton loaded: {skel_name} ({len(copied)} files)",
                         })
+                    else:
+                        logger.warning("new_project_mode: no skeleton found for stack=%s", detected_stack)
                 except Exception as _skel_err:
                     logger.warning("new_project_mode: fallback skeleton error: %s", _skel_err)
 
@@ -5523,8 +5628,10 @@ async def run_pipeline(
             # ══════════════════════════════════════════════════════
             await _send_phase(4, "Researching project", "Gemini is analyzing top products in this domain…", "active")
 
-            # Phases 4+5+6 are all handled inside generate_new_project()
-            await _send_phase(5, "Writing code", "Claude Sonnet is generating project (3-phase)…", "active")
+            # Phase 5 is NOT set here — it will be sent from inside
+            # generate_new_project() when coding actually begins.
+            # This ensures Phase 4 (Research) visually completes
+            # BEFORE Phase 5 (Coding) starts in the UI.
 
             from app.services.project_generator import generate_new_project
 
@@ -5540,8 +5647,8 @@ async def run_pipeline(
                 await _send_phase(5, "Writing code", "Generation failed", "error")
                 return
 
-            await _send_phase(4, "Researching project", "Research complete", "done")
-            await _send_phase(5, "Writing code", "Code changes written", "done")
+            # Phase 4 done + Phase 5 done are sent from inside generate_new_project()
+            # Only send Phase 6 done here as a final confirmation
             await _send_phase(6, "Verifying build", "Build verification complete", "done")
 
             # ── Send updated file tree after code generation ──
@@ -5562,6 +5669,21 @@ async def run_pipeline(
                 websocket,
             )
             await _send_phase(4, "Exploring codebase", "Implementation plan ready", "done")
+
+            # ── Send plan as chat message so user sees a response immediately ──
+            # Extract the user-visible part (files to change + brief summary).
+            # The full plan is sent to Claude only — this is the friendly preview.
+            if plan and plan.strip():
+                try:
+                    # Take the first 600 chars of the plan — enough to show intent
+                    plan_preview = plan.strip()[:600]
+                    await websocket.send_json({
+                        "type": "chat_message",
+                        "role": "agent",
+                        "content": plan_preview,
+                    })
+                except Exception:
+                    pass
 
         # ── Phase 4.5: Analyze images (if any) ────────────
         if images:
@@ -6198,17 +6320,24 @@ async def run_pipeline(
         # Always destroy any lingering OpenHands conversations
         await openhands_manager.destroy_all()
 
-        # Clean up scratch workspaces ONLY on failure.
-        # Successful workspaces are kept alive so follow-up tasks
-        # can reuse them. They expire naturally via workspace reaper TTL.
-        # We detect failure by checking if workspace_path was returned
-        # (the return statement above sets it before reaching finally).
-        # If we reached finally via an exception, workspace_path is still set
-        # but the function returns None due to the except block.
-        # Legacy: clean up workspaces without conversation_id
-        if not conversation_id and workspace_path and os.path.exists(workspace_path):
+        # ALWAYS clean up workspace after pipeline completes.
+        # By this point, code is already pushed to GitHub (Phase 7),
+        # so the local workspace is 100% redundant.
+        # If the user sends a follow-up task, workspace_manager
+        # will re-clone from GitHub (fast with --depth 1).
+        #
+        # This is critical for server disk space — each workspace
+        # with node_modules can be 100-500MB.
+        if workspace_path and os.path.exists(workspace_path):
             try:
-                shutil.rmtree(workspace_path)
-                logger.info("Workspace cleaned up (no conversation_id): %s", workspace_path)
-            except Exception:
-                pass
+                # Delete node_modules first (biggest space consumer, 80%+ of size)
+                nm_path = os.path.join(workspace_path, "node_modules")
+                if os.path.isdir(nm_path):
+                    shutil.rmtree(nm_path, ignore_errors=True)
+                    logger.info("Cleaned up node_modules: %s", nm_path)
+
+                # Delete the entire workspace
+                shutil.rmtree(workspace_path, ignore_errors=True)
+                logger.info("Workspace cleaned up after pipeline: %s", workspace_path)
+            except Exception as _cleanup_err:
+                logger.warning("Workspace cleanup failed (non-fatal): %s", _cleanup_err)

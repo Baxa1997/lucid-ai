@@ -8,14 +8,53 @@ method that touches the database.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from fastapi import HTTPException
 from postgrest.exceptions import APIError
 
 from app.config import logger
 from app.supabase_client import db_client
+
+# ── Transient-error retry helper ─────────────────────────────────────────────
+_TRANSIENT_SIGNALS = (
+    "connection",
+    "timeout",
+    "503",
+    "502",
+    "temporarily unavailable",
+    "reset by peer",
+    "eof",
+    "broken pipe",
+)
+
+
+async def _with_retry(fn: Callable[[], Any], *, max_retries: int = 3) -> Any:
+    """Run an async callable, retrying up to *max_retries* times on transient
+    Supabase / network errors with exponential back-off (0.25 s, 0.5 s, 1 s).
+
+    Non-transient errors (auth, RLS violations, bad requests) are re-raised
+    immediately without retrying.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            return await fn()
+        except (APIError, Exception) as exc:
+            err_lower = str(exc).lower()
+            is_transient = any(sig in err_lower for sig in _TRANSIENT_SIGNALS)
+            if not is_transient or attempt == max_retries - 1:
+                raise
+            last_exc = exc
+            delay = 0.25 * (2 ** attempt)
+            logger.warning(
+                "Transient Supabase error (attempt %d/%d, retry in %.2fs): %s",
+                attempt + 1, max_retries, delay, exc,
+            )
+            await asyncio.sleep(delay)
+    raise last_exc  # unreachable, but satisfies type checkers
 
 
 class ChatService:
@@ -40,9 +79,11 @@ class ChatService:
             "model_provider": model_provider,
         }
         try:
-            async with db_client(user_jwt) as client:
-                result = await client.table("chat_sessions").insert(row).execute()
-            return result.data[0] if result.data else row
+            async def _create():
+                async with db_client(user_jwt) as client:
+                    result = await client.table("chat_sessions").insert(row).execute()
+                return result.data[0] if result.data else row
+            return await _with_retry(_create)
         except APIError as exc:
             logger.error("Supabase error in create_session: code=%s msg=%s", exc.code, exc.message)
             raise HTTPException(status_code=500, detail="Database error") from exc
@@ -163,9 +204,11 @@ class ChatService:
             "metadata_json": metadata,
         }
         try:
-            async with db_client(user_jwt) as client:
-                result = await client.table("chat_messages").insert(row).execute()
-            return result.data[0] if result.data else row
+            async def _insert():
+                async with db_client(user_jwt) as client:
+                    result = await client.table("chat_messages").insert(row).execute()
+                return result.data[0] if result.data else row
+            return await _with_retry(_insert)
         except APIError as exc:
             logger.error("Supabase error in add_message: code=%s msg=%s", exc.code, exc.message)
             raise HTTPException(status_code=500, detail="Database error") from exc
@@ -194,8 +237,10 @@ class ChatService:
             for e in events
         ]
         try:
-            async with db_client(user_jwt) as client:
-                await client.table("chat_messages").insert(rows).execute()
+            async def _batch():
+                async with db_client(user_jwt) as client:
+                    await client.table("chat_messages").insert(rows).execute()
+            await _with_retry(_batch)
         except APIError as exc:
             logger.error("Supabase error in add_messages: code=%s msg=%s", exc.code, exc.message)
             raise HTTPException(status_code=500, detail="Database error") from exc
@@ -209,14 +254,16 @@ class ChatService:
     ) -> None:
         """Mark a chat session as inactive (called on WebSocket disconnect)."""
         try:
-            async with db_client(user_jwt) as client:
-                await (
-                    client.table("chat_sessions")
-                    .update({"is_active": False})
-                    .eq("id", session_id)
-                    .eq("user_id", user_id)
-                    .execute()
-                )
+            async def _deactivate():
+                async with db_client(user_jwt) as client:
+                    await (
+                        client.table("chat_sessions")
+                        .update({"is_active": False})
+                        .eq("id", session_id)
+                        .eq("user_id", user_id)
+                        .execute()
+                    )
+            await _with_retry(_deactivate)
         except APIError as exc:
             logger.error(
                 "Supabase error in deactivate_session: code=%s msg=%s", exc.code, exc.message

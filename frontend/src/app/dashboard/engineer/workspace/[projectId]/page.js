@@ -10,7 +10,7 @@ import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { WorkspaceErrorBoundary } from '@/components/WorkspaceErrorBoundary';
 import {
-  ArrowLeft, Send, Terminal, Settings, X,
+  ArrowLeft, ArrowRight, Send, Terminal, Settings, X,
   Bot, User, Cpu, ArrowDown, Loader2,
   FileText, Copy, Check, Clock, GitBranch, Github,
   ChevronDown, ChevronRight, Zap, Code2, Play,
@@ -19,7 +19,7 @@ import {
   Video, Globe, Camera, Link2, Layers, Paperclip, Plus,
   FolderOpen, PanelLeftClose, PanelLeftOpen, Hammer, Monitor,
   Mic, Pencil, MessageCircle, Lightbulb, History, Diamond, MoreHorizontal,
-  Wand2, Palette, RefreshCw, Maximize, Smartphone, Download,
+  Wand2, Palette, RefreshCw, Maximize, Smartphone, Download, Search,
 } from 'lucide-react';
 import { useAgentSession } from '@/hooks/useAgentSession';
 import {
@@ -43,6 +43,7 @@ function ConnectionStatus({ status, error }) {
   const config = {
     idle:       { color: 'text-slate-400 dark:text-slate-500', label: 'Idle' },
     connecting: { color: 'text-blue-600 dark:text-blue-400',  label: 'Connecting...' },
+    cloning:    { color: 'text-violet-600 dark:text-violet-400', label: 'Cloning repository...' },
     preparing:  { color: 'text-amber-600 dark:text-amber-400', label: 'Preparing workspace...' },
     running:    { color: 'text-blue-600 dark:text-blue-400',  label: 'Agent working…' },
     ready:      { color: 'text-emerald-600 dark:text-emerald-400', label: 'Ready' },
@@ -57,6 +58,7 @@ function ConnectionStatus({ status, error }) {
       <div className={cn("w-2 h-2 rounded-full",
         status === 'ready' || status === 'connected' ? "bg-emerald-500" :
         status === 'preparing' ? "bg-amber-500 animate-pulse" :
+        status === 'cloning' ? "bg-violet-500 animate-pulse" :
         status === 'connecting' || status === 'running' ? "bg-blue-500 animate-pulse" :
         status === 'error' ? "bg-red-500" : "bg-slate-300 dark:bg-slate-600"
       )} />
@@ -67,10 +69,11 @@ function ConnectionStatus({ status, error }) {
   );
 }
 
-// ── File Viewer Panel ──────────────────────────────────────
-function FileViewer({ path, content, loading }) {
+// ── File Viewer Panel ── White editor with line numbers (Base44 style)
+function FileViewer({ path, content, loading, onContentChange }) {
   const [copied, setCopied] = useState(false);
   const fileName = path ? path.split('/').pop() : '';
+  const breadcrumb = path || '';
 
   const handleCopy = () => {
     navigator.clipboard.writeText(content).then(() => {
@@ -79,38 +82,61 @@ function FileViewer({ path, content, loading }) {
     });
   };
 
+  const lines = content ? content.split('\n') : [];
+
   return (
-    <div className="h-full flex flex-col bg-[#1e1e2e] font-mono">
-      {/* File name bar */}
-      <div className="shrink-0 flex items-center justify-between px-4 py-2 bg-[#181825] border-b border-slate-800">
-        <div className="flex items-center gap-2 text-slate-400">
-          <FileText className="w-3.5 h-3.5 text-blue-400" />
-          <span className="text-xs text-slate-300 font-medium truncate max-w-[200px]">
-            {fileName || 'File'}
-          </span>
+    <div className="h-full flex flex-col bg-white font-mono">
+      {/* Breadcrumb bar */}
+      <div className="shrink-0 flex items-center justify-between px-4 py-2.5 bg-white border-b border-slate-200">
+        <div className="flex items-center gap-1.5 text-slate-500 text-[13px] min-w-0">
+          {breadcrumb.split('/').map((part, i, arr) => (
+            <span key={i} className="flex items-center gap-1.5">
+              {i > 0 && <span className="text-slate-300">/</span>}
+              <span className={i === arr.length - 1 ? 'text-slate-800 font-semibold' : 'text-slate-500'}>{part}</span>
+            </span>
+          ))}
         </div>
-        <button
-          onClick={handleCopy}
-          disabled={loading || !content}
-          className="p-1.5 text-slate-500 hover:text-white transition-colors disabled:opacity-30"
-          title="Copy content"
-        >
-          {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={handleCopy}
+            disabled={loading || !content}
+            className="p-1.5 text-slate-400 hover:text-slate-700 transition-colors disabled:opacity-30 rounded hover:bg-slate-100"
+            title="Copy content"
+          >
+            {copied ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
+          </button>
+        </div>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-auto p-4 custom-scrollbar">
+      {/* Editor Content */}
+      <div className="flex-1 overflow-auto custom-scrollbar">
         {loading ? (
           <div className="flex items-center justify-center h-full">
             <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
           </div>
         ) : content ? (
-          <pre className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap break-all">
-            {content}
-          </pre>
+          <div className="flex min-h-full">
+            {/* Line numbers */}
+            <div className="shrink-0 py-3 px-3 text-right select-none border-r border-slate-100 bg-slate-50/50">
+              {lines.map((_, i) => (
+                <div key={i} className="text-[12px] leading-[22px] text-slate-300 font-mono">
+                  {i + 1}
+                </div>
+              ))}
+            </div>
+            {/* Code area — editable */}
+            <div className="flex-1 min-w-0">
+              <textarea
+                value={content}
+                onChange={(e) => onContentChange?.(e.target.value)}
+                spellCheck={false}
+                className="w-full min-h-full py-3 px-4 text-[13px] leading-[22px] text-slate-800 font-mono bg-transparent border-none outline-none resize-none"
+                style={{ tabSize: 2 }}
+              />
+            </div>
+          </div>
         ) : (
-          <div className="flex flex-col items-center justify-center h-full text-slate-600 gap-2">
+          <div className="flex flex-col items-center justify-center h-full text-slate-400 gap-2">
             <FileText className="w-8 h-8 opacity-20" />
             <p className="text-xs">Select a file to view its contents</p>
           </div>
@@ -124,35 +150,62 @@ function FileViewer({ path, content, loading }) {
 // CLEAN CHAT MODE: Only user, agent, system, and push_result messages.
 // ThinkingBlock and ToolCard removed — events go to logs only.
 
+// Relative time helper (Base44 style: "a few seconds ago", "5 minutes ago", "10 hours ago")
+function relativeTime(ts) {
+  if (!ts) return '';
+  const diff = Math.floor((Date.now() - ts) / 1000);
+  if (diff < 10) return 'a few seconds ago';
+  if (diff < 60) return `${diff} seconds ago`;
+  if (diff < 120) return 'a minute ago';
+  if (diff < 3600) return `${Math.floor(diff / 60)} minutes ago`;
+  if (diff < 7200) return 'an hour ago';
+  if (diff < 86400) return `${Math.floor(diff / 3600)} hours ago`;
+  if (diff < 172800) return 'yesterday';
+  return `${Math.floor(diff / 86400)} days ago`;
+}
+
 // The main message bubble dispatcher
 function MessageBubble({ msg, isLatest }) {
+  const [copied, setCopied] = useState(false);
+
   // CLEAN CHAT MODE: skip thinking blocks and tool calls entirely
   if (msg.role === 'thinking' || msg.role === 'tool' || (msg.role === 'assistant' && msg.toolName)) {
     return null;
   }
 
-  // User message
+  // User message — Base44 style: right-aligned, gray bubble, avatar right
   if (msg.role === 'user') {
     const cleanContent = msg.content?.replace(/\[LUCID_PROJECT\][\s\S]*?(?=\n\n(?:I need|Create)|\n)/i, '').replace(/\[LUCID_PROJECT\][\s\S]*?(?=\n\n|\n)/i, '').trim() || msg.content;
     
+    const handleCopy = () => {
+      navigator.clipboard.writeText(cleanContent);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    };
+
     return (
-      <div className="flex flex-col pl-4 pr-3 py-3 w-full">
-        <div className="flex justify-end mb-1">
-          <div className="w-6 h-6 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center shrink-0 overflow-hidden">
-            <User className="w-4 h-4 text-slate-500" />
-            {/* If we have a user image, we can use an img tag here */}
+      <div className="flex items-start gap-2.5 px-4 py-3 w-full justify-end">
+        <div className="max-w-[85%] flex flex-col items-end">
+          <div className="bg-[#e8ecf1] dark:bg-slate-700/80 rounded-2xl rounded-tr-md px-4 py-3 relative group">
+            <p className="text-[14px] leading-relaxed whitespace-pre-wrap text-slate-900 dark:text-slate-100">
+              {cleanContent}
+            </p>
+            <div className="mt-2.5 flex items-center gap-2 text-[11px] text-slate-400 dark:text-slate-500">
+              <span>{relativeTime(msg.ts)}</span>
+              <div className="flex items-center gap-1 ml-auto">
+                <button onClick={handleCopy} className="p-0.5 hover:text-slate-600 dark:hover:text-slate-300 transition-colors" title="Copy">
+                  {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                </button>
+                <button className="p-0.5 hover:text-slate-600 dark:hover:text-slate-300 transition-colors" title="Edit">
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
+                <span className="text-slate-300 dark:text-slate-600 text-[11px] font-medium cursor-pointer hover:text-slate-500 dark:hover:text-slate-400 transition-colors">Revert</span>
+              </div>
+            </div>
           </div>
         </div>
-        <div className="bg-[#f0f4f9] dark:bg-slate-800/80 rounded-[20px] p-4 w-full relative">
-          <p className="text-[13px] font-medium leading-relaxed whitespace-pre-wrap text-slate-800 dark:text-slate-200">
-            {cleanContent}
-          </p>
-          <div className="mt-4 flex justify-between items-center text-[11px] text-slate-400 dark:text-slate-500 font-medium">
-            <span>Just now</span>
-            <button className="hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
-              <Copy className="w-3.5 h-3.5" />
-            </button>
-          </div>
+        <div className="w-7 h-7 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center shrink-0 mt-1 overflow-hidden">
+          <User className="w-4 h-4 text-slate-500" />
         </div>
       </div>
     );
@@ -233,7 +286,7 @@ function MessageBubble({ msg, isLatest }) {
     );
   }
 
-  // Agent message — clean, conversational, natural design
+  // Agent message — Base44 style: transparent bg, no bubble, avatar left
   const renderContent = (text) => {
     // Split into sections: steps, summary text, changed files
     const lines = text.split('\n');
@@ -315,8 +368,11 @@ function MessageBubble({ msg, isLatest }) {
       // Step lines with ✅ — already completed, show subtly
       if (line.trim().startsWith('✅')) {
         elements.push(
-          <div key={i} className="flex items-center gap-2 py-0.5 text-slate-500 dark:text-slate-400 text-sm">
-            {line}
+          <div key={i} className="flex items-start gap-1.5 py-0.5 min-w-0">
+            <span className="shrink-0 text-sm leading-5">✅</span>
+            <span className="text-slate-500 dark:text-slate-400 text-sm break-words min-w-0 flex-1 leading-5">
+              {line.trim().replace(/^✅\s*/, '')}
+            </span>
           </div>
         );
         return;
@@ -326,9 +382,9 @@ function MessageBubble({ msg, isLatest }) {
       const numberedMatch = line.match(/^\s*(\d+)\.\s+(.*)/);
       if (numberedMatch) {
         elements.push(
-          <div key={i} className="flex items-start gap-2 py-0.5">
+          <div key={i} className="flex items-start gap-2 py-0.5 min-w-0">
             <span className="shrink-0 text-slate-400 font-mono text-xs mt-0.5 w-4 text-right">{numberedMatch[1]}.</span>
-            <span className="text-slate-700 dark:text-slate-300">{formatInline(numberedMatch[2])}</span>
+            <span className="text-slate-700 dark:text-slate-300 break-words min-w-0 flex-1">{formatInline(numberedMatch[2])}</span>
           </div>
         );
         return;
@@ -338,9 +394,9 @@ function MessageBubble({ msg, isLatest }) {
       if (line.trim().startsWith('- ') || line.trim().startsWith('• ') || line.trim().startsWith('* ')) {
         const bulletContent = line.trim().replace(/^[-•*]\s*/, '');
         elements.push(
-          <div key={i} className="flex items-start gap-2 py-0.5">
-            <span className="shrink-0 mt-1 w-1.5 h-1.5 rounded-full bg-slate-400 dark:bg-slate-500" />
-            <span className="text-slate-700 dark:text-slate-300">{formatInline(bulletContent)}</span>
+          <div key={i} className="flex items-start gap-2 py-0.5 min-w-0">
+            <span className="shrink-0 mt-1.5 w-1.5 h-1.5 rounded-full bg-slate-400 dark:bg-slate-500" />
+            <span className="text-slate-700 dark:text-slate-300 break-words min-w-0 flex-1">{formatInline(bulletContent)}</span>
           </div>
         );
         return;
@@ -355,7 +411,7 @@ function MessageBubble({ msg, isLatest }) {
 
       // Normal text — conversation style
       elements.push(
-        <div key={i} className="py-0.5 text-slate-700 dark:text-slate-300">{formatInline(line)}</div>
+        <div key={i} className="py-0.5 text-slate-700 dark:text-slate-300 break-words">{formatInline(line)}</div>
       );
     });
 
@@ -363,20 +419,45 @@ function MessageBubble({ msg, isLatest }) {
   };
 
   return (
-    <div className="flex flex-col px-4 py-4 w-full animate-in fade-in duration-300 border-b border-slate-100 dark:border-[#1c2128]/50 last:border-0">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2.5">
-          <div className="w-6 h-6 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center shrink-0 shadow-sm shadow-orange-500/20">
-            <Sparkles className="w-3.5 h-3.5 text-white" />
-          </div>
-          <span className="font-semibold text-slate-800 dark:text-slate-200 text-[13px]">Base44</span>
-        </div>
-        <button className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-1 rounded hover:bg-slate-100 dark:hover:bg-white/[0.04] transition-colors">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
-        </button>
+    <div className="flex items-start gap-3 px-4 py-4 w-full animate-in fade-in duration-300">
+      <div className="w-7 h-7 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center shrink-0 mt-0.5 shadow-sm shadow-orange-500/20">
+        <Sparkles className="w-3.5 h-3.5 text-white" />
       </div>
-      <div className="text-[13px] leading-relaxed text-slate-700 dark:text-slate-300 pl-[34px]">
-        {renderContent(msg.content)}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center justify-between mb-2">
+          <span className="font-semibold text-slate-800 dark:text-slate-200 text-[13px]">Lucid AI</span>
+          <button className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 p-1 rounded hover:bg-slate-100 dark:hover:bg-white/[0.04] transition-colors">
+            <MoreHorizontal className="w-4 h-4" />
+          </button>
+        </div>
+        {msg.content && (
+          <div className="text-[14px] leading-relaxed text-slate-700 dark:text-slate-300">
+            {renderContent(msg.content)}
+          </div>
+        )}
+
+        {/* ── File-write pills — Base44 style ── */}
+        {msg.fileWrites?.length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-3">
+            {msg.fileWrites.map((fw, i) => {
+              const fname = fw.filename.split('/').pop();
+              const label = fw.action === 'edit' ? 'Editing' : fw.action === 'multiedit' ? 'Editing' : 'Writing';
+              return (
+                <span
+                  key={i}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 dark:bg-slate-800 rounded-lg text-[12px] font-medium text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700/60"
+                >
+                  <FileText className="w-3 h-3 text-slate-400 shrink-0" />
+                  {label} <span className="text-slate-400 dark:text-slate-500">{fname}</span>
+                </span>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="mt-2 text-[11px] text-slate-400 dark:text-slate-500">
+          {relativeTime(msg.ts)}
+        </div>
       </div>
     </div>
   );
@@ -530,12 +611,21 @@ function ConversationPageInner({ params }) {
   // ── Auth token for WebSocket ────────────────────────────
   const [token, setToken] = useState('');
   const [gitToken, setGitToken] = useState('');
+  const [userName, setUserName] = useState('');
 
   useEffect(() => {
     fetch('/api/agent/token')
       .then((r) => r.json())
       .then((d) => { if (d.token) setToken(d.token); })
       .catch(() => {});
+    // Get user name for header subtitle
+    const supabase = getSupabaseBrowserClient();
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) {
+        const name = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || '';
+        setUserName(name.split(' ')[0]); // First name only
+      }
+    });
   }, []);
 
   // Load git token from integrations — runs in PARALLEL, not blocked by conversation
@@ -598,8 +688,10 @@ function ConversationPageInner({ params }) {
     messages,
     terminalLogs,
     files,
+    setFiles,
     error,
     sendMessage,
+    startSession,
     isReady,
     isPreparing,
     stopSession,
@@ -631,9 +723,13 @@ function ConversationPageInner({ params }) {
     if (previewUrl && !repoInfo.vercelUrl) {
       setRepoInfo(prev => ({ ...prev, vercelUrl: previewUrl }));
     }
-  }, [previewUrl]);
+  // repoInfo.vercelUrl must be in deps — otherwise the condition reads a stale capture
+  // and can overwrite a deployUrl that arrived earlier.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewUrl, repoInfo.vercelUrl]);
 
   // ── Layout state ────────────────────────────────────────
+  const [chatOpen, setChatOpen] = useState(true);
   const [chatInput, setChatInput] = useState('');
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [showToolsMenu, setShowToolsMenu] = useState(false);
@@ -646,6 +742,7 @@ function ConversationPageInner({ params }) {
   const [figmaUrl, setFigmaUrl] = useState('');
   const [showExportModal, setShowExportModal] = useState(false);
   const [chatMode, setChatMode] = useState('edit'); // 'edit' or 'discuss'
+  const [editedFileContent, setEditedFileContent] = useState(null); // Track unsaved edits
   const fileInputRef = useRef(null);
   const videoInputRef = useRef(null);
   const toolsMenuRef = useRef(null);
@@ -657,33 +754,63 @@ function ConversationPageInner({ params }) {
     }
   }, [savedMessages, setInitialMessages]);
 
+  // ── Fetch file tree from GitLab when returning to an existing project ──
+  // If the WS hasn't sent a file_tree yet but we have a repo_name, fetch from GitLab.
+  const fileTreeFetched = useRef(false);
+  useEffect(() => {
+    if (fileTreeFetched.current) return;
+    if (files.length > 0) { fileTreeFetched.current = true; return; }
+    if (!conversation?.repo_name) return;
+
+    fileTreeFetched.current = true;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/gitlab/tree?repo=${encodeURIComponent(conversation.repo_name)}&ref=${encodeURIComponent(conversation.branch || 'main')}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (data.files && data.files.length > 0 && files.length === 0) {
+            // Inject into the hook's files state
+            if (typeof setFiles === 'function') setFiles(data.files);
+          }
+        }
+      } catch (err) {
+        console.warn('[workspace] GitLab tree fetch failed:', err);
+      }
+    })();
+  }, [conversation?.repo_name, conversation?.branch, files.length]);
+
   // ── Auto-start wizard task when workspace becomes ready ──
   // NOTE: For wizard mode, the task is now sent in the WebSocket handshake
-  // (via the `task` prop to useAgentSession). This effect is kept as a
-  // fallback for edge cases where the handshake task wasn't received.
+  // (via the `task` prop to useAgentSession). This effect is kept ONLY as a
+  // safety net — the handshake path is the primary flow.
   const wizardAutoStarted = useRef(isWizardMode); // Already started if wizard mode
   useEffect(() => {
-    if (status !== 'ready' || wizardAutoStarted.current) return;
+    if (wizardAutoStarted.current) return;
 
-    // Double-check: if wizard task was passed in handshake, skip
+    // If wizard task was passed in handshake, just mark as started
     if (wizardTask) {
       wizardAutoStarted.current = true;
       return;
     }
 
-    // Fallback: check sessionStorage (shouldn't happen in normal flow)
-    try {
-      const key = `wizard_prompt_${conversationId}`;
-      const prompt = sessionStorage.getItem(key);
-      if (prompt) {
-        wizardAutoStarted.current = true;
-        sessionStorage.removeItem(key);
-        sessionStorage.removeItem(`wizard_meta_${conversationId}`);
-        sessionStorage.removeItem(`wizard_desc_${conversationId}`);
-        setTimeout(() => sendMessage(prompt), 300);
-      }
-    } catch (_) {}
-  }, [status, conversationId, sendMessage, wizardTask]);
+    // Fallback: check sessionStorage — only runs if handshake missed the task
+    if (status === 'ready') {
+      try {
+        const key = `wizard_prompt_${conversationId}`;
+        const prompt = sessionStorage.getItem(key);
+        if (prompt) {
+          wizardAutoStarted.current = true;
+          sessionStorage.removeItem(key);
+          sessionStorage.removeItem(`wizard_meta_${conversationId}`);
+          sessionStorage.removeItem(`wizard_desc_${conversationId}`);
+          // Use startSession instead of sendMessage to avoid duplicate chat messages
+          setTimeout(() => startSession(prompt), 300);
+        }
+      } catch (_) {}
+    }
+  }, [status, conversationId, startSession, wizardTask]);
 
   // ── Frontend save (guaranteed backup) ────────────────────
   // Backend also saves to chat_messages, but those saves can fail
@@ -698,10 +825,10 @@ function ConversationPageInner({ params }) {
     for (const msg of newMessages) {
       if (msg.fromHistory) continue;
 
-      if (msg.role === 'user' && msg.content) {
-        saveMessage(conversation.id, { role: 'user', content: msg.content });
-        saveChatMessage(conversationId, { role: 'user', content: msg.content });
-      }
+      // User messages are already saved in handleSend — skip them here to
+      // avoid writing duplicates (handleSend + this effect + backend = 3 copies).
+      if (msg.role === 'user') continue;
+
       if ((msg.role === 'agent' || msg.role === 'assistant') && msg.content) {
         saveMessage(conversation.id, { role: 'assistant', content: msg.content });
         saveChatMessage(conversationId, { role: 'assistant', content: msg.content });
@@ -726,21 +853,93 @@ function ConversationPageInner({ params }) {
   }, [status, conversationId, messages.length]);
 
   // ── 3-Panel IDE Layout State ─────────────────────────────
-  // rightPanel: null | 'build' | 'preview' | 'code' | 'terminal'
+  // rightPanel: 'preview' | 'dashboard' | 'code' | 'terminal'
   const [rightPanel, setRightPanel] = useState('preview');
   const [showFileExplorer, setShowFileExplorer] = useState(false);
+  const [panelOverrideEnabled, setPanelOverrideEnabled] = useState(true);
 
-  // Auto-show right panel with 'build' tab during generation
+  // ── Building screen latch ─────────────────────────────────
+  // Prevents two flicker bugs:
+  //   1. "Building" shown during `idle` for existing projects (cold reconnect)
+  //   2. Flash to "Preview Not Available" during the brief `ready` window
+  //      between workspace init and first `running` state for wizard projects.
+  //
+  // Rules:
+  //   - Always starts true — the workspace is always connecting on page load
+  //   - Debounce 1.2s before hiding — absorbs the preparing→ready→running gap
+  //   - For wizard: stays true through the whole build
+  //   - For existing: clears ~1.2s after status reaches 'ready' with no active task
+  const [buildingActive, setBuildingActive] = useState(true);
+  const buildingTimerRef = useRef(null);
+
+  useEffect(() => {
+    if (buildingTimerRef.current) {
+      clearTimeout(buildingTimerRef.current);
+      buildingTimerRef.current = null;
+    }
+
+    // "Actively building" means the agent is running, workspace is initializing,
+    // OR at least one phase is still in progress. Completed phases (status === 'done')
+    // do NOT count — they are never cleared from state, so checking phases.length > 0
+    // would keep the building screen stuck forever after the task finishes.
+    //
+    // connecting/preparing applies to ALL modes (not just wizard) so the user
+    // always sees a progress visual instead of "Preview Not Available" on load.
+    const hasActivePhase = phases.some(p => p.status === 'active');
+    const isActivelyBuilding =
+      status === 'running' ||
+      hasActivePhase ||
+      status === 'connecting' ||
+      status === 'cloning' ||
+      status === 'preparing';
+
+    if (isActivelyBuilding) {
+      setBuildingActive(true);
+    } else if (
+      // Don't start the debounce-hide during initial idle — wait for at least
+      // one real connection attempt before hiding the building screen.
+      status !== 'idle'
+    ) {
+      // Debounce: absorbs the brief `ready` window between workspace init and task start
+      buildingTimerRef.current = setTimeout(() => {
+        setBuildingActive(false);
+        buildingTimerRef.current = null;
+      }, 1200);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, phases]);
+
+  // Cleanup latch timer on unmount
+  useEffect(() => () => {
+    if (buildingTimerRef.current) clearTimeout(buildingTimerRef.current);
+  }, []);
+
+  // Auto-show right panel during generation — keep preview only if the user
+  // has not selected a different panel manually.
   const prevStatusForPanel = useRef(null);
   useEffect(() => {
     if (prevStatusForPanel.current === status) return;
     prevStatusForPanel.current = status;
 
-    if (status === 'running' || status === 'preparing') {
-      setRightPanel('build');
+    // Show preview panel during initial workspace setup (cloning/preparing)
+    // so the full-page building animation is immediately visible.
+    if ((status === 'cloning' || status === 'preparing') && panelOverrideEnabled) {
+      if (rightPanel !== 'code') setRightPanel('preview');
+    }
+
+    // When clone completes for an existing project (non-wizard), switch to Code
+    // tab so the user can immediately see their cloned file tree.
+    // Wizard projects skip this — they go straight to 'running'.
+    if (status === 'ready' && !isWizardMode && panelOverrideEnabled) {
+      setRightPanel('code');
+    }
+
+    // Show preview + file explorer when agent is actively running a task.
+    if (status === 'running' && panelOverrideEnabled) {
+      if (rightPanel !== 'code') setRightPanel('preview');
       setShowFileExplorer(true);
     }
-  }, [status]);
+  }, [status, rightPanel, panelOverrideEnabled]);
 
   // Auto-switch to preview when build completes and vercelUrl is available
   useEffect(() => {
@@ -952,6 +1151,8 @@ function ConversationPageInner({ params }) {
   }, []);
 
   const handleChatScroll = (e) => {
+    // Prevent accidental horizontal scroll — reset it immediately
+    if (e.target.scrollLeft !== 0) e.target.scrollLeft = 0;
     const { scrollTop, scrollHeight, clientHeight } = e.target;
     const distFromBottom = scrollHeight - scrollTop - clientHeight;
     const isNearBottom = distFromBottom < 100;
@@ -962,33 +1163,57 @@ function ConversationPageInner({ params }) {
   // ── File select: load content from backend ──────────────
   const handleFileSelect = useCallback(async (path) => {
     setSelectedFile(path);
+    setEditedFileContent(null); // reset any unsaved edits
     setRightPanel('code');
     setFileLoading(true);
     setFileContent('');
 
-    if (!sessionId) {
-      setFileContent('// Session not connected — start a task first.');
-      setFileLoading(false);
-      return;
+    // ── Try 1: Read from active workspace session ──
+    if (sessionId) {
+      try {
+        const res = await fetch(
+          `/api/files/read?session_id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`
+        );
+        const data = await res.json();
+        if (res.ok && data.content) {
+          setFileContent(data.content);
+          setFileLoading(false);
+          return;
+        }
+      } catch {
+        // session API failed — try GitLab fallback below
+      }
     }
 
-    try {
-      const res = await fetch(
-        `/api/files/read?session_id=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`
-      );
-      const data = await res.json();
-      if (res.ok) {
-        setFileContent(data.content || '');
-      } else {
-        const errorMsg = data.detail || data.error || 'Could not load file';
-        setFileContent(`// Workspace Offline\n// Error: ${errorMsg}\n\n// The active development container for this project has spun down.\n// Your generated code is completely safe.\n\n// -> Click 'Export' in the top right to download the complete source code.\n// -> Or provide your VERCEL_TOKEN to the backend to enable Live Previews.`);
+    // ── Try 2: Read from GitLab repo ──
+    const repoName = conversation?.repo_name;
+    if (repoName) {
+      try {
+        const gitlabPath = encodeURIComponent(path);
+        const res = await fetch(
+          `/api/gitlab/file?repo=${encodeURIComponent(repoName)}&path=${gitlabPath}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (data.content) {
+            // GitLab returns base64 encoded content
+            const decoded = data.encoding === 'base64'
+              ? atob(data.content)
+              : data.content;
+            setFileContent(decoded);
+            setFileLoading(false);
+            return;
+          }
+        }
+      } catch {
+        // GitLab fallback also failed
       }
-    } catch {
-      setFileContent('// Failed to load file content');
-    } finally {
-      setFileLoading(false);
     }
-  }, [sessionId]);
+
+    // ── Fallback: file not available ──
+    setFileContent(`// File content not available yet\n// Path: ${path}\n\n// The file will be viewable once the build completes\n// and code is pushed to the repository.`);
+    setFileLoading(false);
+  }, [sessionId, conversation?.repo_name]);
 
   // ── Render ─────────────────────────────────────────────
   return (
@@ -1027,54 +1252,63 @@ function ConversationPageInner({ params }) {
       )}
 
       {/* ════════════════════════════════════════════════
-          TOP HEADER BAR — Base44 style
+          TOP HEADER BAR — Base44 pixel-perfect
       ════════════════════════════════════════════════ */}
-      <header className="shrink-0 h-[60px] bg-white dark:bg-[#161b22] border-b border-slate-200 dark:border-[#2d333b] flex items-center px-4 z-20">
+      <header className="shrink-0 h-[52px] bg-white dark:bg-[#161b22] border-b border-slate-200 dark:border-[#2d333b] flex items-center px-4 z-20">
         
-        {/* Left: Logo + Project Name + Sidebar Toggles */}
-        <div className="flex items-center gap-4 flex-1">
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => window.history.back()}
-              className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 hover:bg-slate-100 dark:hover:bg-white/[0.06] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
-              title="Go Back"
-            >
-              <ArrowLeft className="w-4 h-4" />
-            </button>
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center shrink-0 shadow-sm shadow-orange-500/20 ml-1">
-              <Sparkles className="w-4 h-4 text-white" />
-            </div>
-            <div className="flex flex-col justify-center">
-              <div className="flex items-center gap-1.5">
-                <span className="text-[13px] font-bold text-slate-800 dark:text-white leading-tight truncate max-w-[150px]">
-                  {conversation?.title || 'Ember & Hearth'}
-                </span>
-              </div>
-              <span className="text-[11px] font-medium text-slate-400 dark:text-slate-500 leading-tight truncate max-w-[150px]">
-                Bakhriddin's Workspace Work...
-              </span>
-            </div>
+        {/* Left: Back + Logo + Title + Clock + Sidebar Toggle */}
+        <div className="flex items-center gap-2 min-w-0" style={{ flex: '0 0 auto' }}>
+          <button
+            onClick={() => window.history.back()}
+            className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors shrink-0"
+            title="Go Back"
+          >
+            <ArrowLeft className="w-4 h-4" />
+          </button>
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center shrink-0 shadow-sm shadow-orange-500/25">
+            <Sparkles className="w-4 h-4 text-white" />
           </div>
-
-          <div className="flex items-center ml-2 border-l border-slate-200 dark:border-[#2d333b] pl-3 gap-1">
-            <button className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors">
-              <History className="w-4 h-4" />
-            </button>
+          <div className="flex flex-col justify-center min-w-0 mr-1">
+            <span className="text-[13px] font-bold text-slate-900 dark:text-white leading-tight truncate max-w-[160px]">
+              {conversation?.title || wizardDesc || 'New Project'}
+            </span>
+            <span className="text-[11px] text-slate-400 dark:text-slate-500 leading-tight truncate max-w-[160px]">
+              {userName ? `${userName}'s Workspace W...` : 'AI Workspace'}
+            </span>
           </div>
+          <button className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors shrink-0">
+            <History className="w-4 h-4" />
+          </button>
+          {/* Sidebar toggle — |← icon (Base44 places it in left group) */}
+          <button
+            onClick={() => setChatOpen(!chatOpen)}
+            className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors shrink-0"
+            title={chatOpen ? 'Hide Chat' : 'Show Chat'}
+          >
+            {chatOpen ? (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="4" x2="3" y2="20"/><polyline points="11 8 7 12 11 16"/><line x1="7" y1="12" x2="21" y2="12"/></svg>
+            ) : (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="4" x2="3" y2="20"/><polyline points="13 8 17 12 13 16"/><line x1="7" y1="12" x2="17" y2="12"/></svg>
+            )}
+          </button>
         </div>
 
-        {/* Center: Tab Switcher (Preview | Dashboard | Code) */}
-        <div className="flex justify-center flex-1">
-          <div className="flex items-center bg-slate-100 dark:bg-[#21262d] rounded-[20px] p-[3px] border border-slate-200/60 dark:border-[#2d333b]">
+        {/* Center: Tab Switcher — Preview | Dashboard | Code + Split View */}
+        <div className="flex-1 flex items-center justify-center gap-2">
+          <div className="flex items-center bg-slate-100 dark:bg-[#21262d] rounded-xl p-[3px] border border-slate-200/80 dark:border-[#2d333b]">
             {[
-              { key: 'preview', label: 'Preview', hasLive: !!repoInfo.vercelUrl },
-              { key: 'code', label: 'Code', hasLive: false },
+              { key: 'preview', label: 'Preview' },
+              { key: 'dashboard', label: 'Dashboard' },
+              { key: 'code', label: 'Code' },
             ].map(tab => (
               <button
                 key={tab.key}
-                onClick={() => setRightPanel(rightPanel === tab.key ? 'preview' : tab.key)}
+                onClick={() => {
+                  setRightPanel(tab.key);
+                  setPanelOverrideEnabled(false);
+                }}
                 className={cn(
-                  "flex items-center gap-1.5 px-4 py-1.5 rounded-[18px] text-[13px] font-bold transition-all",
+                  "flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[13px] font-semibold transition-all",
                   rightPanel === tab.key
                     ? "bg-white dark:bg-[#2d333b] text-slate-900 dark:text-white shadow-sm"
                     : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-white"
@@ -1084,17 +1318,25 @@ function ConversationPageInner({ params }) {
               </button>
             ))}
           </div>
+
+          {/* Split view icon */}
+          <button
+            className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors"
+            title="Split View"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+          </button>
         </div>
 
         {/* Right: Actions */}
-        <div className="flex items-center justify-end flex-1 gap-1.5">
+        <div className="flex items-center gap-1" style={{ flex: '0 0 auto' }}>
           {/* Avatar Stack */}
           <div className="flex items-center -space-x-1 mr-1">
-            <div className="w-7 h-7 rounded-full bg-slate-200 border border-white dark:border-[#161b22] flex items-center justify-center overflow-hidden shrink-0">
-              <User className="w-4 h-4 text-slate-500" />
+            <div className="w-7 h-7 rounded-full bg-emerald-100 dark:bg-emerald-900/30 border-2 border-white dark:border-[#161b22] flex items-center justify-center overflow-hidden shrink-0">
+              <User className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
             </div>
-            <div className="w-7 h-7 rounded-full bg-slate-100 dark:bg-slate-800 border border-white dark:border-[#161b22] flex items-center justify-center z-10 text-slate-500 cursor-pointer shadow-sm shrink-0">
-              <Plus className="w-3.5 h-3.5" />
+            <div className="w-7 h-7 rounded-full bg-slate-100 dark:bg-slate-800 border-2 border-white dark:border-[#161b22] flex items-center justify-center z-10 text-slate-400 cursor-pointer shrink-0 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors">
+              <Plus className="w-3 h-3" />
             </div>
           </div>
 
@@ -1102,18 +1344,18 @@ function ConversationPageInner({ params }) {
             <MoreHorizontal className="w-4 h-4" />
           </button>
           
-          <button className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors mr-1">
+          <button className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors">
             <Github className="w-4 h-4" />
           </button>
 
-          <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-[18px] text-[12px] font-bold text-orange-500 bg-orange-50 dark:bg-orange-500/10 border border-orange-200 dark:border-orange-500/20 hover:bg-orange-100 dark:hover:bg-orange-500/20 transition-all mr-1">
+          <button className="flex items-center gap-1.5 px-3 py-1 rounded-full text-[12px] font-bold text-orange-500 bg-orange-50 dark:bg-orange-500/10 border border-orange-200 dark:border-orange-500/20 hover:bg-orange-100 dark:hover:bg-orange-500/20 transition-all ml-1">
             <Diamond className="w-3.5 h-3.5 fill-current" />
             30% off
           </button>
 
           <button
             onClick={() => setShowExportModal(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-[18px] text-[13px] font-bold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-all border border-transparent mr-0.5"
+            className="px-3 py-1 rounded-full text-[13px] font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-all ml-0.5"
             title="Export Code"
           >
             Export
@@ -1124,10 +1366,10 @@ function ConversationPageInner({ params }) {
               if (repoInfo.vercelUrl) window.open(repoInfo.vercelUrl, '_blank');
             }}
             className={cn(
-              "flex items-center px-4 py-1.5 rounded-[18px] text-[13px] font-bold shadow-sm transition-all",
+              "flex items-center px-4 py-1.5 rounded-full text-[13px] font-semibold transition-all ml-0.5",
               repoInfo.vercelUrl 
-                ? "bg-slate-900 text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100" 
-                : "bg-slate-200 text-slate-400 dark:bg-slate-800 dark:text-slate-500 cursor-not-allowed"
+                ? "bg-slate-900 text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-100 shadow-sm" 
+                : "bg-slate-200 text-slate-400 dark:bg-slate-700 dark:text-slate-500 cursor-not-allowed"
             )}
             title="Publish to Vercel"
           >
@@ -1143,12 +1385,17 @@ function ConversationPageInner({ params }) {
 
 
 
-      {/* ══ CHAT PANEL (left, 380px) ══ */}
-      <div className="w-[380px] shrink-0 flex flex-col min-w-0 border-r border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117]">
+      {/* ══ CHAT PANEL (left, collapsible with smooth animation) ══ */}
+      <div
+        className={cn(
+          "shrink-0 flex flex-col min-w-0 border-r border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] transition-all duration-300 ease-in-out overflow-hidden",
+          chatOpen ? "w-[380px]" : "w-0 border-r-0"
+        )}
+      >
 
         {/* Chat Stream */}
         <div
-          className="flex-1 overflow-y-auto px-3 py-4 bg-[#f8f9fb] dark:bg-[#0d1117] custom-scrollbar"
+          className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-4 bg-[#f8f9fb] dark:bg-[#0d1117] custom-scrollbar"
           ref={chatContainerRef}
           onScroll={handleChatScroll}
         >
@@ -1185,44 +1432,16 @@ function ConversationPageInner({ params }) {
               </div>
             )}
 
-            {/* Welcome State — only after loading completes and no messages/phases exist */}
-            {!convLoading && messages.length === 0 && phases.length === 0 && status !== 'running' && status !== 'preparing' && status !== 'connecting' && (
-              <div className="flex flex-col items-center justify-center py-24 text-center">
-                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-blue-600 flex items-center justify-center mb-6 shadow-lg shadow-violet-500/20 mx-auto">
-                  <Sparkles className="w-7 h-7 text-white" />
+            {/* Empty chat state — shown after workspace is ready with no history.
+                Clean Base44-style: no splash card, just a subtle prompt. */}
+            {!convLoading && messages.length === 0 && status === 'ready' && (
+              <div className="flex flex-col items-center justify-center py-20 text-center px-6">
+                <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center mb-4 shadow-sm shadow-orange-500/20">
+                  <Sparkles className="w-5 h-5 text-white" />
                 </div>
-                <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-2">
-                  What shall we build?
-                </h2>
-                <p className="text-sm text-slate-400 dark:text-slate-500 mb-8 max-w-md">
-                  Describe your project below, or use the setup wizard for a guided experience.
+                <p className="text-[14px] font-medium text-slate-500 dark:text-slate-400">
+                  Workspace ready. What would you like to build?
                 </p>
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => setShowWizard(true)}
-                    className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-violet-600 to-blue-600 text-white rounded-xl text-sm font-bold hover:from-violet-700 hover:to-blue-700 shadow-sm shadow-violet-600/20 transition-all active:scale-[0.97]"
-                  >
-                    <Sparkles className="w-4 h-4" />
-                    Open Project Wizard
-                  </button>
-                </div>
-                <div className="grid grid-cols-2 gap-3 max-w-lg mt-8">
-                  {[
-                    { icon: '🌐', label: 'Simple HTML & CSS site' },
-                    { icon: '⚛', label: 'React dashboard app' },
-                    { icon: '▲', label: 'Next.js landing page' },
-                    { icon: '📦', label: 'REST API with Express' },
-                  ].map((suggestion) => (
-                    <button
-                      key={suggestion.label}
-                      onClick={() => setChatInput(suggestion.label)}
-                      className="flex items-center gap-3 px-5 py-3 bg-white dark:bg-white/[0.04] border border-slate-200 dark:border-slate-700/60 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-300 hover:border-violet-300 dark:hover:border-violet-500/50 hover:bg-violet-50 dark:hover:bg-violet-500/5 transition-all"
-                    >
-                      <span className="text-base">{suggestion.icon}</span>
-                      {suggestion.label}
-                    </button>
-                  ))}
-                </div>
               </div>
             )}
 
@@ -1233,44 +1452,75 @@ function ConversationPageInner({ params }) {
               </div>
             ))}
 
+            {/* Workspace setup card — cloning / preparing / ready (all-done) / early running */}
+            {(() => {
+              const isCloning   = status === 'cloning' || status === 'preparing' || (isWizardMode && status === 'connecting');
+              const noAgentMsgs = messages.filter(m => !m.fromHistory && m.role === 'agent').length === 0;
+              // Show "all done" step at ready, and keep showing during the brief window
+              // when running has started but no task phases have arrived yet.
+              const isReadyState   = status === 'ready' && noAgentMsgs;
+              const isEarlyRunning = status === 'running' && phases.length === 0 && noAgentMsgs;
+              if (!isCloning && !isReadyState && !isEarlyRunning) return null;
 
-            {/* Thinking indicator — shown while agent processes before first phase */}
-            {phases.length === 0 && status === 'running' && (
-              <div className="flex flex-col px-4 py-4 w-full animate-in fade-in duration-300">
-                <div className="flex items-center mb-3 gap-2.5">
-                  <div className="w-6 h-6 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center shrink-0 shadow-sm shadow-orange-500/20">
-                    <Sparkles className="w-3.5 h-3.5 text-white" />
-                  </div>
-                  <span className="font-semibold text-slate-800 dark:text-slate-200 text-[13px]">Base44</span>
-                </div>
-                <div className="pl-[34px] flex items-center gap-3">
-                  <div className="flex gap-1.5">
-                    <div className="w-1.5 h-1.5 rounded-full bg-orange-500/80 animate-bounce" style={{ animationDelay: '0ms' }} />
-                    <div className="w-1.5 h-1.5 rounded-full bg-orange-500/80 animate-bounce" style={{ animationDelay: '150ms' }} />
-                    <div className="w-1.5 h-1.5 rounded-full bg-orange-500/80 animate-bounce" style={{ animationDelay: '300ms' }} />
-                  </div>
-                  <span className="text-[13px] text-slate-500 dark:text-slate-400">
-                    Thinking and analyzing your request...
-                  </span>
-                </div>
-              </div>
-            )}
+              const allDone = isReadyState || isEarlyRunning;
+              const wsSteps = [
+                { label: 'Connected to workspace', done: true, active: false },
+                {
+                  label: allDone
+                    ? 'Repository cloned'
+                    : status === 'cloning' ? 'Cloning repository…' : 'Preparing environment…',
+                  done:   allDone,
+                  active: !allDone,
+                },
+                { label: 'Ready for your task', done: allDone, active: false },
+              ];
 
-            {/* Preparing/connecting indicator (no steps yet) */}
-            {steps.length === 0 && phases.length === 0 && (status === 'preparing' || status === 'connecting') && (
-              <div className="flex flex-col px-4 py-4 w-full animate-in fade-in duration-300">
-                <div className="flex items-center mb-3 gap-2.5">
-                  <div className="w-6 h-6 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center shrink-0 shadow-sm shadow-orange-500/20">
-                    <Sparkles className="w-3.5 h-3.5 text-white" />
+              return (
+                <div className="px-4 py-3 animate-in fade-in duration-300">
+                  <div className="flex items-start gap-3 p-4 rounded-2xl border border-slate-100 dark:border-[#2d333b] bg-white dark:bg-[#161b22] shadow-sm">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center shrink-0 shadow-sm shadow-orange-500/20 mt-0.5">
+                      <Sparkles className="w-4 h-4 text-white" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[13px] font-semibold text-slate-800 dark:text-slate-100 mb-2.5">
+                        Setting up workspace
+                      </p>
+                      <div className="space-y-2">
+                        {wsSteps.map((step, i) => (
+                          <div key={i} className="flex items-center gap-2.5">
+                            {step.done ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                            ) : step.active ? (
+                              <Loader2 className="w-3.5 h-3.5 text-orange-500 animate-spin shrink-0" />
+                            ) : (
+                              <div className="w-3 h-3 rounded-full border-2 border-slate-200 dark:border-slate-700 shrink-0" />
+                            )}
+                            <span className={cn(
+                              "text-[12px] leading-tight",
+                              step.done   ? "text-slate-400 dark:text-slate-500" :
+                              step.active ? "text-slate-700 dark:text-slate-200 font-medium" :
+                                            "text-slate-400 dark:text-slate-600"
+                            )}>
+                              {step.label}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                  <span className="font-semibold text-slate-800 dark:text-slate-200 text-[13px]">Base44</span>
                 </div>
-                <div className="pl-[34px] flex items-center gap-3">
-                  <Loader2 className="w-3.5 h-3.5 text-orange-500 animate-spin" />
-                  <span className="text-[13px] text-slate-500 dark:text-slate-400">
-                    {status === 'preparing' ? 'Preparing workspace…' : 'Connecting…'}
-                  </span>
+              );
+            })()}
+
+            {/* Thinking indicator — only when agent is actively running a task */}
+            {status === 'running' && (
+              <div className="flex items-center gap-3 px-4 py-3 w-full animate-in fade-in duration-300">
+                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center shrink-0 shadow-sm shadow-orange-500/20">
+                  <Sparkles className="w-3.5 h-3.5 text-white" />
                 </div>
+                <span className="text-[13px] text-slate-500 dark:text-slate-400 flex items-center gap-0.5">
+                  thinking…<span className="animate-pulse text-slate-800 dark:text-slate-200 font-light">▎</span>
+                </span>
               </div>
             )}
 
@@ -1278,36 +1528,40 @@ function ConversationPageInner({ params }) {
           </div>
         </div>
 
-        {/* ── Suggestion Chips (Base44 style) ── */}
-        {messages.length > 0 && status !== 'running' && status !== 'preparing' && (
-          <div className="shrink-0 px-3 py-2 border-t border-slate-100 dark:border-[#1c2128] bg-white dark:bg-[#0d1117]">
-            <div className="flex items-center gap-1.5 mb-2">
-              <Lightbulb className="w-3 h-3 text-slate-400" />
-              <span className="text-[11px] font-semibold text-slate-400 dark:text-slate-500">Suggestions</span>
+        {/* ── Suggestion Chips (Base44 style — pinned above input, never jumps) ── */}
+        {messages.length > 0 && (
+          <div className="shrink-0 px-4 py-2.5 bg-white dark:bg-[#0d1117] border-t border-slate-100 dark:border-[#1c2128] relative">
+            {/* "Latest messages" button — floats above suggestions */}
+            {showScrollBtn && (
+              <div className="absolute -top-8 left-1/2 -translate-x-1/2 z-10">
+                <button onClick={() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })}
+                  className="bg-white dark:bg-[#161b22] text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-[#2d333b] px-3 py-1 rounded-full text-[11px] font-semibold shadow-md flex items-center gap-1.5 hover:bg-slate-50 dark:hover:bg-[#21262d] transition-colors">
+                  <ArrowDown className="w-3 h-3" /> Latest messages
+                </button>
+              </div>
+            )}
+            <div className="flex items-center gap-2 mb-2">
+              <Lightbulb className="w-3.5 h-3.5 text-slate-400" />
+              <span className="text-[12px] font-medium text-slate-400 dark:text-slate-500">Suggestions</span>
             </div>
-            <div className="flex flex-wrap gap-1.5">
-              {['Add Admin Dashboard', 'Build Dedicated Menu', 'Improve Mobile Design'].map(s => (
-                <button key={s} type="button" onClick={() => setChatInput(s)}
-                  className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-[#2d333b] text-[11px] font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-white/[0.04] hover:border-slate-300 dark:hover:border-[#444c56] transition-colors"
-                >{s}</button>
+            <div className="flex items-center overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
+              {['Add Admin Dashboard', 'Build Dedicated Menu', 'Improve Mobile Design'].map((s, i) => (
+                <div key={s} className="flex items-center shrink-0">
+                  {i > 0 && <div className="w-px h-4 bg-slate-200 dark:bg-slate-700 mx-3" />}
+                  <button type="button" onClick={() => setChatInput(s)}
+                    className="text-[13px] font-medium text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors whitespace-nowrap"
+                  >{s}</button>
+                </div>
               ))}
             </div>
           </div>
         )}
 
-        {/* ── Bottom Input Bar (Base44 style) ── */}
-        <div className="shrink-0 bg-white dark:bg-[#0d1117] border-t border-slate-200 dark:border-[#1c2128]">
-          {showScrollBtn && (
-            <div className="flex justify-center -mt-3 relative z-10">
-              <button onClick={() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })}
-                className="bg-slate-800/80 text-white px-3 py-1 rounded-full text-[10px] font-semibold backdrop-blur-md shadow-lg flex items-center gap-1.5 hover:bg-slate-900 transition-colors">
-                <ArrowDown className="w-3 h-3" /> Latest messages
-              </button>
-            </div>
-          )}
+        {/* ── Bottom Input Bar (Base44 pixel-perfect) ── */}
+        <div className="shrink-0 bg-white dark:bg-[#0d1117] px-3 pb-3">
 
           {attachedImages.length > 0 && (
-            <div className="px-3 pt-2">
+            <div className="mb-2">
               <div className="flex gap-2 flex-wrap">
                 {attachedImages.map((img, i) => (
                   <div key={i} className="relative group flex items-center gap-2 bg-slate-50 dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-lg px-2 py-1.5">
@@ -1323,57 +1577,78 @@ function ConversationPageInner({ params }) {
           )}
 
           <form onSubmit={handleSend} className="relative">
-            {(isPreparing || status === 'running') && (
-              <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/80 dark:bg-[#0d1117]/85 backdrop-blur-sm">
-                <div className="flex items-center gap-2">
-                  <Loader2 className={cn("w-4 h-4 animate-spin", isPreparing ? "text-amber-500" : "text-blue-500")} />
-                  <span className="text-[12px] font-medium text-slate-500">{isPreparing ? 'Preparing workspace…' : 'Agent working…'}</span>
-                </div>
-              </div>
-            )}
-
-            <div className="px-3 py-2">
+            {/* Input container — always enabled (Base44 style) */}
+            <div className="border border-slate-200 dark:border-[#2d333b] rounded-2xl bg-white dark:bg-[#161b22] overflow-hidden">
               <textarea value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={handleKeyDown}
-                placeholder={isPreparing ? "Waiting for workspace…" : status === 'running' ? "Agent is working…" : "What would you like to change?"}
-                disabled={isPreparing || status === 'running'}
-                className={cn("w-full px-0 py-1.5 min-h-[32px] max-h-[120px] outline-none text-[13px] text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 resize-none font-medium leading-relaxed bg-transparent",
-                  (isPreparing || status === 'running') && "opacity-40 cursor-not-allowed pointer-events-none"
-                )} rows={1} />
+                placeholder="What would you like to change?"
+                className="w-full px-4 pt-4 pb-8 min-h-[80px] max-h-[160px] outline-none text-[14px] text-slate-800 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 resize-none font-medium leading-relaxed bg-transparent"
+                rows={2} />
             </div>
 
-            {/* Bottom toolbar: [⚙️] [+] [✏️ Edit] [💬 Discuss] ··· [🎙] [→] */}
-            <div className="flex items-center justify-between px-3 pb-2.5">
+            {/* Toolbar below the input box */}
+            <div className="flex items-center justify-between px-1 pt-2.5">
               <div className="flex items-center gap-1">
+                {/* Settings gear */}
                 <div className="relative" ref={toolsMenuRef}>
                   <button type="button" onClick={() => { setShowToolsMenu(!showToolsMenu); setShowFigmaInput(false); }}
-                    className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors" title="Tools">
-                    <Settings className="w-4 h-4" />
+                    className="p-2 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors" title="Tools">
+                    <Settings className="w-5 h-5" />
                   </button>
                   {showToolsMenu && (
                     <div className="absolute bottom-full left-0 mb-2 w-56 bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-xl shadow-2xl overflow-hidden z-30 animate-in fade-in slide-in-from-bottom-2 duration-200">
                       <div className="py-1">
-                        <button type="button" onClick={() => { fileInputRef.current?.click(); setShowToolsMenu(false); }} className="w-full flex items-center gap-3 px-3 py-2 text-[12px] text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04] text-left"><Paperclip className="w-3.5 h-3.5 text-slate-400" /><span className="font-medium">Add files or photos</span></button>
-                        <button type="button" onClick={() => { videoInputRef.current?.click(); setShowToolsMenu(false); }} className="w-full flex items-center gap-3 px-3 py-2 text-[12px] text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04] text-left"><Video className="w-3.5 h-3.5 text-slate-400" /><span className="font-medium">Add video</span></button>
-                        <button type="button" onClick={() => setShowFigmaInput(!showFigmaInput)} className="w-full flex items-center gap-3 px-3 py-2 text-[12px] text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04] text-left"><Layers className="w-3.5 h-3.5 text-slate-400" /><span className="font-medium">Paste Figma link</span></button>
+                        <button type="button" onClick={() => { fileInputRef.current?.click(); setShowToolsMenu(false); }} className="w-full flex items-center gap-3 px-3 py-2.5 text-[13px] text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04] text-left"><Paperclip className="w-4 h-4 text-slate-400" /><span className="font-medium">Add files or photos</span></button>
+                        <button type="button" onClick={() => { videoInputRef.current?.click(); setShowToolsMenu(false); }} className="w-full flex items-center gap-3 px-3 py-2.5 text-[13px] text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04] text-left"><Video className="w-4 h-4 text-slate-400" /><span className="font-medium">Add video</span></button>
+                        <button type="button" onClick={() => setShowFigmaInput(!showFigmaInput)} className="w-full flex items-center gap-3 px-3 py-2.5 text-[13px] text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04] text-left"><Layers className="w-4 h-4 text-slate-400" /><span className="font-medium">Paste Figma link</span></button>
                       </div>
                       <div className="border-t border-slate-100 dark:border-[#2d333b]" />
                       <div className="py-1">
-                        <button type="button" onClick={() => setWebSearchEnabled(!webSearchEnabled)} className="w-full flex items-center gap-3 px-3 py-2 text-[12px] text-left hover:bg-slate-50 dark:hover:bg-white/[0.04]"><Globe className={cn("w-3.5 h-3.5", webSearchEnabled ? "text-blue-500" : "text-slate-400")} /><span className={cn("flex-1 font-medium", webSearchEnabled ? "text-blue-600 dark:text-blue-400" : "text-slate-700 dark:text-slate-300")}>Web search</span>{webSearchEnabled && <Check className="w-3.5 h-3.5 text-blue-500" />}</button>
+                        <button type="button" onClick={() => setWebSearchEnabled(!webSearchEnabled)} className="w-full flex items-center gap-3 px-3 py-2.5 text-[13px] text-left hover:bg-slate-50 dark:hover:bg-white/[0.04]"><Globe className={cn("w-4 h-4", webSearchEnabled ? "text-blue-500" : "text-slate-400")} /><span className={cn("flex-1 font-medium", webSearchEnabled ? "text-blue-600 dark:text-blue-400" : "text-slate-700 dark:text-slate-300")}>Web search</span>{webSearchEnabled && <Check className="w-4 h-4 text-blue-500" />}</button>
                       </div>
                     </div>
                   )}
                 </div>
-                <button type="button" onClick={() => fileInputRef.current?.click()} className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors" title="Add files"><Plus className="w-4 h-4" /></button>
-                <div className="h-4 w-px bg-slate-200 dark:bg-[#2d333b] mx-0.5" />
-                <button type="button" onClick={() => setChatMode('edit')} className={cn("flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all", chatMode === 'edit' ? "bg-slate-100 dark:bg-[#21262d] text-slate-800 dark:text-white border border-slate-200 dark:border-[#2d333b]" : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300")}><Pencil className="w-3 h-3" />Edit</button>
-                <button type="button" onClick={() => setChatMode('discuss')} className={cn("flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all", chatMode === 'discuss' ? "bg-slate-100 dark:bg-[#21262d] text-slate-800 dark:text-white border border-slate-200 dark:border-[#2d333b]" : "text-slate-400 hover:text-slate-600 dark:hover:text-slate-300")}><MessageCircle className="w-3 h-3" />Discuss</button>
-              </div>
-              <div className="flex items-center gap-1">
-                <button type="button" className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors" title="Voice input"><Mic className="w-4 h-4" /></button>
-                <button type="submit" disabled={(!chatInput.trim() && attachedImages.length === 0) || isPreparing || status === 'running'}
-                  className={cn("p-2 rounded-full transition-all", (chatInput.trim() || attachedImages.length > 0) && !isPreparing && status !== 'running' ? "bg-orange-500 text-white shadow-md shadow-orange-500/20 hover:bg-orange-600 hover:scale-105" : "bg-slate-100 dark:bg-[#21262d] text-slate-300 dark:text-slate-600 cursor-not-allowed")}>
-                  <Send className="w-3.5 h-3.5" />
+
+                {/* Plus button */}
+                <button type="button" onClick={() => fileInputRef.current?.click()} className="p-2 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors" title="Add files"><Plus className="w-5 h-5" /></button>
+
+                {/* Separator */}
+                <div className="h-5 w-px bg-slate-200 dark:bg-[#2d333b] mx-1" />
+
+                {/* Discuss button — Base44 style (only Discuss, no separate Edit) */}
+                <button type="button" onClick={() => setChatMode(chatMode === 'discuss' ? 'edit' : 'discuss')}
+                  className={cn("flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[13px] font-semibold transition-all border",
+                    chatMode === 'discuss'
+                      ? "bg-slate-100 dark:bg-[#21262d] text-slate-800 dark:text-white border-slate-200 dark:border-[#2d333b]"
+                      : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 border-transparent hover:bg-slate-50 dark:hover:bg-white/[0.04]"
+                  )}>
+                  <MessageCircle className="w-4 h-4" />Discuss
                 </button>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                {/* Mic button */}
+                <button type="button" className="p-2 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors" title="Voice input"><Mic className="w-5 h-5" /></button>
+
+                {/* Send / Stop button — Base44 style: always filled dark */}
+                {(status === 'running' || isPreparing) ? (
+                  <button type="button" onClick={stopSession}
+                    className="p-2.5 rounded-xl bg-slate-800 dark:bg-white text-white dark:text-slate-900 shadow-sm hover:bg-slate-900 dark:hover:bg-slate-100 transition-all hover:scale-105"
+                    title="Stop processing">
+                    <div className="w-4 h-4 flex items-center justify-center">
+                      <div className="w-3 h-3 bg-current rounded-sm" />
+                    </div>
+                  </button>
+                ) : (
+                  <button type="submit" disabled={!chatInput.trim() && attachedImages.length === 0}
+                    className={cn("p-2.5 rounded-xl transition-all shadow-sm",
+                      (chatInput.trim() || attachedImages.length > 0)
+                        ? "bg-slate-800 dark:bg-white text-white dark:text-slate-900 hover:bg-slate-900 dark:hover:bg-slate-100 hover:scale-105"
+                        : "bg-slate-200 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 cursor-not-allowed"
+                    )}>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                )}
               </div>
             </div>
             <input ref={fileInputRef} type="file" accept="image/*" multiple onChange={handleImageSelect} className="hidden" />
@@ -1446,19 +1721,29 @@ function ConversationPageInner({ params }) {
         {/* Panel content — fills remaining space */}
         <div className="flex-1 overflow-hidden">
 
-          {/* BUILD / Dashboard tab */}
-          {rightPanel === 'build' && (
-            <BuildProgressPanel
-              isVisible={true}
-              onComplete={() => {
-                if (repoInfo.vercelUrl) {
-                  setTimeout(() => setRightPanel('preview'), 1500);
-                }
-              }}
-            />
+          {/* DASHBOARD tab — Build progress + task phases */}
+          {rightPanel === 'dashboard' && (
+            <div className="h-full overflow-y-auto bg-white dark:bg-[#0d1117] p-6 lg:p-10 custom-scrollbar">
+              <div className="max-w-4xl mx-auto space-y-8">
+                <div className="flex items-center gap-4 border-b border-slate-100 dark:border-[#1c2128] pb-6">
+                  <div className="w-12 h-12 rounded-xl bg-blue-500 flex items-center justify-center shrink-0">
+                    <Sparkles className="w-6 h-6 text-white" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100">
+                      Building Your Project
+                    </h2>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
+                      {status === 'cloning' ? 'Cloning your codebase...' : status === 'preparing' ? 'Preparing workspace...' : status === 'running' ? 'Agent actively working...' : phases.length > 0 ? 'Build in progress...' : 'Waiting to start.'}
+                    </p>
+                  </div>
+                </div>
+                <TaskProgress phases={phases} status={status} completionSummary={completionSummary} />
+              </div>
+            </div>
           )}
 
-          {/* PREVIEW tab — Live iframe or Building Space */}
+          {/* PREVIEW tab — Live iframe OR Building state OR Idle state */}
           {rightPanel === 'preview' && (
             <div className="h-full flex flex-col">
               {repoInfo.vercelUrl ? (
@@ -1468,33 +1753,118 @@ function ConversationPageInner({ params }) {
                   className="flex-1 w-full border-0 bg-white"
                   sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
                 />
-              ) : status === 'running' || status === 'preparing' || phases.length > 0 ? (
-                <div className="h-full overflow-y-auto bg-white dark:bg-[#0d1117] p-6 lg:p-10 custom-scrollbar">
-                  <div className="max-w-4xl mx-auto space-y-8">
-                    {/* Header */}
-                    <div className="flex items-center gap-4 border-b border-slate-100 dark:border-[#1c2128] pb-6">
-                      <div className="w-12 h-12 rounded-xl bg-blue-500 flex items-center justify-center shrink-0">
-                        <Sparkles className="w-6 h-6 text-white" />
-                      </div>
-                      <div>
-                        <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100">
-                          Building Your Project
-                        </h2>
-                        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-                          {status === 'preparing' ? 'Preparing workspace...' : status === 'running' ? 'Agent actively working...' : 'Setting up the environment.'}
-                        </p>
-                      </div>
+              ) : (buildingActive || status === 'connecting' || status === 'cloning' || status === 'preparing') ? (() => {
+                /* ── Derive dynamic text from current phase ── */
+                const activePhase = phases.find(p => p.status === 'active');
+                const maxDonePhase = phases.filter(p => p.status === 'done').reduce((max, p) => Math.max(max, p.phase || 0), 0);
+                const currentPhaseNum = activePhase?.phase || maxDonePhase || 0;
+
+                // Phase-aware label & icon
+                let buildLabel =
+                  status === 'connecting' ? 'Connecting...' :
+                  status === 'cloning'    ? 'Cloning your codebase...' :
+                  status === 'preparing'  ? 'Preparing workspace...' :
+                  status === 'ready'      ? 'Workspace ready...' :
+                  isWizardMode            ? 'Building your idea...' : 'Getting ready...';
+                let buildSubtext =
+                  status === 'cloning'   ? '📦 Fetching your repository files and setting up workspace' :
+                  status === 'ready'     ? '✅ Workspace initialized successfully' :
+                  isWizardMode           ? '💬 Brainstorm ideas in Discussion Mode at 0.3 credits per request' :
+                  '🔧 Setting up your workspace and cloning the repository';
+                let progressPct =
+                  status === 'cloning'                             ? '8%' :
+                  (status === 'connecting' || status === 'preparing') ? '5%' :
+                  status === 'ready'                               ? '100%' : '20%';
+
+                if (currentPhaseNum <= 1 && status === 'running') {
+                  buildLabel = 'Setting things up...';
+                  progressPct = '10%';
+                } else if (currentPhaseNum === 2) {
+                  buildLabel = 'Preparing workspace...';
+                  progressPct = '15%';
+                } else if (currentPhaseNum === 3) {
+                  buildLabel = 'Analyzing your idea...';
+                  progressPct = '20%';
+                } else if (currentPhaseNum === 4 && activePhase?.title?.toLowerCase().includes('research')) {
+                  buildLabel = 'Researching your idea...';
+                  buildSubtext = '🔍 Analyzing top products in this domain for best practices';
+                  progressPct = '35%';
+                } else if (currentPhaseNum === 4) {
+                  buildLabel = 'Research complete — planning code...';
+                  buildSubtext = '📋 Creating implementation plan from research insights';
+                  progressPct = '40%';
+                } else if (currentPhaseNum === 5) {
+                  buildLabel = 'Writing your code...';
+                  buildSubtext = '⚡ AI is generating components, pages, and logic';
+                  progressPct = '60%';
+                } else if (currentPhaseNum === 6) {
+                  buildLabel = 'Verifying build...';
+                  buildSubtext = '🔧 Running build checks to ensure everything compiles';
+                  progressPct = '80%';
+                } else if (currentPhaseNum === 7) {
+                  buildLabel = 'Publishing project...';
+                  buildSubtext = '🚀 Committing and pushing code to repository';
+                  progressPct = '90%';
+                } else if (currentPhaseNum >= 8) {
+                  buildLabel = 'Deploying...';
+                  buildSubtext = '🌐 Setting up live preview on Vercel';
+                  progressPct = '95%';
+                }
+                
+                // If phase 4 research is done but phase 5 hasn't started yet
+                const researchDone = phases.find(p => p.phase === 4 && p.status === 'done');
+                const codingStarted = phases.find(p => p.phase === 5);
+                if (researchDone && !codingStarted) {
+                  buildLabel = 'Research complete — starting to code...';
+                  buildSubtext = '✅ Domain analysis complete. Building your codebase now.';
+                  progressPct = '45%';
+                }
+
+                return (
+                /* ── Building state — Base44 "Building your idea..." ── */
+                <div className="h-full flex flex-col items-center justify-center relative overflow-hidden bg-white dark:bg-[#0d1117]">
+                  {/* Warm gradient glow at bottom */}
+                  <div className="absolute bottom-0 left-0 right-0 h-[45%] bg-gradient-to-t from-orange-100/80 via-orange-50/40 to-transparent dark:from-orange-900/20 dark:via-orange-900/5 dark:to-transparent pointer-events-none" />
+                  
+                  {/* Orange circle logo with stripes */}
+                  <div className="relative z-10 mb-6">
+                    <div className="w-20 h-20 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center shadow-lg shadow-orange-400/30">
+                      <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+                        <rect x="8" y="10" width="24" height="3" rx="1.5" fill="white" opacity="0.9"/>
+                        <rect x="8" y="16" width="24" height="3" rx="1.5" fill="white" opacity="0.7"/>
+                        <rect x="8" y="22" width="24" height="3" rx="1.5" fill="white" opacity="0.5"/>
+                        <rect x="12" y="28" width="16" height="3" rx="1.5" fill="white" opacity="0.3"/>
+                      </svg>
                     </div>
-                    
-                    {/* Progress Indicators */}
-                    <TaskProgress phases={phases} status={status} completionSummary={completionSummary} />
-                    <GenerationProgress isVisible={status === 'running' || status === 'preparing'} />
+                  </div>
+
+                  {/* Dynamic building text */}
+                  <h2 className="relative z-10 text-xl font-semibold text-slate-400 dark:text-slate-500 mb-8 transition-all duration-500">
+                    {buildLabel}
+                  </h2>
+
+                  {/* Progress bar — reflects actual phase progress */}
+                  <div className="relative z-10 w-40 h-1 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden mb-10">
+                    <div 
+                      className="h-full bg-gradient-to-r from-orange-400 to-orange-500 rounded-full transition-all duration-1000 ease-out" 
+                      style={{ width: progressPct }} 
+                    />
+                  </div>
+
+                  {/* Did you know tip — changes with phase */}
+                  <div className="relative z-10 text-center">
+                    <p className="text-[13px] font-medium text-orange-400 dark:text-orange-500 mb-1.5">Did you know?</p>
+                    <p className="text-[13px] text-slate-500 dark:text-slate-400 max-w-sm transition-all duration-300">
+                      {buildSubtext}
+                    </p>
                   </div>
                 </div>
-              ) : (
-                <div className="flex flex-col items-center justify-center h-full text-center p-8 bg-slate-50/50 dark:bg-[#0d1117]">
-                  <div className="w-16 h-16 rounded-2xl bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] shadow-sm flex items-center justify-center mb-5">
-                    <Monitor className="w-7 h-7 text-slate-400 dark:text-slate-500" />
+                );
+              })() : (
+                /* ── Idle state — "Preview Not Available" (Base44 style) ── */
+                <div className="flex flex-col items-center justify-center h-full text-center p-8 bg-white dark:bg-[#0d1117]">
+                  <div className="w-16 h-16 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center mb-5">
+                    <Monitor className="w-8 h-8 text-slate-400 dark:text-slate-500" />
                   </div>
                   <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-2">Preview Not Available</h3>
                   <p className="text-[14px] text-slate-500 dark:text-slate-400 max-w-sm mb-6">
@@ -1502,7 +1872,7 @@ function ConversationPageInner({ params }) {
                   </p>
                   <button
                     onClick={() => setRightPanel('code')}
-                    className="px-5 py-2.5 bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-[13px] font-bold rounded-[18px] hover:bg-slate-800 dark:hover:bg-slate-100 transition-all shadow-sm flex items-center gap-2"
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-[13px] font-semibold hover:bg-slate-800 dark:hover:bg-slate-100 transition-colors shadow-sm"
                   >
                     <Code2 className="w-4 h-4" />
                     View Source Code
@@ -1512,28 +1882,68 @@ function ConversationPageInner({ params }) {
             </div>
           )}
 
-          {/* CODE tab */}
+          {/* CODE tab — Base44 style: single Code header on sidebar only */}
           {rightPanel === 'code' && (
             <div className="flex h-full w-full">
-              <div className="w-[260px] shrink-0 border-r border-slate-200 dark:border-[#2d333b] bg-[#f8f9fb] dark:bg-[#0f1118] flex flex-col">
-                <div className="h-10 flex items-center px-4 border-b border-slate-200 dark:border-[#1c2128]">
-                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Code Files</span>
+              {/* File sidebar */}
+              <div className="w-[240px] shrink-0 border-r border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0f1118] flex flex-col">
+                {/* Single Code header */}
+                <div className="h-11 flex items-center justify-between px-4 border-b border-slate-200 dark:border-[#1c2128]">
+                  <span className="text-[14px] font-bold text-slate-800 dark:text-white">Code</span>
+                </div>
+                {/* Files sub-header */}
+                <div className="h-10 flex items-center justify-between px-3 border-b border-slate-100 dark:border-[#1c2128]">
+                  <span className="text-[12px] font-bold text-slate-500 dark:text-slate-400">Code files</span>
+                  <div className="flex items-center gap-0.5">
+                    <button className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors" title="Search">
+                      <Search className="w-3.5 h-3.5" />
+                    </button>
+                    <button className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors" title="Toggle">
+                      <Code2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
                 <div className="flex-1 overflow-hidden">
+                  {(status === 'cloning' || status === 'preparing') && files.length === 0 ? (
+                    /* Cloning loading state — shown until file_tree arrives */
+                    <div className="flex flex-col items-center justify-center h-full gap-3 px-4 py-8">
+                      <Loader2 className="w-5 h-5 text-orange-400 animate-spin" />
+                      <div className="text-center space-y-1">
+                        <p className="text-[12px] font-medium text-slate-500 dark:text-slate-400">
+                          {status === 'cloning' ? 'Cloning repository…' : 'Preparing workspace…'}
+                        </p>
+                        <p className="text-[11px] text-slate-400 dark:text-slate-500">Files will appear here shortly</p>
+                      </div>
+                      {/* Skeleton rows */}
+                      <div className="w-full mt-2 space-y-2 px-2 animate-pulse">
+                        {[70, 55, 80, 45, 65, 50, 72].map((w, i) => (
+                          <div key={i} className="flex items-center gap-2">
+                            <div className="w-3.5 h-3.5 rounded bg-slate-200 dark:bg-slate-700 shrink-0" />
+                            <div className={`h-2.5 rounded bg-slate-200 dark:bg-slate-700`} style={{ width: `${w}%` }} />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
                   <FileExplorer
                     files={files}
                     selectedFile={selectedFile}
                     onFileSelect={handleFileSelect}
                     projectName={conversation?.title || 'Project'}
                   />
+                  )}
                 </div>
               </div>
-              <div className="flex-1 min-w-0 bg-white">
-                <FileViewer
-                  path={selectedFile}
-                  content={fileContent}
-                  loading={fileLoading}
-                />
+              {/* Editor area — no duplicate header, just action icons row */}
+              <div className="flex-1 min-w-0 bg-white flex flex-col">
+                <div className="flex-1 min-h-0">
+                  <FileViewer
+                    path={selectedFile}
+                    content={editedFileContent !== null ? editedFileContent : fileContent}
+                    loading={fileLoading}
+                    onContentChange={(val) => setEditedFileContent(val)}
+                  />
+                </div>
               </div>
             </div>
           )}

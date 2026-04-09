@@ -73,6 +73,22 @@ async def _ws_send(websocket, msg_type: str, message: str) -> None:
         pass
 
 
+async def _send_phase(websocket, phase: int, title: str, description: str, status: str) -> None:
+    """Send a structured phase event to the frontend for TaskProgress UI."""
+    if not websocket:
+        return
+    try:
+        await websocket.send_json({
+            "type": "task_phase",
+            "phase": phase,
+            "title": title,
+            "description": description,
+            "status": status,
+        })
+    except Exception:
+        pass
+
+
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  HELPER — Build file tree string from workspace              ║
 # ╚══════════════════════════════════════════════════════════════╝
@@ -1508,6 +1524,18 @@ Then use:
 This ensures EVERY card, badge, and animation looks identical across the entire project.
 
 ====================================
+SECURITY (non-negotiable)
+====================================
+API KEYS & SECRETS:
+- NEVER return raw secret keys in API responses or display them in full
+- When an API key is already saved, show it masked: "sk_test_••••••••••••" + last 4 chars
+- Input fields for secrets: type="password" by default, with a show/hide toggle
+- On load: if a key exists, populate the input with a masked placeholder (e.g. "••••••••••••") and only send the real value on save if the user typed a new one
+- Backend routes that return settings must redact sensitive fields:
+    return { ...settings, api_key: settings.api_key ? `••••${settings.api_key.slice(-4)}` : '' }
+- NEVER log, expose in URLs, or include secrets in client-side state beyond what is needed for the current save action
+
+====================================
 API-READY SERVICES (non-negotiable for admin/CRUD apps)
 ====================================
 Services must make REAL HTTP fetch() calls:
@@ -1597,13 +1625,20 @@ async def _generate_new_project_inner(
     
     # ── Step 3: Gemini ULTRA-DEEP research ──
     await _ws_send(websocket, "progress", "🔬 Researching real products in this domain...")
+    research_quality = "full"  # Track research quality for gating
     try:
         research = await gemini_deep_research(
             description, app_type, stack, gemini_key, websocket,
         )
+        # Research quality gate: check if we got meaningful research
+        if len(research) < 200:
+            research_quality = "minimal"
+            logger.warning("Research returned minimal content (%d chars)", len(research))
+            await _ws_send(websocket, "warning", "⚠️ Research returned limited results — generation will use basic patterns")
     except Exception as exc:
         logger.error("Gemini research failed: %s", exc)
-        await _ws_send(websocket, "progress", "⚠️ Research failed — proceeding with basic generation...")
+        research_quality = "failed"
+        await _ws_send(websocket, "warning", "⚠️ Research failed — proceeding with basic generation...")
         research = f"Project: {description}\nApp type: {app_type}\nStack: {stack}"
     
     # ── Step 3b: Build structured project schema ──
@@ -1654,6 +1689,12 @@ async def _generate_new_project_inner(
             logger.warning("Failed to write db.json: %s", e)
     
     total_files = []
+
+    # ── PHASE GATE: Research complete → Coding starts ──
+    # Signal Phase 4 (Research) done, Phase 5 (Coding) active
+    # This ensures the UI shows research completing BEFORE coding starts.
+    await _send_phase(websocket, 4, "Researching project", f"Research complete ({research_quality})", "done")
+    await _send_phase(websocket, 5, "Writing code", "Claude is generating project (3-phase)…", "active")
     
     # ═══════════════════════════════════════════════════════
     #  CALL 1 — FOUNDATION
@@ -1938,6 +1979,10 @@ Call the write_project_files tool with ALL files.
         return False
     
     await _ws_send(websocket, "progress", f"💾 Total: {len(total_files)} files generated")
+
+    # ── Signal Phase 5 (Coding) done, Phase 6 (Build) active ──
+    await _send_phase(websocket, 5, "Writing code", f"Code complete — {len(total_files)} files", "done")
+    await _send_phase(websocket, 6, "Verifying build", "Running build checks…", "active")
     
     # ── Post-generation fixers (before build) ──
     # Automatically fix the 3 most common build error causes:

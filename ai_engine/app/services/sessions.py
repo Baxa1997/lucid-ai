@@ -32,7 +32,11 @@ def _safe_put(queue: asyncio.Queue, item) -> None:
     try:
         queue.put_nowait(item)
     except asyncio.QueueFull:
-        pass  # Drop oldest? For now, just skip
+        logger.warning(
+            "Event buffer full (maxsize=%d) — dropping event: %.120s",
+            queue.maxsize,
+            str(item),
+        )
 
 # ── Session dataclass ───────────────────────────────────────
 

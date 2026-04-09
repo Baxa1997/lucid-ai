@@ -14,7 +14,7 @@ const icons = {
 };
 
 export default function ThemeModeSelector({ className = '' }) {
-  const { theme, setTheme, resolvedTheme } = useTheme();
+  const { theme, setTheme } = useTheme();
 
   const handleClick = () => {
     const currentIndex = cycle.indexOf(theme);
@@ -26,12 +26,15 @@ export default function ThemeModeSelector({ className = '' }) {
   const Icon = icons[theme] || Sun;
 
   return (
-    <button
-      onClick={handleClick}
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={(e) => { e.stopPropagation(); handleClick(); }}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); handleClick(); } }}
       aria-label={`Theme: ${theme}. Click to switch.`}
       id="theme-mode-selector"
       className={cn(
-        "p-2 rounded-xl transition-all duration-200",
+        "p-2 rounded-xl transition-all duration-200 cursor-pointer select-none",
         "bg-slate-100 hover:bg-slate-200 text-slate-600",
         "dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300",
         "border border-slate-200 dark:border-slate-700",
@@ -40,6 +43,6 @@ export default function ThemeModeSelector({ className = '' }) {
       )}
     >
       <Icon className="w-4 h-4" />
-    </button>
+    </div>
   );
 }

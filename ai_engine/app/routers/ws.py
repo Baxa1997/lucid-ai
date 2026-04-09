@@ -173,6 +173,29 @@ async def websocket_agent(websocket: WebSocket):
             websocket.receive_json(), timeout=WS_INIT_TIMEOUT_SECONDS,
         )
 
+        # ── Validate handshake message structure ──────────
+        if not isinstance(raw, dict):
+            logger.warning("WebSocket rejected — handshake is not a JSON object")
+            await websocket.send_json({
+                "type": "error",
+                "message": "Invalid handshake: expected a JSON object.",
+            })
+            await websocket.close(code=4400, reason="Invalid handshake")
+            return
+
+        # String-type fields that must not be non-string values if present
+        _str_fields = ("task", "repoUrl", "branch", "gitToken", "projectId",
+                       "modelProvider", "apiKey")
+        for _field in _str_fields:
+            if _field in raw and not isinstance(raw[_field], (str, type(None))):
+                logger.warning("WebSocket rejected — field %s has wrong type", _field)
+                await websocket.send_json({
+                    "type": "error",
+                    "message": f"Invalid handshake: field '{_field}' must be a string.",
+                })
+                await websocket.close(code=4400, reason="Invalid handshake")
+                return
+
         # If not authenticated from query param, try handshake token
         if ws_user is None:
             ws_user = authenticate_from_handshake(raw)
@@ -274,6 +297,17 @@ async def websocket_agent(websocket: WebSocket):
                 "reconnected": True,
                 "message": "Reconnected to existing workspace.",
             })
+
+            # ── Send file tree immediately on reconnect ──────────
+            # Without this, the Code tab stays empty until the user sends
+            # a follow-up task. The file tree must be sent every time.
+            if session.workspace_dir and os.path.isdir(session.workspace_dir):
+                try:
+                    from app.services.task_pipeline import _send_file_tree
+                    await _send_file_tree(websocket, session.workspace_dir)
+                    logger.info("Sent file_tree on reconnect for session %s", session.session_id)
+                except Exception as ft_err:
+                    logger.warning("Failed to send file_tree on reconnect: %s", ft_err)
         else:
             # ── Create new session (no clone — workspace_manager handles it) ──
             try:
@@ -385,12 +419,125 @@ async def websocket_agent(websocket: WebSocket):
         # Only send the "ready" message for NEW sessions.
         # For reconnects we already sent it at step 2 above (reconnected=True).
         if not existing:
+            # ── Hydrate session.repo_url for returning wizard projects ──────
+            # Wizard projects don't have a repo_url in the handshake (no user
+            # repo provided), but after Phase 7 the pipeline creates a platform
+            # GitHub repo and saves its URL to chat_sessions.platform_repo_url.
+            # Look that up now so the pre-clone below can clone it.
+            if not session.repo_url and project_id and user_jwt:
+                try:
+                    async with db_client(user_jwt) as client:
+                        _repo_result = await (
+                            client.table("chat_sessions")
+                            .select("platform_repo_url")
+                            .eq("project_id", project_id)
+                            .order("created_at", desc=True)
+                            .limit(1)
+                            .execute()
+                        )
+                    if _repo_result.data and _repo_result.data[0].get("platform_repo_url"):
+                        session.repo_url = _repo_result.data[0]["platform_repo_url"]
+                        session.git_token = session.git_token or PLATFORM_GITHUB_TOKEN or ""
+                        logger.info(
+                            "Hydrated session.repo_url from chat_sessions: %s",
+                            session.repo_url,
+                        )
+                except Exception as _hydrate_err:
+                    logger.warning("Failed to hydrate repo_url from chat_sessions: %s", _hydrate_err)
+
+            # ── Pre-clone repo for existing conversations ─────────
+            # For conversations that have a repoUrl (existing GitHub/GitLab project),
+            # clone the repo NOW so the workspace is ready when the user's first task
+            # arrives — no cold-start clone delay on the first message.
+            if session.repo_url and project_id:
+                # ── Heartbeat task: sends progress pings every 8s so the UI
+                # doesn't appear frozen during the ~30s clone.
+                _clone_stop = asyncio.Event()
+
+                async def _clone_heartbeat():
+                    _msgs = [
+                        "Fetching repository objects…",
+                        "Analysing file structure…",
+                        "Setting up workspace environment…",
+                        "Almost there…",
+                    ]
+                    _i = 0
+                    while not _clone_stop.is_set():
+                        await asyncio.sleep(8)
+                        if _clone_stop.is_set():
+                            break
+                        try:
+                            await websocket.send_json({
+                                "type": "status",
+                                "status": "initializing",
+                                "message": _msgs[_i % len(_msgs)],
+                            })
+                        except Exception:
+                            break
+                        _i += 1
+
+                heartbeat_task = asyncio.create_task(_clone_heartbeat())
+                try:
+                    await websocket.send_json({
+                        "type": "status",
+                        "status": "initializing",
+                        "message": "Cloning repository…",
+                    })
+                    pre_validated = {
+                        "repo_url": session.repo_url,
+                        "branch": session.branch or "main",
+                        "git_token": session.git_token or "",
+                    }
+                    pre_workspace = await workspace_manager.get_or_create_workspace(
+                        conversation_id=project_id,
+                        validated=pre_validated,
+                        websocket=websocket,
+                    )
+                    if pre_workspace:
+                        session.workspace_dir = pre_workspace
+                        # Send the file tree so the Code tab is populated immediately
+                        try:
+                            from app.services.task_pipeline import _send_file_tree
+                            await _send_file_tree(websocket, pre_workspace)
+                        except Exception as ft_err:
+                            logger.warning("Pre-clone file_tree failed: %s", ft_err)
+                        logger.info(
+                            "Pre-cloned repo for project %s at %s",
+                            project_id, pre_workspace,
+                        )
+                    else:
+                        # workspace_manager returned None — clone failed internally
+                        await websocket.send_json({
+                            "type": "status",
+                            "status": "preparing",
+                            "message": "⚠️ Could not clone repository. Workspace ready in limited mode — you can still send tasks.",
+                        })
+                except Exception as clone_err:
+                    sanitised = str(clone_err)
+                    if session.git_token:
+                        sanitised = sanitised.replace(session.git_token, "***")
+                    logger.warning(
+                        "Pre-clone failed for project %s: %s",
+                        project_id, sanitised,
+                    )
+                    try:
+                        await websocket.send_json({
+                            "type": "status",
+                            "status": "preparing",
+                            "message": f"⚠️ Repository clone failed: {sanitised[:120]}. Workspace ready — clone will be retried on your first task.",
+                        })
+                    except Exception:
+                        pass
+                finally:
+                    _clone_stop.set()
+                    await asyncio.gather(heartbeat_task, return_exceptions=True)
+
             ready_msg = "Workspace ready. You can start giving tasks."
             if session.repo_url:
                 ready_msg = (
-                    f"Workspace initialized. "
-                    f"The agent has terminal, file editor, and browser tools available. "
-                    f"You can start giving tasks."
+                    "Repository cloned. "
+                    "The agent has terminal, file editor, and browser tools available. "
+                    "You can start giving tasks."
                 )
             await websocket.send_json({
                 "type": "status",
@@ -479,6 +626,31 @@ async def websocket_agent(websocket: WebSocket):
             # Note: initial task comes from WS query params, no images possible
             initial_images = []
             pipeline_task_id = str(uuid.uuid4())[:8]
+
+            # Bug fix: re-hydrate session.repo_url right before building
+            # pipeline_user. The hydration at the top of this block (above)
+            # may have failed silently; this is a last-chance refresh so the
+            # pipeline config always carries the freshest repo URL.
+            if not session.repo_url and chat_session_id and user_jwt:
+                try:
+                    async with db_client(user_jwt) as client:
+                        _precheck = await (
+                            client.table("chat_sessions")
+                            .select("platform_repo_url")
+                            .eq("id", chat_session_id)
+                            .maybe_single()
+                            .execute()
+                        )
+                    _url = _precheck.data and _precheck.data.get("platform_repo_url")
+                    if _url:
+                        session.repo_url = _url
+                        session.git_token = session.git_token or PLATFORM_GITHUB_TOKEN or ""
+                        logger.info(
+                            "Pre-pipeline repo_url hydrated from chat_session: %s", _url
+                        )
+                except Exception as _pre_err:
+                    logger.warning("Pre-pipeline repo_url hydration failed: %s", _pre_err)
+
             pipeline_user = {
                 "anthropic_api_key": api_key,
                 "gemini_api_key": gemini_api_key,
@@ -509,6 +681,7 @@ async def websocket_agent(websocket: WebSocket):
             # Listen for stop messages while pipeline runs
             pipeline_stopped = False
             while not pipeline_task.done():
+                msg_coro = None
                 try:
                     # Wait for either pipeline completion or a WS message
                     msg_coro = asyncio.ensure_future(websocket.receive_json())
@@ -543,9 +716,18 @@ async def websocket_agent(websocket: WebSocket):
                             await msg_coro
                         except (asyncio.CancelledError, Exception):
                             pass
+                        msg_coro = None
                         break
                 except Exception:
                     break
+                finally:
+                    # Always cancel a pending msg_coro to avoid leaked tasks
+                    if msg_coro is not None and not msg_coro.done():
+                        msg_coro.cancel()
+                        try:
+                            await msg_coro
+                        except (asyncio.CancelledError, Exception):
+                            pass
 
             if pipeline_stopped:
                 await websocket.send_json({
@@ -763,6 +945,7 @@ async def websocket_agent(websocket: WebSocket):
             # Listen for stop messages while pipeline runs
             followup_stopped = False
             while not pipeline_task.done():
+                msg_coro = None
                 try:
                     msg_coro = asyncio.ensure_future(websocket.receive_json())
                     done_set, _ = await asyncio.wait(
@@ -796,9 +979,18 @@ async def websocket_agent(websocket: WebSocket):
                             await msg_coro
                         except (asyncio.CancelledError, Exception):
                             pass
+                        msg_coro = None
                         break
                 except Exception:
                     break
+                finally:
+                    # Always cancel a pending msg_coro to avoid leaked tasks
+                    if msg_coro is not None and not msg_coro.done():
+                        msg_coro.cancel()
+                        try:
+                            await msg_coro
+                        except (asyncio.CancelledError, Exception):
+                            pass
 
             if followup_stopped:
                 await websocket.send_json({
@@ -896,13 +1088,18 @@ async def websocket_agent(websocket: WebSocket):
             except asyncio.CancelledError:
                 pass
 
-        # Only destroy if user explicitly stopped — otherwise keep alive for reconnection
-        if session and explicit_stop:
-            await destroy_session(session.session_id)
-            logger.info("Session %s destroyed (user stopped)", session.session_id)
-        elif session:
-            session.touch()
-            logger.info("Session %s kept alive for reconnection (TTL 2h)", session.session_id)
+        # ALWAYS destroy session and workspace on disconnect.
+        # Code is already pushed to GitHub — the workspace is redundant.
+        # If the user reconnects, workspace_manager will re-clone from GitHub.
+        # This prevents /tmp disk usage from growing unbounded.
+        # Each step is wrapped independently so a failure in one never
+        # prevents the others from running (no partial-cleanup leak).
+        if session:
+            try:
+                await destroy_session(session.session_id)
+                logger.info("Session %s destroyed on disconnect", session.session_id)
+            except Exception as exc:
+                logger.error("Failed to destroy session %s: %s", session.session_id, exc)
 
         # Mark chat session as inactive
         if chat_session_id and ws_user:
@@ -913,9 +1110,13 @@ async def websocket_agent(websocket: WebSocket):
             except Exception as exc:
                 logger.warning("Failed to mark chat session inactive: %s", exc)
 
-        # Destroy workspace for this conversation
-        await workspace_manager.destroy_workspace(conversation_id)
-        logger.info("Workspace destroyed for conversation %s", conversation_id)
+        # Destroy workspace for this conversation (covers both
+        # workspace_manager-tracked and orphaned /tmp/lucid_* dirs)
+        try:
+            await workspace_manager.destroy_workspace(conversation_id)
+            logger.info("Workspace destroyed for conversation %s", conversation_id)
+        except Exception as exc:
+            logger.error("Failed to destroy workspace for conversation %s: %s", conversation_id, exc)
 
         logger.info("WebSocket session cleaned up")
 
@@ -1179,11 +1380,13 @@ async def _auto_push_if_needed(
     new_branch: str | None = None,
 ) -> None:
     """Push changes to remote if the session has a repo and git_token."""
-    print(f"DEBUG _auto_push_if_needed called")
-    print(f"DEBUG   repo_url: {bool(session.repo_url)} = {session.repo_url}")
-    print(f"DEBUG   git_token: {bool(session.git_token)} (len={len(session.git_token) if session.git_token else 0})")
-    print(f"DEBUG   workspace_dir: {bool(session.workspace_dir)} = {session.workspace_dir}")
-    print(f"DEBUG   branch: {session.branch}")
+    logger.debug(
+        "_auto_push_if_needed: repo_url=%s git_token=%s workspace_dir=%s branch=%s",
+        bool(session.repo_url),
+        f"len={len(session.git_token)}" if session.git_token else "missing",
+        bool(session.workspace_dir),
+        session.branch,
+    )
 
     if not session.repo_url or not session.git_token or not session.workspace_dir:
         skip_reason = []
@@ -1195,7 +1398,6 @@ async def _auto_push_if_needed(
             skip_reason.append("no workspace_dir")
         reason_str = ", ".join(skip_reason)
         logger.info("Auto-push skipped: %s", reason_str)
-        print(f"DEBUG auto-push SKIPPED: {reason_str}")
         try:
             await websocket.send_json({
                 "type": "warning",

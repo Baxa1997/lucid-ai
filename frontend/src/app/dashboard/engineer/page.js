@@ -253,25 +253,24 @@ export default function EngineerDashboardPage() {
     if (!text) return;
     setIsLaunching(true);
     try {
-      let resolvedStack = advancedOpts.stack;
-      if (resolvedStack === 'auto') {
-        try {
-          const res = await fetch('/api/recommend-stack', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: text }) });
-          if (res.ok) { const d = await res.json(); resolvedStack = d.stack || 'nextjs'; }
-        } catch { resolvedStack = 'nextjs'; }
-      }
-      let enhancedPrompt = text;
-      try {
-        const res = await fetch('/api/enhance-prompt', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stack: resolvedStack, backend: advancedOpts.backend, description: text, figmaUrl: advancedOpts.figmaUrl || undefined }) });
-        if (res.ok) { const d = await res.json(); enhancedPrompt = d.enhancedPrompt || text; }
-      } catch { /* fallback */ }
+      // Resolve stack synchronously from user selection (no API call)
+      // 'auto' defaults to 'nextjs' — the backend Gemini research step
+      // handles intelligent stack detection as part of the pipeline.
+      const resolvedStack = advancedOpts.stack === 'auto' ? 'nextjs' : advancedOpts.stack;
+
+      // Create conversation FIRST — this is the only blocking call
       const conversation = await createConversation({ repoName: null, repoProvider: null, repoUrl: null, branch: 'main', title: text.slice(0, 80) });
       const cid = conversation?.id || `wizard-${Date.now()}`;
+
+      // Store raw prompt in sessionStorage — the backend pipeline's
+      // Gemini research phase replaces the old frontend prompt enhancement.
       try {
-        sessionStorage.setItem(`wizard_prompt_${cid}`, enhancedPrompt);
+        sessionStorage.setItem(`wizard_prompt_${cid}`, text);
         sessionStorage.setItem(`wizard_meta_${cid}`, JSON.stringify({ stack: resolvedStack, projectType: null, backend: advancedOpts.backend, deployment: 'hosted', figmaUrl: advancedOpts.figmaUrl || '' }));
         sessionStorage.setItem(`wizard_desc_${cid}`, text);
       } catch {}
+
+      // Navigate IMMEDIATELY — user enters workspace in < 300ms
       router.replace(`/dashboard/engineer/workspace/${cid}`);
     } catch (err) {
       console.error('[Dashboard] Build error:', err);

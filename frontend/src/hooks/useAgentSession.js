@@ -222,7 +222,12 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       // ─── Status updates ───────────────────────────
       if (msg.type === 'status') {
         const st = msg.status;
-        if (['initializing', 'cloning', 'preparing'].includes(st)) {
+        if (['initializing', 'cloning'].includes(st)) {
+          // Show a dedicated "cloning" state so the UI can display
+          // "Cloning your codebase..." rather than the generic preparing label.
+          setState('cloning');
+          if (msg.message) pushLog(msg.message, 'system');
+        } else if (st === 'preparing') {
           setState('preparing');
           if (msg.message) pushLog(msg.message, 'system');
         } else if (st === 'ready' || st === 'mock_mode') {
@@ -256,8 +261,11 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
 
         if (msg.event === 'task_start') {
           setState('running');
-          // Clear steps for new task
+          // Clear steps + phases for new task so buildLabel starts from phase 0
           setSteps([]);
+          setPhases([]);
+          flushedRef.current = false;
+          setCompletionSummary('');
           setFinishSummary('');
           pushLog(content, 'system');
           return;
@@ -277,6 +285,37 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         }
 
         if (msg.fileTree && Array.isArray(msg.fileTree)) setFiles(msg.fileTree);
+        return;
+      }
+
+      // ─── File write event — attach pill to last agent message ──
+      if (msg.type === 'file_write_event') {
+        const filename = msg.filename || '';
+        const action = msg.action || 'write';
+        if (filename) {
+          pushLog(`[${action}] ${filename}`, 'file_write');
+          setChatMessages((prev) => {
+            if (prev.length === 0) return prev;
+            const last = prev[prev.length - 1];
+            // Attach to the last agent message (plan or empty agent bubble)
+            if (last.role === 'agent') {
+              const updated = [...prev];
+              updated[updated.length - 1] = {
+                ...last,
+                fileWrites: [...(last.fileWrites || []), { filename, action }],
+              };
+              return updated;
+            }
+            // No agent message yet — create one to hold the write pills
+            return [...prev, {
+              id: uid(),
+              role: 'agent',
+              content: '',
+              fileWrites: [{ filename, action }],
+              ts: Date.now(),
+            }];
+          });
+        }
         return;
       }
 
@@ -307,45 +346,11 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         return;
       }
 
-      // ─── Claude Message — parse and route to chat ────
+      // ─── Claude Message — log only (structured events handled separately) ──
+      // file_write_event and chat_message now carry the user-visible data.
+      // claude_message is raw SDK output kept only for terminal/debug logs.
       if (msg.type === 'claude_message') {
         const raw = msg.content || '';
-
-        // Detect tool use patterns in the raw SDK dump
-        const toolMatch = raw.match(/ToolUseBlock\(.*?name=['"]?(\w+)['"]?.*?input=.*?['"]?(?:file_path|command|pattern)['"]?:\s*['"]?([^'"\)]+)/i);
-        if (toolMatch) {
-          const toolName = toolMatch[1].toLowerCase();
-          const target = toolMatch[2].trim().slice(0, 100);
-
-          // Route tool calls as structured chat messages
-          const isWrite = ['write', 'edit', 'multiedit'].includes(toolName);
-          const isBash = toolName === 'bash';
-          const isRead = ['read', 'glob', 'ls', 'grep'].includes(toolName);
-
-          if (isWrite || isBash) {
-            pushChat('agent', '', {
-              toolCalls: [{ type: toolName, target }],
-            });
-          }
-          pushLog(`[Tool: ${toolName}] ${target}`, isWrite ? 'file_write' : isBash ? 'cmd_output' : 'agent_message');
-          return;
-        }
-
-        // Detect text response (AssistantMessage with actual content)
-        const textMatch = raw.match(/TextBlock\(.*?text=['"](.{10,}?)['"]/s);
-        if (textMatch) {
-          const text = textMatch[1]
-            .replace(/\\n/g, '\n')
-            .replace(/\\t/g, '  ')
-            .trim();
-          if (text.length > 20) {
-            pushChat('agent', text);
-          }
-          pushLog(`[Claude] ${text.slice(0, 200)}`, 'agent_message');
-          return;
-        }
-
-        // Fallback: log raw content
         if (raw.length > 5) {
           pushLog(`[Claude] ${raw.slice(0, 300)}`, 'agent_message');
         }
@@ -456,14 +461,15 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       }
 
       if (msg.type === 'complete') {
+        // Only transition to 'ready' — do NOT push a chat message.
+        // The TaskProgress UI already shows the completion state clearly.
+        // Pushing 'Task completed.' to chat was confusing during multi-phase pipelines.
         setState('ready');
-        const successMsg = msg.message || 'Task completed successfully.';
-        pushChat('system', `✅ ${successMsg}`);
-        pushLog(`[Success] ${successMsg}`, 'system');
+        if (msg.message) pushLog(`[Complete] ${msg.message}`, 'system');
         
         // Refresh task status
         setSteps([]);
-        setFinishSummary(successMsg);
+        setFinishSummary(msg.message || '');
         // Clear preview on completion
         setPreviewUrl(null);
         setPreviewTaskId(null);
@@ -526,14 +532,25 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         return;
       }
 
-      // ─── Progress — route important steps to chat ────
+      // ─── Progress — only show MAJOR milestones in chat ────
       if (msg.type === 'progress') {
         const text = msg.message || '';
         pushLog(text, 'system');
-        // Show key milestones in chat so the user can follow along
-        if (text.includes('✅') || text.includes('📦') || text.includes('🔍') || 
-            text.includes('📊') || text.includes('🔨') || text.includes('📚') ||
-            text.includes('⚠️')) {
+        // Only push truly important milestones to chat to keep it clean.
+        // All other progress goes to the terminal/logs panel only.
+        const MAJOR_MILESTONES = [
+          '✅ Repository ready',
+          '✅ Local workspace ready',
+          '✅ GitHub template cloned',
+          '✅ Foundation:',
+          '✅ Content:',
+          '✅ Extra pages:',
+          '🏗️ Phase 1/3',
+          '🎨 Phase 2/3',
+          '📄 Phase 3/3',
+          '🚀 Project published',
+        ];
+        if (MAJOR_MILESTONES.some(m => text.includes(m))) {
           pushChat('system', text);
         }
         return;
@@ -559,11 +576,26 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     return unsub;
   }, [handleMessage]);
 
+  // ── Cleanup on unmount: close connection if navigating away ──
+  // NOTE: We do NOT close here — the manager persists across navigation.
+  // But we DO need to reset the connecting flag if we're still connecting
+  // when the component unmounts, to avoid ghost states.
+  useEffect(() => {
+    return () => {
+      // If we navigate away to a DIFFERENT project page, the new page's
+      // hook will call manager.connect() with the new projectId, which
+      // handles closing the old connection.
+    };
+  }, []);
+
   // ── Connect function ─────────────────────────────────────
   const connect = useCallback(
     (taskToSend) => {
       if (!manager) return;
-      if (manager.isOpen || manager.isConnecting) return;
+
+      // If already open to THIS project, don't reconnect
+      if (manager.isOpen && manager.projectId === projectIdRef.current) return;
+      if (manager.isConnecting) return;
 
       setState('connecting');
       setError(null);
@@ -589,24 +621,28 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   useEffect(() => {
     if (!manager || !token) return;
 
-    if (manager.isOpen) {
+    // If already open to THIS project — just set ready state
+    if (manager.isOpen && manager.projectId === projectIdRef.current) {
       setState('ready');
       if (manager.sessionId) setSessionId(manager.sessionId);
       return;
     }
 
+    // If already connecting — just track state
     if (manager.isConnecting) {
       setState('connecting');
       return;
     }
 
-    if (state === 'idle') {
+    // If open to a DIFFERENT project — the connect() call below
+    // will handle closing the old connection automatically.
+
+    if (state === 'idle' || (manager.isOpen && manager.projectId !== projectIdRef.current)) {
       // Pass initial task (from wizard) in the handshake so backend
       // starts the pipeline immediately — no second message needed.
       const taskToSend = initialTaskRef.current || '';
       if (taskToSend) {
-        // Show user message in chat so the chat isn't empty during building.
-        // Strip the [LUCID_PROJECT] header for display — show only the prompt.
+        // Show user message in chat ONCE. Strip the [LUCID_PROJECT] header for display.
         const displayText = taskToSend.includes('\n\n')
           ? taskToSend.split('\n\n').slice(1).join('\n\n')
           : taskToSend;
@@ -650,7 +686,11 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       manager.send(payload);
       pushChat('user', text, { images: images.length > 0 ? images : undefined });
       pushLog(`→ ${text}`, 'user');
-      // Show thinking indicator immediately
+      // Show thinking indicator immediately; clear stale phases from previous task
+      // so the buildLabel logic starts fresh (no stale currentPhaseNum).
+      setPhases([]);
+      flushedRef.current = false;
+      setCompletionSummary('');
       setState('running');
     },
     [pushLog, pushChat]
@@ -746,6 +786,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     chatMessages,
     logs,
     files,
+    setFiles,
     error,
 
     // Structured progress steps
@@ -763,7 +804,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     messages: chatMessages,
     terminalLogs: logs,
     isReady: state === 'ready',
-    isPreparing: state === 'preparing' || state === 'connecting',
+    isPreparing: state === 'preparing' || state === 'connecting' || state === 'cloning',
 
     // Actions
     startSession,

@@ -120,7 +120,25 @@ async def clone_repo(
     if result.returncode != 0:
         # Strip token from error message
         err = result.stderr.replace(token, "***") if token else result.stderr
-        raise RuntimeError(f"git clone failed: {err.strip()}")
+        err = err.strip()
+        # Distinguish auth failures from generic network/other errors so the
+        # caller (and the user) gets an actionable message.
+        _auth_signals = (
+            "authentication failed",
+            "invalid username or password",
+            "could not read username",
+            "repository not found",
+            "403",
+            "401",
+            "remote: invalid",
+        )
+        if any(sig in err.lower() for sig in _auth_signals):
+            raise PermissionError(
+                f"git clone: authentication failed for {repo_url} — "
+                f"check that your token is valid and has repo read access. "
+                f"Detail: {err[:300]}"
+            )
+        raise RuntimeError(f"git clone failed: {err}")
 
     # Configure git user for commits
     name = git_user_name or "Lucid AI Agent"
@@ -172,7 +190,22 @@ async def pull_latest(
         err = result.stderr
         if token:
             err = err.replace(token, "***")
-        raise RuntimeError(f"git pull failed: {err.strip()}")
+        err = err.strip()
+        _auth_signals = (
+            "authentication failed",
+            "invalid username or password",
+            "could not read username",
+            "repository not found",
+            "403",
+            "401",
+            "remote: invalid",
+        )
+        if any(sig in err.lower() for sig in _auth_signals):
+            raise PermissionError(
+                f"git pull: authentication failed — token may have expired or been revoked. "
+                f"Detail: {err[:300]}"
+            )
+        raise RuntimeError(f"git pull failed: {err}")
 
     logger.info("Pull complete — workspace: %s", workspace_dir)
     return True

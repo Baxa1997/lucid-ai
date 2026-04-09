@@ -12,6 +12,7 @@
 
 const WS_BASE = process.env.NEXT_PUBLIC_AGENT_WS_URL || 'ws://localhost:8000/api/v1/ws';
 const HEARTBEAT_MS = 25000;
+const CONNECT_TIMEOUT_MS = 15000; // 15s timeout for connection
 
 class AgentWSManager {
   constructor() {
@@ -19,6 +20,8 @@ class AgentWSManager {
     this.ws = null;
     /** @type {number | null} */
     this._heartbeat = null;
+    /** @type {number | null} */
+    this._connectTimeout = null;
     /** @type {string} */
     this._projectId = '';
     /** @type {boolean} */
@@ -41,9 +44,14 @@ class AgentWSManager {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
   }
 
-  /** True if connecting. */
+  /** True if currently trying to connect. */
   get isConnecting() {
-    return this._connecting || (this.ws !== null && this.ws.readyState === WebSocket.CONNECTING);
+    return this._connecting;
+  }
+
+  /** The project ID this manager is currently connected to. */
+  get projectId() {
+    return this._projectId;
   }
 
   /** Subscribe to events. Returns unsubscribe function. */
@@ -60,13 +68,34 @@ class AgentWSManager {
     }
   }
 
-  /** Connect (or reconnect) to the agent WS. */
+  /** 
+   * Connect (or reconnect) to the agent WS.
+   * 
+   * FIX: If a previous connection is in CLOSING state, we force-cleanup it
+   * before starting a new one. This prevents the manager from getting "stuck"
+   * when navigating between projects.
+   */
   connect({ token, projectId, repoUrl, gitToken, branch, task, modelProvider }) {
-    // If already open or connecting (any project) — never open a second connection.
-    // A new connection sends a new handshake that can create a brand-new container
-    // on the backend, destroying the active workspace.
-    if (this.isOpen || this._connecting) return;
-    if (this.ws !== null) return; // still in CLOSING state
+    // If already open to the SAME project — do nothing
+    if (this.isOpen && this._projectId === projectId) return;
+
+    // If already connecting — do nothing (but check for timeout via _connectTimeout)
+    if (this._connecting) return;
+
+    // If connected to a DIFFERENT project, close the old connection first
+    if (this.isOpen && this._projectId !== projectId) {
+      console.log(`[WS] Switching project: ${this._projectId} → ${projectId}`);
+      this.close(1000, 'Switching project');
+    }
+
+    // CRITICAL FIX: If ws exists but is not OPEN (e.g. CLOSING state),
+    // force cleanup so we don't get stuck
+    if (this.ws !== null && this.ws.readyState !== WebSocket.OPEN) {
+      console.log(`[WS] Cleaning up stale WS in state ${this.ws.readyState}`);
+      try { this.ws.onclose = null; this.ws.onerror = null; this.ws.onmessage = null; } catch (_) {}
+      try { this.ws.close(); } catch (_) {}
+      this.ws = null;
+    }
 
     this._connecting = true;
     this._projectId = projectId;
@@ -75,8 +104,21 @@ class AgentWSManager {
     const ws = new WebSocket(url);
     this.ws = ws;
 
+    // Connection timeout — if WS doesn't open within 15s, clean up
+    this._clearConnectTimeout();
+    this._connectTimeout = setTimeout(() => {
+      if (this._connecting) {
+        console.warn('[WS] Connection timeout — cleaning up');
+        this._connecting = false;
+        try { ws.close(); } catch (_) {}
+        this.ws = null;
+        this._emit({ type: '_internal', event: 'error', reason: 'Connection timeout' });
+      }
+    }, CONNECT_TIMEOUT_MS);
+
     ws.onopen = () => {
       this._connecting = false;
+      this._clearConnectTimeout();
       this._startHeartbeat();
 
       ws.send(JSON.stringify({
@@ -103,11 +145,13 @@ class AgentWSManager {
 
     ws.onerror = () => {
       this._connecting = false;
+      this._clearConnectTimeout();
       this._emit({ type: '_internal', event: 'error' });
     };
 
     ws.onclose = (event) => {
       this._connecting = false;
+      this._clearConnectTimeout();
       this._stopHeartbeat();
       this.ws = null;
       this._emit({ type: '_internal', event: 'closed', code: event.code, reason: event.reason });
@@ -124,12 +168,21 @@ class AgentWSManager {
   /** Explicitly close. */
   close(code = 1000, reason = '') {
     this._stopHeartbeat();
+    this._clearConnectTimeout();
+    this._connecting = false;
     if (this.ws) {
       try { this.ws.close(code, reason); } catch (_) {}
       this.ws = null;
     }
     this._projectId = '';
     this.sessionId = null;
+  }
+
+  _clearConnectTimeout() {
+    if (this._connectTimeout) {
+      clearTimeout(this._connectTimeout);
+      this._connectTimeout = null;
+    }
   }
 
   _startHeartbeat() {

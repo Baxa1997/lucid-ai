@@ -130,19 +130,40 @@ class DockerSessionManager:
     def cleanup_orphaned_containers(self) -> int:
         """Remove any leftover containers from previous runs.
 
+        Two discovery strategies are used so containers are found even when
+        Docker labels are lost (e.g. daemon restart, label truncation):
+          1. Label filter  ``lucid.managed=true``   — authoritative
+          2. Name prefix   ``lucid_sandbox_*``       — fallback
+
         Returns the number of containers cleaned up.
         """
         try:
-            containers = self.client.containers.list(
+            # Strategy 1: label-based (primary)
+            by_label = self.client.containers.list(
                 all=True,
                 filters={"label": "lucid.managed=true"},
             )
+            # Strategy 2: name-prefix fallback
+            by_name = self.client.containers.list(
+                all=True,
+                filters={"name": settings.SANDBOX_CONTAINER_PREFIX},
+            )
+
+            # Deduplicate by container ID
+            seen: set[str] = set()
+            candidates = []
+            for c in list(by_label) + list(by_name):
+                if c.id not in seen:
+                    seen.add(c.id)
+                    candidates.append(c)
+
             count = 0
-            for container in containers:
+            for container in candidates:
                 try:
                     container.stop(timeout=3)
                     container.remove(force=True)
                     count += 1
+                    logger.info("Cleaned up orphaned container %s", container.name)
                 except Exception:
                     pass
             return count

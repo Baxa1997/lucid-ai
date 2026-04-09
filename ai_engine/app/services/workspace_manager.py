@@ -115,13 +115,15 @@ class WorkspaceManager:
                 except Exception:
                     pass
 
-                # Pull latest changes
+                # Pull latest changes — hard 90 s cap so a stalled TCP
+                # connection can't block the workspace forever.
                 try:
-                    await pull_latest(
-                        workspace_dir=info.path,
-                        branch=info.branch,
-                        token=info.git_token,
-                    )
+                    async with asyncio.timeout(90):
+                        await pull_latest(
+                            workspace_dir=info.path,
+                            branch=info.branch,
+                            token=info.git_token,
+                        )
                     try:
                         await websocket.send_json({
                             "type": "progress",
@@ -182,11 +184,12 @@ class WorkspaceManager:
                     pass
 
                 try:
-                    await pull_latest(
-                        workspace_dir=workspace_path,
-                        branch=branch,
-                        token=git_token,
-                    )
+                    async with asyncio.timeout(90):
+                        await pull_latest(
+                            workspace_dir=workspace_path,
+                            branch=branch,
+                            token=git_token,
+                        )
                     try:
                         await websocket.send_json({
                             "type": "progress",
@@ -239,6 +242,16 @@ class WorkspaceManager:
                 branch=branch,
                 workspace_dir=workspace_path,
             )
+        except asyncio.CancelledError:
+            # Task was cancelled mid-clone — unregister to avoid memory leak
+            logger.warning(
+                "Clone cancelled for conversation %s — unregistering workspace",
+                conversation_id,
+            )
+            async with self._lock:
+                self._workspaces.pop(conversation_id, None)
+            shutil.rmtree(workspace_path, ignore_errors=True)
+            raise  # Re-raise so the cancellation propagates correctly
         except Exception as e:
             logger.error(
                 "Clone failed for conversation %s: %s",

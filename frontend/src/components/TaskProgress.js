@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils';
  * @param {string} completionSummary - Summary text when all phases are done
  */
 export default function TaskProgress({ phases = [], status, completionSummary = '' }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
 
   if (phases.length === 0) return null;
 

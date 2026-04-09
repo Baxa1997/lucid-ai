@@ -88,9 +88,11 @@ export async function cloneTemplate(template, newRepoName, githubToken) {
   }
   const tree = await treeRes.json()
 
-  // ── Step 2: Create a new private repo under the org ───────────────────────
+  // ── Step 2: Create a new private repo under the authenticated user ─────────
+  // NOTE: LucidSoftware-tech is a User account, not an Org.
+  // Use /user/repos for user-scoped repos, not /orgs/.
   const createRes = await fetch(
-    `https://api.github.com/orgs/LucidSoftware-tech/repos`,
+    `https://api.github.com/user/repos`,
     {
       method: 'POST',
       headers,
@@ -103,29 +105,41 @@ export async function cloneTemplate(template, newRepoName, githubToken) {
     }
   )
   const newRepo = await createRes.json()
-  if (!createRes.ok) throw new Error(`Repo creation failed: ${newRepo.message}`)
+  if (!createRes.ok) {
+    console.error('[cloneTemplate] Repo creation failed:', newRepo)
+    throw new Error(`Repo creation failed: ${newRepo.message}`)
+  }
 
   // ── Step 3: Fetch blob contents for every file in the template ────────────
   const files = tree.tree.filter(f => f.type === 'blob')
 
-  const fileContents = await Promise.all(
-    files.map(async (file) => {
+  const fileContents = []
+  for (const file of files) {
+    try {
       const res = await fetch(
         `https://api.github.com/repos/${template.repo}/contents/${file.path}`,
         { headers }
       )
+      if (!res.ok) {
+        console.warn(`[cloneTemplate] Skipping file ${file.path}: HTTP ${res.status}`)
+        continue
+      }
       const data = await res.json()
-      return { path: file.path, content: data.content, encoding: 'base64' }
-    })
-  )
+      if (data.content) {
+        fileContents.push({ path: file.path, content: data.content, encoding: 'base64' })
+      }
+    } catch (err) {
+      console.warn(`[cloneTemplate] Failed to fetch ${file.path}:`, err.message)
+    }
+  }
 
   // ── Step 4: Build and push the initial commit ─────────────────────────────
 
-  // 4a. Create a blob in the new repo for each file
-  const blobs = await Promise.all(
-    fileContents.map(async (file) => {
+  const blobs = []
+  for (const file of fileContents) {
+    try {
       const blobRes = await fetch(
-        `https://api.github.com/repos/LucidSoftware-tech/${newRepoName}/git/blobs`,
+        `https://api.github.com/repos/${newRepo.full_name}/git/blobs`,
         {
           method: 'POST',
           headers,
@@ -135,14 +149,20 @@ export async function cloneTemplate(template, newRepoName, githubToken) {
           })
         }
       )
+      if (!blobRes.ok) {
+        console.warn(`[cloneTemplate] Blob creation failed for ${file.path}: HTTP ${blobRes.status}`)
+        continue
+      }
       const blob = await blobRes.json()
-      return { path: file.path, mode: '100644', type: 'blob', sha: blob.sha }
-    })
-  )
+      blobs.push({ path: file.path, mode: '100644', type: 'blob', sha: blob.sha })
+    } catch (err) {
+      console.warn(`[cloneTemplate] Blob error for ${file.path}:`, err.message)
+    }
+  }
 
   // 4b. Create a git tree from all blobs
   const newTreeRes = await fetch(
-    `https://api.github.com/repos/LucidSoftware-tech/${newRepoName}/git/trees`,
+    `https://api.github.com/repos/${newRepo.full_name}/git/trees`,
     {
       method: 'POST',
       headers,
@@ -150,11 +170,14 @@ export async function cloneTemplate(template, newRepoName, githubToken) {
     }
   )
   const newTree = await newTreeRes.json()
-  if (!newTreeRes.ok) throw new Error(`Tree creation failed: ${newTree.message}`)
+  if (!newTreeRes.ok) {
+    console.error('[cloneTemplate] Tree creation failed:', newTree)
+    throw new Error(`Tree creation failed: ${newTree.message}`)
+  }
 
   // 4c. Create the initial commit (no parents — empty repo)
   const commitRes = await fetch(
-    `https://api.github.com/repos/LucidSoftware-tech/${newRepoName}/git/commits`,
+    `https://api.github.com/repos/${newRepo.full_name}/git/commits`,
     {
       method: 'POST',
       headers,
@@ -166,11 +189,14 @@ export async function cloneTemplate(template, newRepoName, githubToken) {
     }
   )
   const commit = await commitRes.json()
-  if (!commitRes.ok) throw new Error(`Commit creation failed: ${commit.message}`)
+  if (!commitRes.ok) {
+    console.error('[cloneTemplate] Commit creation failed:', commit)
+    throw new Error(`Commit creation failed: ${commit.message}`)
+  }
 
   // 4d. Point the main branch ref at the new commit
   const refRes = await fetch(
-    `https://api.github.com/repos/LucidSoftware-tech/${newRepoName}/git/refs`,
+    `https://api.github.com/repos/${newRepo.full_name}/git/refs`,
     {
       method: 'POST',
       headers,
@@ -182,6 +208,7 @@ export async function cloneTemplate(template, newRepoName, githubToken) {
   )
   if (!refRes.ok) {
     const refErr = await refRes.json()
+    console.error('[cloneTemplate] Ref creation failed:', refErr)
     throw new Error(`Ref creation failed: ${refErr.message}`)
   }
 
