@@ -673,8 +673,10 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
           if (hydrated.length > 0) {
             setChatMessages(prev => {
               if (prev.length === 0) return hydrated;
-              const prevKeys = new Set(prev.map(p => `${p.role}::${(p.content || '').slice(0, 80)}`));
-              const toAdd = hydrated.filter(h => !prevKeys.has(`${h.role}::${(h.content || '').slice(0, 80)}`));
+              // Use a Map keyed by stable message ID — eliminates false-positive
+              // dedup for two agent messages that share the same first 80 chars.
+              const existingById = new Map(prev.map(p => [p.id, p]));
+              const toAdd = hydrated.filter(h => !existingById.has(h.id));
               return toAdd.length > 0 ? [...toAdd, ...prev] : prev;
             });
           }

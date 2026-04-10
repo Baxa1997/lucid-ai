@@ -2123,29 +2123,9 @@ Call the write_project_files tool with ALL files.
     return True
 
 
-# ╔══════════════════════════════════════════════════════════════╗
-# ║  LEGACY COMPATIBILITY — re-export functions used elsewhere  ║
-# ╚══════════════════════════════════════════════════════════════╝
-
-# The old project_generator_legacy.py exposed these functions.
-# Re-export them so nothing breaks during transition.
-try:
-    from app.services.project_generator_legacy import (
-        research_app_requirements,
-        generate_app_structure,
-        VALID_APP_TYPES,
-    )
-except ImportError:
-    # Legacy file not present — provide stubs
-    VALID_APP_TYPES = [
-        "admin_panel", "dashboard", "e_commerce", "saas_app",
-        "landing_page", "blog", "portfolio", "crm", "erp",
-        "logistics", "healthcare", "finance", "education", "other",
-    ]
-    
-    async def research_app_requirements(app_description, send_progress=None):
-        return {"app_type": "other", "must_have_features": [], "standard_pages": []}
-    
-    async def generate_app_structure(app_description, research, stack="nextjs", send_progress=None):
-        return {"app_name": "project", "pages": [], "shared_components": []}
+VALID_APP_TYPES = [
+    "admin_panel", "dashboard", "e_commerce", "saas_app",
+    "landing_page", "blog", "portfolio", "crm", "erp",
+    "logistics", "healthcare", "finance", "education", "other",
+]
 

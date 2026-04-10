@@ -31,9 +31,9 @@ from fastapi import WebSocket
 
 logger = logging.getLogger("lucid.build_validator")
 
-# Import helpers from task_pipeline
+# Import helpers from pipeline package
 try:
-    from app.services.task_pipeline import (
+    from app.services.pipeline import (
         detect_package_manager,
         _pm_install_cmd,
         _pm_env,

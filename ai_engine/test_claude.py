@@ -1,5 +1,5 @@
 import asyncio
-from app.services.task_pipeline import execute_with_claude
+from app.services.pipeline import execute_with_claude
 
 async def main():
     classifica = {"model_id": "anthropic/claude-sonnet-4-6", "max_turns": 3}

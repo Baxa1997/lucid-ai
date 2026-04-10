@@ -27,7 +27,7 @@ from app.services.sessions import (
     store as session_store,
 )
 from app.services.git_operations import push_changes, get_git_status
-from app.services.task_pipeline import run_pipeline, PLATFORM_GITHUB_TOKEN
+from app.services.pipeline import run_pipeline, PLATFORM_GITHUB_TOKEN
 from app.services.workspace_manager import workspace_manager
 from app.services.dev_server import launch_dev_preview
 from app.supabase_client import db_client
@@ -370,7 +370,7 @@ async def websocket_agent(websocket: WebSocket):
             # a follow-up task. The file tree must be sent every time.
             if session.workspace_dir and os.path.isdir(session.workspace_dir):
                 try:
-                    from app.services.task_pipeline import _send_file_tree
+                    from app.services.pipeline import _send_file_tree
                     await _send_file_tree(websocket, session.workspace_dir)
                     logger.info("Sent file_tree on reconnect for session %s", session.session_id)
                 except Exception as ft_err:
@@ -647,7 +647,7 @@ async def websocket_agent(websocket: WebSocket):
 
                     # Send the file tree so the Code tab is populated immediately
                     try:
-                        from app.services.task_pipeline import _send_file_tree
+                        from app.services.pipeline import _send_file_tree
                         await _send_file_tree(websocket, pre_workspace)
                     except Exception as ft_err:
                         logger.warning("Pre-clone file_tree failed: %s", ft_err)

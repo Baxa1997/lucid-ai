@@ -284,7 +284,7 @@ async def _try_recover_repo_from_db(
 
     try:
         from app.supabase_client import db_client
-        from app.services.task_pipeline import PLATFORM_GITHUB_TOKEN
+        from app.services.pipeline import PLATFORM_GITHUB_TOKEN
 
         async with db_client(None) as sb:
             result = await (
