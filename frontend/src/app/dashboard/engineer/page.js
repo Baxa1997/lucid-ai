@@ -16,7 +16,7 @@ import {
 import { useRouter } from 'next/navigation';
 import { useState, useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
-import { createConversation, listConversations } from '@/lib/conversations';
+import { listConversations } from '@/lib/conversations';
 import { useWizard } from './layout';
 import CustomSelect from '@/components/ui/CustomSelect';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
@@ -258,9 +258,8 @@ export default function EngineerDashboardPage() {
       // handles intelligent stack detection as part of the pipeline.
       const resolvedStack = advancedOpts.stack === 'auto' ? 'nextjs' : advancedOpts.stack;
 
-      // Create conversation FIRST — this is the only blocking call
-      const conversation = await createConversation({ repoName: null, repoProvider: null, repoUrl: null, branch: 'main', title: text.slice(0, 80) });
-      const cid = conversation?.id || `wizard-${Date.now()}`;
+      // Generate a stable UUID for this workspace — no DB round-trip needed
+      const cid = crypto.randomUUID();
 
       // Store raw prompt in sessionStorage — the backend pipeline's
       // Gemini research phase replaces the old frontend prompt enhancement.
@@ -278,16 +277,9 @@ export default function EngineerDashboardPage() {
     }
   };
 
-  const handleLaunchProject = async (pr) => {
+  const handleLaunchProject = (pr) => {
     if (!pr.projectId) return;
     setIsLaunching(true);
-    try {
-      const { getConversation } = await import('@/lib/conversations');
-      const existing = await getConversation(pr.projectId);
-      if (!existing) {
-        await createConversation({ repoName: pr.repoName || '', repoProvider: 'github', repoUrl: pr.repoUrl || '', branch: 'main', title: pr.projectName || pr.repoName || 'Project' });
-      }
-    } catch {}
     router.push(`/dashboard/engineer/workspace/${pr.projectId}`);
   };
 

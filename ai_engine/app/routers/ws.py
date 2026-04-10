@@ -29,7 +29,10 @@ from app.services.sessions import (
 from app.services.git_operations import push_changes, get_git_status
 from app.services.task_pipeline import run_pipeline, PLATFORM_GITHUB_TOKEN
 from app.services.workspace_manager import workspace_manager
+from app.services.dev_server import launch_dev_preview
 from app.supabase_client import db_client
+from app.workspace_states import WorkspaceState, transition as ws_transition
+from app.services.workspace_resolver import resolve_workspace_path, ResolvePath
 
 router = APIRouter()
 
@@ -165,6 +168,7 @@ async def websocket_agent(websocket: WebSocket):
     streaming_task: Optional[asyncio.Task] = None
     pipeline_task: Optional[asyncio.Task] = None
     chat_session_id: Optional[str] = None
+    reconnect_chat_session_id: Optional[str] = None
     conversation_id: str = str(uuid.uuid4())  # unique per WS connection
 
     try:
@@ -290,6 +294,43 @@ async def websocket_agent(websocket: WebSocket):
                 logger.info("Session branch refreshed → %s", fresh_branch)
 
             logger.info("Reconnecting to existing session %s for project %s", session.session_id, project_id)
+
+            # ── Look up chat session early so we can replay history ────────────
+            reconnect_chat_session_id = None
+            try:
+                async with db_client(ws_user.raw_jwt) as client:
+                    result = await (
+                        client.table("chat_sessions")
+                        .select("id")
+                        .eq("user_id", user_id)
+                        .eq("agent_session_id", session.session_id)
+                        .order("created_at", desc=True)
+                        .limit(1)
+                        .execute()
+                    )
+                if result.data:
+                    reconnect_chat_session_id = result.data[0]["id"]
+                elif project_id:
+                    async with db_client(ws_user.raw_jwt) as client:
+                        result = await (
+                            client.table("chat_sessions")
+                            .select("id")
+                            .eq("user_id", user_id)
+                            .eq("project_id", project_id)
+                            .order("created_at", desc=True)
+                            .limit(1)
+                            .execute()
+                        )
+                    if result.data:
+                        reconnect_chat_session_id = result.data[0]["id"]
+            except Exception as exc:
+                logger.warning("Failed to look up chat session on reconnect: %s", exc)
+
+            await ws_transition(
+                session, websocket, WorkspaceState.READY,
+                "Reconnected to existing workspace.",
+                reconnected=True,
+            )
             await websocket.send_json({
                 "type": "status",
                 "status": "ready",
@@ -297,6 +338,32 @@ async def websocket_agent(websocket: WebSocket):
                 "reconnected": True,
                 "message": "Reconnected to existing workspace.",
             })
+
+            # ── Replay recent chat history so client can restore chat panel ──
+            if reconnect_chat_session_id:
+                try:
+                    async with db_client(ws_user.raw_jwt) as client:
+                        hist = await (
+                            client.table("chat_messages")
+                            .select("id, role, content, created_at")
+                            .eq("session_id", reconnect_chat_session_id)
+                            .order("created_at", desc=False)
+                            .limit(40)
+                            .execute()
+                        )
+                    if hist.data:
+                        await websocket.send_json({
+                            "type": "chat_history",
+                            "messages": hist.data,
+                        })
+                        logger.info(
+                            "Sent %d chat_history messages on reconnect for session %s",
+                            len(hist.data), session.session_id,
+                        )
+                    # Store for later use
+                    chat_session_id = reconnect_chat_session_id
+                except Exception as hist_err:
+                    logger.warning("Failed to send chat_history on reconnect: %s", hist_err)
 
             # ── Send file tree immediately on reconnect ──────────
             # Without this, the Code tab stays empty until the user sends
@@ -343,6 +410,10 @@ async def websocket_agent(websocket: WebSocket):
                     api_key=api_key or "",
                     project_id=project_id,
                 )
+                await ws_transition(
+                    session, websocket, WorkspaceState.RESOLVING,
+                    "Initializing workspace...",
+                )
             except HTTPException as rate_err:
                 # Rate limit or other HTTP error from create_session
                 logger.warning("Session creation rejected: %s", rate_err.detail)
@@ -373,40 +444,10 @@ async def websocket_agent(websocket: WebSocket):
             except Exception as exc:
                 logger.warning("Failed to create chat session in DB: %s", exc)
         else:
-            # On reconnect — look up the existing chat session_id so
-            # follow-up messages are still persisted after the reconnect.
-            try:
-                async with db_client(ws_user.raw_jwt) as client:
-                    # First try by agent_session_id
-                    result = await (
-                        client.table("chat_sessions")
-                        .select("id")
-                        .eq("user_id", user_id)
-                        .eq("agent_session_id", session.session_id)
-                        .order("created_at", desc=True)
-                        .limit(1)
-                        .execute()
-                    )
-                if result.data:
-                    chat_session_id = result.data[0]["id"]
-                    logger.info("Reconnected to existing chat session %s", chat_session_id)
-                elif project_id:
-                    # Fallback: find by project_id
-                    async with db_client(ws_user.raw_jwt) as client:
-                        result = await (
-                            client.table("chat_sessions")
-                            .select("id")
-                            .eq("user_id", user_id)
-                            .eq("project_id", project_id)
-                            .order("created_at", desc=True)
-                            .limit(1)
-                            .execute()
-                        )
-                    if result.data:
-                        chat_session_id = result.data[0]["id"]
-                        logger.info("Found chat session %s by project_id %s", chat_session_id, project_id)
-            except Exception as exc:
-                logger.warning("Failed to look up existing chat session on reconnect: %s", exc)
+            # On reconnect — chat_session_id was already looked up above (early lookup)
+            # and stored in chat_session_id via reconnect_chat_session_id. Nothing to do.
+            if reconnect_chat_session_id:
+                logger.info("Using chat session %s (found during early reconnect lookup)", reconnect_chat_session_id)
 
         # ── 3. Pipeline handles agent execution ──────────
         # NOTE: The old mock gate (sdk.OPENHANDS_AVAILABLE) is removed.
@@ -419,39 +460,56 @@ async def websocket_agent(websocket: WebSocket):
         # Only send the "ready" message for NEW sessions.
         # For reconnects we already sent it at step 2 above (reconnected=True).
         if not existing:
-            # ── Hydrate session.repo_url for returning wizard projects ──────
-            # Wizard projects don't have a repo_url in the handshake (no user
-            # repo provided), but after Phase 7 the pipeline creates a platform
-            # GitHub repo and saves its URL to chat_sessions.platform_repo_url.
-            # Look that up now so the pre-clone below can clone it.
-            if not session.repo_url and project_id and user_jwt:
-                try:
-                    async with db_client(user_jwt) as client:
-                        _repo_result = await (
-                            client.table("chat_sessions")
-                            .select("platform_repo_url")
-                            .eq("project_id", project_id)
-                            .order("created_at", desc=True)
-                            .limit(1)
-                            .execute()
-                        )
-                    if _repo_result.data and _repo_result.data[0].get("platform_repo_url"):
-                        session.repo_url = _repo_result.data[0]["platform_repo_url"]
-                        session.git_token = session.git_token or PLATFORM_GITHUB_TOKEN or ""
-                        logger.info(
-                            "Hydrated session.repo_url from chat_sessions: %s",
-                            session.repo_url,
-                        )
-                except Exception as _hydrate_err:
-                    logger.warning("Failed to hydrate repo_url from chat_sessions: %s", _hydrate_err)
+            # ── Resolve workspace path (A / B / C) ───────────────
+            # Determines what to clone (or not), emits structured progress
+            # events so the frontend always shows meaningful loading text.
+            # Also patches session.repo_url in-place when a platform repo
+            # is found in the DB (returning wizard projects).
+            resolve_result = await resolve_workspace_path(
+                task=task,
+                session=session,
+                websocket=websocket,
+                project_id=project_id,
+                user_jwt=user_jwt,
+            )
 
-            # ── Pre-clone repo for existing conversations ─────────
-            # For conversations that have a repoUrl (existing GitHub/GitLab project),
-            # clone the repo NOW so the workspace is ready when the user's first task
-            # arrives — no cold-start clone delay on the first message.
-            if session.repo_url and project_id:
-                # ── Heartbeat task: sends progress pings every 8s so the UI
-                # doesn't appear frozen during the ~30s clone.
+            # ── If the wizard header was present but resolver chose Path B ──
+            # This means the project was already created successfully in a
+            # previous run. Strip the task so the pipeline does NOT auto-run
+            # again — the user is just re-opening the workspace.
+            if resolve_result.path == ResolvePath.EXISTING_REPO and "[LUCID_PROJECT]" in task:
+                logger.info(
+                    "Wizard task present but project already exists (Path B) — "
+                    "clearing task to prevent duplicate generation for project %s",
+                    project_id,
+                )
+                task = ""
+
+            # ── Phase 3: Clone → validate → install ──────────────
+            # Path A (new_project):  workspace is intentionally empty — AI generates code
+            # Path B (existing_repo): shallow clone (30s) → validate → npm install (60s)
+            # Path C (conversation):  no repo, skip clone entirely
+            #
+            # clone_fatal: set to True when clone fails hard so we skip READY
+            # and let the frontend show an error recovery card.
+            clone_fatal = False
+
+            if resolve_result.path == ResolvePath.NEW_PROJECT:
+                # Workspace starts empty — that is correct, not an error.
+                # The AI will generate all files when the task runs.
+                await websocket.send_json({
+                    "type": "workspace_empty",
+                    "message": "Waiting for AI to generate code...",
+                    "path": "new_project",
+                })
+
+            elif resolve_result.path == ResolvePath.EXISTING_REPO and session.repo_url and project_id:
+                await ws_transition(
+                    session, websocket, WorkspaceState.CLONING,
+                    "Cloning repository...",
+                )
+
+                # ── Heartbeat: progress pings every 8s so the UI never freezes ──
                 _clone_stop = asyncio.Event()
 
                 async def _clone_heartbeat():
@@ -477,81 +535,175 @@ async def websocket_agent(websocket: WebSocket):
                         _i += 1
 
                 heartbeat_task = asyncio.create_task(_clone_heartbeat())
+                pre_workspace = None
                 try:
-                    await websocket.send_json({
-                        "type": "status",
-                        "status": "initializing",
-                        "message": "Cloning repository…",
-                    })
-                    pre_validated = {
-                        "repo_url": session.repo_url,
-                        "branch": session.branch or "main",
-                        "git_token": session.git_token or "",
-                    }
-                    pre_workspace = await workspace_manager.get_or_create_workspace(
-                        conversation_id=project_id,
-                        validated=pre_validated,
-                        websocket=websocket,
-                    )
-                    if pre_workspace:
-                        session.workspace_dir = pre_workspace
-                        # Send the file tree so the Code tab is populated immediately
-                        try:
-                            from app.services.task_pipeline import _send_file_tree
-                            await _send_file_tree(websocket, pre_workspace)
-                        except Exception as ft_err:
-                            logger.warning("Pre-clone file_tree failed: %s", ft_err)
-                        logger.info(
-                            "Pre-cloned repo for project %s at %s",
-                            project_id, pre_workspace,
+                    # Hard 30-second cap on clone — shallow clone should always
+                    # fit within this window. If it doesn't, something is wrong.
+                    async with asyncio.timeout(30):
+                        pre_validated = {
+                            "repo_url": session.repo_url,
+                            "branch": session.branch or "main",
+                            "git_token": session.git_token or "",
+                        }
+                        pre_workspace = await workspace_manager.get_or_create_workspace(
+                            conversation_id=project_id,
+                            validated=pre_validated,
+                            websocket=websocket,
                         )
-                    else:
-                        # workspace_manager returned None — clone failed internally
-                        await websocket.send_json({
-                            "type": "status",
-                            "status": "preparing",
-                            "message": "⚠️ Could not clone repository. Workspace ready in limited mode — you can still send tasks.",
-                        })
+                except (asyncio.TimeoutError, TimeoutError):
+                    sanitised_url = resolve_result.repo_display or "repository"
+                    logger.warning("Clone timed out after 30s for project %s", project_id)
+                    clone_fatal = True
+                    await ws_transition(
+                        session, websocket, WorkspaceState.ERROR,
+                        f"Clone timed out — could not fetch {sanitised_url} within 30 seconds.",
+                        error_stage="clone",
+                    )
                 except Exception as clone_err:
                     sanitised = str(clone_err)
                     if session.git_token:
                         sanitised = sanitised.replace(session.git_token, "***")
-                    logger.warning(
-                        "Pre-clone failed for project %s: %s",
-                        project_id, sanitised,
+                    logger.warning("Pre-clone failed for project %s: %s", project_id, sanitised)
+                    clone_fatal = True
+                    await ws_transition(
+                        session, websocket, WorkspaceState.ERROR,
+                        f"Could not clone repository: {sanitised[:120]}",
+                        error_stage="clone",
                     )
-                    try:
-                        await websocket.send_json({
-                            "type": "status",
-                            "status": "preparing",
-                            "message": f"⚠️ Repository clone failed: {sanitised[:120]}. Workspace ready — clone will be retried on your first task.",
-                        })
-                    except Exception:
-                        pass
                 finally:
                     _clone_stop.set()
                     await asyncio.gather(heartbeat_task, return_exceptions=True)
 
-            ready_msg = "Workspace ready. You can start giving tasks."
-            if session.repo_url:
-                ready_msg = (
-                    "Repository cloned. "
-                    "The agent has terminal, file editor, and browser tools available. "
-                    "You can start giving tasks."
+                if not clone_fatal and pre_workspace:
+                    session.workspace_dir = pre_workspace
+
+                    # ── Validate: package.json must exist for npm install ──────
+                    import subprocess as _subprocess
+                    pkg_json = os.path.join(pre_workspace, "package.json")
+                    if not os.path.exists(pkg_json):
+                        logger.info(
+                            "No package.json in cloned repo — skipping npm install"
+                        )
+                    else:
+                        # ── INSTALLING: npm install with 60-second hard cap ────
+                        await ws_transition(
+                            session, websocket, WorkspaceState.INSTALLING,
+                            "Installing dependencies...",
+                        )
+                        try:
+                            async with asyncio.timeout(60):
+                                _install = await asyncio.to_thread(
+                                    _subprocess.run,
+                                    [
+                                        "npm", "install",
+                                        "--prefer-offline",
+                                        "--no-audit",
+                                        "--loglevel=error",
+                                    ],
+                                    cwd=pre_workspace,
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=55,
+                                )
+                            if _install.returncode != 0:
+                                _err = (_install.stderr or _install.stdout or "")[:200]
+                                await websocket.send_json({
+                                    "type": "warning",
+                                    "message": f"npm install errors: {_err}",
+                                })
+                                logger.warning(
+                                    "npm install failed (non-fatal) for project %s: %s",
+                                    project_id, _err,
+                                )
+                            else:
+                                await websocket.send_json({
+                                    "type": "progress",
+                                    "message": "✅ Dependencies installed",
+                                })
+                                logger.info(
+                                    "npm install succeeded for project %s", project_id
+                                )
+                        except _subprocess.TimeoutExpired:
+                            await websocket.send_json({
+                                "type": "warning",
+                                "message": "⚠️ npm install timed out — dependencies may be missing",
+                            })
+                            logger.warning(
+                                "npm install timed out (subprocess) for project %s", project_id
+                            )
+                        except (asyncio.TimeoutError, TimeoutError):
+                            await websocket.send_json({
+                                "type": "warning",
+                                "message": "⚠️ npm install timed out after 60s — workspace ready but dependencies may be missing",
+                            })
+                            logger.warning(
+                                "npm install timed out (asyncio) for project %s", project_id
+                            )
+                        except Exception as _install_err:
+                            logger.warning(
+                                "npm install error (non-fatal) for project %s: %s",
+                                project_id, _install_err,
+                            )
+
+                    # Send the file tree so the Code tab is populated immediately
+                    try:
+                        from app.services.task_pipeline import _send_file_tree
+                        await _send_file_tree(websocket, pre_workspace)
+                    except Exception as ft_err:
+                        logger.warning("Pre-clone file_tree failed: %s", ft_err)
+
+                    # ── Phase 4: Start dev server (STARTING → HEALTH_CHECK) ──
+                    # Non-fatal: if it fails, workspace is still usable.
+                    # Only attempted for JS projects that have a "dev" script.
+                    try:
+                        await launch_dev_preview(
+                            workspace_path=pre_workspace,
+                            session=session,
+                            websocket=websocket,
+                            chat_session_id=chat_session_id or "",
+                        )
+                    except Exception as _dev_err:
+                        logger.warning(
+                            "Dev server launch failed (non-fatal) for project %s: %s",
+                            project_id, _dev_err,
+                        )
+
+                    logger.info(
+                        "Workspace fully initialized for project %s at %s",
+                        project_id, pre_workspace,
+                    )
+                elif not clone_fatal:
+                    await websocket.send_json({
+                        "type": "status",
+                        "status": "preparing",
+                        "message": "⚠️ Could not clone repository. Workspace ready in limited mode — you can still send tasks.",
+                    })
+
+            if not clone_fatal:
+                ready_msg = "Workspace ready. You can start giving tasks."
+                if session.repo_url:
+                    ready_msg = (
+                        "Repository cloned. "
+                        "The agent has terminal, file editor, and browser tools available. "
+                        "You can start giving tasks."
+                    )
+                await ws_transition(
+                    session, websocket, WorkspaceState.READY, ready_msg,
                 )
-            await websocket.send_json({
-                "type": "status",
-                "status": "ready",
-                "sessionId": session.session_id,
-                "message": ready_msg,
-            })
+                await websocket.send_json({
+                    "type": "status",
+                    "status": "ready",
+                    "sessionId": session.session_id,
+                    "message": ready_msg,
+                })
 
         # NOTE: stream_events_to_ws removed — OpenHands Conversation no longer
         # created. Claude Code SDK sends events directly via WebSocket.
         streaming_task = None
 
         # ── If task was included in handshake, run it immediately ─
-        if task and not existing:
+        # Skip if clone_fatal — workspace is in ERROR state, no point running the task.
+        if task and not existing and not clone_fatal:
             # ── Step 1: Save user task to DB ──────────────────
             if chat_session_id:
                 try:
@@ -564,6 +716,10 @@ async def websocket_agent(websocket: WebSocket):
                     logger.warning("Failed to persist user message: %s", exc)
 
             # ── Step: Got Task ────────────────────────────────
+            await ws_transition(
+                session, websocket, WorkspaceState.UPDATING,
+                "Agent starting task...",
+            )
             await websocket.send_json({
                 "type": "step", "step": "got_task",
                 "label": "Got task", "done": True,
@@ -730,6 +886,10 @@ async def websocket_agent(websocket: WebSocket):
                             pass
 
             if pipeline_stopped:
+                await ws_transition(
+                    session, websocket, WorkspaceState.READY,
+                    "Task stopped. Ready for next instruction.",
+                )
                 await websocket.send_json({
                     "type": "status",
                     "status": "ready",
@@ -803,6 +963,10 @@ async def websocket_agent(websocket: WebSocket):
                     chat_session_id, task, session, user_jwt
                 )
 
+                await ws_transition(
+                    session, websocket, WorkspaceState.READY,
+                    "Task completed. Ready for next instruction.",
+                )
                 await websocket.send_json({
                     "type": "status",
                     "status": "ready",
@@ -840,6 +1004,33 @@ async def websocket_agent(websocket: WebSocket):
             if not content and followup_images:
                 content = f"Analyze the {len(followup_images)} attached image(s) and implement any changes they suggest."
 
+            # ── Retry preview — restart dev server without re-cloning ───
+            if msg_type == "retry_preview":
+                workspace_path = session.workspace_dir
+                if workspace_path and os.path.isdir(workspace_path):
+                    logger.info("retry_preview: restarting dev server for %s", project_id)
+                    try:
+                        await launch_dev_preview(
+                            workspace_path=workspace_path,
+                            session=session,
+                            websocket=websocket,
+                            chat_session_id=chat_session_id or "",
+                        )
+                    except Exception as retry_preview_err:
+                        logger.warning("retry_preview failed: %s", retry_preview_err)
+                        await websocket.send_json({
+                            "type": "preview_error",
+                            "error_stage": "start",
+                            "message": f"Failed to restart preview: {str(retry_preview_err)[:120]}",
+                        })
+                else:
+                    await websocket.send_json({
+                        "type": "preview_error",
+                        "error_stage": "no_workspace",
+                        "message": "No workspace available. Please refresh the page.",
+                    })
+                continue
+
             if msg_type == "push":
                 # Explicit push request from client
                 new_branch = data.get("newBranch")
@@ -864,6 +1055,10 @@ async def websocket_agent(websocket: WebSocket):
                     logger.warning("Failed to persist follow-up message: %s", exc)
 
             # ── Step: Got Task ────────────────────────────────
+            await ws_transition(
+                session, websocket, WorkspaceState.UPDATING,
+                "Agent working on task...",
+            )
             await websocket.send_json({
                 "type": "step", "step": "got_task",
                 "label": "Got task", "done": True,
@@ -993,6 +1188,10 @@ async def websocket_agent(websocket: WebSocket):
                             pass
 
             if followup_stopped:
+                await ws_transition(
+                    session, websocket, WorkspaceState.READY,
+                    "Task stopped. Ready for next instruction.",
+                )
                 await websocket.send_json({
                     "type": "status",
                     "status": "ready",
@@ -1042,6 +1241,10 @@ async def websocket_agent(websocket: WebSocket):
                     chat_session_id, content, session, user_jwt
                 )
 
+                await ws_transition(
+                    session, websocket, WorkspaceState.READY,
+                    "Task completed. Ready for next instruction.",
+                )
                 await websocket.send_json({
                     "type": "status",
                     "status": "ready",
@@ -1065,6 +1268,11 @@ async def websocket_agent(websocket: WebSocket):
     except Exception as exc:
         logger.error("WebSocket error (session=%s): %s", getattr(session, "session_id", "?"), exc, exc_info=True)
         try:
+            if session:
+                await ws_transition(
+                    session, websocket, WorkspaceState.ERROR,
+                    "An internal error occurred. Please try again.",
+                )
             await websocket.send_json({
                 "type": "error",
                 "message": "An internal error occurred. Please try again.",

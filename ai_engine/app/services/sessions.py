@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from app.config import logger, settings, EVENT_BUFFER_MAX_SIZE
+from app.workspace_states import WorkspaceState
 
 # Sessions expire after 2 hours of inactivity (production-safe)
 SESSION_TTL_SECONDS = 2 * 60 * 60   # 2 hours
@@ -51,6 +52,7 @@ class AgentSession:
         "agent", "llm",
         "event_buffer", "container_id", "project_id",
         "repo_context", "last_agent_message",
+        "workspace_state",  # current WorkspaceState — set only via workspace_states.transition()
     )
 
     def __init__(
@@ -87,6 +89,9 @@ class AgentSession:
 
         # Queue for streaming events to the WebSocket handler
         self.event_buffer: asyncio.Queue = asyncio.Queue(maxsize=EVENT_BUFFER_MAX_SIZE)
+
+        # Authoritative state — mutated only via workspace_states.transition()
+        self.workspace_state: str = WorkspaceState.ENTRY
 
     def touch(self) -> None:
         """Update last_active timestamp."""

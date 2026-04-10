@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/gatekeeper';
 import { selectTemplate, cloneTemplate } from '@/services/template.service';
-import { getSupabaseServerClient } from '@/lib/supabase/server';
 
 // ─────────────────────────────────────────────────────────
 //  POST /api/clone-template
@@ -75,26 +74,6 @@ export async function POST(req) {
       { error: err.message || 'Template clone failed' },
       { status: 502 }
     );
-  }
-
-  // ── Optionally update the conversation with repo metadata ─
-  if (conversationId) {
-    try {
-      const supabase = await getSupabaseServerClient();
-      await supabase
-        .from('conversations')
-        .update({
-          repo_name: repoName,
-          repo_url: repo.repoUrl,
-          repo_provider: 'github',
-          status: 'template_cloned',
-        })
-        .eq('id', conversationId)
-        .eq('user_id', ctx.userId);
-    } catch (err) {
-      // Non-fatal — log and continue
-      console.warn('[clone-template] Failed to stamp conversation:', err.message);
-    }
   }
 
   return NextResponse.json({

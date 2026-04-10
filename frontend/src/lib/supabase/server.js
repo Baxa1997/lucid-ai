@@ -4,18 +4,24 @@ import { cookies } from 'next/headers';
 // ─────────────────────────────────────────────────────────
 //  Lucid AI — Supabase Server Client
 //  Used in API Routes and Server Actions
+//
+//  Uses the access token from cookies as an Authorization
+//  header — no network call needed. This avoids the
+//  intermittent `fetch failed` errors that occur when
+//  setSession() tries to refresh an expired token in Docker.
 // ─────────────────────────────────────────────────────────
 
 /**
  * Creates a Supabase client for server-side use.
- * Reads session tokens from cookies set by the auth callback.
+ * Reads the access token from cookies and passes it via
+ * the Authorization header — RLS policies evaluate it via
+ * auth.uid() without any network round-trip to Supabase Auth.
  */
 export async function getSupabaseServerClient() {
   const cookieStore = await cookies();
   const accessToken = cookieStore.get('sb-access-token')?.value;
-  const refreshToken = cookieStore.get('sb-refresh-token')?.value;
 
-  const supabase = createClient(
+  return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
     {
@@ -23,26 +29,11 @@ export async function getSupabaseServerClient() {
         persistSession: false,
         autoRefreshToken: false,
       },
+      global: accessToken
+        ? { headers: { Authorization: `Bearer ${accessToken}` } }
+        : {},
     }
   );
-
-  // If we have tokens, set the session manually
-  if (accessToken && refreshToken) {
-    const { error } = await supabase.auth.setSession({
-      access_token: accessToken,
-      refresh_token: refreshToken,
-    });
-
-    if (error) {
-      console.warn('[SupabaseServer] Failed to set session from cookies:', error.message);
-    }
-  } else if (!accessToken && !refreshToken) {
-    // No tokens at all — this is expected for unauthenticated requests
-  } else {
-    console.warn('[SupabaseServer] Partial tokens found — access:', !!accessToken, 'refresh:', !!refreshToken);
-  }
-
-  return supabase;
 }
 
 /**

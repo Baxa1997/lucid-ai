@@ -1595,6 +1595,18 @@ async def _generate_new_project_inner(
     """Inner implementation of generate_new_project (wrapped in try/except above)."""
     api_key = validated["anthropic_api_key"]
     gemini_key = validated["gemini_api_key"]
+
+    # generate_new_project is Claude-only (all 3 phases call Anthropic directly).
+    # If the user's stored key is a Gemini/Google key (not starting with "sk-ant-"),
+    # fall back to the server's ANTHROPIC_API_KEY so schema building and code generation work.
+    if not (api_key and api_key.startswith("sk-ant-")):
+        _server_anthropic = os.environ.get("ANTHROPIC_API_KEY", "")
+        if _server_anthropic:
+            logger.info(
+                "User key is not an Anthropic key; falling back to server ANTHROPIC_API_KEY for generation"
+            )
+            api_key = _server_anthropic
+
     stack = validated.get("project_stack", "") or validated.get("skeleton_stack", "")
     
     MODEL = DEFAULT_MODEL
@@ -1689,6 +1701,75 @@ async def _generate_new_project_inner(
             logger.warning("Failed to write db.json: %s", e)
     
     total_files = []
+
+    # ── Emit base44-style plan message to chat ──────────────
+    # Shows the user what we're about to build before code generation starts.
+    try:
+        _entities = project_schema.get("entities", [])
+        _pages    = project_schema.get("pages", [])
+        _sections = project_schema.get("sections", [])
+        _brand    = project_schema.get("brand", {})
+
+        # Key features — prefer sections (landing) then pages (admin)
+        _features: list[str] = []
+        if _sections:
+            for s in _sections[:6]:
+                t = s.get("type", "").replace("_", " ").title()
+                if t:
+                    _features.append(t + " section")
+        elif _pages:
+            for p in _pages:
+                name = p.get("title") or p.get("name", "")
+                ptype = p.get("type", "")
+                if name and ptype not in ("dashboard",):
+                    _features.append(f"{name} page")
+        if not _features and _entities:
+            _features = [
+                f"{e.get('name', '')} management"
+                for e in _entities[:5] if e.get("name")
+            ]
+
+        # Entity list with field hints
+        _entity_list = [
+            {
+                "name": e.get("name", ""),
+                "fields": ", ".join(
+                    f.get("name", "") for f in e.get("fields", [])[:5]
+                ),
+            }
+            for e in _entities if e.get("name")
+        ]
+
+        # Page/component list
+        _page_list = [
+            {"name": p.get("title") or p.get("name", ""), "type": p.get("type", "")}
+            for p in _pages if p.get("title") or p.get("name")
+        ][:12]
+
+        # Design hint from theme fonts
+        _theme = project_schema.get("theme", {})
+        _fonts = [f for f in [_theme.get("heading_font"), _theme.get("body_font")] if f]
+        _design_desc = (
+            f"Typography: {' + '.join(_fonts[:2])}. Clean, modern layout."
+            if _fonts else ""
+        )
+
+        _project_name = _brand.get("name") or (description[:40] if description else "your app")
+
+        await websocket.send_json({
+            "type": "chat_message",
+            "role": "agent",
+            "messageType": "plan",
+            "planData": {
+                "intro": f"I'll build **{_project_name}** for you. Let me plan this out first:",
+                "features": _features[:6],
+                "design": _design_desc,
+                "entities": _entity_list,
+                "pages": _page_list,
+            },
+        })
+    except Exception as _plan_exc:
+        logger.warning("Failed to emit plan message (non-fatal): %s", _plan_exc)
 
     # ── PHASE GATE: Research complete → Coding starts ──
     # Signal Phase 4 (Research) done, Phase 5 (Coding) active

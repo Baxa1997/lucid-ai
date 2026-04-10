@@ -48,34 +48,8 @@ export async function GET() {
       return true;
     });
 
-    // Get project names from conversations table
-    const projectIds = uniqueSessions.map(s => s.project_id);
-    const { data: conversations } = await supabase
-      .from('conversations')
-      .select('id, title, project_slug')
-      .in('id', projectIds);
-
-    const convMap = {};
-    (conversations || []).forEach(c => {
-      convMap[c.id] = c;
-    });
-
-    // Fetch deploy URLs if available
-    const { data: deployments } = await supabase
-      .from('project_deployments')
-      .select('project_id, deploy_url, status')
-      .eq('user_id', ctx.userId)
-      .in('project_id', projectIds);
-
-    const deployMap = {};
-    (deployments || []).forEach(d => {
-      deployMap[d.project_id] = d;
-    });
-
-    // Build response
+    // Build response — derive names from the repo URL directly
     const repos = uniqueSessions.map(s => {
-      const conv = convMap[s.project_id] || {};
-      const deploy = deployMap[s.project_id];
       const repoName = s.platform_repo_url
         ?.replace('https://github.com/', '')
         ?.split('/')
@@ -85,10 +59,10 @@ export async function GET() {
         projectId: s.project_id,
         repoUrl: s.platform_repo_url,
         repoName,
-        projectName: conv.title || conv.project_slug || repoName,
+        projectName: repoName,
         createdAt: s.created_at,
-        deployUrl: deploy?.deploy_url || s.vercel_url || null,
-        deployStatus: deploy?.status || (s.vercel_url ? 'deployed' : null),
+        deployUrl: s.vercel_url || null,
+        deployStatus: s.vercel_url ? 'deployed' : null,
       };
     });
 

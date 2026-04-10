@@ -38,40 +38,81 @@ export async function createConversation({ repoName, repoProvider, repoUrl, bran
 
 /**
  * List all conversations for the current user.
- * Ordered by most recent first.
+ * Reads from chat_sessions (the real data layer), deduplicates by project_id.
  */
 export async function listConversations() {
   const supabase = getSupabaseBrowserClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return [];
 
   const { data, error } = await supabase
-    .from('conversations')
-    .select('*')
+    .from('chat_sessions')
+    .select('project_id, user_repo_url, user_repo_provider, title, created_at, updated_at')
+    .eq('user_id', user.id)
+    .is('platform_repo_url', null)   // platform-generated projects live in All Apps, not here
     .order('updated_at', { ascending: false });
 
-  if (error) {
-    console.error('Failed to list conversations:', error);
-    return [];
-  }
-  return data || [];
+  if (error) return [];
+
+  // Deduplicate by project_id — keep the most recent session per project
+  const seen = new Set();
+  return (data || [])
+    .filter(row => {
+      if (!row.project_id) return false;
+      if (seen.has(row.project_id)) return false;
+      seen.add(row.project_id);
+      return true;
+    })
+    .map(row => {
+      const repoUrl = row.user_repo_url || null;
+      const repoName = repoUrl
+        ? repoUrl.replace(/\.git$/, '').split('/').slice(-2).join('/')
+        : null;
+      const fallbackTitle = repoName?.split('/').pop() || row.title || 'Project';
+      return {
+        id: row.project_id,
+        title: fallbackTitle,
+        repo_name: repoName,
+        repo_provider: row.user_repo_provider || null,
+        repo_url: repoUrl,
+        status: 'active',
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      };
+    });
 }
 
 /**
  * Get a single conversation by ID.
+ * Reads from chat_sessions (the real data layer) and shapes the result
+ * to match what the workspace page expects.
  */
 export async function getConversation(conversationId) {
   const supabase = getSupabaseBrowserClient();
 
   const { data, error } = await supabase
-    .from('conversations')
-    .select('*')
-    .eq('id', conversationId)
-    .single();
+    .from('chat_sessions')
+    .select('project_id, user_repo_url, user_repo_provider')
+    .eq('project_id', conversationId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
-  if (error) {
-    console.error('Failed to get conversation:', error);
-    return null;
-  }
-  return data;
+  if (error || !data) return null;
+
+  const repoUrl = data.user_repo_url || null;
+  const repoName = repoUrl
+    ? repoUrl.replace(/\.git$/, '').split('/').slice(-2).join('/')
+    : null;
+
+  return {
+    id: conversationId,
+    title: repoName?.split('/').pop() || 'Project',
+    repo_name: repoName,
+    repo_provider: data.user_repo_provider || null,
+    repo_url: repoUrl,
+    branch: 'main',
+  };
 }
 
 /**
@@ -95,15 +136,30 @@ export async function updateConversation(conversationId, updates) {
 }
 
 /**
- * Delete a conversation and all its messages (cascade).
+ * Delete a conversation — removes all chat_sessions (and cascaded messages)
+ * for the given project_id.
  */
 export async function deleteConversation(conversationId) {
   const supabase = getSupabaseBrowserClient();
 
   const { error } = await supabase
-    .from('conversations')
+    .from('chat_sessions')
     .delete()
-    .eq('id', conversationId);
+    .eq('project_id', conversationId);
+
+  return !error;
+}
+
+/**
+ * Delete multiple conversations at once.
+ */
+export async function deleteConversations(conversationIds) {
+  const supabase = getSupabaseBrowserClient();
+
+  const { error } = await supabase
+    .from('chat_sessions')
+    .delete()
+    .in('project_id', conversationIds);
 
   return !error;
 }

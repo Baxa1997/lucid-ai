@@ -10,6 +10,7 @@ import {
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import ThemeModeSelector from '@/components/ThemeModeSelector';
+import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 
 /* ── Dropdown Data ── */
 const productItems = [
@@ -109,11 +110,23 @@ function NavDropdown({ label, items, columns }) {
 export default function Navbar() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   useEffect(() => {
     const handleScroll = () => setIsScrolled(window.scrollY > 20);
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  useEffect(() => {
+    const supabase = getSupabaseBrowserClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setIsLoggedIn(!!session);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setIsLoggedIn(!!session);
+    });
+    return () => subscription.unsubscribe();
   }, []);
 
   return (
@@ -146,10 +159,18 @@ export default function Navbar() {
           {/* Right Actions */}
           <div className="hidden md:flex items-center gap-4">
             <ThemeModeSelector />
-            <Link href="/login" className="text-[15px] font-bold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors">Login</Link>
-            <Link href="/login" className="bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-[15px] font-semibold px-5 py-2.5 rounded-lg hover:shadow-lg hover:shadow-violet-500/30 transition-all duration-200 transform hover:-translate-y-0.5">
-              Start Building
-            </Link>
+            {isLoggedIn ? (
+              <Link href="/dashboard/engineer" className="bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-[15px] font-semibold px-5 py-2.5 rounded-lg hover:shadow-lg hover:shadow-violet-500/30 transition-all duration-200 transform hover:-translate-y-0.5">
+                Go to Dashboard
+              </Link>
+            ) : (
+              <>
+                <Link href="/login" className="text-[15px] font-bold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors">Login</Link>
+                <Link href="/login" className="bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-[15px] font-semibold px-5 py-2.5 rounded-lg hover:shadow-lg hover:shadow-violet-500/30 transition-all duration-200 transform hover:-translate-y-0.5">
+                  Start Building
+                </Link>
+              </>
+            )}
           </div>
 
           {/* Mobile Toggle */}
@@ -205,8 +226,14 @@ export default function Navbar() {
                 <span className="text-sm text-slate-500">Theme</span>
                 <ThemeModeSelector />
               </div>
-              <Link href="/login" className="block text-sm font-medium text-slate-600 dark:text-slate-300 px-3 py-2">Login</Link>
-              <Link href="/login" className="block bg-violet-600 text-white font-semibold px-4 py-3 rounded-xl text-center text-sm">Start Building</Link>
+              {isLoggedIn ? (
+                <Link href="/dashboard/engineer" className="block bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-semibold px-4 py-3 rounded-xl text-center text-sm">Go to Dashboard</Link>
+              ) : (
+                <>
+                  <Link href="/login" className="block text-sm font-medium text-slate-600 dark:text-slate-300 px-3 py-2">Login</Link>
+                  <Link href="/login" className="block bg-violet-600 text-white font-semibold px-4 py-3 rounded-xl text-center text-sm">Start Building</Link>
+                </>
+              )}
             </div>
           </div>
         </div>

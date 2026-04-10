@@ -15,7 +15,7 @@ import Toast from '@/components/Toast';
 import NewProjectWizard from '@/components/agent/NewProjectWizard';
 import CommandPalette from '@/components/CommandPalette';
 import { getSupabaseBrowserClient, clearAllSupabaseCookies } from '@/lib/supabase/client';
-import { createConversation, listConversations } from '@/lib/conversations';
+import { listConversations } from '@/lib/conversations';
 
 const WizardContext = createContext({ showWizard: false, setShowWizard: () => {} });
 export function useWizard() { return useContext(WizardContext); }
@@ -235,12 +235,7 @@ export default function EngineerLayout({ children }) {
     }
   }, [supabase, router]);
 
-  const handleWizardComplete = useCallback(async (wizardResult) => {
-    const stackLabel = wizardResult.stack || 'project';
-    const title = wizardResult.description
-      ? wizardResult.description.slice(0, 80)
-      : `New ${stackLabel} Project`;
-
+  const handleWizardComplete = useCallback((wizardResult) => {
     const {
       stack,
       projectType,
@@ -251,39 +246,24 @@ export default function EngineerLayout({ children }) {
       enhancedPrompt,
     } = wizardResult;
 
-    try {
-      const conversation = await createConversation({
-        repoName:     null,
-        repoProvider: null,
-        repoUrl:      null,
-        branch:       'main',
-        title,
-      });
+    const conversationId = crypto.randomUUID();
 
-      const conversationId = conversation?.id || `wizard-${Date.now()}`;
-
-      const prompt = enhancedPrompt || description || '';
-      if (prompt) {
-        try {
-          sessionStorage.setItem(`wizard_prompt_${conversationId}`, prompt);
-          sessionStorage.setItem(`wizard_meta_${conversationId}`, JSON.stringify({
-            stack:       stack      || 'nextjs',
-            projectType: projectType || null,
-            backend:     backend    || 'none',
-            deployment:  deployment || null,
-            figmaUrl:    figmaUrl   || '',
-          }));
-          sessionStorage.setItem(`wizard_desc_${conversationId}`, description || '');
-        } catch (_) {}
-      }
-
-      router.replace(`/dashboard/engineer/workspace/${conversationId}`);
-
-    } catch (err) {
-      console.error('[Layout] Wizard completion error:', err);
-      const fallbackId = `wizard-${Date.now()}`;
-      router.replace(`/dashboard/engineer/workspace/${fallbackId}`);
+    const prompt = enhancedPrompt || description || '';
+    if (prompt) {
+      try {
+        sessionStorage.setItem(`wizard_prompt_${conversationId}`, prompt);
+        sessionStorage.setItem(`wizard_meta_${conversationId}`, JSON.stringify({
+          stack:       stack      || 'nextjs',
+          projectType: projectType || null,
+          backend:     backend    || 'none',
+          deployment:  deployment || null,
+          figmaUrl:    figmaUrl   || '',
+        }));
+        sessionStorage.setItem(`wizard_desc_${conversationId}`, description || '');
+      } catch (_) {}
     }
+
+    router.replace(`/dashboard/engineer/workspace/${conversationId}`);
   }, [router]);
 
 

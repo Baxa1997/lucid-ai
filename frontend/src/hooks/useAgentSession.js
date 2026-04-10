@@ -24,7 +24,23 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   // ── State ────────────────────────────────────────────────
   const [state, setState] = useState('idle');
   const [sessionId, setSessionId] = useState(null);
-  const [chatMessages, setChatMessages] = useState([]);
+
+  // Track whether the initial wizard user message was pre-populated in state.
+  // Prevents [token] effect from adding a duplicate when token arrives.
+  const initialTaskPreloaded = useRef(false);
+
+  // Pre-populate wizard user message synchronously so it's visible on first render —
+  // no flicker/swap with a synthetic JSX placeholder.
+  const [chatMessages, setChatMessages] = useState(() => {
+    const taskArg = task || '';
+    if (!taskArg) return [];
+    const displayText = taskArg.includes('\n\n')
+      ? taskArg.split('\n\n').slice(1).join('\n\n').trim()
+      : taskArg.trim();
+    if (!displayText) return [];
+    initialTaskPreloaded.current = true;
+    return [{ id: 'init_msg_0', role: 'user', content: displayText, ts: Date.now() }];
+  });
   const [logs, setLogs] = useState([]);
   const [files, setFiles] = useState([]);
   const [error, setError] = useState(null);
@@ -43,12 +59,34 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   // Each phase: { phase, title, description, status }
   const [phases, setPhases] = useState([]);
 
+  // ── Resolving info — path classification from backend ──────
+  // Set once per connection during the RESOLVING state.
+  // { path, message, detail, stack?, templateName?, description?, repoDisplay?, branch? }
+  const [resolvingInfo, setResolvingInfo] = useState(null);
+  // Live progress during resolving (latest message + 0-100 pct)
+  const [resolvingProgress, setResolvingProgress] = useState({ message: '', pct: 0 });
+
   // ── Preview state (noVNC) ────────────────────────────────
   const [previewUrl, setPreviewUrl] = useState(null);
   const [previewTaskId, setPreviewTaskId] = useState(null);
 
   // ── Vercel deploy URL (persists after deployment) ────────
   const [deployUrl, setDeployUrl] = useState(null);
+
+  // ── Written files in the current agent run (for HMR failure detection) ──
+  // Accumulates filenames from file_write_event; reset at the start of each task.
+  const [writtenFiles, setWrittenFiles] = useState([]);
+
+  // ── Error recovery (Phase 8) ─────────────────────────────
+  // errorStage: which init step failed fatally ('clone' | 'install' | null)
+  //   → drives the workspace error card in the Preview panel
+  // previewError: non-fatal preview failure (dev server / tunnel)
+  //   → drives a subtle "Restart Preview" card; workspace stays READY
+  // retryCount: how many times the user has clicked retry (never resets)
+  //   → after 3 attempts, show fallback "contact support" card
+  const [errorStage, setErrorStage] = useState(null);
+  const [previewError, setPreviewError] = useState(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   // ── Refs ─────────────────────────────────────────────────
   const idCounter = useRef(0);
@@ -150,10 +188,86 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   // ── Handle incoming messages ─────────────────────────────
   const handleMessage = useCallback(
     (msg) => {
+      // ─── Canonical workspace state — single source of truth ──────
+      // The backend emits this on EVERY state transition so the frontend
+      // never has to infer state from other message types.
+      if (msg.type === 'workspace_state') {
+        const stateMap = {
+          entry:        'connecting',
+          resolving:    'preparing',
+          cloning:      'cloning',
+          installing:   'installing',
+          starting:     'starting',
+          health_check: 'health_check',
+          ready:        'ready',
+          updating:     'running',
+          error:        'error',
+        };
+        const frontendState = stateMap[msg.state] || msg.state;
+        setState(frontendState);
+        if (msg.sessionId) {
+          setSessionId(msg.sessionId);
+          try { sessionStorage.setItem(`ws_session_${projectIdRef.current}`, msg.sessionId); } catch (_) {}
+        }
+        if (msg.state === 'updating') {
+          // Reset flush guard + clear stale phases for new task
+          flushedRef.current = false;
+          setCompletionSummary('');
+          setPhases([]);
+          setWrittenFiles([]);
+        }
+        if (msg.state === 'ready') {
+          reconnectCount.current = 0;
+        }
+        if (msg.state === 'error') {
+          setError(msg.message || 'Workspace error');
+          if (msg.error_stage) setErrorStage(msg.error_stage);
+        }
+        // Any non-error transition clears the workspace error stage
+        if (msg.state !== 'error') {
+          setErrorStage(null);
+        }
+        if (msg.message) pushLog(msg.message, 'system');
+        return;
+      }
+
+      // ─── Resolving progress — live steps during RESOLVING state ──
+      if (msg.type === 'resolving_progress') {
+        setResolvingProgress({ message: msg.message || '', pct: msg.pct || 0 });
+        if (msg.message) pushLog(msg.message, 'system');
+        return;
+      }
+
+      // ─── Workspace empty — new project, no files yet ─────────
+      // Backend emits this for Path A (new_project) so the Code tab can
+      // show "Waiting for AI to generate code..." instead of an error.
+      if (msg.type === 'workspace_empty') {
+        pushLog(msg.message || 'Waiting for AI to generate code...', 'system');
+        return;
+      }
+
+      // ─── Resolving info — final path classification result ────
+      if (msg.type === 'resolving_info') {
+        setResolvingInfo({
+          path:         msg.path || '',
+          message:      msg.message || '',
+          detail:       msg.detail || '',
+          stack:        msg.stack || '',
+          templateName: msg.templateName || '',
+          description:  msg.description || '',
+          repoDisplay:  msg.repoDisplay || '',
+          branch:       msg.branch || 'main',
+        });
+        if (msg.message) pushLog(msg.message, 'system');
+        return;
+      }
+
       // Internal manager events
       if (msg.type === '_internal') {
         if (msg.event === 'connected') {
           setState('preparing');
+          setErrorStage(null);
+          setPreviewError(null);
           pushLog('Connected — preparing workspace…', 'system');
         } else if (msg.event === 'error') {
           pushLog('WebSocket error', 'error');
@@ -264,6 +378,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
           // Clear steps + phases for new task so buildLabel starts from phase 0
           setSteps([]);
           setPhases([]);
+          setWrittenFiles([]);
           flushedRef.current = false;
           setCompletionSummary('');
           setFinishSummary('');
@@ -293,6 +408,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         const filename = msg.filename || '';
         const action = msg.action || 'write';
         if (filename) {
+          setWrittenFiles(prev => prev.includes(filename) ? prev : [...prev, filename]);
           pushLog(`[${action}] ${filename}`, 'file_write');
           setChatMessages((prev) => {
             if (prev.length === 0) return prev;
@@ -456,7 +572,18 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       if (msg.type === 'preview_ready') {
         setPreviewUrl(msg.preview_url);
         setPreviewTaskId(msg.task_id);
+        setPreviewError(null); // clear any previous preview error
         pushLog(`[Preview] ${msg.message || 'Preview ready'}`, 'system');
+        return;
+      }
+
+      // ─── Preview Error — non-fatal (dev server / tunnel failed) ──
+      // Workspace stays READY; user can click "Restart Preview" to retry.
+      if (msg.type === 'preview_error') {
+        const stage = msg.error_stage || 'start';
+        const message = msg.message || 'Preview unavailable — click Restart Preview to retry.';
+        setPreviewError({ stage, message });
+        pushLog(`[Preview Error] ${message}`, 'error');
         return;
       }
 
@@ -522,10 +649,60 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
 
       if (msg.type === 'pong' || msg.type === 'ack') return;
 
+      // ─── Chat history — backend replays recent messages on reconnect ──
+      // Received when client reconnects to an existing backend session.
+      // We only hydrate if the local snapshot is empty (avoids overwriting
+      // live messages that already arrived via the snapshot restore path).
+      if (msg.type === 'chat_history') {
+        if (!historyLoadedRef.current && Array.isArray(msg.messages) && msg.messages.length > 0) {
+          historyLoadedRef.current = true;
+          const hydrated = msg.messages.map((m, i) => {
+            let content = m.content || '';
+            if ((m.role === 'user') && content.includes('[LUCID_PROJECT]')) {
+              const sep = content.indexOf('\n\n');
+              if (sep !== -1) content = content.slice(sep + 2).trim();
+            }
+            return {
+              id: m.id || `wshist_${i}`,
+              role: m.role === 'assistant' ? 'agent' : (m.role || 'agent'),
+              content,
+              ts: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
+              fromHistory: true,
+            };
+          }).filter(m => m.content.trim());
+          if (hydrated.length > 0) {
+            setChatMessages(prev => {
+              if (prev.length === 0) return hydrated;
+              const prevKeys = new Set(prev.map(p => `${p.role}::${(p.content || '').slice(0, 80)}`));
+              const toAdd = hydrated.filter(h => !prevKeys.has(`${h.role}::${(h.content || '').slice(0, 80)}`));
+              return toAdd.length > 0 ? [...toAdd, ...prev] : prev;
+            });
+          }
+        }
+        return;
+      }
+
       // ─── Chat message — direct chat bubble from backend ────
       if (msg.type === 'chat_message') {
         const role = msg.role || 'agent';
         const content = msg.content || '';
+
+        // Structured plan message — rendered as a special plan card in the UI
+        if (msg.messageType === 'plan' && msg.planData) {
+          setChatMessages((prev) => [
+            ...prev,
+            {
+              id: uid(),
+              role: 'agent',
+              messageType: 'plan',
+              planData: msg.planData,
+              fileWrites: [],
+              ts: Date.now(),
+            },
+          ]);
+          return;
+        }
+
         if (content.trim()) {
           pushChat(role, content);
         }
@@ -541,7 +718,6 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         const MAJOR_MILESTONES = [
           '✅ Repository ready',
           '✅ Local workspace ready',
-          '✅ GitHub template cloned',
           '✅ Foundation:',
           '✅ Content:',
           '✅ Extra pages:',
@@ -617,14 +793,61 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     [pushLog]
   );
 
+  // ── Immediate snapshot restore on mount (before token is available) ──
+  // Non-wizard workspaces wait for convLoading before effectiveToken becomes
+  // truthy, so the [token] effect fires late. This effect runs once on mount
+  // to restore the snapshot immediately, avoiding a blank chat on return.
+  useEffect(() => {
+    if (!manager) return;
+    if (manager.isOpen && manager.projectId === projectIdRef.current) {
+      const snap = manager._statusSnapshot;
+      setState(snap && snap !== 'idle' ? snap : 'ready');
+      if (manager.sessionId) setSessionId(manager.sessionId);
+      if (manager._chatSnapshot?.length > 0) setChatMessages(manager._chatSnapshot);
+      if (manager._phasesSnapshot?.length > 0) setPhases(manager._phasesSnapshot);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intentionally empty — runs once on mount only
+
+  // ── Sync snapshots to manager whenever state changes ──────
+  // These survive React unmount so the workspace can restore state on return.
+  useEffect(() => {
+    if (manager && manager.projectId === projectIdRef.current) {
+      manager._chatSnapshot = chatMessages;
+    }
+  }, [chatMessages]);
+
+  useEffect(() => {
+    if (manager && manager.projectId === projectIdRef.current) {
+      manager._phasesSnapshot = phases;
+    }
+  }, [phases]);
+
+  useEffect(() => {
+    if (manager && manager.projectId === projectIdRef.current) {
+      manager._statusSnapshot = state;
+    }
+  }, [state]);
+
   // ── Auto-connect on mount when token is available ────────
   useEffect(() => {
     if (!manager || !token) return;
 
-    // If already open to THIS project — just set ready state
+    // If already open to THIS project — restore snapshot state immediately
     if (manager.isOpen && manager.projectId === projectIdRef.current) {
-      setState('ready');
+      // Restore last known status (may be 'running' if agent is still going)
+      const snap = manager._statusSnapshot;
+      setState(snap && snap !== 'idle' ? snap : 'ready');
       if (manager.sessionId) setSessionId(manager.sessionId);
+
+      // Restore chat messages from snapshot (avoids blank chat on return)
+      if (manager._chatSnapshot?.length > 0) {
+        setChatMessages(manager._chatSnapshot);
+      }
+      // Restore phases
+      if (manager._phasesSnapshot?.length > 0) {
+        setPhases(manager._phasesSnapshot);
+      }
       return;
     }
 
@@ -634,19 +857,19 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       return;
     }
 
-    // If open to a DIFFERENT project — the connect() call below
-    // will handle closing the old connection automatically.
-
+    // Fresh connection (new project or cold start)
     if (state === 'idle' || (manager.isOpen && manager.projectId !== projectIdRef.current)) {
-      // Pass initial task (from wizard) in the handshake so backend
-      // starts the pipeline immediately — no second message needed.
       const taskToSend = initialTaskRef.current || '';
       if (taskToSend) {
         // Show user message in chat ONCE. Strip the [LUCID_PROJECT] header for display.
         const displayText = taskToSend.includes('\n\n')
           ? taskToSend.split('\n\n').slice(1).join('\n\n')
           : taskToSend;
-        pushChat('user', displayText);
+        // Guard: lazy useState initializer may have already added this message.
+        // Pushing again would create a visible duplicate.
+        if (!initialTaskPreloaded.current) {
+          pushChat('user', displayText);
+        }
       }
       connect(taskToSend);
     }
@@ -736,13 +959,48 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
 
   const stopSession = useCallback(() => {
     if (manager) {
-      try { 
-        manager.send({ type: 'stop_task', task_id: sessionId }); 
+      try {
+        manager.send({ type: 'stop_task', task_id: sessionId });
       } catch (_) {}
     }
     setState('stopped');
     pushLog('Stopping session...', 'system');
   }, [pushLog, sessionId]);
+
+  // ── Retry — Phase 8 error recovery ───────────────────────
+  // hint='preview': re-run dev server without re-cloning (WS stays open)
+  // hint=undefined/other: full reconnect (clone failed, auth failed, etc.)
+  const retry = useCallback((hint) => {
+    setRetryCount(prev => prev + 1);
+
+    if (hint === 'preview') {
+      // Non-fatal preview error — ask the backend to restart the dev server
+      if (manager?.isOpen) {
+        manager.send({ type: 'retry_preview' });
+        setPreviewError(null);
+        pushLog('Restarting preview server…', 'system');
+      }
+    } else {
+      // Fatal workspace error (e.g. clone failed) — close & reconnect
+      setError(null);
+      setErrorStage(null);
+      setState('connecting');
+      pushLog('Retrying connection…', 'system');
+      if (manager) {
+        manager.close(1000, 'User retry');
+        setTimeout(() => {
+          manager.connect({
+            token: tokenRef.current,
+            projectId: projectIdRef.current,
+            repoUrl: repoUrlRef.current,
+            gitToken: gitTokenRef.current,
+            branch: branchRef.current,
+            task: '',
+          });
+        }, 500);
+      }
+    }
+  }, [pushLog]);
 
   // ── Hydrate chat history from Supabase (called once by page) ──
   const setInitialMessages = useCallback((savedMsgs) => {
@@ -757,24 +1015,35 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     // Deduplicate by role+content (both backend and frontend may save)
     const seen = new Set();
     const deduped = filtered.filter((m) => {
-      const key = `${m.role}::${(m.content || '').slice(0, 100)}`;
+      const key = `${m.role === 'assistant' ? 'agent' : m.role}::${(m.content || '').slice(0, 100)}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
 
-    const hydrated = deduped.map((m, i) => ({
-      id: m.id || `saved_${i}`,
-      role: m.role === 'assistant' ? 'agent' : m.role,
-      content: m.content || '',
-      ts: new Date(m.created_at).getTime() || Date.now(),
-      fromHistory: true,
-    }));
+    const hydrated = deduped.map((m, i) => {
+      let content = m.content || '';
+      // Strip [LUCID_PROJECT] header that backend stores in user messages
+      if ((m.role === 'user') && content.includes('[LUCID_PROJECT]')) {
+        const sep = content.indexOf('\n\n');
+        if (sep !== -1) content = content.slice(sep + 2).trim();
+      }
+      return {
+        id: m.id || `saved_${i}`,
+        role: m.role === 'assistant' ? 'agent' : m.role,
+        content,
+        ts: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
+        fromHistory: true,
+      };
+    }).filter(m => m.content.trim());  // drop blank messages
 
     if (hydrated.length > 0) {
       setChatMessages((prev) => {
-        if (prev.length > 0) return [...hydrated, ...prev];
-        return hydrated;
+        if (prev.length === 0) return hydrated;
+        // Dedup against existing live messages (snapshot or WS events)
+        const prevKeys = new Set(prev.map(p => `${p.role}::${(p.content || '').slice(0, 80)}`));
+        const toAdd = hydrated.filter(h => !prevKeys.has(`${h.role}::${(h.content || '').slice(0, 80)}`));
+        return toAdd.length > 0 ? [...toAdd, ...prev] : prev;
       });
     }
   }, []);
@@ -799,12 +1068,16 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     // Completion summary for polished completion card
     completionSummary,
 
+    // Resolving path info — drive the loading screen
+    resolvingInfo,
+    resolvingProgress,
+
     // Aliases for backward compat
     status: state,
     messages: chatMessages,
     terminalLogs: logs,
     isReady: state === 'ready',
-    isPreparing: state === 'preparing' || state === 'connecting' || state === 'cloning',
+    isPreparing: state === 'preparing' || state === 'connecting' || state === 'cloning' || state === 'installing' || state === 'starting' || state === 'health_check',
 
     // Actions
     startSession,
@@ -821,5 +1094,14 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
 
     // Vercel deploy URL
     deployUrl,
+
+    // Files written in the current agent run — used for HMR failure detection
+    writtenFiles,
+
+    // Phase 8: error recovery
+    errorStage,      // 'clone' | null — which init stage caused the workspace error
+    previewError,    // { stage, message } | null — non-fatal preview failure
+    retryCount,      // number — how many retries the user has attempted
+    retry,           // (hint?: 'preview') => void — trigger recovery
   };
 }

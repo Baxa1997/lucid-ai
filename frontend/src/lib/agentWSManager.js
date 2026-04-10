@@ -31,6 +31,16 @@ class AgentWSManager {
     /** @type {string} current session ID from backend */
     this.sessionId = null;
 
+    // ── Session snapshot — survives React component unmount/remount ──
+    // When the workspace page navigates away and back, the new hook instance
+    // reads these to immediately restore chat + phases instead of showing empty.
+    /** @type {Array|null} last chatMessages state */
+    this._chatSnapshot = null;
+    /** @type {Array} last phases state */
+    this._phasesSnapshot = [];
+    /** @type {string} last status state */
+    this._statusSnapshot = 'idle';
+
     // Listen for page close — only then do we close the WS
     if (typeof window !== 'undefined') {
       window.addEventListener('beforeunload', () => {
@@ -86,6 +96,13 @@ class AgentWSManager {
     if (this.isOpen && this._projectId !== projectId) {
       console.log(`[WS] Switching project: ${this._projectId} → ${projectId}`);
       this.close(1000, 'Switching project');
+    }
+
+    // Clear snapshots when starting a fresh connection to a different project
+    if (this._projectId !== projectId) {
+      this._chatSnapshot = null;
+      this._phasesSnapshot = [];
+      this._statusSnapshot = 'idle';
     }
 
     // CRITICAL FIX: If ws exists but is not OPEN (e.g. CLOSING state),

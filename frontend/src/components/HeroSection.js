@@ -1,9 +1,20 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { ChevronRight, Terminal, Zap } from 'lucide-react';
 import Link from 'next/link';
+import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 
 export default function HeroSection() {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+  useEffect(() => {
+    const supabase = getSupabaseBrowserClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setIsLoggedIn(!!session);
+    });
+  }, []);
+
   return (
     <section className="flex flex-col lg:flex-row items-center justify-center gap-12 lg:gap-20 px-6 sm:px-10 pt-24 pb-12 lg:pt-32 lg:pb-24 max-w-[1400px] mx-auto w-full">
       
@@ -26,8 +37,8 @@ export default function HeroSection() {
         </p>
 
         <div className="flex items-center gap-4 mb-10">
-          <Link href="/login" className="bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-[15px] font-semibold px-8 py-3.5 rounded-lg shadow-lg shadow-violet-500/25 hover:shadow-violet-600/40 hover:-translate-y-0.5 transition-all duration-200 inline-block text-center">
-            Get Started
+          <Link href={isLoggedIn ? '/dashboard/engineer' : '/login'} className="bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-[15px] font-semibold px-8 py-3.5 rounded-lg shadow-lg shadow-violet-500/25 hover:shadow-violet-600/40 hover:-translate-y-0.5 transition-all duration-200 inline-block text-center">
+            {isLoggedIn ? 'Go to Dashboard' : 'Get Started'}
           </Link>
           <button className="bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-[15px] font-bold px-8 py-3.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all shadow-sm">
             Book a Demo

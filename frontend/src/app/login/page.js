@@ -14,6 +14,16 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [toast, setToast] = useState(null);
 
+  // Redirect to dashboard if already authenticated
+  useEffect(() => {
+    const supabase = getSupabaseBrowserClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        router.replace('/dashboard/engineer');
+      }
+    });
+  }, [router]);
+
   // Check for one-time logout toast
   useEffect(() => {
     if (typeof window !== 'undefined') {

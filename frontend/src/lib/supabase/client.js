@@ -42,8 +42,8 @@ export function clearAllSupabaseCookies() {
 export function syncCookiesFromSession(session) {
   if (typeof document === 'undefined') return;
   if (!session?.access_token) return;
-  document.cookie = `sb-access-token=${session.access_token}; path=/; max-age=${60 * 60 * 24 * 7}; samesite=lax`;
-  document.cookie = `sb-refresh-token=${session.refresh_token}; path=/; max-age=${60 * 60 * 24 * 7}; samesite=lax`;
+  document.cookie = `sb-access-token=${session.access_token}; path=/; max-age=${60 * 60 * 24}; samesite=lax`;
+  document.cookie = `sb-refresh-token=${session.refresh_token}; path=/; max-age=${60 * 60 * 24}; samesite=lax`;
 }
 
 export function getSupabaseBrowserClient() {
