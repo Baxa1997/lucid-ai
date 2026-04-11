@@ -73,6 +73,258 @@ async def _ws_send(websocket, msg_type: str, message: str) -> None:
         pass
 
 
+def _generate_design_system_name(
+    domain: str,
+    heading_font: str,
+    primary_hsl: str,
+    description: str = "",
+) -> str:
+    """Generate a creative design system name like base44 does.
+
+    Examples: 'Living Archive', 'Midnight Stack', 'Parchment & Obsidian'
+
+    Searches both `domain` (brand.domain / app_type) AND the raw user
+    `description` for topic keywords so that even generic app_types like
+    "landing_page" resolve to a meaningful name.
+    """
+    # Domain → evocative name mapping
+    _domain_names = {
+        "library": "Living Archive",
+        "archive": "Paper & Ink",
+        "education": "Scholar Studio",
+        "school": "Campus Canvas",
+        "university": "Campus Canvas",
+        "course": "Scholar Studio",
+        "restaurant": "Saffron Kitchen",
+        "food": "Harvest Table",
+        "recipe": "Harvest Table",
+        "cafe": "Morning Ritual",
+        "coffee": "Morning Ritual",
+        "ecommerce": "Commerce Canvas",
+        "shop": "Merchant Studio",
+        "store": "Merchant Studio",
+        "market": "Merchant Studio",
+        "fashion": "Editorial Grid",
+        "clothing": "Editorial Grid",
+        "luxury": "Obsidian Atelier",
+        "premium": "Obsidian Atelier",
+        "brutalist": "Brutalist Canvas",
+        "portfolio": "Folio Black",
+        "agency": "Studio Noir",
+        "creative": "Void & Light",
+        "design": "Void & Light",
+        "saas": "Midnight Stack",
+        "software": "Midnight Stack",
+        "platform": "Midnight Stack",
+        "startup": "Launch Pad",
+        "analytics": "Data Horizon",
+        "data": "Data Horizon",
+        "dashboard": "Control Tower",
+        "admin": "Control Tower",
+        "healthcare": "Vital White",
+        "health": "Vital White",
+        "medical": "Clinical Blue",
+        "clinic": "Clinical Blue",
+        "finance": "Sterling Grid",
+        "fintech": "Sterling Grid",
+        "banking": "Vault Blue",
+        "invest": "Vault Blue",
+        "real_estate": "Urban Elevation",
+        "property": "Urban Elevation",
+        "real estate": "Urban Elevation",
+        "travel": "Horizon Atlas",
+        "trip": "Horizon Atlas",
+        "hotel": "Grand Welcome",
+        "fitness": "Kinetic Form",
+        "gym": "Kinetic Form",
+        "sport": "Kinetic Form",
+        "music": "Sonic Wave",
+        "audio": "Sonic Wave",
+        "podcast": "Sonic Wave",
+        "movie": "Cinematic Dark",
+        "video": "Cinematic Dark",
+        "film": "Cinematic Dark",
+        "blog": "Prose & Type",
+        "article": "Prose & Type",
+        "news": "Press Layout",
+        "media": "Press Layout",
+        "social": "Pulse Network",
+        "community": "Pulse Network",
+        "chat": "Pulse Network",
+        "booking": "Reserve & Go",
+        "appointment": "Reserve & Go",
+        "schedule": "Reserve & Go",
+        "hospitality": "Grand Welcome",
+        "tech": "Silicon Studio",
+        "developer": "Silicon Studio",
+        "api": "Silicon Studio",
+        "tool": "Silicon Studio",
+        "productivity": "Flow Studio",
+        "task": "Flow Studio",
+        "project": "Flow Studio",
+        "crm": "Relation Grid",
+        "hr": "Relation Grid",
+        "hiring": "Relation Grid",
+        "job": "Relation Grid",
+        "event": "Stage Light",
+        "concert": "Stage Light",
+        "ticket": "Stage Light",
+        "game": "Neon Arena",
+        "gaming": "Neon Arena",
+        "legal": "Charter Blue",
+        "law": "Charter Blue",
+        "logistics": "Route Zero",
+        "delivery": "Route Zero",
+        "shipping": "Route Zero",
+        "agriculture": "Root & Soil",
+        "farm": "Root & Soil",
+        "environment": "Green Grid",
+        "sustainability": "Green Grid",
+        "eco": "Green Grid",
+    }
+
+    # Search in domain first, then fall through to description
+    search_text = domain.lower()
+    for keyword, name in _domain_names.items():
+        if keyword in search_text:
+            return name
+
+    # Search the raw user description for stronger signal
+    if description:
+        desc_lower = description.lower()
+        for keyword, name in _domain_names.items():
+            if keyword in desc_lower:
+                return name
+
+    # Fallback: derive from font
+    if heading_font:
+        font_short = heading_font.split()[0]
+        return f"{font_short} Studio"
+
+    # Color-vibe fallback — map HSL hue range to evocative names
+    if primary_hsl:
+        import re as _re
+        hue_match = _re.search(r"(\d+(?:\.\d+)?)\s*(?:deg|°)?", primary_hsl)
+        if hue_match:
+            hue = float(hue_match.group(1))
+            if hue < 30 or hue >= 330:
+                return "Crimson Canvas"
+            elif hue < 60:
+                return "Amber Studio"
+            elif hue < 150:
+                return "Verdant Grid"
+            elif hue < 210:
+                return "Cyan Horizon"
+            elif hue < 270:
+                return "Indigo Form"
+            elif hue < 330:
+                return "Violet Studio"
+
+    # Last resort: hash on the description (not the generic domain)
+    import hashlib
+    _fallbacks = [
+        "Obsidian Canvas", "Minimal Grid", "Aurora Studio",
+        "Quantum Form", "Prism Layout", "Signal Studio",
+        "Apex Grid", "Lumen Form", "Contour Studio", "Slate Zero",
+    ]
+    seed = description[:80] if description else domain
+    idx = int(hashlib.md5(seed.encode()).hexdigest(), 16) % len(_fallbacks)
+    return _fallbacks[idx]
+
+
+async def _call_stitch_mcp(description: str, stitch_api_key: str, timeout: float = 45.0) -> str:
+    """Call Stitch AI MCP directly from Python via JSON-RPC over stdio.
+
+    Because the project uses the direct Anthropic API (not Claude Code CLI),
+    MCP tools are invisible to Claude. We pre-call Stitch ourselves, extract
+    the design reference HTML, and inject it into Claude's prompt so the
+    layout/spacing/card patterns actually influence the generated code.
+
+    Returns trimmed design reference HTML (≤8 KB), or "" on any failure.
+    """
+    if not stitch_api_key:
+        logger.debug("Stitch MCP skipped — no STITCH_API_KEY")
+        return ""
+
+    env = {**os.environ, "STITCH_API_KEY": stitch_api_key}
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "npx", "--yes", "@_davideast/stitch-mcp", "proxy",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            env=env,
+        )
+    except Exception as exc:
+        logger.warning("Stitch MCP — failed to spawn process: %s", exc)
+        return ""
+
+    async def _write_msg(obj: dict) -> None:
+        raw = (json.dumps(obj) + "\n").encode()
+        proc.stdin.write(raw)
+        await proc.stdin.drain()
+
+    async def _read_msg(wait: float = 30.0) -> dict:
+        line = await asyncio.wait_for(proc.stdout.readline(), timeout=wait)
+        return json.loads(line.decode().strip())
+
+    try:
+        # ── MCP handshake ──────────────────────────────────────
+        await _write_msg({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "lucid-ai", "version": "1.0"},
+            },
+        })
+        await _read_msg()  # consume initialize response
+
+        await _write_msg({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+        # ── Call build_site ────────────────────────────────────
+        await _write_msg({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {
+                "name": "build_site",
+                "arguments": {"description": description},
+            },
+        })
+        result = await asyncio.wait_for(_read_msg(wait=timeout), timeout=timeout)
+
+        # ── Extract HTML from content array ───────────────────
+        content_blocks = result.get("result", {}).get("content", [])
+        parts = [
+            b["text"] for b in content_blocks
+            if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
+        ]
+        html = "\n".join(parts)
+
+        if not html:
+            logger.warning("Stitch MCP returned empty content")
+            return ""
+
+        logger.info("Stitch MCP returned %d chars of design reference", len(html))
+        return html[:8000]  # cap at ~8 KB to keep prompt manageable
+
+    except asyncio.TimeoutError:
+        logger.warning("Stitch MCP timed out after %.0fs — skipping", timeout)
+        return ""
+    except Exception as exc:
+        logger.warning("Stitch MCP call failed (non-fatal): %s", exc)
+        return ""
+    finally:
+        try:
+            proc.stdin.close()
+            await asyncio.wait_for(proc.wait(), timeout=5.0)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+
 async def _send_phase(websocket, phase: int, title: str, description: str, status: str) -> None:
     """Send a structured phase event to the frontend for TaskProgress UI."""
     if not websocket:
@@ -1551,6 +1803,25 @@ Pattern:
 Services should CATCH errors and return empty arrays/objects (graceful degradation).
 NEVER hardcode mock data arrays inside service files.
 Mock data lives in db.json at the project root (served by json-server).
+
+====================================
+STITCH AI — UI POLISH LAYER
+====================================
+A Stitch AI design reference may be provided in the user message under
+"UI POLISH LAYER — STITCH AI DESIGN REFERENCE". If present:
+
+WHAT TO DO:
+  - Study the spatial patterns: grid columns, gap sizes, padding ratios, card borders
+  - Study typography: heading sizes, font-weight, letter-spacing hierarchy
+  - Study component style: shadow depth, border-radius, button shape, icon sizing
+  - ADAPT these patterns into React/Vue JSX with Tailwind classes
+
+RULES (critical):
+  - Do NOT copy HTML verbatim — convert every element to JSX
+  - Replace all inline styles with Tailwind classes (bg-primary, text-foreground, etc.)
+  - Use existing shadcn/ui components where applicable
+  - The Stitch reference is UI-ONLY — do not change page structure, routes, or entities
+  - If no Stitch reference is in the message, apply your own professional judgment
 """
 
 
@@ -1564,20 +1835,22 @@ async def generate_new_project(
     validated: dict,
     websocket,
     chat_session_id: str = "",
+    user_jwt: str = "",
 ) -> bool:
     """3-phase multi-call orchestrator for new project generation.
-    
+
     Uses Claude Opus 4.6 (120K+ output tokens) across 3 sequential calls:
       Call 1: Foundation (theme, config, nav, layouts, main page, router)
       Call 2: Content (all sections OR all CRUD features — NO LIMIT)
       Call 3: Extra pages + completeness check
-    
+
     Between each call, the file tree is rebuilt so imports resolve correctly.
     The template is ALREADY cloned into workspace_path by Phase 2.
     """
     try:
         return await _generate_new_project_inner(
-            description, workspace_path, validated, websocket, chat_session_id,
+            description, workspace_path, validated, websocket,
+            chat_session_id, user_jwt,
         )
     except Exception as exc:
         logger.error("generate_new_project crashed: %s", exc, exc_info=True)
@@ -1591,6 +1864,7 @@ async def _generate_new_project_inner(
     validated: dict,
     websocket,
     chat_session_id: str = "",
+    user_jwt: str = "",
 ) -> bool:
     """Inner implementation of generate_new_project (wrapped in try/except above)."""
     api_key = validated["anthropic_api_key"]
@@ -1702,34 +1976,93 @@ async def _generate_new_project_inner(
     
     total_files = []
 
-    # ── Emit base44-style plan message to chat ──────────────
-    # Shows the user what we're about to build before code generation starts.
+    # ════════════════════════════════════════════════════════════
+    #  STEP A — Emit rich plan to chat (before any design work)
+    #  User sees the full structural plan (sections/pages/entities)
+    #  THEN Phase 4 (Stitch) runs, THEN coding starts.
+    # ════════════════════════════════════════════════════════════
+    _plan_design_system_name = "Clean Slate"  # fallback, overwritten below
     try:
         _entities = project_schema.get("entities", [])
         _pages    = project_schema.get("pages", [])
         _sections = project_schema.get("sections", [])
         _brand    = project_schema.get("brand", {})
+        _nav      = project_schema.get("navigation", [])
+        _theme    = project_schema.get("theme", {})
+        _ds       = project_schema.get("design_system", {})
 
-        # Key features — prefer sections (landing) then pages (admin)
-        _features: list[str] = []
+        # Strip context enrichment (everything after the "---" separator) so the
+        # project name fallback uses only the original user description, not the
+        # "## Previous conversation context\n\n..." block appended by ws.py.
+        _clean_desc = description.split("\n\n---\n\n")[0].strip()
+        _project_name = _brand.get("name") or (_clean_desc[:40] if _clean_desc else "your app")
+        _domain = _brand.get("domain", app_type.replace("_", " "))
+
+        _h_font      = _theme.get("heading_font", "")
+        _b_font      = _theme.get("body_font", "")
+        _primary_hsl = _theme.get("primary", "")
+        _bg_hsl      = _theme.get("background", "")
+        _fg_hsl      = _theme.get("foreground", "")
+        _accent_hsl  = _theme.get("accent", "")
+
+        _domain_lower = _domain.lower()
+        # Strip enrichment header so the plain user description drives keyword matching
+        _raw_desc = description.split("\n\n---\n\n")[0].strip()
+        _plan_design_system_name = _generate_design_system_name(
+            _domain_lower, _h_font, _primary_hsl, _raw_desc
+        )
+
+        # ── Section/page items ────────────────────────────────
+        # Priority 1: schema sections (landing pages)
+        # Priority 2: schema pages (admin panels)
+        # Priority 3: parse keywords from the user's description
+        _page_items = []
+
         if _sections:
-            for s in _sections[:6]:
-                t = s.get("type", "").replace("_", " ").title()
-                if t:
-                    _features.append(t + " section")
-        elif _pages:
-            for p in _pages:
-                name = p.get("title") or p.get("name", "")
-                ptype = p.get("type", "")
-                if name and ptype not in ("dashboard",):
-                    _features.append(f"{name} page")
-        if not _features and _entities:
-            _features = [
-                f"{e.get('name', '')} management"
-                for e in _entities[:5] if e.get("name")
-            ]
+            for s in _sections[:10]:
+                stype   = s.get("type", "custom")
+                headline = s.get("headline", "")
+                subdesc  = s.get("subheadline", "") or s.get("description", "")
+                name     = stype.replace("_", " ").title()
+                desc     = headline or subdesc or name
+                _page_items.append({"name": name, "desc": desc[:80]})
 
-        # Entity list with field hints
+        elif _pages:
+            for p in _pages[:10]:
+                name  = p.get("title") or p.get("name", "")
+                ptype = p.get("type", "")
+                desc  = p.get("description", "") or ptype.replace("_", " ")
+                if name:
+                    _page_items.append({"name": name, "desc": desc[:80]})
+
+        # Fallback: parse keywords from the description so the plan is never empty
+        if not _page_items:
+            _desc_lower = description.lower()
+            _SECTION_MAP = [
+                ("hero",        "Hero Section",      "Main headline, subtext, and primary CTA"),
+                ("feature",     "Features Grid",     "Product capabilities showcase"),
+                ("pricing",     "Pricing Table",     "Subscription plans and tiers"),
+                ("testimonial", "Testimonials",      "Customer quotes and social proof"),
+                ("faq",         "FAQ Accordion",     "Frequently asked questions"),
+                ("how it works","How It Works",      "Step-by-step product walkthrough"),
+                ("stat",        "Stats Section",     "Key metrics and numbers"),
+                ("integrat",    "Integrations",      "Third-party tool connections"),
+                ("comparison",  "Comparison Table",  "Side-by-side feature comparison"),
+                ("cta",         "Call to Action",    "Conversion-focused signup section"),
+                ("footer",      "Footer",            "Site links, legal, and social icons"),
+                ("contact",     "Contact",           "Contact form and info"),
+                ("blog",        "Blog",              "Articles and updates listing"),
+                ("team",        "Team",              "Team members and bios"),
+                ("about",       "About",             "Company story and mission"),
+                ("dashboard",   "Dashboard",         "Overview with KPI cards and charts"),
+                ("table",       "Data Table",        "Sortable, filterable data listing"),
+                ("form",        "Form",              "Create / edit record form"),
+            ]
+            for kw, name, desc in _SECTION_MAP:
+                if kw in _desc_lower and len(_page_items) < 10:
+                    _page_items.append({"name": name, "desc": desc})
+
+        # ── Entity list (admin panels) ─────────────────────────
         _entity_list = [
             {
                 "name": e.get("name", ""),
@@ -1737,44 +2070,185 @@ async def _generate_new_project_inner(
                     f.get("name", "") for f in e.get("fields", [])[:5]
                 ),
             }
-            for e in _entities if e.get("name")
+            for e in _entities[:6] if e.get("name")
         ]
 
-        # Page/component list
-        _page_list = [
-            {"name": p.get("title") or p.get("name", ""), "type": p.get("type", "")}
-            for p in _pages if p.get("title") or p.get("name")
-        ][:12]
+        # ── Project description (replaces Components in plan) ─────
+        # For landing pages : 1-2 focused sentences (goal + sections)
+        # For admin panels  : 2-3 richer sentences (entities + features + tech)
+        _is_admin = bool(_entities)
 
-        # Design hint from theme fonts
-        _theme = project_schema.get("theme", {})
-        _fonts = [f for f in [_theme.get("heading_font"), _theme.get("body_font")] if f]
-        _design_desc = (
-            f"Typography: {' + '.join(_fonts[:2])}. Clean, modern layout."
-            if _fonts else ""
-        )
+        if _is_admin:
+            # ── Admin / CRUD description ───────────────────────
+            _entity_names = [e.get("name", "") for e in _entities[:6] if e.get("name")]
+            _entity_count = len(_entity_names)
+            _entity_str   = ", ".join(_entity_names[:4])
+            if _entity_count > 4:
+                _entity_str += f", and {_entity_count - 4} more"
 
-        _project_name = _brand.get("name") or (description[:40] if description else "your app")
+            # Sentence 1 — what it manages
+            _about_s1 = (
+                f"A full-stack {app_type.replace('_', ' ')} managing "
+                f"{_entity_count} resource{'s' if _entity_count != 1 else ''}"
+                + (f": {_entity_str}" if _entity_str else "")
+                + "."
+            )
 
+            # Sentence 2 — key features derived from schema
+            _features = []
+            _page_types = [p.get("type", "") for p in _pages]
+            if any("dashboard" in t for t in _page_types):
+                _features.append("KPI dashboard with live Recharts analytics")
+            if _entity_count > 0:
+                _features.append("DataTable views with search, filters, and row actions")
+            if any("form" in t for t in _page_types):
+                _features.append("validated create / edit forms")
+            if any("settings" in t for t in _page_types):
+                _features.append("settings & profile management")
+            _vibe = _ds.get("overall_vibe", "")
+            if _vibe:
+                _features.append(f"{_vibe} design aesthetic")
+            _about_s2 = ("Features: " + ", ".join(_features[:4]) + ".") if _features else ""
+
+            # Sentence 3 — tech stack
+            _about_s3 = (
+                f"Built with {stack}, shadcn/ui components, "
+                f"React Query for data fetching, and a json-server REST API."
+            )
+
+            _about = " ".join(p for p in [_about_s1, _about_s2, _about_s3] if p)
+
+        else:
+            # ── Landing page description ───────────────────────
+            _tagline  = _brand.get("tagline", "")
+            _vibe     = _ds.get("overall_vibe", "") or "modern"
+            _sec_names = [item["name"] for item in _page_items]
+            _sec_count = len(_sec_names)
+            _sec_str   = ", ".join(_sec_names[:5])
+            if _sec_count > 5:
+                _sec_str += f", and {_sec_count - 5} more"
+
+            _about = f"A {_vibe} landing page for **{_project_name}**"
+            if _tagline:
+                _about += f" — {_tagline}"
+            _about += "."
+            if _sec_str:
+                _about += (
+                    f" Includes {_sec_count} section{'s' if _sec_count != 1 else ''}"
+                    f": {_sec_str}."
+                )
+            _about += (
+                " Gradient-forward design with smooth framer-motion animations"
+                " and conversion-optimised CTAs."
+            )
+
+        # ── Design description line ────────────────────────────
+        font_str = " + ".join(f for f in [_h_font, _b_font] if f) or "Inter + sans-serif"
+
+        # Collect real color tokens for display
+        _color_tokens = []
+        for label, val in [
+            ("primary", _primary_hsl),
+            ("accent", _accent_hsl),
+            ("bg", _bg_hsl),
+        ]:
+            if val:
+                _color_tokens.append(f"{label}: {val}")
+
+        _radius     = _theme.get("radius", "")
+        _vibe       = _ds.get("overall_vibe", "") or _domain.replace("_", " ").title()
+        _card_cls   = _ds.get("card_classes", "")
+
+        design_parts = [f"{font_str} fonts"]
+        if _color_tokens:
+            design_parts.append(f"{_plan_design_system_name} palette ({', '.join(_color_tokens[:2])})")
+        else:
+            design_parts.append(f"{_plan_design_system_name} palette")
+        if _radius:
+            design_parts.append(f"radius {_radius}")
+        if _vibe:
+            design_parts.append(f"{_vibe} vibe")
+        _design_line = " · ".join(design_parts)
+
+        _plan_data = {
+            "intro": (
+                f"I'll build **{_project_name}** using the "
+                f"**\"{_plan_design_system_name}\"** design system. "
+                f"Here's my plan:"
+            ),
+            "description": _about,
+            "pages":       _page_items,
+            "entities":    _entity_list,
+            "design":      _design_line,
+        }
         await websocket.send_json({
             "type": "chat_message",
             "role": "agent",
             "messageType": "plan",
-            "planData": {
-                "intro": f"I'll build **{_project_name}** for you. Let me plan this out first:",
-                "features": _features[:6],
-                "design": _design_desc,
-                "entities": _entity_list,
-                "pages": _page_list,
-            },
+            "planData": _plan_data,
         })
+
+        # ── Persist plan to DB so chat history survives server restarts ──
+        if chat_session_id and user_jwt:
+            try:
+                from app.services.chat import ChatService
+                await ChatService.add_message(
+                    session_id=chat_session_id,
+                    role="assistant",
+                    content=json.dumps({"messageType": "plan", "planData": _plan_data}),
+                    event_type="Plan",
+                    user_jwt=user_jwt,
+                )
+            except Exception as _db_plan_err:
+                logger.warning("Failed to persist plan to DB (non-fatal): %s", _db_plan_err)
+
+        await asyncio.sleep(1.5)   # let user read the plan
+
     except Exception as _plan_exc:
         logger.warning("Failed to emit plan message (non-fatal): %s", _plan_exc)
 
+    # ════════════════════════════════════════════════════════════
+    #  STEP B — Phase 4: Fetch Stitch design reference
+    #  This is real work, not a cosmetic delay.
+    #  Order: Gemini research → Schema → Plan shown → Stitch → Code
+    # ════════════════════════════════════════════════════════════
+    _stitch_api_key = os.environ.get("STITCH_API_KEY", "")
+    _stitch_description = (
+        f"{app_type.replace('_', ' ')} {stack} — {description[:60]}"
+    )
+
+    _theme_d     = project_schema.get("theme", {})
+    _disp_font   = " + ".join(f for f in [_theme_d.get("heading_font", ""), _theme_d.get("body_font", "")] if f) or "Inter"
+    _disp_color  = _theme_d.get("primary", "")
+    _design_summary = f"{_disp_font} · {_disp_color}" if _disp_color else _disp_font
+
+    await _send_phase(
+        websocket, 4,
+        "Fetching design reference",
+        f"Calling Stitch AI for UI patterns — {_plan_design_system_name}",
+        "active",
+    )
+
+    stitch_html = await _call_stitch_mcp(_stitch_description, _stitch_api_key)
+
+    if stitch_html:
+        _stitch_status = f"Design reference loaded — {_design_summary}"
+        await _ws_send(websocket, "progress", "✅ Stitch design reference ready")
+    else:
+        _stitch_status = f"Using research-based design — {_design_summary}"
+        await _ws_send(websocket, "progress", "ℹ️ Stitch unavailable — proceeding with Gemini research design")
+
+    await _send_phase(
+        websocket, 4,
+        "Fetching design reference",
+        _stitch_status,
+        "done",
+    )
+    await asyncio.sleep(1.2)   # brief pause so user sees Phase 4 done
+
     # ── PHASE GATE: Research complete → Coding starts ──
-    # Signal Phase 4 (Research) done, Phase 5 (Coding) active
-    # This ensures the UI shows research completing BEFORE coding starts.
-    await _send_phase(websocket, 4, "Researching project", f"Research complete ({research_quality})", "done")
+    await _send_phase(websocket, 3, "Researching project", f"Research complete ({research_quality})", "done")
+    await asyncio.sleep(0.5)
     await _send_phase(websocket, 5, "Writing code", "Claude is generating project (3-phase)…", "active")
     
     # ═══════════════════════════════════════════════════════
@@ -1803,6 +2277,65 @@ async def _generate_new_project_inner(
         api_instruction = f"""\n8. ENV FILE — Generate .env with API URL:
    {project_schema.get('api_config', {}).get('base_url_env', 'VITE_API_URL')}={project_schema.get('api_config', {}).get('base_url_default', 'http://localhost:3001')}
 \n"""
+
+    # ── Build Stitch AI reference block for this stack ───────
+    _is_landing = app_type not in {
+        "admin_panel", "ecommerce", "saas_app", "analytics",
+        "education", "medical", "fitness", "booking",
+        "social", "food_restaurant", "travel", "real_estate",
+    }
+
+    if stitch_html:
+        # We have a live Stitch reference — inject it directly.
+        # Claude reads the HTML and adapts the layout/spacing/card patterns
+        # to React/Vue JSX with Tailwind classes.
+        stitch_instruction = f"""
+====================================
+STITCH AI DESIGN REFERENCE (pre-fetched)
+====================================
+The following is a real Stitch AI design reference for this project type.
+Study the layout structure, spacing ratios, card styles, typography hierarchy,
+and color usage. Then ADAPT these patterns into React/Vue JSX with Tailwind classes.
+
+RULES:
+- Do NOT copy HTML verbatim — convert every element to React/Vue JSX
+- Replace inline styles with Tailwind classes (bg-primary, text-foreground, etc.)
+- Keep the SPATIAL patterns (grid columns, gap sizes, padding ratios)
+- Replace any raw colors with the project's design tokens from research
+
+STITCH REFERENCE HTML:
+{stitch_html}
+====================================
+"""
+    else:
+        # No live reference — keep the original guidance for Claude to try itself.
+        if "next" in stack.lower() or "nextjs" in stack.lower():
+            stitch_instruction = f"""
+====================================
+STITCH AI — DESIGN GUIDANCE
+====================================
+{"- Hero: full-width gradient, headline left-aligned, product screenshot/visual right" if _is_landing else "- Dashboard: sidebar with icon nav, KPI cards in a 4-col grid, chart + table below"}
+{"- Features: 3-column icon cards with hover elevation, subtle bg-muted backdrop" if _is_landing else "- Cards: compact padding (p-4), border border-border, shadow-sm, rounded-lg"}
+Apply these spatial patterns with Tailwind + React JSX.
+"""
+        elif "vue" in stack.lower():
+            stitch_instruction = """
+====================================
+STITCH AI — DESIGN GUIDANCE
+====================================
+- Sidebar: collapsed/expanded state, icon nav, dark bg-card, user profile bottom
+- Dashboard: KPI cards row, recharts/vue-chartjs area chart, recent items table
+Convert to Vue 3 SFC with Tailwind classes.
+"""
+        else:
+            stitch_instruction = f"""
+====================================
+STITCH AI — DESIGN GUIDANCE
+====================================
+{"- Hero: large headline, subtext, dual CTA buttons, background gradient" if _is_landing else "- Sidebar: icon + label nav, collapsible groups, avatar bottom"}
+{"- Features: icon cards, 3-column grid, hover shadow" if _is_landing else "- DataTable: sticky header, row actions dropdown, filter bar"}
+Convert layout/spacing/card patterns to React JSX with Tailwind.
+"""
 
     phase1_prompt = f"""PHASE 1 OF 3 — FOUNDATION FILES ONLY
 
@@ -1855,6 +2388,16 @@ FILE TREE:
 
 {stack_rules}
 {template_context}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+UI POLISH LAYER — STITCH AI DESIGN REFERENCE
+⚠️  FOR VISUAL/UI IMPROVEMENTS ONLY.
+    Do NOT change pages, routes, entities, or nav items — those are fixed above.
+    Only use this to improve: card styles, spacing ratios, color usage,
+    typography hierarchy, button shapes, shadow/border patterns.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{stitch_instruction}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Call the write_project_files tool with ALL files.
 """
@@ -1919,11 +2462,50 @@ IMPORTANT — DESIGN SYSTEM:
 {schema_api_spec}
 
 ALSO: Create any domain-specific specialized views from DOMAIN_MUST_HAVES in the research:
-- Maps, calendars, kanban boards, timelines, etc."""
+- Maps, calendars, kanban boards, timelines, etc.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+UI POLISH LAYER — STITCH AI DESIGN REFERENCE
+⚠️  FOR VISUAL/UI IMPROVEMENTS ONLY.
+    Entities and CRUD structure are fixed above (from schema).
+    Only use this to improve: table density, card padding, form layout,
+    badge styles, button shapes, empty-state visuals, sidebar widths.
+    Do NOT add or remove entities/fields based on this reference.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{stitch_instruction}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
     else:
+        # Build the UI polish block for landing sections
+        if stitch_html:
+            _stitch_ui_polish = f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+UI POLISH LAYER — STITCH AI DESIGN REFERENCE
+⚠️  FOR VISUAL/UI IMPROVEMENTS ONLY.
+    The sections to build are fixed above (from schema).
+    Only use this to improve: card spacing, grid gaps, typography scale,
+    button shapes, hero layout ratios, shadow/border patterns.
+    Do NOT add or remove sections based on this reference.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STITCH REFERENCE HTML (adapt to React JSX + Tailwind — do NOT copy verbatim):
+{stitch_html[:4000]}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+        else:
+            _stitch_ui_polish = """
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+UI POLISH LAYER — SECTION SPATIAL PATTERNS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Hero: min-h-screen, split or centered layout, gradient bg, headline text-5xl md:text-7xl, dual CTA
+- Features: py-24 section padding, 3-col grid gap-8, icon w-12 h-12, card hover:-translate-y-1 shadow-lg
+- Pricing: 3 cards, middle card bg-primary text-primary-foreground scale-105 shadow-2xl
+- Testimonials: quote cards with avatar + name + role, grid or horizontal scroll
+- CTA: full-width gradient, centered headline, prominent button with icon
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
         phase2_instruction = f"""Generate ALL section components for the landing page.
 Create EVERY section listed in the schema — NO LIMIT.
 
+SECTIONS TO BUILD (from research schema — do NOT add or remove any):
 {schema_sections_spec}
 
 Each section must be:
@@ -1935,7 +2517,8 @@ Each section must be:
 - With realistic mock data (testimonials with i.pravatar.cc avatars, pricing with real USD)
 
 ALSO: Create any domain-specific must-have sections from the research:
-- Product demos, ROI calculators, comparison tables, integration showcases, etc."""
+- Product demos, ROI calculators, comparison tables, integration showcases, etc.
+{_stitch_ui_polish}"""
     
     phase2_prompt = f"""PHASE 2 OF 3 — CONTENT FILES
 
@@ -2119,7 +2702,25 @@ Call the write_project_files tool with ALL files.
         })
     except Exception:
         pass
-    
+
+    # ── Mark generation_complete in DB so re-entering skips rebuild ──
+    # This flag is checked in ws.py when a new session opens for an
+    # existing project — if True, pipeline is suppressed and the user
+    # sees chat history + workspace ready to receive follow-up requests.
+    if chat_session_id and user_jwt:
+        try:
+            from app.supabase_client import db_client
+            async with db_client(user_jwt) as _client:
+                await (
+                    _client.table("chat_sessions")
+                    .update({"generation_complete": True})
+                    .eq("id", chat_session_id)
+                    .execute()
+                )
+            logger.info("Marked generation_complete=True for session %s", chat_session_id)
+        except Exception as _gc_err:
+            logger.warning("Failed to set generation_complete (non-fatal): %s", _gc_err)
+
     return True
 
 

@@ -429,20 +429,136 @@ async def websocket_agent(websocket: WebSocket):
         # ── Persist chat session to DB (new sessions only) ──
         # On reconnect we skip this — a chat session already exists for this
         # agent session and creating another would leave orphan records.
+        #
+        # For NEW sessions on an existing project (server restarted, session
+        # timed out): look for a previous chat_session so we can:
+        #   1. Replay chat history to restore the chat panel
+        #   2. Detect if generation already completed so we skip the pipeline
+        _prev_session_data: dict | None = None  # {platform_repo_url, generation_complete, messages}
+
+        if not existing and project_id:
+            try:
+                async with db_client(user_jwt) as client:
+                    prev_s = await (
+                        client.table("chat_sessions")
+                        .select("id, platform_repo_url, generation_complete")
+                        .eq("user_id", user_id)
+                        .eq("project_id", project_id)
+                        .order("created_at", desc=True)
+                        .limit(1)
+                        .execute()
+                    )
+                if prev_s.data:
+                    prev_row = prev_s.data[0]
+                    prev_sid = prev_row["id"]
+                    # Load messages from that session
+                    async with db_client(user_jwt) as client:
+                        prev_msgs = await (
+                            client.table("chat_messages")
+                            .select("id, role, content, created_at, event_type")
+                            .eq("session_id", prev_sid)
+                            .order("created_at", desc=False)
+                            .limit(60)
+                            .execute()
+                        )
+                    _prev_session_data = {
+                        "session_id":          prev_sid,
+                        "platform_repo_url":   prev_row.get("platform_repo_url"),
+                        "generation_complete": prev_row.get("generation_complete", False),
+                        "messages":            prev_msgs.data or [],
+                    }
+                    logger.info(
+                        "Found previous session %s for project %s "
+                        "(complete=%s, msgs=%d, repo=%s)",
+                        prev_sid, project_id,
+                        _prev_session_data["generation_complete"],
+                        len(_prev_session_data["messages"]),
+                        bool(_prev_session_data["platform_repo_url"]),
+                    )
+            except Exception as _prev_err:
+                logger.warning("Failed to load previous session for project %s: %s", project_id, _prev_err)
+
         if not existing:
             try:
-                chat_sess = await ChatService.create_session(
-                    user_id=user_id,
-                    user_jwt=user_jwt,
-                    agent_session_id=session.session_id,
-                    project_id=raw.get("projectId"),
-                    title=task[:255] if task else "New workspace session",
-                    model_provider=model_provider,
-                )
-                chat_session_id = chat_sess["id"]
-                logger.info("Chat session %s created for user %s", chat_session_id, user_id)
+                # Reuse previous session if one exists for this project —
+                # this keeps all history under one chat_session record.
+                if _prev_session_data:
+                    chat_session_id = _prev_session_data["session_id"]
+                    logger.info("Reusing existing chat session %s for project %s", chat_session_id, project_id)
+                    # Update agent_session_id so future reconnects find it
+                    try:
+                        async with db_client(user_jwt) as client:
+                            await (
+                                client.table("chat_sessions")
+                                .update({"agent_session_id": session.session_id})
+                                .eq("id", chat_session_id)
+                                .execute()
+                            )
+                    except Exception:
+                        pass
+                else:
+                    chat_sess = await ChatService.create_session(
+                        user_id=user_id,
+                        user_jwt=user_jwt,
+                        agent_session_id=session.session_id,
+                        project_id=raw.get("projectId"),
+                        title=task[:255] if task else "New workspace session",
+                        model_provider=model_provider,
+                    )
+                    chat_session_id = chat_sess["id"]
+                    logger.info("Chat session %s created for user %s", chat_session_id, user_id)
             except Exception as exc:
-                logger.warning("Failed to create chat session in DB: %s", exc)
+                logger.warning("Failed to create/reuse chat session in DB: %s", exc)
+
+            # ── Replay history for returning users (server-restart safe) ──
+            if _prev_session_data and _prev_session_data["messages"]:
+                try:
+                    await websocket.send_json({
+                        "type": "chat_history",
+                        "messages": _prev_session_data["messages"],
+                    })
+                    logger.info(
+                        "Sent %d historical messages for project %s (new session, prev data found)",
+                        len(_prev_session_data["messages"]), project_id,
+                    )
+                except Exception as _hist_err:
+                    logger.warning("Failed to send chat_history (new session): %s", _hist_err)
+
+            # ── Skip pipeline if project was already fully generated ──
+            # Conditions to skip:
+            #   • platform_repo_url is set  → project was published to GitHub
+            #   • generation_complete flag  → set by project_generator when done
+            #   • wizard re-entry: [LUCID_PROJECT] header + previous messages exist
+            #     → generation was attempted before (even if it failed mid-way);
+            #     never restart research from scratch on re-entry.
+            _wizard_reentry = (
+                task
+                and "[LUCID_PROJECT]" in task[:500]
+                and _prev_session_data
+                and _prev_session_data.get("messages")
+            )
+            if _prev_session_data and (
+                _prev_session_data.get("platform_repo_url")
+                or _prev_session_data.get("generation_complete")
+                or _wizard_reentry
+            ):
+                _skip_reason = (
+                    "published" if _prev_session_data.get("platform_repo_url")
+                    else "generation_complete flag" if _prev_session_data.get("generation_complete")
+                    else "wizard re-entry with previous messages"
+                )
+                logger.info(
+                    "Skipping pipeline for project %s — already generated (%s). "
+                    "Clearing task to wait for user input.",
+                    project_id, _skip_reason,
+                )
+                task = ""   # clear task → pipeline won't auto-run
+                await websocket.send_json({
+                    "type": "status",
+                    "status": "ready",
+                    "message": "Project loaded. Ask me to make changes.",
+                })
+
         else:
             # On reconnect — chat_session_id was already looked up above (early lookup)
             # and stored in chat_session_id via reconnect_chat_session_id. Nothing to do.
@@ -818,6 +934,7 @@ async def websocket_agent(websocket: WebSocket):
                 "selected_branch": session.branch or "main",
                 "git_token": session.git_token or "",
                 "package_manager": user_package_manager,
+                "user_jwt": user_jwt or "",
             }
 
             # Run pipeline as a cancellable task so stop messages work

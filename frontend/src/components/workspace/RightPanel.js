@@ -26,6 +26,7 @@ export default function RightPanel() {
     status,
     phases, resolvingInfo, resolvingProgress,
     isWizardMode,
+    convLoading,
     buildingActive,
     files,
     conversation,
@@ -149,6 +150,7 @@ export default function RightPanel() {
             resolvingInfo={resolvingInfo}
             resolvingProgress={resolvingProgress}
             isWizardMode={isWizardMode}
+            convLoading={convLoading}
           />
         ) : (
           <>

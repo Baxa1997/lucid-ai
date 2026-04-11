@@ -61,6 +61,8 @@ async def run_pipeline(
     """
     workspace_path = None
     validated = None
+    classification = {"model": "sonnet", "complexity": "medium", "task_type": "feature"}
+    model = "sonnet"
 
     # ── Helper: send structured phase events ──────────────
     async def _send_phase(phase: int, title: str, description: str, status: str):
@@ -83,6 +85,7 @@ async def run_pipeline(
             await _send_phase(1, "Validating inputs", "Validation failed", "error")
             return
         await _send_phase(1, "Validating inputs", "All inputs validated", "done")
+        await asyncio.sleep(0.8)
 
         # Save original task (with [LUCID_PROJECT] header) for naming in Phase 7
         task_original = task
@@ -142,6 +145,8 @@ async def run_pipeline(
                 logger.info("Skeleton detection: stack=%s, is_admin=%s, task=%s",
                             detected_stack, is_admin, (task_original or task)[:60])
 
+                await _send_phase(2, "Cloning template", f"Loading {detected_stack or 'project'} template…", "active")
+
                 skeleton_path = get_skeleton_for_stack(detected_stack, is_admin, task=task_original or task)
                 if skeleton_path:
                     copied_files = copy_skeleton(skeleton_path, workspace_path)
@@ -154,8 +159,11 @@ async def run_pipeline(
                     validated["skeleton_name"] = skeleton_name
                     validated["skeleton_stack"] = detected_stack
                     validated["is_admin"] = is_admin
+                    await asyncio.sleep(1.0)
+                    await _send_phase(2, "Cloning template", f"Template ready: {skeleton_name}", "done")
                 else:
                     logger.warning("No skeleton found for stack: %s", detected_stack)
+                    await _send_phase(2, "Cloning template", "Using default structure", "done")
             except Exception as skel_err:
                 logger.warning("Skeleton copy failed (non-fatal): %s", skel_err)
 
@@ -219,7 +227,7 @@ async def run_pipeline(
                 except Exception as npm_err:
                     logger.warning("%s install error (non-fatal): %s", pm, npm_err)
 
-            # ── Step 2d: Create .claude/settings.json ───────
+            # ── Step 2d: Create .claude/settings.json (with Stitch AI MCP) ───────
             try:
                 claude_dir = os.path.join(workspace_path, ".claude")
                 os.makedirs(claude_dir, exist_ok=True)
@@ -240,7 +248,19 @@ async def run_pipeline(
                             "Bash(rm -rf*)",
                             "Bash(sudo*)",
                         ],
-                    }
+                    },
+                    # Stitch AI MCP — Google's design system generator.
+                    # Provides: build_site, get_screen_code, get_screen_image tools.
+                    # Auth: API key (set via STITCH_API_KEY env var).
+                    "mcpServers": {
+                        "stitch": {
+                            "command": "npx",
+                            "args": ["@_davideast/stitch-mcp", "proxy"],
+                            "env": {
+                                "STITCH_API_KEY": os.environ.get("STITCH_API_KEY", ""),
+                            },
+                        }
+                    },
                 }
                 with open(os.path.join(claude_dir, "settings.json"), "w") as f:
                     json.dump(claude_settings, f, indent=2)
@@ -467,17 +487,23 @@ async def run_pipeline(
             await openhands_manager.destroy_all()
             await asyncio.sleep(0.5)
 
-        # ── Phase 3: Classify task ────────────────────────
-        await _send_phase(3, "Classifying task", "Analyzing task complexity…", "active")
-        classification = await classify_task(
-            task,
-            validated["gemini_api_key"],
-            websocket,
-        )
-        model = classification.get("model", "sonnet")
-        await _send_phase(3, "Classifying task", f"Assigned to {model} ({classification.get('complexity', 'medium')})", "done")
+        # ── Phase 3: Research project ─────────────────────
+        # For new projects: skip classify (not needed) and go straight to deep research.
+        # For existing repos: classify task complexity first, then explore.
+        if validated.get("scratch_mode") or validated.get("new_project_mode"):
+            await _send_phase(3, "Researching project", "Gemini is analyzing top products in this domain…", "active")
+        else:
+            await _send_phase(3, "Classifying task", "Analyzing task complexity…", "active")
+            classification = await classify_task(
+                task,
+                validated["gemini_api_key"],
+                websocket,
+            )
+            model = classification.get("model", "sonnet")
+            await _send_phase(3, "Classifying task", f"Assigned to {model} ({classification.get('complexity', 'medium')})", "done")
+            await asyncio.sleep(0.8)
 
-        # ── Phase 3b: Generate CLAUDE.md ─────────────────────
+        # ── Phase 3b: Generate CLAUDE.md (new projects only) ──
         if validated.get("scratch_mode") or validated.get("new_project_mode"):
             try:
                 from knowledge.loader import generate_claude_md, classify_project_type
@@ -502,7 +528,6 @@ async def run_pipeline(
 
         # ── Phase 4: Explore / Research ──────────────────────
         if validated.get("scratch_mode") or validated.get("new_project_mode"):
-            await _send_phase(4, "Researching project", "Gemini is analyzing top products in this domain…", "active")
 
             from app.services.project_generator import generate_new_project
 
@@ -512,12 +537,15 @@ async def run_pipeline(
                 validated=validated,
                 websocket=websocket,
                 chat_session_id=chat_session_id,
+                user_jwt=user.get("user_jwt", ""),
             )
 
             if not success:
                 await _send_phase(5, "Writing code", "Generation failed", "error")
                 return
 
+            await asyncio.sleep(0.5)
+            await _send_phase(5, "Writing code", "Code generation complete", "done")
             await _send_phase(6, "Verifying build", "Build verification complete", "done")
             await _send_file_tree(websocket, workspace_path)
             plan = ""
@@ -531,16 +559,41 @@ async def run_pipeline(
                 validated["gemini_api_key"],
                 websocket,
             )
+            await asyncio.sleep(0.8)
             await _send_phase(4, "Exploring codebase", "Implementation plan ready", "done")
 
             if plan and plan.strip():
                 try:
-                    plan_preview = plan.strip()[:600]
-                    await websocket.send_json({
-                        "type": "chat_message",
-                        "role": "agent",
-                        "content": plan_preview,
-                    })
+                    # Parse plan into a structured summary for chat
+                    plan_lines = [l.strip() for l in plan.strip().splitlines() if l.strip()]
+                    files_to_change = [
+                        l for l in plan_lines
+                        if any(ext in l for ext in [".js", ".ts", ".jsx", ".tsx", ".py", ".css", ".json"])
+                        and len(l) < 80
+                    ][:6]
+                    steps = [l for l in plan_lines if l.startswith(("1.", "2.", "3.", "4.", "5."))][:5]
+
+                    if files_to_change or steps:
+                        await websocket.send_json({
+                            "type": "chat_message",
+                            "role": "agent",
+                            "messageType": "plan",
+                            "planData": {
+                                "intro": f"I'll implement this for you. Here's my plan:",
+                                "features": steps or [task[:80]],
+                                "design": "",
+                                "entities": [],
+                                "pages": [{"name": f, "type": "file"} for f in files_to_change],
+                            },
+                        })
+                    else:
+                        plan_preview = plan.strip()[:400]
+                        await websocket.send_json({
+                            "type": "chat_message",
+                            "role": "agent",
+                            "content": plan_preview,
+                        })
+                    await asyncio.sleep(1.5)
                 except Exception:
                     pass
 

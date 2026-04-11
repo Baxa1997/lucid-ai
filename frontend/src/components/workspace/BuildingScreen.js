@@ -54,7 +54,7 @@ function BuildingTips() {
 }
 
 // ── Main component ────────────────────────────────────────
-export default function BuildingScreen({ status, phases, resolvingInfo, resolvingProgress, isWizardMode }) {
+export default function BuildingScreen({ status, phases, resolvingInfo, resolvingProgress, isWizardMode, convLoading }) {
   const activePhase = phases.find((p) => p.status === 'active');
   const maxDonePhase = phases
     .filter((p) => p.status === 'done')
@@ -64,7 +64,12 @@ export default function BuildingScreen({ status, phases, resolvingInfo, resolvin
   let buildLabel = 'Building App...';
   let buildSubtext = 'Setting up your workspace';
 
-  if (status === 'connecting') {
+  // Returning to an existing conversation — show a friendlier init message
+  // while the conversation data + WS connection are being established.
+  if (!isWizardMode && (status === 'idle' || (convLoading && status === 'connecting'))) {
+    buildLabel = 'Loading your conversation...';
+    buildSubtext = 'Retrieving chat history and workspace state';
+  } else if (status === 'connecting') {
     buildLabel = 'Connecting...';
     buildSubtext = 'Opening secure connection to AI Engine';
   } else if (status === 'preparing' && resolvingProgress?.message) {
@@ -100,10 +105,18 @@ export default function BuildingScreen({ status, phases, resolvingInfo, resolvin
   if (currentPhaseNum <= 1 && status === 'running') {
     buildLabel = 'Building App...';
     buildSubtext = 'Setting things up';
+  } else if (currentPhaseNum === 2 && activePhase?.title?.toLowerCase().includes('clone')) {
+    buildLabel = 'Cloning template...';
+    buildSubtext = activePhase?.description || 'Copying starter files into workspace';
   } else if (currentPhaseNum === 2) {
     buildLabel = 'Preparing workspace...';
+    buildSubtext = activePhase?.description || 'Setting up your project environment';
   } else if (currentPhaseNum === 3) {
-    buildLabel = 'Analyzing your idea...';
+    buildLabel = 'Researching your idea...';
+    buildSubtext = 'Gemini is analyzing top products in this domain';
+  } else if (currentPhaseNum === 4 && activePhase?.title?.toLowerCase().includes('design')) {
+    buildLabel = 'Choosing design style...';
+    buildSubtext = activePhase?.description || 'Selecting colors, typography and layout';
   } else if (currentPhaseNum === 4 && activePhase?.title?.toLowerCase().includes('research')) {
     buildLabel = 'Researching your idea...';
     buildSubtext = 'Analyzing top products in this domain';
@@ -124,11 +137,16 @@ export default function BuildingScreen({ status, phases, resolvingInfo, resolvin
     buildSubtext = 'Setting up live preview';
   }
 
-  const researchDone = phases.find((p) => p.phase === 4 && p.status === 'done');
-  const codingStarted = phases.find((p) => p.phase === 5);
-  if (researchDone && !codingStarted) {
+  const researchDone = phases.find((p) => (p.phase === 3 || p.phase === 4) && p.status === 'done' && p.title?.toLowerCase().includes('research'));
+  const designDone = phases.find((p) => p.phase === 4 && p.status === 'done' && p.title?.toLowerCase().includes('design'));
+  const codingStarted = phases.find((p) => p.phase === 5 && p.status === 'active');
+
+  if (designDone && !codingStarted) {
     buildLabel = 'Starting to code...';
-    buildSubtext = 'Domain analysis complete. Building your codebase now.';
+    buildSubtext = 'Design and plan ready. Building your codebase now.';
+  } else if (researchDone && !codingStarted) {
+    buildLabel = 'Planning project...';
+    buildSubtext = 'Research complete. Choosing design style.';
   }
 
   return (
@@ -162,6 +180,19 @@ export default function BuildingScreen({ status, phases, resolvingInfo, resolvin
       <p className="relative z-10 text-[13px] text-slate-400 dark:text-slate-500 max-w-sm text-center transition-all duration-300">
         {buildSubtext}
       </p>
+
+      {/* Animated dots — visible until workspace is ready */}
+      {status !== 'ready' && (
+        <div className="relative z-10 flex items-center gap-1.5 mt-5">
+          {[0, 1, 2].map((i) => (
+            <div
+              key={i}
+              className="w-1.5 h-1.5 rounded-full bg-orange-400/70"
+              style={{ animation: 'dot-bounce 1.4s ease-in-out infinite', animationDelay: `${i * 0.22}s` }}
+            />
+          ))}
+        </div>
+      )}
 
       <BuildingTips />
     </div>

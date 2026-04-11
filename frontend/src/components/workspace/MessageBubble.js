@@ -30,12 +30,48 @@ export function relativeTime(ts) {
 // Module-level Set: persists across re-renders, never re-animates finished messages
 const _animatedMsgIds = new Set();
 
-// ── PlanBubble — structured plan card ────────────────────
+// ── PlanIntro — renders intro text with **bold** support ──
+function PlanIntro({ text }) {
+  if (!text) return null;
+  const parts = text.split(/(\*\*.*?\*\*)/g);
+  return (
+    <p className="text-[14px] text-slate-700 dark:text-slate-200 mb-3 leading-relaxed">
+      {parts.map((part, i) => {
+        if (part.startsWith('**') && part.endsWith('**')) {
+          return <strong key={i} className="font-semibold text-slate-900 dark:text-white">{part.slice(2, -2)}</strong>;
+        }
+        return part;
+      })}
+    </p>
+  );
+}
+
+// ── PlanIntro with **bold** and plain text support ────────
+function PlanDescription({ text }) {
+  if (!text) return null;
+  const parts = text.split(/(\*\*.*?\*\*)/g);
+  return (
+    <p className="text-[13px] text-slate-600 dark:text-slate-300 leading-relaxed">
+      {parts.map((part, i) => {
+        if (part.startsWith('**') && part.endsWith('**'))
+          return <strong key={i} className="font-semibold text-slate-800 dark:text-slate-100">{part.slice(2, -2)}</strong>;
+        return part;
+      })}
+    </p>
+  );
+}
+
+// ── PlanBubble — base44-style structured plan card ────────
 function PlanBubble({ msg }) {
   const { planData, fileWrites = [] } = msg;
   if (!planData) return null;
 
-  const introText = (planData.intro || '').replace(/\*\*(.*?)\*\*/g, '$1');
+  const pages       = planData.pages    || [];
+  const entities    = planData.entities || [];
+  const description = planData.description || '';
+  // legacy fallbacks
+  const legacyFeatures   = planData.features    || [];
+  const legacyComponents = planData.components  || [];
 
   return (
     <div className="flex items-start gap-3 px-4 py-3 animate-in fade-in duration-300">
@@ -43,38 +79,52 @@ function PlanBubble({ msg }) {
         <Sparkles className="w-3.5 h-3.5 text-white" />
       </div>
       <div className="flex-1 min-w-0">
-        {introText && (
-          <p className="text-[14px] text-slate-700 dark:text-slate-200 mb-3 leading-relaxed">
-            {introText}
-          </p>
-        )}
+        <PlanIntro text={planData.intro} />
 
         <div className="border border-slate-100 dark:border-[#2d333b] rounded-xl overflow-hidden mb-2.5">
           <div className="px-4 py-2 bg-slate-50 dark:bg-[#161b22] border-b border-slate-100 dark:border-[#2d333b]">
             <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Plan</span>
           </div>
           <div className="px-4 py-3 bg-white dark:bg-[#0d1117] space-y-3.5">
-            {planData.features?.length > 0 && (
+
+            {/* About — short description based on research */}
+            {description && (
               <div>
-                <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1.5">Key Features</p>
+                <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1.5">About</p>
+                <PlanDescription text={description} />
+              </div>
+            )}
+
+            {/* Pages / Sections */}
+            {(pages.length > 0 || legacyFeatures.length > 0) && (
+              <div>
+                <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1.5">
+                  {entities.length > 0 ? 'Pages' : 'Sections'}
+                </p>
                 <div className="space-y-1">
-                  {planData.features.map((f, i) => (
+                  {(pages.length > 0 ? pages : legacyFeatures.map(f => ({ name: f, desc: '' }))).map((p, i) => (
                     <div key={i} className="flex items-start gap-2">
                       <span className="text-slate-300 dark:text-slate-600 text-[12px] mt-0.5 shrink-0">•</span>
-                      <span className="text-[13px] text-slate-600 dark:text-slate-300 leading-snug">{f}</span>
+                      <span className="text-[13px] leading-snug">
+                        <span className="font-medium text-slate-700 dark:text-slate-200">
+                          {typeof p === 'string' ? p : p.name}
+                        </span>
+                        {typeof p === 'object' && p.desc && (
+                          <span className="text-slate-400 dark:text-slate-500"> — {p.desc}</span>
+                        )}
+                      </span>
                     </div>
                   ))}
                 </div>
               </div>
             )}
-            {planData.design && (
-              <p className="text-[13px] text-slate-400 dark:text-slate-500 italic">{planData.design}</p>
-            )}
-            {planData.entities?.length > 0 && (
+
+            {/* Entities (admin panels only) */}
+            {entities.length > 0 && (
               <div>
-                <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1.5">Entities</p>
+                <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1.5">Data Models</p>
                 <div className="space-y-1">
-                  {planData.entities.map((e, i) => (
+                  {entities.map((e, i) => (
                     <div key={i} className="flex items-start gap-2">
                       <span className="text-slate-300 dark:text-slate-600 text-[12px] mt-0.5 shrink-0">•</span>
                       <span className="text-[13px] leading-snug">
@@ -86,23 +136,28 @@ function PlanBubble({ msg }) {
                 </div>
               </div>
             )}
-            {planData.pages?.length > 0 && (
+
+            {/* Legacy components fallback — shown only for old messages */}
+            {!description && legacyComponents.length > 0 && (
               <div>
-                <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1.5">Pages & Components</p>
-                <div className="space-y-1">
-                  {planData.pages.map((p, i) => (
-                    <div key={i} className="flex items-start gap-2">
-                      <span className="text-slate-300 dark:text-slate-600 text-[12px] mt-0.5 shrink-0">•</span>
-                      <span className="text-[13px] text-slate-600 dark:text-slate-300 leading-snug">{p.name}</span>
-                    </div>
-                  ))}
-                </div>
+                <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1.5">Components</p>
+                <p className="text-[13px] text-slate-600 dark:text-slate-300 leading-snug">
+                  {legacyComponents.join(', ')}
+                </p>
+              </div>
+            )}
+
+            {/* Design line */}
+            {planData.design && (
+              <div className="pt-1 border-t border-slate-50 dark:border-[#2d333b]">
+                <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1">Design</p>
+                <p className="text-[13px] text-slate-500 dark:text-slate-400">{planData.design}</p>
               </div>
             )}
           </div>
         </div>
 
-        <p className="text-[13px] text-slate-500 dark:text-slate-400 mb-2">Let me build this now.</p>
+        <p className="text-[13px] text-slate-500 dark:text-slate-400 mb-2">Let me start building.</p>
 
         {fileWrites.length > 0 && (
           <div className="space-y-1 mb-1">

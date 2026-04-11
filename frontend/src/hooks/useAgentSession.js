@@ -656,28 +656,56 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       if (msg.type === 'chat_history') {
         if (!historyLoadedRef.current && Array.isArray(msg.messages) && msg.messages.length > 0) {
           historyLoadedRef.current = true;
-          const hydrated = msg.messages.map((m, i) => {
+          const hydrated = msg.messages.flatMap((m, i) => {
             let content = m.content || '';
-            if ((m.role === 'user') && content.includes('[LUCID_PROJECT]')) {
+
+            // Strip wizard header from user messages
+            if (m.role === 'user' && content.includes('[LUCID_PROJECT]')) {
               const sep = content.indexOf('\n\n');
               if (sep !== -1) content = content.slice(sep + 2).trim();
             }
-            return {
+
+            // ── Detect persisted plan messages ────────────────────
+            // Plan messages are saved as JSON: {"messageType": "plan", "planData":{...}}
+            // Python json.dumps adds spaces after colons, so check for the key only.
+            if (m.role === 'assistant' && content.trimStart().startsWith('{"messageType"')) {
+              try {
+                const parsed = JSON.parse(content);
+                if (parsed.messageType === 'plan' && parsed.planData) {
+                  return [{
+                    id: m.id || `wshist_plan_${i}`,
+                    role: 'agent',
+                    messageType: 'plan',
+                    planData: parsed.planData,
+                    fileWrites: [],
+                    ts: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
+                    fromHistory: true,
+                  }];
+                }
+              } catch (_) {
+                // not valid JSON — fall through to plain text
+              }
+            }
+
+            // Plain text messages
+            if (!content.trim()) return [];
+            return [{
               id: m.id || `wshist_${i}`,
               role: m.role === 'assistant' ? 'agent' : (m.role || 'agent'),
               content,
               ts: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
               fromHistory: true,
-            };
-          }).filter(m => m.content.trim());
+            }];
+          });
+
           if (hydrated.length > 0) {
             setChatMessages(prev => {
-              if (prev.length === 0) return hydrated;
-              // Use a Map keyed by stable message ID — eliminates false-positive
-              // dedup for two agent messages that share the same first 80 chars.
-              const existingById = new Map(prev.map(p => [p.id, p]));
+              // Drop init_msg_0 placeholder — WS history is authoritative ordering
+              const livePrev = prev.filter(p => p.id !== 'init_msg_0');
+              if (livePrev.length === 0) return hydrated;
+              const existingById = new Map(livePrev.map(p => [p.id, p]));
               const toAdd = hydrated.filter(h => !existingById.has(h.id));
-              return toAdd.length > 0 ? [...toAdd, ...prev] : prev;
+              return toAdd.length > 0 ? [...toAdd, ...livePrev] : livePrev;
             });
           }
         }
@@ -1023,29 +1051,51 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       return true;
     });
 
-    const hydrated = deduped.map((m, i) => {
+    const hydrated = deduped.flatMap((m, i) => {
       let content = m.content || '';
       // Strip [LUCID_PROJECT] header that backend stores in user messages
       if ((m.role === 'user') && content.includes('[LUCID_PROJECT]')) {
         const sep = content.indexOf('\n\n');
         if (sep !== -1) content = content.slice(sep + 2).trim();
       }
-      return {
+      // Detect persisted plan messages (same logic as chat_history WS handler)
+      if (m.role === 'assistant' && content.trimStart().startsWith('{"messageType"')) {
+        try {
+          const parsed = JSON.parse(content);
+          if (parsed.messageType === 'plan' && parsed.planData) {
+            return [{
+              id: m.id || `saved_plan_${i}`,
+              role: 'agent',
+              messageType: 'plan',
+              planData: parsed.planData,
+              fileWrites: [],
+              ts: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
+              fromHistory: true,
+            }];
+          }
+        } catch (_) { /* not valid JSON — fall through */ }
+      }
+      if (!content.trim()) return [];
+      return [{
         id: m.id || `saved_${i}`,
         role: m.role === 'assistant' ? 'agent' : m.role,
         content,
         ts: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
         fromHistory: true,
-      };
-    }).filter(m => m.content.trim());  // drop blank messages
+      }];
+    });
 
     if (hydrated.length > 0) {
       setChatMessages((prev) => {
-        if (prev.length === 0) return hydrated;
-        // Dedup against existing live messages (snapshot or WS events)
-        const prevKeys = new Set(prev.map(p => `${p.role}::${(p.content || '').slice(0, 80)}`));
+        // Drop the pre-populated init_msg_0 — history is the authoritative order.
+        // init_msg_0 is the synchronous placeholder added by useState; once real
+        // history arrives it must be replaced so the user message appears first.
+        const livePrev = prev.filter(p => p.id !== 'init_msg_0');
+        if (livePrev.length === 0) return hydrated;
+        // Dedup against existing live WS messages (keep them at the end)
+        const prevKeys = new Set(livePrev.map(p => `${p.role}::${(p.content || '').slice(0, 80)}`));
         const toAdd = hydrated.filter(h => !prevKeys.has(`${h.role}::${(h.content || '').slice(0, 80)}`));
-        return toAdd.length > 0 ? [...toAdd, ...prev] : prev;
+        return toAdd.length > 0 ? [...toAdd, ...livePrev] : livePrev;
       });
     }
   }, []);
