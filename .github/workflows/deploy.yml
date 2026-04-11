@@ -23,5 +23,5 @@ jobs:
             cd /opt/lucid-ai
             git pull origin main
             mkdir -p workspaces
-            docker compose up -d --build
+            docker compose up -d --build ai_engine
             docker image prune -f
