@@ -26,6 +26,7 @@ export default function ChatPanel() {
     messages,
     status,
     isPreparing,
+    phases,
     stopSession,
     sendMessage,
     conversation,
@@ -277,7 +278,7 @@ export default function ChatPanel() {
 
           {!convLoading && messages.length === 0 && status === 'ready' && !isWizardMode && (
             <div className="flex flex-col items-center justify-center py-20 text-center px-6">
-              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center mb-4 shadow-sm shadow-orange-500/20">
+              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center mb-4 shadow-sm shadow-blue-500/20">
                 <Sparkles className="w-5 h-5 text-white" />
               </div>
               <p className="text-[14px] font-medium text-slate-500 dark:text-slate-400">
@@ -302,6 +303,30 @@ export default function ChatPanel() {
             const hasAgentReplied = liveMessages.some((m) => m.role === 'agent');
             const waitingForAgent = waitingForFirstReply && (status !== 'running' || !hasAgentReplied);
             if (!waitingForAgent) return null;
+            // For 'running': mirror the BuildingScreen phase label so both
+            // panels always show the same status rather than conflicting text.
+            const activePhase = (phases || []).find((p) => p.status === 'active');
+            const maxDonePhase = (phases || [])
+              .filter((p) => p.status === 'done')
+              .reduce((max, p) => Math.max(max, p.phase || 0), 0);
+            const currentPhaseNum = activePhase?.phase || maxDonePhase || 0;
+            const PHASE_LABELS = {
+              0: 'Building app...',
+              1: 'Building app...',
+              2: 'Preparing workspace...',
+              3: 'Researching your idea...',
+              4: activePhase?.title?.toLowerCase().includes('design')
+                  ? 'Choosing design style...'
+                  : 'Planning your code...',
+              5: 'Writing your code...',
+              6: 'Verifying build...',
+              7: 'Publishing project...',
+            };
+            const runningLabel = currentPhaseNum > 0
+              ? (PHASE_LABELS[currentPhaseNum] || PHASE_LABELS[currentPhaseNum >= 8 ? 7 : 0])
+              : (wizardDesc
+                  ? `Designing your ${wizardDesc.length > 28 ? wizardDesc.slice(0, 28) + '…' : wizardDesc.toLowerCase()}...`
+                  : 'Working on your project...');
             const LABELS = {
               connecting: 'Connecting to workspace...',
               preparing: resolvingProgress?.message || 'Preparing workspace...',
@@ -309,13 +334,11 @@ export default function ChatPanel() {
               installing: 'Installing dependencies...',
               starting: 'Starting dev server...',
               health_check: 'Connecting live preview...',
-              running: wizardDesc
-                ? `Designing your ${wizardDesc.length > 28 ? wizardDesc.slice(0, 28) + '…' : wizardDesc.toLowerCase()}...`
-                : 'Working on your project...',
+              running: runningLabel,
             };
             return (
               <div className="flex items-center gap-2.5 px-4 py-2.5 animate-in fade-in duration-500">
-                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center shrink-0 shadow-sm shadow-orange-500/15">
+                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center shrink-0 shadow-sm shadow-blue-500/15">
                   <Sparkles className="w-3 h-3 text-white" />
                 </div>
                 <span className="text-[13px] text-slate-500 dark:text-slate-400">
@@ -325,7 +348,7 @@ export default function ChatPanel() {
                   {[0, 200, 400].map((delay) => (
                     <span
                       key={delay}
-                      className="w-1 h-1 rounded-full bg-orange-400/70 animate-bounce"
+                      className="w-1 h-1 rounded-full bg-blue-400/70 animate-bounce"
                       style={{ animationDelay: `${delay}ms`, animationDuration: '1s' }}
                     />
                   ))}
@@ -339,7 +362,7 @@ export default function ChatPanel() {
             messages.filter((m) => !m.fromHistory && m.role === 'agent').length > 0 &&
             messages.filter((m) => !m.fromHistory).slice(-1)[0]?.role !== 'agent' && (
               <div className="flex items-center gap-3 px-4 py-3 w-full animate-in fade-in duration-300">
-                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center shrink-0 shadow-sm shadow-orange-500/20">
+                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center shrink-0 shadow-sm shadow-blue-500/20">
                   <Sparkles className="w-3.5 h-3.5 text-white" />
                 </div>
                 <div className="flex items-center gap-2">

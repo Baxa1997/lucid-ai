@@ -220,16 +220,15 @@ def _generate_design_system_name(
             elif hue < 330:
                 return "Violet Studio"
 
-    # Last resort: hash on the description (not the generic domain)
-    import hashlib
+    # Last resort: pick randomly so repeated runs produce different names
+    import random as _random
     _fallbacks = [
         "Obsidian Canvas", "Minimal Grid", "Aurora Studio",
         "Quantum Form", "Prism Layout", "Signal Studio",
         "Apex Grid", "Lumen Form", "Contour Studio", "Slate Zero",
+        "Eclipse Form", "Polar Grid", "Meridian Studio", "Zenith Canvas",
     ]
-    seed = description[:80] if description else domain
-    idx = int(hashlib.md5(seed.encode()).hexdigest(), 16) % len(_fallbacks)
-    return _fallbacks[idx]
+    return _random.choice(_fallbacks)
 
 
 async def _call_stitch_mcp(description: str, stitch_api_key: str, timeout: float = 45.0) -> str:
@@ -2008,9 +2007,17 @@ async def _generate_new_project_inner(
         _domain_lower = _domain.lower()
         # Strip enrichment header so the plain user description drives keyword matching
         _raw_desc = description.split("\n\n---\n\n")[0].strip()
-        _plan_design_system_name = _generate_design_system_name(
-            _domain_lower, _h_font, _primary_hsl, _raw_desc
-        )
+
+        # Prefer the AI-generated name from the schema — it knows the brand,
+        # colors, and vibe so it can produce a truly product-specific name.
+        # Only fall back to the keyword/random lookup when the schema omits it.
+        _schema_ds_name = _ds.get("name", "").strip()
+        if _schema_ds_name:
+            _plan_design_system_name = _schema_ds_name
+        else:
+            _plan_design_system_name = _generate_design_system_name(
+                _domain_lower, _h_font, _primary_hsl, _raw_desc
+            )
 
         # ── Section/page items ────────────────────────────────
         # Priority 1: schema sections (landing pages)
@@ -2137,10 +2144,36 @@ async def _generate_new_project_inner(
                     f" Includes {_sec_count} section{'s' if _sec_count != 1 else ''}"
                     f": {_sec_str}."
                 )
-            _about += (
-                " Gradient-forward design with smooth framer-motion animations"
-                " and conversion-optimised CTAs."
-            )
+            # Derive the closing style sentence from the actual schema design tokens
+            # so each generation reflects its unique palette rather than a generic line.
+            _primary_hint = ""
+            if _primary_hsl:
+                import re as _re_hsl
+                _hm = _re_hsl.search(r"(\d+(?:\.\d+)?)\s*(?:deg|°)?", _primary_hsl)
+                if _hm:
+                    _h = float(_hm.group(1))
+                    if _h < 30 or _h >= 330:
+                        _primary_hint = "bold crimson"
+                    elif _h < 60:
+                        _primary_hint = "warm amber"
+                    elif _h < 90:
+                        _primary_hint = "earthy green"
+                    elif _h < 150:
+                        _primary_hint = "fresh teal"
+                    elif _h < 210:
+                        _primary_hint = "cool cyan"
+                    elif _h < 270:
+                        _primary_hint = "deep indigo"
+                    else:
+                        _primary_hint = "rich violet"
+            _style_closers = [
+                f"{_primary_hint + ' ' if _primary_hint else ''}{_vibe} palette with smooth scroll animations and high-impact CTAs.",
+                f"Tailwind-powered {_primary_hint or _vibe} design with accessible contrast and fluid layout transitions.",
+                f"Purpose-built {_vibe} aesthetic — {_primary_hint or 'curated'} color tokens, clean typography, conversion-optimised flow.",
+                f"Fully responsive {_primary_hint or _vibe} design with framer-motion micro-interactions and focused conversion paths.",
+            ]
+            import random as _rand_about
+            _about += " " + _rand_about.choice(_style_closers)
 
         # ── Design description line ────────────────────────────
         font_str = " + ".join(f for f in [_h_font, _b_font] if f) or "Inter + sans-serif"

@@ -95,7 +95,7 @@ async def push_with_openhands(
 
     # Build authenticated URL for push
     if git_token:
-        from app.services.git_operations import _inject_token_into_url
+        from app.services.vcs.git import _inject_token_into_url
         authed_url = _inject_token_into_url(repo_url, git_token)
     else:
         authed_url = repo_url

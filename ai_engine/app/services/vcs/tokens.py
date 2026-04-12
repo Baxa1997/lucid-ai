@@ -1,4 +1,4 @@
-"""Integration service — PAT storage/retrieval + GitHub/GitLab API calls.
+"""VCS — token encryption and integration CRUD.
 
 Encryption matches the frontend's crypto.js exactly:
   key  = SHA-256(ENCRYPTION_KEY)  → 32 bytes
@@ -13,7 +13,6 @@ import hashlib
 import os
 from typing import Optional
 
-import httpx
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding as crypto_padding
 from fastapi import HTTPException
@@ -138,13 +137,13 @@ async def get_integration(
     except Exception as exc:
         logger.error("Unexpected error in get_integration: %s", exc)
         raise HTTPException(status_code=500, detail="Internal server error") from exc
+
     row = result.data
     if not row:
         return None
 
     token = decrypt_token(row["access_token_encrypted"], row["iv"])
 
-    # Parse gitlab_url from the scopes field if present
     raw_scopes = row.get("scopes") or ""
     gitlab_url = "https://gitlab.com"
     scopes = raw_scopes
@@ -177,7 +176,7 @@ async def delete_integration(
                 .delete()
                 .eq("user_id", user_id)
                 .eq("provider", provider)
-                .select("id")          # ensures PostgREST returns deleted rows
+                .select("id")
                 .execute()
             )
         return bool(result.data)
@@ -211,6 +210,7 @@ async def list_integrations(
     except Exception as exc:
         logger.error("Unexpected error in list_integrations: %s", exc)
         raise HTTPException(status_code=500, detail="Internal server error") from exc
+
     return [
         {
             "id": r["id"],
@@ -223,168 +223,3 @@ async def list_integrations(
         }
         for r in rows
     ]
-
-
-# ── GitHub API ───────────────────────────────────────────────────────────
-
-_GH_HEADERS = {"Accept": "application/vnd.github.v3+json", "X-GitHub-Api-Version": "2022-11-28"}
-
-
-async def github_get_user(token: str) -> dict:
-    """Validate token and return the authenticated GitHub user's profile."""
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            "https://api.github.com/user",
-            headers={"Authorization": f"Bearer {token}", **_GH_HEADERS},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        return resp.json()
-
-
-async def github_list_repos(token: str) -> list[dict]:
-    """List all repos accessible by the stored GitHub PAT (paginated)."""
-    repos: list[dict] = []
-    page = 1
-    async with httpx.AsyncClient() as client:
-        while True:
-            resp = await client.get(
-                "https://api.github.com/user/repos",
-                params={"sort": "updated", "per_page": 100, "page": page},
-                headers={"Authorization": f"Bearer {token}", **_GH_HEADERS},
-                timeout=15,
-            )
-            resp.raise_for_status()
-            batch = resp.json()
-            if not batch:
-                break
-            repos.extend(
-                {
-                    "name": r["name"],
-                    "fullName": r["full_name"],
-                    "url": r["html_url"],
-                    "cloneUrl": r["clone_url"],
-                    "defaultBranch": r["default_branch"],
-                    "private": r["private"],
-                    "description": r.get("description"),
-                }
-                for r in batch
-            )
-            if len(batch) < 100:
-                break
-            page += 1
-    return repos
-
-
-async def github_create_pr(
-    *,
-    token: str,
-    owner: str,
-    repo: str,
-    title: str,
-    body: str,
-    head: str,
-    base: str = "main",
-) -> dict:
-    """Open a GitHub Pull Request and return the PR metadata."""
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            f"https://api.github.com/repos/{owner}/{repo}/pulls",
-            json={"title": title, "body": body, "head": head, "base": base},
-            headers={"Authorization": f"Bearer {token}", **_GH_HEADERS},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    return {
-        "prUrl": data["html_url"],
-        "prNumber": data["number"],
-        "title": data["title"],
-        "state": data["state"],
-    }
-
-
-# ── GitLab API ───────────────────────────────────────────────────────────
-
-async def gitlab_get_user(token: str, *, gitlab_url: str = "https://gitlab.com") -> dict:
-    """Validate token and return the authenticated GitLab user's profile."""
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{gitlab_url}/api/v4/user",
-            headers={"PRIVATE-TOKEN": token},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        return resp.json()
-
-
-async def gitlab_list_repos(token: str, *, gitlab_url: str = "https://gitlab.com") -> list[dict]:
-    """List all GitLab projects the user is a member of (paginated)."""
-    repos: list[dict] = []
-    page = 1
-    async with httpx.AsyncClient() as client:
-        while True:
-            resp = await client.get(
-                f"{gitlab_url}/api/v4/projects",
-                params={
-                    "membership": "true",
-                    "order_by": "last_activity_at",
-                    "per_page": 100,
-                    "page": page,
-                },
-                headers={"PRIVATE-TOKEN": token},
-                timeout=15,
-            )
-            resp.raise_for_status()
-            batch = resp.json()
-            if not batch:
-                break
-            repos.extend(
-                {
-                    "name": r["name"],
-                    "fullName": r["path_with_namespace"],
-                    "url": r["web_url"],
-                    "cloneUrl": r["http_url_to_repo"],
-                    "defaultBranch": r.get("default_branch", "main"),
-                    "private": r.get("visibility") == "private",
-                    "description": r.get("description"),
-                }
-                for r in batch
-            )
-            if len(batch) < 100:
-                break
-            page += 1
-    return repos
-
-
-async def gitlab_create_mr(
-    *,
-    token: str,
-    project_id: str,
-    title: str,
-    body: str,
-    source_branch: str,
-    target_branch: str = "main",
-    gitlab_url: str = "https://gitlab.com",
-) -> dict:
-    """Open a GitLab Merge Request and return the MR metadata."""
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            f"{gitlab_url}/api/v4/projects/{project_id}/merge_requests",
-            json={
-                "title": title,
-                "description": body,
-                "source_branch": source_branch,
-                "target_branch": target_branch,
-            },
-            headers={"PRIVATE-TOKEN": token},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    return {
-        "prUrl": data["web_url"],
-        "prNumber": data["iid"],
-        "title": data["title"],
-        "state": data["state"],
-    }

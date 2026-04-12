@@ -387,9 +387,9 @@ export default function DocsPage() {
                 onClick={() => handleProviderSelect('gitlab')}
                 className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-8 text-center transition-all duration-300 group hover:shadow-card hover:-translate-y-1 relative overflow-hidden"
               >
-                <div className="absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r from-orange-400 to-orange-600 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-                <div className="w-16 h-16 rounded-2xl bg-orange-50 border border-orange-100 flex items-center justify-center mx-auto mb-4 group-hover:scale-110 group-hover:shadow-lg transition-all duration-300">
-                  <GitLabIcon className="w-9 h-9 text-orange-500" />
+                <div className="absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r from-blue-400 to-indigo-600 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                <div className="w-16 h-16 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center mx-auto mb-4 group-hover:scale-110 group-hover:shadow-lg transition-all duration-300">
+                  <GitLabIcon className="w-9 h-9 text-blue-500" />
                 </div>
                 <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-1">GitLab</h3>
                 <p className="text-xs text-slate-400 dark:text-slate-500 leading-relaxed mb-4">Connect to your GitLab repos</p>
@@ -411,7 +411,7 @@ export default function DocsPage() {
             <div className="flex items-center gap-2 px-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-full mb-6">
               {selectedProvider === 'github'
                 ? <Github className="w-4 h-4 text-slate-700" />
-                : <GitLabIcon className="w-4 h-4 text-orange-500" />
+                : <GitLabIcon className="w-4 h-4 text-blue-500" />
               }
               <span className="text-xs font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wider">
                 {selectedProvider === 'github' ? 'GitHub' : 'GitLab'} Repositories

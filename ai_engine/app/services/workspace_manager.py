@@ -26,7 +26,7 @@ import logging
 
 from fastapi import WebSocket
 
-from app.services.git_operations import clone_repo, pull_latest
+from app.services.vcs.git import clone_repo, pull_latest
 
 logger = logging.getLogger(__name__)
 

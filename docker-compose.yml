@@ -7,7 +7,7 @@ services:
       - "3000:3000"
     volumes:
       - ./frontend:/app
-      - /app/node_modules
+      - frontend_node_modules:/app/node_modules
     env_file:
       - ./frontend/.env
     environment:
@@ -72,3 +72,6 @@ services:
       # Must match frontend ENCRYPTION_KEY — used to decrypt stored git tokens
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - ALLOWED_ORIGINS=http://localhost:3000,http://frontend:3000
+
+volumes:
+  frontend_node_modules:

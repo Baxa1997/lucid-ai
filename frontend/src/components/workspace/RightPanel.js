@@ -248,11 +248,11 @@ export default function RightPanel() {
                       {status === 'running' && (
                         <>
                           <div className="absolute top-0 left-0 right-0 h-[2px] overflow-hidden pointer-events-none z-10">
-                            <div className="absolute inset-y-0 w-1/2 bg-gradient-to-r from-transparent via-orange-400 to-transparent animate-hmr-slide" />
+                            <div className="absolute inset-y-0 w-1/2 bg-gradient-to-r from-transparent via-blue-400 to-transparent animate-hmr-slide" />
                           </div>
                           <div className="absolute top-2 right-2 z-10">
                             <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/40 backdrop-blur-sm">
-                              <div className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse" />
+                              <div className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
                               <span className="text-[10px] font-semibold text-white/90">Updating</span>
                             </div>
                           </div>
@@ -297,14 +297,14 @@ export default function RightPanel() {
                   )
                 ) : isNewProject && files.length === 0 ? (
                   <div className="flex flex-col items-center justify-center h-full text-center p-8 bg-white dark:bg-[#0d1117]">
-                    <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center mb-5 shadow-lg shadow-orange-500/20">
+                    <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center mb-5 shadow-lg shadow-blue-500/20">
                       <Wand2 className="w-8 h-8 text-white" />
                     </div>
                     <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-2">Your canvas is ready</h3>
                     <p className="text-[14px] text-slate-500 dark:text-slate-400 max-w-sm mb-6">
                       Describe your project in the chat to get started.
                     </p>
-                    <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800/40 text-orange-600 dark:text-orange-400 text-[13px] font-semibold">
+                    <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/40 text-blue-600 dark:text-blue-400 text-[13px] font-semibold">
                       <MessageCircle className="w-4 h-4" />
                       Chat to generate code
                     </div>
@@ -357,7 +357,7 @@ export default function RightPanel() {
                   <div className="flex-1 overflow-hidden">
                     {(['connecting', 'idle', 'cloning', 'installing', 'starting', 'health_check', 'preparing'].includes(status)) && files.length === 0 && !isNewProject ? (
                       <div className="flex flex-col items-center justify-center h-full gap-3 px-4 py-8">
-                        <Loader2 className="w-5 h-5 text-orange-400 animate-spin" />
+                        <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
                         <div className="text-center space-y-1">
                           <p className="text-[12px] font-medium text-slate-500 dark:text-slate-400">
                             {status === 'cloning' ? 'Cloning repository…'
@@ -379,8 +379,8 @@ export default function RightPanel() {
                       </div>
                     ) : resolvingInfo?.path === 'new_project' && files.length === 0 ? (
                       <div className="flex flex-col items-center justify-center h-full gap-3 px-4 py-8 text-center">
-                        <div className="w-10 h-10 rounded-xl bg-orange-50 dark:bg-orange-900/20 flex items-center justify-center">
-                          <Wand2 className="w-5 h-5 text-orange-400" />
+                        <div className="w-10 h-10 rounded-xl bg-blue-50 dark:bg-blue-900/20 flex items-center justify-center">
+                          <Wand2 className="w-5 h-5 text-blue-400" />
                         </div>
                         <div className="space-y-1">
                           <p className="text-[12px] font-semibold text-slate-600 dark:text-slate-300">Waiting for AI</p>
@@ -408,7 +408,7 @@ export default function RightPanel() {
                         Code editing is only available on paid plans.{' '}
                         <button
                           onClick={() => setShowExportModal(true)}
-                          className="font-semibold text-orange-500 hover:text-orange-600 hover:underline transition-colors">
+                          className="font-semibold text-blue-500 hover:text-blue-600 hover:underline transition-colors">
                           Upgrade your plan
                         </button>
                       </span>
@@ -475,7 +475,7 @@ export default function RightPanel() {
             {/* Fallback — no panel selected */}
             {!rightPanel && (
               <div className="h-full flex flex-col items-center justify-center text-center p-8 bg-[#f8f9fb] dark:bg-[#0d1117]">
-                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center mb-5 shadow-lg shadow-orange-500/20">
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center mb-5 shadow-lg shadow-blue-500/20">
                   <Monitor className="w-7 h-7 text-white" />
                 </div>
                 <h3 className="text-[18px] font-bold text-slate-800 dark:text-white mb-2">Preview & Build</h3>

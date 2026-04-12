@@ -44,7 +44,7 @@ const IDEAS = [
 // Emoji icons for projects (deterministic based on name hash)
 const PROJECT_EMOJIS = ['🔥', '⚡', '🚀', '💎', '🎯', '🌟', '🎨', '🔮', '🌊', '🍀', '🦊', '🎪'];
 const EMOJI_BG_COLORS = [
-  'bg-orange-50 dark:bg-orange-500/10',
+  'bg-blue-50 dark:bg-blue-500/10',
   'bg-amber-50 dark:bg-amber-500/10',
   'bg-blue-50 dark:bg-blue-500/10',
   'bg-violet-50 dark:bg-violet-500/10',
@@ -142,12 +142,12 @@ function GhostCard({ onClick }) {
   return (
     <button
       onClick={onClick}
-      className="group rounded-2xl border-2 border-dashed border-slate-200 dark:border-[#2d333b] hover:border-orange-300 dark:hover:border-orange-500/30 hover:bg-slate-50/50 dark:hover:bg-[#161b22]/50 transition-all duration-200 flex flex-col items-center justify-center min-h-[160px] p-5"
+      className="group rounded-2xl border-2 border-dashed border-slate-200 dark:border-[#2d333b] hover:border-blue-300 dark:hover:border-blue-500/30 hover:bg-slate-50/50 dark:hover:bg-[#161b22]/50 transition-all duration-200 flex flex-col items-center justify-center min-h-[160px] p-5"
     >
-      <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-[#21262d] flex items-center justify-center mb-2 group-hover:bg-orange-100 dark:group-hover:bg-orange-500/20 transition-colors">
-        <Plus className="w-5 h-5 text-slate-400 group-hover:text-orange-500 transition-colors" />
+      <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-[#21262d] flex items-center justify-center mb-2 group-hover:bg-blue-100 dark:group-hover:bg-blue-500/20 transition-colors">
+        <Plus className="w-5 h-5 text-slate-400 group-hover:text-blue-500 transition-colors" />
       </div>
-      <span className="text-[13px] font-semibold text-slate-500 dark:text-slate-400 group-hover:text-orange-600 dark:group-hover:text-orange-400 transition-colors">
+      <span className="text-[13px] font-semibold text-slate-500 dark:text-slate-400 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
         New Project
       </span>
     </button>
@@ -304,12 +304,12 @@ export default function EngineerDashboardPage() {
               </h1>
               <p className="text-[16px] text-slate-500 dark:text-slate-400 mt-4 max-w-lg mx-auto">
                 Describe your app idea below or get inspired by our{' '}
-                <button onClick={() => router.push('/dashboard/engineer/templates')} className="text-orange-600 dark:text-orange-400 underline underline-offset-2 hover:text-orange-700 transition-colors">templates</button>.
+                <button onClick={() => router.push('/dashboard/engineer/templates')} className="text-blue-600 dark:text-blue-400 underline underline-offset-2 hover:text-blue-700 transition-colors">templates</button>.
               </p>
             </div>
 
             {/* ── Big Prompt Box (Base44 style) ── */}
-            <div className="relative bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200 dark:border-[#2d333b] shadow-[0_2px_20px_rgba(0,0,0,0.04)] dark:shadow-[0_2px_20px_rgba(0,0,0,0.3)] focus-within:border-orange-300 dark:focus-within:border-orange-500/40 focus-within:shadow-[0_2px_24px_rgba(249,115,22,0.06)] transition-all duration-200 z-10">
+            <div className="relative bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200 dark:border-[#2d333b] shadow-[0_2px_20px_rgba(0,0,0,0.04)] dark:shadow-[0_2px_20px_rgba(0,0,0,0.3)] focus-within:border-blue-300 dark:focus-within:border-blue-500/40 focus-within:shadow-[0_2px_24px_rgba(59,130,246,0.06)] transition-all duration-200 z-10">
               <textarea
                 ref={promptRef}
                 value={promptText}
@@ -439,7 +439,7 @@ export default function EngineerDashboardPage() {
                       <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 block">Figma URL</label>
                       <input type="url" value={advancedOpts.figmaUrl} onChange={(e) => setAdvancedOpts(p => ({ ...p, figmaUrl: e.target.value }))}
                         placeholder="Optional..."
-                        className="w-full px-3 py-2 text-[12px] bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-lg text-slate-700 dark:text-slate-300 placeholder:text-slate-400 outline-none focus:border-orange-400" />
+                        className="w-full px-3 py-2 text-[12px] bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-lg text-slate-700 dark:text-slate-300 placeholder:text-slate-400 outline-none focus:border-blue-400" />
                     </div>
                   </div>
                 </div>
@@ -477,9 +477,9 @@ export default function EngineerDashboardPage() {
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-10 stagger-children">
                 {IDEAS.map((chip) => (
                   <button key={chip.label} type="button" onClick={() => { setPromptText(chip.prompt); promptRef.current?.focus(); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-                    className="group p-5 rounded-xl bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] hover:border-orange-300 dark:hover:border-orange-500/30 hover:shadow-lg transition-all text-center">
+                    className="group p-5 rounded-xl bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] hover:border-blue-300 dark:hover:border-blue-500/30 hover:shadow-lg transition-all text-center">
                     <span className="text-2xl mb-2 block">{chip.emoji}</span>
-                    <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300 group-hover:text-orange-600 dark:group-hover:text-orange-400 transition-colors">{chip.label}</span>
+                    <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">{chip.label}</span>
                   </button>
                 ))}
               </div>
@@ -508,7 +508,7 @@ export default function EngineerDashboardPage() {
                 <div className="flex items-center justify-between mb-5">
                   <h2 className="text-[18px] font-extrabold text-slate-800 dark:text-white tracking-tight">Your Projects</h2>
                   {platformRepos.length > 8 && (
-                    <button onClick={() => router.push('/dashboard/engineer/projects')} className="text-[12px] font-bold text-orange-500 hover:text-orange-700 dark:hover:text-orange-400 transition-colors">View all →</button>
+                    <button onClick={() => router.push('/dashboard/engineer/projects')} className="text-[12px] font-bold text-blue-500 hover:text-blue-700 dark:hover:text-blue-400 transition-colors">View all →</button>
                   )}
                 </div>
 
@@ -542,7 +542,7 @@ export default function EngineerDashboardPage() {
               <div className="mb-8">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-[18px] font-extrabold text-slate-800 dark:text-white tracking-tight">Recent Activity</h2>
-                  <button onClick={() => router.push('/dashboard/engineer/conversations')} className="text-[12px] font-bold text-orange-500 hover:text-orange-700 dark:hover:text-orange-400 transition-colors">
+                  <button onClick={() => router.push('/dashboard/engineer/conversations')} className="text-[12px] font-bold text-blue-500 hover:text-blue-700 dark:hover:text-blue-400 transition-colors">
                     All conversations →
                   </button>
                 </div>

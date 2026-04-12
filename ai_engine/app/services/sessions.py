@@ -1,13 +1,18 @@
 """Agent session lifecycle — store, create, destroy.
 
 The ``AgentSession`` dataclass holds per-session SDK objects.
-``SessionStore`` manages the in-memory dict and the asyncio lock.
-This is the *only* module that touches the global session state.
+``SessionStore`` manages a hybrid store: in-memory dict (primary) backed by
+Redis (persistence layer). Redis failures are silently swallowed so the
+application degrades gracefully to in-memory-only mode.
+
+On process restart, sessions not yet in memory are lazily recovered from Redis
+the first time they are looked up (e.g. when a WebSocket reconnects).
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 import time
@@ -25,7 +30,7 @@ MAX_SESSIONS_PER_USER = 3           # rate limit: max concurrent sessions
 from app import sdk
 from app.exceptions import SessionNotFoundError
 from app.services.llm import resolve_llm
-from app.services.git_operations import clone_repo
+from app.services.vcs.git import clone_repo
 
 
 def _safe_put(queue: asyncio.Queue, item) -> None:
@@ -53,6 +58,9 @@ class AgentSession:
         "event_buffer", "container_id", "project_id",
         "repo_context", "last_agent_message",
         "workspace_state",  # current WorkspaceState — set only via workspace_states.transition()
+        "pipeline_task",    # asyncio.Task | None — the currently running pipeline
+        "ws_proxy",         # WebSocketProxy | None — detachable event publisher
+        "sandbox_runner",   # SandboxRunner — swappable execution backend
     )
 
     def __init__(
@@ -93,6 +101,13 @@ class AgentSession:
         # Authoritative state — mutated only via workspace_states.transition()
         self.workspace_state: str = WorkspaceState.ENTRY
 
+        # Pipeline task detached from the WebSocket lifecycle
+        self.pipeline_task: Any = None   # asyncio.Task | None
+        self.ws_proxy: Any = None        # WebSocketProxy | None
+
+        # Execution backend — set by create_session() via create_runner()
+        self.sandbox_runner: Any = None  # SandboxRunner
+
     def touch(self) -> None:
         """Update last_active timestamp."""
         self.last_active = time.monotonic()
@@ -102,37 +117,177 @@ class AgentSession:
         return (time.monotonic() - self.last_active) > SESSION_TTL_SECONDS
 
 
-# ── In-memory session store ─────────────────────────────────
+# ── Redis key helpers ────────────────────────────────────────
+
+_KEY_SESSION = "lucid:session:{}"       # hash → JSON metadata
+_KEY_USER_SESSIONS = "lucid:user:{}:sessions"  # set → session_ids
+
+
+def _serialize(session: AgentSession) -> dict:
+    """Return a JSON-serializable dict of the session's persistent metadata."""
+    # Convert monotonic last_active to a wall-clock timestamp so it survives
+    # process restart (time.monotonic() resets each run).
+    last_active_wall = time.time() - (time.monotonic() - session.last_active)
+    return {
+        "session_id": session.session_id,
+        "user_id": session.user_id,
+        "task": session.task,
+        "repo_url": session.repo_url,
+        "branch": session.branch,
+        "git_token": session.git_token,
+        "created_at": session.created_at.isoformat(),
+        "last_active_wall": last_active_wall,
+        "is_alive": session.is_alive,
+        "project_id": session.project_id,
+        "repo_context": session.repo_context,
+        "last_agent_message": session.last_agent_message,
+        "workspace_dir": session.workspace_dir,
+        "workspace_state": session.workspace_state,
+        "container_id": session.container_id,
+    }
+
+
+def _deserialize(data: dict) -> AgentSession:
+    """Reconstruct an AgentSession from stored metadata."""
+    session = AgentSession(
+        session_id=data["session_id"],
+        user_id=data["user_id"],
+        task=data["task"],
+        repo_url=data.get("repo_url"),
+        branch=data.get("branch", "main"),
+        git_token=data.get("git_token"),
+    )
+    session.created_at = datetime.fromisoformat(data["created_at"])
+    # Restore last_active as a monotonic value with the correct elapsed time.
+    stored_wall: float = data.get("last_active_wall", time.time())
+    elapsed = max(0.0, time.time() - stored_wall)
+    session.last_active = time.monotonic() - elapsed
+
+    session.is_alive = data.get("is_alive", True)
+    session.project_id = data.get("project_id", "")
+    session.repo_context = data.get("repo_context", "")
+    session.last_agent_message = data.get("last_agent_message", "")
+    session.workspace_dir = data.get("workspace_dir", "")
+    session.workspace_state = data.get("workspace_state", WorkspaceState.ENTRY)
+    session.container_id = data.get("container_id")
+    return session
+
+
+# ── Session store ────────────────────────────────────────────
 
 class SessionStore:
-    """Thread-safe, in-memory session registry."""
+    """Thread-safe session registry backed by in-memory dict + Redis.
+
+    The in-memory dict is the primary store — all reads/writes hit it first.
+    Redis is the persistence layer: metadata is written on every mutation so
+    that sessions survive a process restart. Redis failures are silently
+    logged and never propagate to callers.
+
+    On restart, a session not yet in memory is lazily recovered from Redis
+    the first time it is looked up.
+    """
 
     def __init__(self) -> None:
         self._sessions: dict[str, AgentSession] = {}
         self._lock = asyncio.Lock()
 
+    # ── Redis helpers (private, never raise) ─────────────────
+
+    async def _persist(self, session: AgentSession) -> None:
+        from app.services.redis_client import get_redis
+        redis = get_redis()
+        if redis is None:
+            return
+        try:
+            payload = json.dumps(_serialize(session))
+            await redis.set(
+                _KEY_SESSION.format(session.session_id),
+                payload,
+                ex=SESSION_TTL_SECONDS,
+            )
+            user_key = _KEY_USER_SESSIONS.format(session.user_id)
+            await redis.sadd(user_key, session.session_id)
+            # User-sessions set TTL = 2× session TTL so it outlives any session
+            await redis.expire(user_key, SESSION_TTL_SECONDS * 2)
+        except Exception as exc:
+            logger.warning("Redis persist failed for %s: %s", session.session_id, exc)
+
+    async def _delete_from_redis(self, session: AgentSession) -> None:
+        from app.services.redis_client import get_redis
+        redis = get_redis()
+        if redis is None:
+            return
+        try:
+            await redis.delete(_KEY_SESSION.format(session.session_id))
+            await redis.srem(
+                _KEY_USER_SESSIONS.format(session.user_id), session.session_id
+            )
+        except Exception as exc:
+            logger.warning("Redis delete failed for %s: %s", session.session_id, exc)
+
+    async def _recover(self, session_id: str) -> AgentSession | None:
+        """Try to reconstruct a session from Redis after a process restart."""
+        from app.services.redis_client import get_redis
+        redis = get_redis()
+        if redis is None:
+            return None
+        try:
+            raw = await redis.get(_KEY_SESSION.format(session_id))
+            if raw is None:
+                return None
+            return _deserialize(json.loads(raw))
+        except Exception as exc:
+            logger.warning("Redis recovery failed for %s: %s", session_id, exc)
+            return None
+
+    # ── Public interface ──────────────────────────────────────
+
     async def add(self, session: AgentSession) -> None:
         async with self._lock:
             self._sessions[session.session_id] = session
+        await self._persist(session)
 
     async def get(self, session_id: str) -> AgentSession:
         async with self._lock:
             session = self._sessions.get(session_id)
+        if session is not None:
+            return session
+        # Not in memory — attempt Redis recovery (e.g. after process restart)
+        session = await self._recover(session_id)
         if session is None:
             raise SessionNotFoundError(session_id)
+        async with self._lock:
+            self._sessions[session.session_id] = session
+        logger.info("Session %s recovered from Redis", session_id)
         return session
 
     async def get_or_none(self, session_id: str) -> AgentSession | None:
         async with self._lock:
-            return self._sessions.get(session_id)
+            session = self._sessions.get(session_id)
+        if session is not None:
+            return session
+        return await self._recover(session_id)
 
     async def pop(self, session_id: str) -> AgentSession | None:
         async with self._lock:
-            return self._sessions.pop(session_id, None)
+            session = self._sessions.pop(session_id, None)
+        if session is not None:
+            await self._delete_from_redis(session)
+        return session
 
     async def contains(self, session_id: str) -> bool:
         async with self._lock:
-            return session_id in self._sessions
+            if session_id in self._sessions:
+                return True
+        # Fall back to Redis
+        from app.services.redis_client import get_redis
+        redis = get_redis()
+        if redis is None:
+            return False
+        try:
+            return bool(await redis.exists(_KEY_SESSION.format(session_id)))
+        except Exception:
+            return False
 
     async def list_all(self) -> list[AgentSession]:
         async with self._lock:
@@ -145,6 +300,13 @@ class SessionStore:
     async def snapshot_ids(self) -> list[str]:
         async with self._lock:
             return list(self._sessions.keys())
+
+    async def touch(self, session_id: str) -> None:
+        """Refresh the Redis TTL for a session after in-memory activity."""
+        async with self._lock:
+            session = self._sessions.get(session_id)
+        if session is not None:
+            await self._persist(session)
 
     async def find_by_user_and_project(
         self, user_id: str, project_id: str
@@ -343,6 +505,19 @@ async def create_session(
     session.workspace_dir = workspace_dir
     session.project_id = project_id or ""
 
+    # ── Create the sandbox runner ────────────────────────────
+    # LocalRunner is the default (no Docker required). DockerRunner can be
+    # enabled per-session in the future via a settings flag or user preference.
+    from app.services.sandbox import create_runner
+    runner = create_runner(
+        session_id=session_id,
+        workspace_dir=workspace_dir,
+        user_id=user_id,
+        use_docker=False,
+    )
+    await runner.setup()
+    session.sandbox_runner = runner
+
     # NOTE: Repo cloning is handled by workspace_manager.get_or_create_workspace()
     # inside run_pipeline(). We do NOT clone here to avoid:
     #   1. Double-cloning (once here, once in workspace_manager)
@@ -370,6 +545,13 @@ async def destroy_session(session_id: str) -> None:
 
     session.is_alive = False
     logger.info("Destroying session %s", session_id)
+
+    # Teardown the sandbox runner (no-op for LocalRunner, stops container for Docker)
+    if session.sandbox_runner is not None:
+        try:
+            await session.sandbox_runner.teardown()
+        except Exception as exc:
+            logger.error("SandboxRunner teardown error for %s: %s", session_id, exc)
 
     if session.conversation and hasattr(session.conversation, "close"):
         try:

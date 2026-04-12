@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     # also includes a matching X-Internal-Key header.
     INTERNAL_API_KEY: str = ""
 
+    # Redis — used for session persistence and (future) job queue.
+    # Set to empty string to disable Redis and fall back to in-memory-only mode.
+    REDIS_URL: str = "redis://localhost:6379"
+
     # CORS — comma-separated string of origins.
     # Use .allowed_origins_list property to get parsed list[str].
     ALLOWED_ORIGINS: str = "http://localhost:3000"

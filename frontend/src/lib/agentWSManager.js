@@ -30,6 +30,8 @@ class AgentWSManager {
     this._listeners = [];
     /** @type {string} current session ID from backend */
     this.sessionId = null;
+    /** @type {string|null} last Redis Stream event ID — sent on reconnect for delta replay */
+    this._lastEventId = null;
 
     // ── Session snapshot — survives React component unmount/remount ──
     // When the workspace page navigates away and back, the new hook instance
@@ -103,6 +105,7 @@ class AgentWSManager {
       this._chatSnapshot = null;
       this._phasesSnapshot = [];
       this._statusSnapshot = 'idle';
+      this._lastEventId = null;
     }
 
     // CRITICAL FIX: If ws exists but is not OPEN (e.g. CLOSING state),
@@ -146,6 +149,7 @@ class AgentWSManager {
         gitToken: gitToken || '',
         branch: branch || '',
         task: task || '',
+        lastEventId: this._lastEventId || '',
       }));
 
       this._emit({ type: '_internal', event: 'connected' });
@@ -156,6 +160,11 @@ class AgentWSManager {
         const msg = JSON.parse(event.data);
         // Track session ID
         if (msg.sessionId) this.sessionId = msg.sessionId;
+        // Track Redis Stream cursor — used for delta replay on reconnect
+        if (msg.type === '_cursor' && msg.id) {
+          this._lastEventId = msg.id;
+          return; // internal bookkeeping only, don't forward to listeners
+        }
         this._emit(msg);
       } catch (_) {}
     };
@@ -193,6 +202,7 @@ class AgentWSManager {
     }
     this._projectId = '';
     this.sessionId = null;
+    this._lastEventId = null;
   }
 
   _clearConnectTimeout() {

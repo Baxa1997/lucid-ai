@@ -4,7 +4,7 @@ from fastapi import APIRouter
 
 from app.config import settings, MODEL_CONFIGS
 from app.sdk import OPENHANDS_AVAILABLE
-from app.services.docker_workspace import docker_manager
+from app.services.sandbox import docker_runner_manager
 from app.services.sessions import store
 
 router = APIRouter(tags=["health"])
@@ -18,8 +18,8 @@ async def root():
         "version": "1.0.0",
         "status": "healthy",
         "openhands_available": OPENHANDS_AVAILABLE,
-        "docker_available": docker_manager.is_docker_available(),
-        "active_sandboxes": docker_manager.active_container_count,
+        "docker_available": docker_runner_manager.is_docker_available(),
+        "active_sandboxes": docker_runner_manager.active_container_count,
         "active_sessions": await store.count(),
         "llm_model": MODEL_CONFIGS.get(
             settings.DEFAULT_PROVIDER, {}

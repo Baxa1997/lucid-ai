@@ -1,6 +1,8 @@
 'use client';
 
-import { 
+export const dynamic = 'force-dynamic';
+
+import {
   Plus, MessageSquare, FileText, Settings, Zap,
   LogOut, Grid2X2, PanelLeftClose, PanelLeft, Sparkles,
   AlertTriangle, X, ChevronUp, Home,
@@ -118,7 +120,13 @@ export default function EngineerLayout({ children }) {
   const pathname = usePathname();
   const supabase = getSupabaseBrowserClient();
 
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => {
+    // Read persisted state synchronously so the sidebar never flashes open
+    // before collapsing. A useEffect would set state after the first render,
+    // causing the visible open→close jump the user reported.
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('lucid-sidebar-collapsed') === 'true';
+  });
   const [showWizard, setShowWizard] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [cmdProjects, setCmdProjects] = useState([]);
@@ -134,10 +142,6 @@ export default function EngineerLayout({ children }) {
   }, [pathname, showWizard]);
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('lucid-sidebar-collapsed');
-      if (saved === 'true') setCollapsed(true);
-    }
     // Fetch data for command palette
     fetch('/api/platform-repos').then(r => r.json()).then(d => setCmdProjects(d.repos || [])).catch(() => {});
     listConversations().then(d => setCmdConversations(d || [])).catch(() => {});
@@ -327,7 +331,7 @@ export default function EngineerLayout({ children }) {
               <Tooltip label="Expand sidebar" show={true}>
                 <button
                   onClick={toggleCollapsed}
-                  className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center hover:from-orange-600 hover:to-red-600 transition-all shadow-sm"
+                  className="w-10 h-10 rounded-xl bg-gradient-to-br from-slate-800 to-slate-900 dark:from-slate-200 dark:to-slate-300 flex items-center justify-center hover:opacity-90 transition-all shadow-sm"
                 >
                   <Zap className="w-4 h-4 text-white fill-current" />
                 </button>
@@ -345,7 +349,7 @@ export default function EngineerLayout({ children }) {
                   }}
                   className="flex items-center gap-2.5 hover:opacity-80 transition-opacity"
                 >
-                  <div className="w-8 h-8 bg-gradient-to-br from-orange-500 to-red-500 rounded-lg flex items-center justify-center shrink-0 shadow-sm">
+                  <div className="w-8 h-8 bg-gradient-to-br from-slate-800 to-slate-900 dark:from-slate-200 dark:to-slate-300 rounded-lg flex items-center justify-center shrink-0 shadow-sm">
                     <Zap className="w-4 h-4 text-white fill-current" />
                   </div>
                   <span className="font-bold text-slate-900 dark:text-white text-[17px] tracking-tight">Lucid AI</span>
@@ -388,14 +392,14 @@ export default function EngineerLayout({ children }) {
           {wizardIsActive && (
             <div className={cn("px-4 pb-0.5 pt-2", collapsed && "px-2")}>
               <div className={cn(
-                "w-full flex items-center rounded-xl text-[13px] font-medium bg-orange-50 dark:bg-orange-500/10 text-orange-700 dark:text-orange-400 border border-orange-200/60 dark:border-orange-500/15",
+                "w-full flex items-center rounded-xl text-[13px] font-medium bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400 border border-blue-200/60 dark:border-blue-500/15",
                 collapsed ? "justify-center p-2.5" : "gap-3 px-3 py-2"
               )}>
-                <Sparkles className="w-4 h-4 shrink-0 text-orange-500 dark:text-orange-400" strokeWidth={2} />
+                <Sparkles className="w-4 h-4 shrink-0 text-blue-500 dark:text-blue-400" strokeWidth={2} />
                 {!collapsed && (
                   <>
                     <span className="flex-1 text-left">New Project</span>
-                    <div className="w-1.5 h-1.5 rounded-full bg-orange-500 dark:bg-orange-400 animate-pulse shrink-0" />
+                    <div className="w-1.5 h-1.5 rounded-full bg-blue-500 dark:bg-blue-400 animate-pulse shrink-0" />
                   </>
                 )}
               </div>
@@ -432,7 +436,7 @@ export default function EngineerLayout({ children }) {
                     <p className="text-[13px] font-semibold text-slate-800 dark:text-white leading-tight">Upgrade your plan</p>
                     <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">Get more out of your apps</p>
                   </div>
-                  <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shrink-0 shadow-sm">
+                  <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-400 to-blue-500 flex items-center justify-center shrink-0 shadow-sm">
                     <Sparkles className="w-4 h-4 text-white" />
                   </div>
                 </button>

@@ -65,12 +65,20 @@ async def validate_inputs(
         # ══════════════════════════════════════════════════════════════════
         import re as _re_early
         _task_str = str(task) if task else ""
-        # Find the [LUCID_PROJECT] header line anywhere in the first 2000 chars
+        # [LUCID_PROJECT] header is ALWAYS the very first non-empty line of a
+        # genuine wizard task.  Searching further into the string would cause
+        # false positives when a previous wizard session's last_task is injected
+        # as conversation context (e.g. "## What happened in the previous
+        # session\n\nTask: [LUCID_PROJECT]...").
         _header_raw = ""
-        for _ln in _task_str[:2000].split("\n"):
-            if "[LUCID_PROJECT]" in _ln:
-                _header_raw = _ln.strip()
-                break
+        for _ln in _task_str[:300].split("\n"):
+            _ln_stripped = _ln.strip()
+            if not _ln_stripped:
+                continue  # skip blank lines at the top
+            # The first real content line must contain the marker to be a wizard task
+            if "[LUCID_PROJECT]" in _ln_stripped:
+                _header_raw = _ln_stripped
+            break  # stop after the first non-empty line regardless
         _is_wizard_task = bool(_header_raw)
 
         if _is_wizard_task:

@@ -77,6 +77,7 @@ EMPTY_SCHEMA: dict[str, Any] = {
     },
     "status_badges": {},  # {status_name: tailwind_classes}
     "design_system": {    # Deterministic tokens all components import
+        "name": "",        # Evocative 2-4 word name, e.g. "Midnight Stack"
         "card_classes": "",
         "badge_variants": {},
         "section_spacing": "",
@@ -114,6 +115,10 @@ RULES:
 9. Dashboard KPIs must reference real entity metrics.
 10. Status badges: extract ALL statuses mentioned with semantic Tailwind classes.
 11. design_system: extract the EXACT Tailwind classes for cards, badges, spacing.
+    Also generate design_system.name — a short evocative 2-4 word name that
+    captures the visual identity of THIS specific product (e.g. "Midnight Stack",
+    "Harvest Table", "Neon Arena", "Silk & Steel", "Polar Grid").  It must be
+    unique to the product — never generic like "Modern App" or "Clean Design".
 12. api_config: generate REST API endpoints for each entity.
 13. mock_db: create the complete db.json content with all entities and mock data.
 
@@ -231,6 +236,7 @@ Return JSON with this EXACT structure:
     "processing": "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
   }},
   "design_system": {{
+    "name": "Midnight Stack",
     "card_classes": "rounded-xl border border-border bg-card shadow-sm hover:shadow-md transition-shadow",
     "badge_variants": {{
       "default": "bg-primary/10 text-primary",
@@ -289,15 +295,47 @@ async def build_project_schema(
     
     Returns the canonical schema dict, or a fallback if parsing fails.
     """
+    import random
+    import string
     from app.services.project_generator import call_claude_for_json, _ws_send
 
     await _ws_send(websocket, "progress", "📐 Building project schema...")
+
+    # ── Inject a random design seed so each generation is unique ────────────
+    # Without this, the same description always produces the same color tokens,
+    # fonts, and section order because LLMs are nearly deterministic on
+    # structured-output prompts.  The seed breaks that symmetry cheaply.
+    _session_seed = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
+    _design_directions = [
+        "dark and moody with deep backgrounds and light text — tech/creative aesthetic",
+        "light and airy with generous whitespace and subtle shadows — minimal SaaS",
+        "bold and high-contrast with a vivid accent color — conversion-focused startup",
+        "warm earth tones (amber, sand, terracotta) — human and approachable",
+        "vibrant gradient hero with glassmorphism cards — modern web app",
+        "clean corporate palette (navy, slate, white) — professional B2B",
+        "playful and colorful (coral, teal, yellow) — consumer product",
+        "sophisticated dark mode with neon accent — developer / technical tool",
+        "elegant near-monochrome with serif headings — premium / luxury brand",
+        "green-forward eco palette — sustainability / health product",
+        "purple-to-indigo gradient — AI / data / analytics product",
+        "orange and black high-energy — fitness / sports / gaming",
+    ]
+    _design_direction = random.choice(_design_directions)
 
     user_prompt = _SCHEMA_USER_TEMPLATE.format(
         description=description,
         app_type=app_type,
         stack=stack,
         research=research[:12000],  # Cap research to stay in context budget
+    )
+    # Append the seed + direction AFTER the template so it influences design choices
+    # without breaking the JSON structure rules.
+    user_prompt += (
+        f"\n\nSESSION SEED: {_session_seed}\n"
+        f"DESIGN DIRECTION FOR THIS RUN: {_design_direction}\n"
+        "Apply this design direction to theme colors, fonts, and overall_vibe. "
+        "Make the palette feel PURPOSE-BUILT for this specific product — "
+        "do NOT default to generic blue-tech colors unless the direction calls for it."
     )
 
     # We need raw JSON output here, not file-based tool_use.

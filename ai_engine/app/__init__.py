@@ -11,8 +11,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import logger, settings
 from app.sdk import OPENHANDS_AVAILABLE, import_error
 from app.services.sessions import store, destroy_session, reap_expired_sessions
-from app.services.docker_workspace import docker_manager
+from app.services.sandbox import docker_runner_manager
 from app.services.workspace_manager import workspace_manager
+from app.services.redis_client import connect_redis, disconnect_redis
 from app.routers import health, sessions, ws, chat, files, integrations
 
 
@@ -20,6 +21,9 @@ from app.routers import health, sessions, ws, chat, files, integrations
 async def lifespan(_app: FastAPI):
     """Verify dependencies on boot; clean up on shutdown."""
     logger.info("Lucid AI Engine starting …")
+
+    # Connect Redis (session persistence — gracefully skipped if unavailable)
+    await connect_redis()
 
     # Report SDK availability
     if OPENHANDS_AVAILABLE:
@@ -32,10 +36,10 @@ async def lifespan(_app: FastAPI):
 
     # Check Docker daemon availability (optional, mainly for cleanup)
     try:
-        docker_available = await asyncio.to_thread(docker_manager.is_docker_available)
+        docker_available = await asyncio.to_thread(docker_runner_manager.is_docker_available)
         if docker_available:
             logger.info("Docker daemon is accessible")
-            cleaned = await asyncio.to_thread(docker_manager.cleanup_orphaned_containers)
+            cleaned = await asyncio.to_thread(docker_runner_manager.cleanup_orphaned_containers)
             if cleaned:
                 logger.info("Cleaned up %d orphaned sandbox containers", cleaned)
         else:
@@ -65,12 +69,13 @@ async def lifespan(_app: FastAPI):
         await destroy_session(sid)
     # Destroy any remaining Docker containers
     try:
-        await docker_manager.destroy_all()
+        await docker_runner_manager.destroy_all()
     except Exception:
         pass
     # Destroy all lingering workspaces
     await workspace_manager.stop_reaper()
     await workspace_manager.destroy_all()
+    await disconnect_redis()
     logger.info("All resources cleaned up.")
 
 

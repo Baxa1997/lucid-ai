@@ -280,6 +280,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
           } else {
             if (reconnectCount.current < MAX_RECONNECTS) {
               reconnectCount.current += 1;
+              setState('reconnecting');
               pushLog(`Reconnecting (${reconnectCount.current}/${MAX_RECONNECTS})…`, 'system');
               setTimeout(() => {
                 if (manager && !manager.isOpen && !manager.isConnecting) {
@@ -1129,7 +1130,8 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     messages: chatMessages,
     terminalLogs: logs,
     isReady: state === 'ready',
-    isPreparing: state === 'preparing' || state === 'connecting' || state === 'cloning' || state === 'installing' || state === 'starting' || state === 'health_check',
+    isReconnecting: state === 'reconnecting',
+    isPreparing: state === 'preparing' || state === 'connecting' || state === 'cloning' || state === 'installing' || state === 'starting' || state === 'health_check' || state === 'reconnecting',
 
     // Actions
     startSession,

@@ -75,7 +75,7 @@ function PlanBubble({ msg }) {
 
   return (
     <div className="flex items-start gap-3 px-4 py-3 animate-in fade-in duration-300">
-      <div className="w-7 h-7 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center shrink-0 mt-0.5 shadow-sm shadow-orange-500/20">
+      <div className="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center shrink-0 mt-0.5 shadow-sm shadow-blue-500/20">
         <Sparkles className="w-3.5 h-3.5 text-white" />
       </div>
       <div className="flex-1 min-w-0">
@@ -437,7 +437,7 @@ export default function MessageBubble({ msg, isLatest }) {
   // ── Agent message — Base44 style: transparent, avatar left ──
   return (
     <div className="flex items-start gap-3 px-4 py-4 w-full animate-in fade-in duration-300">
-      <div className="w-7 h-7 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center shrink-0 mt-0.5 shadow-sm shadow-orange-500/20">
+      <div className="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center shrink-0 mt-0.5 shadow-sm shadow-blue-500/20">
         <Sparkles className="w-3.5 h-3.5 text-white" />
       </div>
       <div className="flex-1 min-w-0">

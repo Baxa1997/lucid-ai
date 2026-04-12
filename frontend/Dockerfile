@@ -10,7 +10,8 @@ COPY package.json package-lock.json .npmrc ./
 RUN apk add --no-cache libc6-compat
 
 # Install dependencies using npm (legacy-peer-deps is set in .npmrc)
-RUN npm install --legacy-peer-deps
+# NODE_ENV=development ensures devDependencies (Tailwind plugins, PostCSS, etc.) are installed
+RUN NODE_ENV=development npm install --legacy-peer-deps
 
 # Pre-install TypeScript deps so Next.js doesn't auto-install at runtime
 RUN npm install --save-dev typescript @types/react @types/node --legacy-peer-deps

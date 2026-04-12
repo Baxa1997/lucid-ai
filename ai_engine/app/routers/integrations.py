@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from app.auth import AuthenticatedUser, get_current_user
 from app.config import logger
-from app.services.integrations import (
+from app.services.vcs import (
     delete_integration,
     get_integration,
     github_create_pr,
