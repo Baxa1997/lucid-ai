@@ -100,7 +100,7 @@ EMPTY_SCHEMA: dict[str, Any] = {
 # ║  Transforms Gemini research text → structured JSON           ║
 # ╚══════════════════════════════════════════════════════════════╝
 
-_SCHEMA_SYSTEM = """You are a precise data architect.  Your ONLY job is to parse
+_SCHEMA_SYSTEM = """You are a precise data architect. Your ONLY job is to parse
 unstructured research text into a strictly-typed JSON schema.
 
 RULES:
@@ -111,8 +111,9 @@ RULES:
 5. Mark fields as inForm:true if they should appear in create/edit forms.
 6. Generate 15-20 rows of realistic mock data per entity.
 7. Every navigation item MUST have a corresponding page in the pages array.
-8. Every entity MUST have a corresponding /entity and /entity/:id route in pages.
-9. Dashboard KPIs must reference real entity metrics.
+8. For admin/dashboard apps: every entity MUST have /entity, /entity/new, /entity/:id routes in pages.
+   For consumer/public apps: pages should reflect the public-facing page structure.
+9. Dashboard KPIs must reference real entity metrics (admin apps only).
 10. Status badges: extract ALL statuses mentioned with semantic Tailwind classes.
 11. design_system: extract the EXACT Tailwind classes for cards, badges, spacing.
     Also generate design_system.name — a short evocative 2-4 word name that
@@ -121,6 +122,12 @@ RULES:
     unique to the product — never generic like "Modern App" or "Clean Design".
 12. api_config: generate REST API endpoints for each entity.
 13. mock_db: create the complete db.json content with all entities and mock data.
+14. SELF-CLASSIFY: if the research contains an ===APP_CLASSIFICATION=== section,
+    use it to determine whether to use sidebar nav vs header nav, whether to include
+    a dashboard section, and what page types to use. Always follow the research's guidance.
+15. For unusual/edge-case app types not explicitly listed in the instructions below:
+    read the research carefully, understand the app's nature, and build the schema
+    that best represents what the research describes — do NOT fall back to a generic structure.
 
 Output ONLY valid JSON. No markdown, no explanation."""
 
@@ -263,13 +270,51 @@ Return JSON with this EXACT structure:
   }}
 }}
 
-For LANDING PAGES (not admin):
-- "entities" should be empty []
-- "sections" should list all page sections with content
-- "dashboard" should be empty
-- "mock_db" should be empty
-- "navigation" should be header nav items
-- "pages" should include /about, /pricing, /contact, /blog etc.
+The research text contains ===CLASSIFICATION=== with layout_archetype and is_single_page.
+Read it to determine the correct schema structure. Use these rules:
+
+For layout_archetype = single_page_landing (is_single_page: yes):
+- "entities" → empty []
+- "sections" → list ALL page sections (hero, features, testimonials, pricing, FAQ, CTA, footer, etc.)
+  All content is sections within the single page — NO separate routes exist.
+- "dashboard" → empty {{}}
+- "mock_db" → empty {{}}
+- "navigation" → TOP HEADER with anchor links pointing to sections (e.g. /#features, /#pricing)
+  Format: [{{"group": "main", "items": [{{"label": "...", "path": "/#section-id", "icon": "..."}}]}}]
+- "pages" → EMPTY [] — never add /about, /pricing, /contact as separate routes
+
+For layout_archetype = consumer_website OR portfolio OR marketplace:
+- "entities" → domain data models with ALL fields and 10-15 realistic mock rows each
+- "sections" → empty [] (pages are full components, not section lists)
+- "pages" → ALL public-facing pages with domain-specific paths (minimum 5-6 pages)
+  Extract from the ===PAGES=== section in the research.
+  Each page: path, title, component, type: "content_page", purpose
+- "dashboard" → empty {{}} (NOT an admin dashboard)
+- "navigation" → TOP HEADER nav items (NOT sidebar groups)
+  Format: [{{"group": "main", "items": [{{"label": "...", "path": "/path", "icon": "..."}}]}}]
+- "mock_db" → all entity data with realistic domain content
+- Images: https://picsum.photos/seed/[domain][N]/800/600 | Avatars: https://i.pravatar.cc/150?u=[unique]
+
+For layout_archetype = admin_dashboard OR crm OR tms OR saas_dashboard OR ecommerce:
+- "entities" → ALL data entities with fields and 15-20 mock rows (extract from ===ENTITIES=== in research)
+- "pages" → all CRUD routes (/entity, /entity/new, /entity/:id) + /dashboard
+- "sections" → empty []
+- "navigation" → SIDEBAR groups from ===SIDEBAR=== in research
+  Format: [{{"group": "Group Name", "items": [{{"label": "...", "path": "...", "icon": "..."}}]}}]
+- "dashboard" → KPIs, charts, recent_table from ===DASHBOARD_KPIS=== in research
+- "mock_db" → all entity data
+
+For layout_archetype = blog:
+- "entities" → Article, Author, Category, Tag — ALL fields, 15-20 mock rows each
+- "sections" → empty []
+- "pages" → /articles, /articles/:slug, /write, /categories, /tags/:tag, /authors/:username, /search
+- "dashboard" → empty {{}}
+- "navigation" → top header nav items
+- "mock_db" → all entity data with realistic blog content
+
+CRITICAL RULE: Always parse ===CLASSIFICATION=== from the research first to determine which
+structure applies. is_single_page: yes → NEVER create separate page routes.
+admin types → use sidebar nav groups, not top header.
 
 IMPORTANT: Generate 15-20 rows of REALISTIC mock data per entity.
 Use real-sounding names, realistic numbers, proper date formats, varied statuses.
@@ -326,7 +371,7 @@ async def build_project_schema(
         description=description,
         app_type=app_type,
         stack=stack,
-        research=research[:12000],  # Cap research to stay in context budget
+        research=research[:24000],  # Thinking mode outputs 20K+ — raised from 12K
     )
     # Append the seed + direction AFTER the template so it influences design choices
     # without breaking the JSON structure rules.

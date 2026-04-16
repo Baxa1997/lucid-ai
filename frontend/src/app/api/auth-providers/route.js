@@ -69,7 +69,7 @@ export async function PUT(req) {
     .select('*')
     .eq('id', supabaseProjectId)
     .eq('user_id', ctx.userId)
-    .single();
+    .maybeSingle();
 
   if (fetchErr || !project) {
     return NextResponse.json({ error: 'Project not found' }, { status: 404 });
@@ -127,7 +127,7 @@ export async function PUT(req) {
         .from('user_settings')
         .select('gitlab_host, gitlab_token_enc, gitlab_token_iv')
         .eq('user_id', ctx.userId)
-        .single();
+        .maybeSingle();
 
       if (settings?.gitlab_host && settings?.gitlab_token_enc) {
         const gitlabToken = decrypt(settings.gitlab_token_enc, settings.gitlab_token_iv);

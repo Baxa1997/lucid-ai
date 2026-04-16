@@ -175,47 +175,79 @@ async def validate_inputs(
             # If this session already created a repo (wizard project),
             # reuse it instead of entering scratch mode.
             if chat_session_id:
-                try:
-                    from app.supabase_client import db_client
-                    async with db_client(None) as sb:
-                        result = await (
-                            sb.table("chat_sessions")
-                            .select("platform_repo_url")
-                            .eq("id", chat_session_id)
-                            .maybe_single()
-                            .execute()
-                        )
-                    if result.data and result.data.get("platform_repo_url"):
-                        existing_repo_url = result.data["platform_repo_url"]
-                        # Use module-level PLATFORM_GITHUB_TOKEN (loaded at startup)
-                        platform_token = PLATFORM_GITHUB_TOKEN
-                        if platform_token:
-                            # Extract owner/repo from URL
-                            # e.g. "https://github.com/Baxa1997/my_project_frontend"
-                            repo_path = existing_repo_url.replace("https://github.com/", "").strip("/")
-                            if repo_path.endswith(".git"):
-                                repo_path = repo_path[:-4]
-                            repo_url = f"https://{platform_token}@github.com/{repo_path}.git"
-                            token = platform_token
-                            git_provider = "github"
-                            scratch_mode = False
-                            branch = "main"
-                            logger.info(
-                                "FOLLOW-UP MODE: Reusing existing repo from chat_session %s: %s",
-                                chat_session_id, existing_repo_url,
+                # Retry up to 3 times with 1-second backoff so a transient
+                # Supabase timeout does NOT silently create a brand-new project
+                # instead of editing the existing wizard project.
+                _db_result = None
+                _db_err_last = None
+                for _attempt in range(3):
+                    try:
+                        import asyncio as _asyncio
+                        from app.supabase_client import db_client
+                        async with db_client(None) as sb:
+                            _db_result = await _asyncio.wait_for(
+                                (
+                                    sb.table("chat_sessions")
+                                    .select("platform_repo_url")
+                                    .eq("id", chat_session_id)
+                                    .maybe_single()
+                                    .execute()
+                                ),
+                                timeout=8.0,
                             )
-                            await websocket.send_json({
-                                "type": "progress",
-                                "message": f"📂 Using existing project repo: {existing_repo_url}",
-                            })
-                        else:
-                            logger.warning("FOLLOW-UP: Found platform_repo_url but no PLATFORM_GITHUB_TOKEN")
-                            scratch_mode = True
+                        _db_err_last = None
+                        break  # success
+                    except Exception as _e:
+                        _db_err_last = _e
+                        logger.warning(
+                            "DB lookup for platform_repo_url failed (attempt %d/3): %s",
+                            _attempt + 1, _e,
+                        )
+                        if _attempt < 2:
+                            import asyncio as _asyncio2
+                            await _asyncio2.sleep(1.0)
+
+                if _db_err_last is not None:
+                    # All 3 attempts failed — warn user and fall back to scratch mode
+                    logger.error(
+                        "All DB retries failed for chat_session %s — entering scratch mode. Last error: %s",
+                        chat_session_id, _db_err_last,
+                    )
+                    await websocket.send_json({
+                        "type": "warning",
+                        "message": (
+                            "⚠️ Could not reach database to check for existing project. "
+                            "If this is a follow-up task, please try again in a moment."
+                        ),
+                    })
+                    scratch_mode = True
+                elif _db_result and _db_result.data and _db_result.data.get("platform_repo_url"):
+                    existing_repo_url = _db_result.data["platform_repo_url"]
+                    # Use module-level PLATFORM_GITHUB_TOKEN (loaded at startup)
+                    platform_token = PLATFORM_GITHUB_TOKEN
+                    if platform_token:
+                        # Extract owner/repo from URL
+                        # e.g. "https://github.com/Baxa1997/my_project_frontend"
+                        repo_path = existing_repo_url.replace("https://github.com/", "").strip("/")
+                        if repo_path.endswith(".git"):
+                            repo_path = repo_path[:-4]
+                        repo_url = f"https://{platform_token}@github.com/{repo_path}.git"
+                        token = platform_token
+                        git_provider = "github"
+                        scratch_mode = False
+                        branch = "main"
+                        logger.info(
+                            "FOLLOW-UP MODE: Reusing existing repo from chat_session %s: %s",
+                            chat_session_id, existing_repo_url,
+                        )
+                        await websocket.send_json({
+                            "type": "progress",
+                            "message": f"📂 Using existing project repo: {existing_repo_url}",
+                        })
                     else:
+                        logger.warning("FOLLOW-UP: Found platform_repo_url but no PLATFORM_GITHUB_TOKEN")
                         scratch_mode = True
-                        logger.info("SCRATCH MODE: No repository configured — creating local workspace")
-                except Exception as db_err:
-                    logger.warning("Failed to check chat_sessions for platform_repo_url: %s", db_err)
+                else:
                     scratch_mode = True
                     logger.info("SCRATCH MODE: No repository configured — creating local workspace")
             else:
@@ -245,7 +277,7 @@ async def validate_inputs(
                 if repo.endswith(".git"):
                     repo = repo[:-4]
                 repo_url = f"https://{token}@github.com/{repo}.git"
-                logger.info("DEBUG repo_url built: %s...", repo_url[:50])
+                logger.info("repo_url built for github/%s", repo)
 
             elif git_provider == "gitlab":
                 if not token or not str(token).strip():
@@ -260,7 +292,7 @@ async def validate_inputs(
                 if repo.endswith(".git"):
                     repo = repo[:-4]
                 repo_url = f"https://oauth2:{token}@gitlab.com/{repo}.git"
-                logger.info("DEBUG repo_url built: %s...", repo_url[:50])
+                logger.info("repo_url built for gitlab/%s", repo)
 
             else:
                 await websocket.send_json({

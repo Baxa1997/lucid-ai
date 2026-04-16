@@ -34,7 +34,7 @@ export async function GET(req) {
       .from('deployment_settings')
       .select('gitlab_host, gitlab_token_enc, gitlab_token_iv')
       .eq('user_id', ctx.user.id)
-      .single();
+      .maybeSingle();
 
     if (!settings?.gitlab_host || !settings?.gitlab_token_enc) {
       return NextResponse.json({ error: 'GitLab not configured' }, { status: 404 });

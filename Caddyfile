@@ -1,0 +1,56 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  Lucid AI — Caddy preview proxy
+#
+#  Routes *.preview.yourdomain.com → the dev server running on that port.
+#  Port is encoded in the subdomain — no dynamic config needed:
+#    https://preview-3001.preview.yourdomain.com  →  http://127.0.0.1:3001
+#
+#  Setup (one-time on the production server):
+#
+#  1. Install Caddy:
+#       apt install -y debian-keyring debian-archive-keyring apt-transport-https
+#       curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+#       curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
+#       apt update && apt install caddy
+#
+#  2. Install the Caddy Cloudflare DNS plugin (needed for wildcard SSL):
+#       caddy add-package github.com/caddy-dns/cloudflare
+#       # or download a pre-built binary from https://caddyserver.com/download
+#       # with the cloudflare module selected
+#
+#  3. Set your Cloudflare API token as an env var on the server:
+#       echo "CF_API_TOKEN=your_token_here" >> /etc/caddy/caddy.env
+#
+#  4. Add a DNS wildcard A record in Cloudflare dashboard:
+#       *.preview.yourdomain.com  →  A  →  your_server_ip  (DNS only, no proxy)
+#
+#  5. Replace "yourdomain.com" below with your real domain.
+#
+#  6. Copy this file and start Caddy:
+#       cp Caddyfile /etc/caddy/Caddyfile
+#       systemctl enable caddy && systemctl start caddy
+#
+#  Set in your .env on the server:
+#       PREVIEW_DOMAIN=preview.yourdomain.com
+# ─────────────────────────────────────────────────────────────────────────────
+
+*.preview.yourdomain.com {
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+	}
+
+	@preview_host header_regexp port Host ^preview-(?P<port>[0-9]+)\.preview\.yourdomain\.com$
+
+	handle @preview_host {
+		reverse_proxy http://127.0.0.1:{re.port} {
+			# WebSocket support — required for Vite HMR and Next.js Fast Refresh
+			header_up Host {host}
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 0
+			}
+		}
+	}
+
+	respond 400
+}

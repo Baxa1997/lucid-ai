@@ -120,13 +120,15 @@ export default function EngineerLayout({ children }) {
   const pathname = usePathname();
   const supabase = getSupabaseBrowserClient();
 
-  const [collapsed, setCollapsed] = useState(() => {
-    // Read persisted state synchronously so the sidebar never flashes open
-    // before collapsing. A useEffect would set state after the first render,
-    // causing the visible open→close jump the user reported.
-    if (typeof window === 'undefined') return false;
-    return localStorage.getItem('lucid-sidebar-collapsed') === 'true';
-  });
+  // Always start collapsed=false on the server so SSR HTML matches.
+  // After hydration, read localStorage and snap to the persisted value.
+  // The sidebar gets a suppressHydrationWarning so React doesn't error on
+  // the class-name difference during the one-frame correction.
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    const stored = localStorage.getItem('lucid-sidebar-collapsed') === 'true';
+    if (stored) setCollapsed(true);
+  }, []);
   const [showWizard, setShowWizard] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
   const [cmdProjects, setCmdProjects] = useState([]);
@@ -316,6 +318,7 @@ export default function EngineerLayout({ children }) {
 
         {!isWorkspace && (
         <aside
+          suppressHydrationWarning
           className={cn(
             "h-full bg-white dark:bg-[#0d1117] border-r border-slate-200/60 dark:border-slate-800/40 flex flex-col shrink-0",
             collapsed ? "w-[60px]" : "w-[260px]"

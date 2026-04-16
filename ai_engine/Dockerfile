@@ -34,8 +34,25 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && rm -rf /var/lib/apt/lists/*
 
 # Install pnpm + yarn (templates may use any of these)
-# Install localtunnel for live preview during development
-RUN npm install -g pnpm@latest yarn@latest localtunnel
+RUN npm install -g pnpm@latest yarn@latest
+
+# Warm the pnpm store with common dependencies shared across all 3 templates.
+# This means workspace installs pull from the local store (~10-20s) instead
+# of downloading from the network (~60-180s) every time.
+RUN mkdir -p /tmp/pnpm-warmup && cd /tmp/pnpm-warmup \
+    && pnpm init \
+    && pnpm add \
+        react react-dom \
+        next \
+        vue \
+        vite @vitejs/plugin-react @vitejs/plugin-vue \
+        tailwindcss postcss autoprefixer \
+        @radix-ui/react-slot \
+        class-variance-authority clsx tailwind-merge \
+        lucide-react \
+    && cd / && rm -rf /tmp/pnpm-warmup
+
+# NOTE: cloudflared removed — E2B cloud sandboxes handle preview URLs natively
 
 # Install Claude Code CLI (required by claude-code-sdk Python package)
 RUN npm install -g @anthropic-ai/claude-code

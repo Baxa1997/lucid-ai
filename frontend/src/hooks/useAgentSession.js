@@ -66,9 +66,16 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   // Live progress during resolving (latest message + 0-100 pct)
   const [resolvingProgress, setResolvingProgress] = useState({ message: '', pct: 0 });
 
-  // ── Preview state (noVNC) ────────────────────────────────
+  // ── Preview state (noVNC / E2B legacy) ───────────────────
   const [previewUrl, setPreviewUrl] = useState(null);
   const [previewTaskId, setPreviewTaskId] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewStatusMsg, setPreviewStatusMsg] = useState('');
+
+  // ── WebContainers preview ─────────────────────────────────
+  // Sandpack preview — { files: Record<string,string>, template: string }
+  // sent by backend preview_files message; RightPanel renders SandpackPreview.
+  const [previewFileMap, setPreviewFileMap] = useState(null);
 
   // ── Vercel deploy URL (persists after deployment) ────────
   const [deployUrl, setDeployUrl] = useState(null);
@@ -87,6 +94,12 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   const [errorStage, setErrorStage] = useState(null);
   const [previewError, setPreviewError] = useState(null);
   const [retryCount, setRetryCount] = useState(0);
+
+  // ── Plan confirmation state ──────────────────────────────
+  // planAwaiting: backend has sent a plan and is waiting for confirm/reject
+  // currentPlanData: the planData object from the latest plan message
+  const [planAwaiting, setPlanAwaiting] = useState(false);
+  const [currentPlanData, setCurrentPlanData] = useState(null);
 
   // ── Refs ─────────────────────────────────────────────────
   const idCounter = useRef(0);
@@ -534,10 +547,9 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         return;
       }
 
-      // ─── Deploy Ready — Vercel auto-deploy URL ────
+      // ─── Deploy Ready — Vercel auto-deploy URL (silent — shown in Publish popup) ────
       if (msg.type === 'deploy_ready') {
         setDeployUrl(msg.url);
-        pushChat('system', `🚀 **Live at:** [${msg.url}](${msg.url})`);
         pushLog(`[Deploy] Live: ${msg.url}`, 'system');
         return;
       }
@@ -569,11 +581,21 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       }
 
 
+      // ─── Preview Status — sandbox creation progress ────
+      if (msg.type === 'preview_status') {
+        setPreviewLoading(true);
+        setPreviewStatusMsg(msg.message || msg.status || 'Setting up preview…');
+        pushLog(`[Preview] ${msg.message || msg.status || ''}`, 'system');
+        return;
+      }
+
       // ─── Preview Ready ────────────────────────────
       if (msg.type === 'preview_ready') {
         setPreviewUrl(msg.preview_url);
         setPreviewTaskId(msg.task_id);
-        setPreviewError(null); // clear any previous preview error
+        setPreviewError(null);
+        setPreviewLoading(false);
+        setPreviewStatusMsg('');
         pushLog(`[Preview] ${msg.message || 'Preview ready'}`, 'system');
         return;
       }
@@ -584,7 +606,20 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         const stage = msg.error_stage || 'start';
         const message = msg.message || 'Preview unavailable — click Restart Preview to retry.';
         setPreviewError({ stage, message });
+        setPreviewLoading(false);
+        setPreviewStatusMsg('');
         pushLog(`[Preview Error] ${message}`, 'error');
+        return;
+      }
+
+      // ─── Sandpack preview files ───────────────────────────
+      // Backend sends the full workspace file tree + detected template.
+      // SandpackPreview bundles and runs everything in-browser (~2-5s).
+      if (msg.type === 'preview_files') {
+        if (msg.files && typeof msg.files === 'object') {
+          setPreviewFileMap({ files: msg.files, template: msg.template || 'react' });
+          pushLog(`[Preview] Received ${Object.keys(msg.files).length} files — booting Sandpack (${msg.template || 'react'})…`, 'system');
+        }
         return;
       }
 
@@ -598,9 +633,9 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         // Refresh task status
         setSteps([]);
         setFinishSummary(msg.message || '');
-        // Clear preview on completion
-        setPreviewUrl(null);
-        setPreviewTaskId(null);
+        // DO NOT clear previewUrl here — the E2B sandbox preview should
+        // persist between pipeline runs so the user can see changes.
+        // Preview is only cleared on explicit disconnect or page refresh.
         return;
       }
 
@@ -649,6 +684,15 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       }
 
       if (msg.type === 'pong' || msg.type === 'ack') return;
+
+      // ─── Plan awaiting confirmation ─────────────────
+      // The backend has shown a plan and is waiting for the user to confirm
+      // or reject it before spending money on code generation.
+      if (msg.type === 'plan_awaiting_confirmation') {
+        setPlanAwaiting(true);
+        pushLog(msg.message || 'Waiting for plan confirmation...', 'system');
+        return;
+      }
 
       // ─── Chat history — backend replays recent messages on reconnect ──
       // Received when client reconnects to an existing backend session.
@@ -720,6 +764,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
 
         // Structured plan message — rendered as a special plan card in the UI
         if (msg.messageType === 'plan' && msg.planData) {
+          setCurrentPlanData(msg.planData);
           setChatMessages((prev) => [
             ...prev,
             {
@@ -740,26 +785,12 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         return;
       }
 
-      // ─── Progress — only show MAJOR milestones in chat ────
+      // ─── Progress — only show in terminal logs, NOT in chat ────
       if (msg.type === 'progress') {
         const text = msg.message || '';
         pushLog(text, 'system');
-        // Only push truly important milestones to chat to keep it clean.
-        // All other progress goes to the terminal/logs panel only.
-        const MAJOR_MILESTONES = [
-          '✅ Repository ready',
-          '✅ Local workspace ready',
-          '✅ Foundation:',
-          '✅ Content:',
-          '✅ Extra pages:',
-          '🏗️ Phase 1/3',
-          '🎨 Phase 2/3',
-          '📄 Phase 3/3',
-          '🚀 Project published',
-        ];
-        if (MAJOR_MILESTONES.some(m => text.includes(m))) {
-          pushChat('system', text);
-        }
+        // Progress messages go to terminal/logs panel only.
+        // Chat stays clean for actual conversation + deploy results.
         return;
       }
 
@@ -998,6 +1029,18 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     pushLog('Stopping session...', 'system');
   }, [pushLog, sessionId]);
 
+  const stopPreview = useCallback(() => {
+    if (manager?.isOpen) {
+      try {
+        manager.send({ type: 'stop_preview' });
+      } catch (_) {}
+    }
+    setPreviewUrl(null);
+    setPreviewLoading(false);
+    setPreviewStatusMsg('');
+    setPreviewError(null);
+  }, []);
+
   // ── Retry — Phase 8 error recovery ───────────────────────
   // hint='preview': re-run dev server without re-cloning (WS stays open)
   // hint=undefined/other: full reconnect (clone failed, auth failed, etc.)
@@ -1141,10 +1184,16 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     pushToBranch,
     setInitialMessages,
 
-    // Preview (noVNC)
+    // Preview (noVNC / E2B legacy)
     previewUrl,
     previewTaskId,
-    clearPreview: () => { setPreviewUrl(null); setPreviewTaskId(null); },
+    previewLoading,
+    previewStatusMsg,
+    clearPreview: () => { setPreviewUrl(null); setPreviewTaskId(null); setPreviewLoading(false); setPreviewStatusMsg(''); },
+    stopPreview,
+
+    // Sandpack preview — { files, template } from backend
+    previewFileMap,
 
     // Vercel deploy URL
     deployUrl,
@@ -1157,5 +1206,22 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     previewError,    // { stage, message } | null — non-fatal preview failure
     retryCount,      // number — how many retries the user has attempted
     retry,           // (hint?: 'preview') => void — trigger recovery
+
+    // Plan confirmation — approve or reject the plan before code generation
+    planAwaiting,
+    currentPlanData,
+    confirmPlan: useCallback(() => {
+      if (!manager?.isOpen) return;
+      manager.send({ type: 'plan_confirm' });
+      setPlanAwaiting(false);
+      pushLog('Plan confirmed — starting code generation...', 'system');
+    }, [pushLog]),
+    rejectPlan: useCallback((correction) => {
+      if (!manager?.isOpen) return;
+      manager.send({ type: 'plan_reject', correction });
+      setPlanAwaiting(false);
+      setCurrentPlanData(null);
+      pushLog(`Plan rejected — re-researching: ${correction?.slice(0, 60)}...`, 'system');
+    }, [pushLog]),
   };
 }

@@ -79,46 +79,156 @@ _SKIP_DIRS = {"node_modules", ".git", ".next", "dist", "build", ".vite", "__pyca
 # Only process these extensions
 _JSX_EXTENSIONS = {".jsx", ".tsx", ".js", ".ts"}
 
+# Config/data-only files that must NEVER have 'use client' — they export
+# plain static data and are imported by server components (e.g. MarketingFooter).
+# Adding 'use client' to these turns them into client module exports and breaks
+# any server component that calls .map() or iterates over their exports.
+_CONFIG_FILENAMES = {
+    "navigation.js", "navigation.ts",
+    "site.js", "site.ts",
+    "icons.js", "icons.ts",
+    "constants.js", "constants.ts",
+    "config.js", "config.ts",
+    "theme.js", "theme.ts",
+    "tokens.js", "tokens.ts",
+    "routes.js", "routes.ts",
+    "metadata.js", "metadata.ts",
+}
 
-def fix_use_client(workspace_path: str) -> list[str]:
-    """Scan all JSX/TSX files and inject 'use client' where missing.
-    
+# Subdirectory paths that only contain config/data (relative to src/)
+_CONFIG_DIRS = {"config", "constants", "tokens", "theme"}
+
+
+def _is_config_file(filepath: str) -> bool:
+    """Return True if this file is a static config/data file.
+
+    Config files must never receive 'use client' — they export plain
+    arrays/objects consumed by both server and client components.
+    """
+    fname = os.path.basename(filepath)
+    if fname in _CONFIG_FILENAMES:
+        return True
+    # Check if any parent directory is a known config-only dir
+    parts = filepath.replace("\\", "/").split("/")
+    for part in parts[:-1]:  # exclude the filename itself
+        if part in _CONFIG_DIRS:
+            return True
+    return False
+
+
+def strip_use_client_from_configs(workspace_path: str) -> list[str]:
+    """Remove mistakenly-added 'use client' from static config/data files.
+
+    Claude sometimes generates config files (navigation.js, site.js, etc.)
+    with 'use client' at the top. This breaks Next.js server components that
+    import and iterate over those exports.
+
     Returns list of file paths that were fixed.
     """
     fixed_files = []
     src_dir = os.path.join(workspace_path, "src")
-    
     if not os.path.isdir(src_dir):
-        # No src/ directory — scan the whole workspace
         src_dir = workspace_path
-    
+
     for root, dirs, files in os.walk(src_dir):
         dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
-        
+
         for fname in files:
             ext = os.path.splitext(fname)[1].lower()
             if ext not in _JSX_EXTENSIONS:
                 continue
-            
+
             filepath = os.path.join(root, fname)
+            if not _is_config_file(filepath):
+                continue
+
             try:
                 with open(filepath, "r", encoding="utf-8", errors="replace") as f:
                     content = f.read()
             except Exception:
                 continue
-            
+
+            # Check if 'use client' is present in the first 5 lines
+            lines = content.split("\n")
+            first_lines = "\n".join(lines[:5])
+            has_use_client = (
+                "'use client'" in first_lines or '"use client"' in first_lines
+            )
+            if not has_use_client:
+                continue
+
+            # Strip 'use client' line(s) from the top
+            new_lines = []
+            skipping = True
+            for line in lines:
+                stripped = line.strip()
+                if skipping and (stripped in ("'use client';", '"use client";', "'use client'", '"use client"') or stripped == ""):
+                    if stripped == "":
+                        continue  # also drop blank lines immediately after directive
+                    continue
+                skipping = False
+                new_lines.append(line)
+
+            new_content = "\n".join(new_lines)
+            try:
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                rel_path = os.path.relpath(filepath, workspace_path)
+                fixed_files.append(rel_path)
+                logger.info("Stripped 'use client' from config file: %s", rel_path)
+            except Exception as e:
+                logger.warning("Failed to strip 'use client' from %s: %s", filepath, e)
+
+    if fixed_files:
+        logger.info("Config 'use client' stripper fixed %d files", len(fixed_files))
+
+    return fixed_files
+
+
+def fix_use_client(workspace_path: str) -> list[str]:
+    """Scan all JSX/TSX files and inject 'use client' where missing.
+
+    Returns list of file paths that were fixed.
+    """
+    fixed_files = []
+    src_dir = os.path.join(workspace_path, "src")
+
+    if not os.path.isdir(src_dir):
+        # No src/ directory — scan the whole workspace
+        src_dir = workspace_path
+
+    for root, dirs, files in os.walk(src_dir):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+
+        for fname in files:
+            ext = os.path.splitext(fname)[1].lower()
+            if ext not in _JSX_EXTENSIONS:
+                continue
+
+            filepath = os.path.join(root, fname)
+
+            # Never inject 'use client' into static config/data files
+            if _is_config_file(filepath):
+                continue
+
+            try:
+                with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except Exception:
+                continue
+
             # Skip if already has 'use client'
             # Check first 5 lines (may have comments/whitespace before it)
             first_lines = "\n".join(content.split("\n")[:5])
             if "'use client'" in first_lines or '"use client"' in first_lines:
                 continue
-            
+
             # Skip pure type/config files (no JSX)
             if ext in {".ts", ".js"} and "<" not in content and "jsx" not in content.lower():
                 # Check if it has any client patterns (hooks in non-JSX files like stores)
                 if not _CLIENT_RE.search(content):
                     continue
-            
+
             # Check if any client pattern is present
             if _CLIENT_RE.search(content):
                 # Inject 'use client' at the very top
@@ -131,10 +241,10 @@ def fix_use_client(workspace_path: str) -> list[str]:
                     logger.info("Injected 'use client' into %s", rel_path)
                 except Exception as e:
                     logger.warning("Failed to fix %s: %s", filepath, e)
-    
+
     if fixed_files:
         logger.info("'use client' auto-injector fixed %d files", len(fixed_files))
-    
+
     return fixed_files
 
 
@@ -385,14 +495,73 @@ def _create_stub(filepath: str, import_names: list[str], workspace_path: str) ->
         if exports:
             stub_content += "\n" + "\n\n".join(exports) + "\n"
     else:
-        # JS/TS file — export named values
-        stub_content = f"// Stub: {rel_path} — auto-generated by Lucid AI\n\n"
-        for name in import_names:
-            clean_name = name.strip()
-            if clean_name == "default":
-                stub_content += f"const _default = {{}};\nexport default _default;\n"
-            else:
-                stub_content += f"export const {clean_name} = undefined;\n"
+        # JS/TS file — determine if the file is likely a React component module.
+        # Heuristics: path contains components/ or pages/, or filename is PascalCase.
+        _basename_no_ext = os.path.splitext(os.path.basename(filepath))[0]
+        _norm_path = filepath.replace("\\", "/")
+        _is_component_module = (
+            "/components/" in _norm_path
+            or "/pages/" in _norm_path
+            or "/screens/" in _norm_path
+            or "/views/" in _norm_path
+            or (bool(_basename_no_ext) and _basename_no_ext[0].isupper())
+        )
+
+        def _is_component_name(n: str) -> bool:
+            """Return True if the name looks like a React component (PascalCase)."""
+            n = n.strip()
+            return bool(n) and n[0].isupper() and n not in {"default"}
+
+        if _is_component_module:
+            # Treat this stub as a JSX component file even though the extension is .js/.ts
+            component_name = re.sub(r"[^a-zA-Z0-9]", "", _basename_no_ext) or "StubComponent"
+            if component_name[0].islower():
+                component_name = component_name[0].upper() + component_name[1:]
+
+            named_exports = []
+            for name in import_names:
+                clean_name = name.strip()
+                if clean_name in ("default", component_name):
+                    continue
+                if _is_component_name(clean_name):
+                    named_exports.append(
+                        f"export function {clean_name}({{ children, className, ...props }}) {{\n"
+                        f"  return <div className={{className}} {{...props}}>{{children}}</div>;\n"
+                        f"}}"
+                    )
+                else:
+                    named_exports.append(f"export const {clean_name} = null;")
+
+            stub_content = (
+                f"'use client';\n\n"
+                f"// Stub: {rel_path} — auto-generated by Lucid AI\n\n"
+                f"export default function {component_name}({{ children, className, ...props }}) {{\n"
+                f"  return <div className={{className}} {{...props}}>{{children}}</div>;\n"
+                f"}}\n"
+            )
+            if named_exports:
+                stub_content += "\n" + "\n\n".join(named_exports) + "\n"
+        else:
+            # Non-component JS/TS module — export safe falsy values rather than
+            # `undefined`, which crashes Server Component rendering when a component
+            # name is mistakenly exported as undefined.
+            stub_content = f"// Stub: {rel_path} — auto-generated by Lucid AI\n\n"
+            for name in import_names:
+                clean_name = name.strip()
+                if clean_name == "default":
+                    # If it's a plain default export in a non-component file,
+                    # export an empty object (safe for config/data imports).
+                    stub_content += f"const _default = {{}};\nexport default _default;\n"
+                elif _is_component_name(clean_name):
+                    # PascalCase name in a non-component path — still likely a component.
+                    stub_content += (
+                        f"export function {clean_name}({{ children, className, ...props }}) {{\n"
+                        f"  return null;\n"
+                        f"}}\n"
+                    )
+                else:
+                    # Truly non-component: export null (not undefined — undefined breaks RSC)
+                    stub_content += f"export const {clean_name} = null;\n"
     
     try:
         with open(filepath, "w", encoding="utf-8") as f:
@@ -499,6 +668,257 @@ def fix_unresolved_imports(workspace_path: str) -> list[str]:
 
 
 # ╔══════════════════════════════════════════════════════════════╗
+# ║  FIXER 4 — Named-Import / Default-Export Mismatch Fixer    ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+# Matches:  import { Foo, Bar } from './something'
+_NAMED_IMPORT_RE = re.compile(
+    r'^(import\s+)\{([^}]+)\}(\s+from\s+[\'"]([^\'"]+)[\'"])',
+    re.MULTILINE,
+)
+# Matches any `export default` in a file (function, class, const, arrow …)
+_HAS_DEFAULT_EXPORT_RE = re.compile(r'\bexport\s+default\b')
+# Matches named export of a specific identifier:  export function Foo | export const Foo | export { Foo }
+_HAS_NAMED_EXPORT_RE = re.compile(
+    r'export\s+(?:function|class|const|let|var)\s+({name})\b'
+    r'|export\s*\{[^}}]*\b({name})\b[^}}]*\}'
+)
+
+
+def fix_named_import_default_export_mismatch(workspace_path: str) -> list[str]:
+    """Fix imports that use named braces for a file that only has a default export.
+
+    A very common AI generation mistake:
+
+        // page.js
+        import { MarketingHeader } from "@/components/layout/MarketingHeader";
+
+        // MarketingHeader.jsx — only exports:
+        export default function MarketingHeader() { ... }
+
+    Named import from a default-only module resolves to ``undefined``, which
+    crashes Next.js App Router with "Unsupported Server Component type: undefined".
+
+    Fix: when EVERY name in ``{ A, B }`` matches the file's default export name
+    and the file has no named export of that name, rewrite the import to use
+    the default import syntax ``import A from '...'``.
+
+    Returns list of file paths that were modified.
+    """
+    fixed_files: list[str] = []
+
+    src_dir = os.path.join(workspace_path, "src")
+    if not os.path.isdir(src_dir):
+        src_dir = workspace_path
+
+    for root, dirs, files in os.walk(src_dir):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+
+        for fname in files:
+            ext = os.path.splitext(fname)[1].lower()
+            if ext not in _JSX_EXTENSIONS:
+                continue
+
+            filepath = os.path.join(root, fname)
+            try:
+                with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except Exception:
+                continue
+
+            if "{" not in content:
+                continue  # No named imports at all — fast path
+
+            new_content = content
+            changed = False
+
+            for m in _NAMED_IMPORT_RE.finditer(content):
+                import_prefix = m.group(1)   # "import "
+                names_str = m.group(2)        # "Foo, Bar as B"
+                from_suffix = m.group(3)      # " from './Foo'"
+                import_path = m.group(4)      # "./Foo"
+
+                # Resolve the imported file
+                resolved = _resolve_import_path(import_path, filepath, workspace_path)
+                if not resolved or resolved == "THIRD_PARTY" or not os.path.isfile(resolved):
+                    continue
+
+                try:
+                    with open(resolved, "r", encoding="utf-8", errors="replace") as rf:
+                        target_content = rf.read()
+                except Exception:
+                    continue
+
+                if not _HAS_DEFAULT_EXPORT_RE.search(target_content):
+                    continue  # Target has no default export — not our pattern
+
+                # Parse the names: "Foo, Bar as B" → [("Foo", "Foo"), ("Bar", "B")]
+                raw_names = [n.strip() for n in names_str.split(",") if n.strip()]
+                parsed = []
+                for raw in raw_names:
+                    parts = raw.split(" as ")
+                    original = parts[0].strip()
+                    alias = parts[-1].strip()
+                    parsed.append((original, alias))
+
+                # Check each name: if the target file lacks a named export for it
+                # but DOES have a default export, convert that name to default import.
+                default_imports = []   # (original, alias) pairs that should be default imports
+                keep_named = []        # pairs that have real named exports → stay in braces
+
+                for original, alias in parsed:
+                    named_pattern = re.compile(
+                        r'export\s+(?:function|class|const|let|var)\s+' + re.escape(original) + r'\b'
+                        r'|export\s*\{[^}]*\b' + re.escape(original) + r'\b[^}]*\}'
+                    )
+                    if named_pattern.search(target_content):
+                        keep_named.append((original, alias))
+                    else:
+                        # No named export found — candidate for default import conversion
+                        default_imports.append((original, alias))
+
+                if not default_imports:
+                    continue  # All names have proper named exports
+
+                # Build replacement import(s)
+                replacement_lines = []
+
+                # Default imports (convert each to its own `import X from '...'`)
+                for original, alias in default_imports:
+                    local_name = alias if alias != original else original
+                    replacement_lines.append(
+                        f"import {local_name}{from_suffix}"
+                    )
+
+                # Remaining named imports (keep in braces)
+                if keep_named:
+                    named_part = ", ".join(
+                        orig if orig == alias else f"{orig} as {alias}"
+                        for orig, alias in keep_named
+                    )
+                    replacement_lines.append(f"import {{{named_part}}}{from_suffix}")
+
+                replacement = "\n".join(replacement_lines)
+                old_statement = m.group(0)
+                if replacement != old_statement:
+                    new_content = new_content.replace(old_statement, replacement, 1)
+                    changed = True
+                    logger.info(
+                        "fix_named_import_mismatch: %s: replaced '%s' → '%s'",
+                        os.path.relpath(filepath, workspace_path),
+                        old_statement[:80],
+                        replacement[:80],
+                    )
+
+            if changed:
+                try:
+                    with open(filepath, "w", encoding="utf-8") as f:
+                        f.write(new_content)
+                    fixed_files.append(os.path.relpath(filepath, workspace_path))
+                except Exception as exc:
+                    logger.warning("fix_named_import_mismatch: write failed for %s: %s", filepath, exc)
+
+    if fixed_files:
+        logger.info("Named-import/default-export mismatch fixer fixed %d file(s)", len(fixed_files))
+
+    return fixed_files
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  FIXER 5 — Dynamic Route Conflict Remover                  ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+def fix_dynamic_route_conflicts(workspace_path: str) -> list[str]:
+    """Remove duplicate dynamic route segments that share the same parent directory.
+
+    Next.js crashes on startup with:
+        Error: You cannot use different slug names for the same dynamic path
+        ('id' !== 'slug')
+    when a directory has two children like ``[id]/`` and ``[slug]/`` that both
+    match the same URL shape.  This is a common AI generation artefact where
+    the same route is written twice with different parameter names.
+
+    Strategy:
+    - Walk every directory under ``app/`` (or ``src/app/``).
+    - For each directory, collect its immediate child directories whose names
+      match the ``[param]`` pattern.
+    - When two or more such children exist under the same parent, keep the one
+      whose ``page.js/page.tsx`` file (if it has one) is the largest / most
+      complete, then delete the rest.
+    - If neither has a page file, keep the one named ``[id]`` (conventional),
+      otherwise keep the lexicographically first one.
+
+    Returns list of directory paths that were deleted (relative to workspace).
+    """
+    import shutil
+
+    removed: list[str] = []
+
+    _DYN_RE = re.compile(r"^\[.+\]$")  # matches [id], [slug], [courseId], etc.
+
+    # Locate app directory
+    candidates = [
+        os.path.join(workspace_path, "src", "app"),
+        os.path.join(workspace_path, "app"),
+        os.path.join(workspace_path, "src", "pages"),
+        os.path.join(workspace_path, "pages"),
+    ]
+    app_dirs = [c for c in candidates if os.path.isdir(c)]
+    if not app_dirs:
+        return removed
+
+    for app_dir in app_dirs:
+        for root, dirs, _files in os.walk(app_dir, topdown=True):
+            dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+
+            dynamic_children = [d for d in dirs if _DYN_RE.match(d)]
+            if len(dynamic_children) < 2:
+                continue
+
+            # Multiple dynamic segments under the same parent — conflict!
+            logger.warning(
+                "fix_dynamic_route_conflicts: conflict in %s — children: %s",
+                root, dynamic_children,
+            )
+
+            # Score each candidate: prefer the one with a page file and more content.
+            def _score(dname: str) -> int:
+                dpath = os.path.join(root, dname)
+                score = 0
+                for fname in ("page.js", "page.jsx", "page.tsx", "page.ts",
+                              "index.js", "index.jsx", "index.tsx"):
+                    fpath = os.path.join(dpath, fname)
+                    if os.path.isfile(fpath):
+                        score += os.path.getsize(fpath)
+                # Prefer conventional name [id] as a tiebreaker
+                if dname in ("[id]", "[Id]"):
+                    score += 1
+                return score
+
+            dynamic_children_sorted = sorted(dynamic_children, key=_score, reverse=True)
+            keep = dynamic_children_sorted[0]
+            to_remove = dynamic_children_sorted[1:]
+
+            for dname in to_remove:
+                dpath = os.path.join(root, dname)
+                rel = os.path.relpath(dpath, workspace_path)
+                try:
+                    shutil.rmtree(dpath)
+                    removed.append(rel)
+                    logger.info("fix_dynamic_route_conflicts: removed %s (kept %s)", rel, keep)
+                except Exception as exc:
+                    logger.warning("fix_dynamic_route_conflicts: could not remove %s: %s", dpath, exc)
+
+            # Update dirs so os.walk doesn't descend into removed directories
+            dirs[:] = [d for d in dirs if d not in to_remove]
+
+    if removed:
+        logger.info("Dynamic route conflict fixer removed %d director(y/ies): %s", len(removed), removed)
+
+    return removed
+
+
+# ╔══════════════════════════════════════════════════════════════╗
 # ║  MAIN ENTRY POINT — Run All Fixers                         ║
 # ╚══════════════════════════════════════════════════════════════╝
 
@@ -520,11 +940,28 @@ async def run_all_fixers(
     
     results = {
         "use_client_fixed": [],
+        "config_stripped": [],
         "icons_fixed": [],
         "stubs_created": [],
+        "route_conflicts_fixed": [],
+        "import_mismatches_fixed": [],
         "total_fixes": 0,
     }
-    
+
+    # 0. Strip 'use client' from static config/data files (MUST run first)
+    # navigation.js, site.js, etc. must never have 'use client' — they are
+    # imported by server components and adding the directive breaks .map() calls.
+    try:
+        stripped = strip_use_client_from_configs(workspace_path)
+        results["config_stripped"] = stripped
+        if stripped:
+            await _ws_send(
+                websocket, "progress",
+                f"🔧 Removed 'use client' from {len(stripped)} config file(s): {', '.join(stripped)}",
+            )
+    except Exception as e:
+        logger.warning("Config 'use client' stripper failed (non-fatal): %s", e)
+
     # 1. Fix 'use client'
     try:
         await _ws_send(websocket, "progress", "🔧 Checking 'use client' directives...")
@@ -534,7 +971,7 @@ async def run_all_fixers(
             await _ws_send(websocket, "progress", f"✅ Auto-injected 'use client' in {len(fixed)} files")
     except Exception as e:
         logger.warning("'use client' fixer failed (non-fatal): %s", e)
-    
+
     # 2. Fix banned icons
     try:
         await _ws_send(websocket, "progress", "🔧 Checking icon imports...")
@@ -545,7 +982,31 @@ async def run_all_fixers(
     except Exception as e:
         logger.warning("Banned icon fixer failed (non-fatal): %s", e)
     
-    # 3. Fix unresolved imports
+    # 3. Fix named-import / default-export mismatches (import { X } where X is a default export)
+    try:
+        fixed = fix_named_import_default_export_mismatch(workspace_path)
+        results["import_mismatches_fixed"] = fixed
+        if fixed:
+            await _ws_send(
+                websocket, "progress",
+                f"🔧 Fixed {len(fixed)} named-import/default-export mismatch(es): {', '.join(fixed)}",
+            )
+    except Exception as e:
+        logger.warning("Named-import mismatch fixer failed (non-fatal): %s", e)
+
+    # 4. Fix dynamic route conflicts ([id] vs [slug] under same parent)
+    try:
+        removed = fix_dynamic_route_conflicts(workspace_path)
+        results["route_conflicts_fixed"] = removed
+        if removed:
+            await _ws_send(
+                websocket, "progress",
+                f"🔧 Removed {len(removed)} conflicting dynamic route dir(s): {', '.join(removed)}",
+            )
+    except Exception as e:
+        logger.warning("Dynamic route conflict fixer failed (non-fatal): %s", e)
+
+    # 4. Fix unresolved imports
     try:
         await _ws_send(websocket, "progress", "🔧 Resolving missing imports...")
         stubs = fix_unresolved_imports(workspace_path)
@@ -556,18 +1017,24 @@ async def run_all_fixers(
         logger.warning("Import resolver failed (non-fatal): %s", e)
     
     results["total_fixes"] = (
-        len(results["use_client_fixed"])
+        len(results["config_stripped"])
+        + len(results["use_client_fixed"])
         + len(results["icons_fixed"])
         + len(results["stubs_created"])
+        + len(results["route_conflicts_fixed"])
+        + len(results["import_mismatches_fixed"])
     )
-    
+
     if results["total_fixes"] > 0:
         logger.info(
-            "Post-generation fixers: %d total fixes (use_client=%d, icons=%d, stubs=%d)",
+            "Post-generation fixers: %d total fixes "
+            "(config_stripped=%d, use_client=%d, icons=%d, stubs=%d, route_conflicts=%d)",
             results["total_fixes"],
+            len(results["config_stripped"]),
             len(results["use_client_fixed"]),
             len(results["icons_fixed"]),
             len(results["stubs_created"]),
+            len(results["route_conflicts_fixed"]),
         )
     
     return results

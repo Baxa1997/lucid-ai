@@ -31,7 +31,8 @@ async def verify_changes(
     Returns True if files changed, False otherwise.
     """
     try:
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            subprocess.run,
             ["git", "status", "--porcelain"],
             cwd=workspace_path,
             capture_output=True,
@@ -174,7 +175,8 @@ Do nothing else. Stop after these commands."""
             await openhands_manager.destroy_conversation(f"{task_id}_push")
 
             # Check if push succeeded by looking at git log
-            check = subprocess.run(
+            check = await asyncio.to_thread(
+                subprocess.run,
                 ["git", "log", "--oneline", "-1"],
                 cwd=workspace_path,
                 capture_output=True,

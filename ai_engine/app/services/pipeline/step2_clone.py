@@ -84,9 +84,11 @@ Do nothing else. Stop after these commands."""
             await openhands_manager.destroy_conversation(f"{task_id}_clone")
 
         # If OpenHands wasn't available or failed, use subprocess fallback
-        if not os.listdir(workspace_path) if os.path.exists(workspace_path) else True:
+        ws_is_empty = (not os.path.exists(workspace_path)) or (not os.listdir(workspace_path))
+        if ws_is_empty:
             logger.info("Falling back to subprocess git clone")
-            result = subprocess.run(
+            result = await asyncio.to_thread(
+                subprocess.run,
                 ["git", "clone", "--branch", branch, "--single-branch", "--depth", "1", repo_url, "."],
                 cwd=workspace_path,
                 capture_output=True,
@@ -107,13 +109,15 @@ Do nothing else. Stop after these commands."""
                 return None
 
             # Configure git user
-            subprocess.run(
+            await asyncio.to_thread(
+                subprocess.run,
                 ["git", "config", "user.name", "Lucid AI Agent"],
-                cwd=workspace_path, check=True,
+                cwd=workspace_path, capture_output=True,
             )
-            subprocess.run(
+            await asyncio.to_thread(
+                subprocess.run,
                 ["git", "config", "user.email", "agent@lucid-ai.dev"],
-                cwd=workspace_path, check=True,
+                cwd=workspace_path, capture_output=True,
             )
 
         # Validate workspace

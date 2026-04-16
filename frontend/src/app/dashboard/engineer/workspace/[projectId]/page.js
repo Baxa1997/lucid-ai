@@ -39,10 +39,9 @@ import {
 } from "@/lib/conversations";
 import {getSupabaseBrowserClient} from "@/lib/supabase/client";
 import ExportCodeModal from "@/components/ExportCodeModal";
-import { WorkspaceContext } from "@/contexts/WorkspaceContext";
+import {WorkspaceContext} from "@/contexts/WorkspaceContext";
 import ChatPanel from "@/components/workspace/ChatPanel";
 import RightPanel from "@/components/workspace/RightPanel";
-
 
 // ── Main Page Component ────────────────────────────────────
 export default function ConversationPage({params}) {
@@ -142,16 +141,18 @@ function ConversationPageInner({params}) {
     vercelUrl: null,
   });
 
-  // Clear wizard sessionStorage once platform_repo_url is confirmed in DB.
-  // This means the project was successfully created — no need to retry on next visit.
+  // Clear wizard sessionStorage once the project is confirmed complete in DB.
+  // Trigger on either platformRepoUrl OR vercelUrl — both indicate the project
+  // was successfully created. Without this, the wizard prompt stays in sessionStorage
+  // and re-triggers generation on every subsequent visit.
   useEffect(() => {
-    if (!repoInfo.platformRepoUrl) return;
+    if (!repoInfo.platformRepoUrl && !repoInfo.vercelUrl) return;
     try {
       sessionStorage.removeItem(`wizard_prompt_${conversationId}`);
       sessionStorage.removeItem(`wizard_meta_${conversationId}`);
       sessionStorage.removeItem(`wizard_desc_${conversationId}`);
     } catch (_) {}
-  }, [repoInfo.platformRepoUrl, conversationId]);
+  }, [repoInfo.platformRepoUrl, repoInfo.vercelUrl, conversationId]);
 
   // Load conversation and messages on mount (with timeout)
   // For wizard mode, use a much shorter timeout since we don't need this data to connect.
@@ -191,15 +192,19 @@ function ConversationPageInner({params}) {
             .limit(1);
           if (!cancelled && sessions?.[0]) {
             const storedUrl = sessions[0].vercel_url || null;
-            // Don't load temporary tunnel URLs — they expire between sessions.
-            // Localtunnel (loca.lt), ngrok, localhost are all session-scoped.
-            // Only permanent deployment URLs (e.g. vercel.app) should be restored.
+            // Don't load temporary URLs — they don't survive between sessions.
+            // E2B sandbox URLs (.e2b.dev) expire after 30 min → treat as temporary.
+            // Only Vercel (.vercel.app) URLs are truly persistent.
+            // A fresh E2B preview will be created when the WS connects.
             const isTemporaryUrl =
               storedUrl &&
-              (storedUrl.includes("loca.lt") ||
-                storedUrl.includes("localtunnel") ||
-                storedUrl.includes("ngrok.io") ||
-                storedUrl.includes("localhost"));
+              (storedUrl.includes("localhost") ||
+                storedUrl.includes("127.0.0.1") ||
+                storedUrl.includes(".e2b.dev") ||
+                storedUrl.includes(".e2b.app") ||
+                storedUrl.includes(".loca.lt") ||
+                storedUrl.includes(".ngrok") ||
+                storedUrl.includes(".trycloudflare.com"));
             setRepoInfo({
               platformRepoUrl: sessions[0].platform_repo_url || null,
               userRepoUrl: sessions[0].user_repo_url || null,
@@ -332,6 +337,9 @@ function ConversationPageInner({params}) {
     completionSummary,
     deployUrl,
     previewUrl,
+    previewLoading,
+    previewStatusMsg,
+    stopPreview,
     resolvingInfo,
     resolvingProgress,
     writtenFiles,
@@ -339,11 +347,21 @@ function ConversationPageInner({params}) {
     previewError,
     retryCount,
     retry,
+    planAwaiting,
+    currentPlanData,
+    confirmPlan,
+    rejectPlan,
+    previewFileMap,
   } = useAgentSession({
     projectId: conversationId,
     token: effectiveToken,
     task: wizardTask, // Pass wizard prompt in handshake for instant start
-    repoUrl: conversation?.repo_url || "",
+    // For platform-owned repos (wizard projects), do NOT send repoUrl here.
+    // The backend resolver will recover it from DB and use PLATFORM_GITHUB_TOKEN
+    // (which has access). The user's personal gitToken lacks org access.
+    repoUrl: conversation?.is_platform_owned
+      ? ""
+      : conversation?.repo_url || "",
     gitToken,
     branch: conversation?.branch || "main",
   });
@@ -362,15 +380,13 @@ function ConversationPageInner({params}) {
     }
   }, [deployUrl]);
 
-  // Live Preview URL from dev server tunnel (takes priority during dev)
+  // Live Preview URL from dev server tunnel — always show it when it arrives.
+  // deployUrl (Vercel) overrides it if it arrives later via its own effect above.
   useEffect(() => {
-    if (previewUrl && !repoInfo.vercelUrl) {
+    if (previewUrl) {
       setRepoInfo((prev) => ({...prev, vercelUrl: previewUrl}));
     }
-    // repoInfo.vercelUrl must be in deps — otherwise the condition reads a stale capture
-    // and can overwrite a deployUrl that arrived earlier.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewUrl, repoInfo.vercelUrl]);
+  }, [previewUrl]);
 
   // ── Layout state ────────────────────────────────────────
   const [chatOpen, setChatOpen] = useState(true);
@@ -380,6 +396,9 @@ function ConversationPageInner({params}) {
   const chatDragRef = useRef(null); // stores drag state without re-render
   const [chatDragging, setChatDragging] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
+  const [showPublishModal, setShowPublishModal] = useState(false);
+  const [publishConfirmed, setPublishConfirmed] = useState(false);
+  const [copiedUrl, setCopiedUrl] = useState(false);
   const [showAppDropdown, setShowAppDropdown] = useState(false);
   const [showProfileDropdown, setShowProfileDropdown] = useState(false);
   const appDropdownRef = useRef(null);
@@ -397,7 +416,8 @@ function ConversationPageInner({params}) {
   }, [savedMessages, setInitialMessages]);
 
   // ── Fetch file tree from GitLab when returning to an existing project ──
-  // If the WS hasn't sent a file_tree yet but we have a repo_name, fetch from GitLab.
+  // Only triggered for GitLab repos — GitHub repos get their tree from the WS
+  // (background E2B clone sends a file_tree event after cloning).
   const fileTreeFetched = useRef(false);
   useEffect(() => {
     if (fileTreeFetched.current) return;
@@ -405,7 +425,8 @@ function ConversationPageInner({params}) {
       fileTreeFetched.current = true;
       return;
     }
-    if (!conversation?.repo_name) return;
+    // Only fetch from GitLab API for GitLab repos
+    if (!conversation?.repo_name || conversation?.repo_provider !== "gitlab") return;
 
     fileTreeFetched.current = true;
     (async () => {
@@ -424,7 +445,7 @@ function ConversationPageInner({params}) {
         console.warn("[workspace] GitLab tree fetch failed:", err);
       }
     })();
-  }, [conversation?.repo_name, conversation?.branch, files.length]);
+  }, [conversation?.repo_name, conversation?.branch, conversation?.repo_provider, files.length]);
 
   // ── Auto-start wizard task when workspace becomes ready ──
   // NOTE: For wizard mode, the task is now sent in the WebSocket handshake
@@ -667,10 +688,10 @@ function ConversationPageInner({params}) {
       setRightPanel("preview");
     }
 
-    // Clone complete for existing project — switch to Code so file tree is visible.
+    // Clone complete for existing project — switch to Preview.
     // Wizard projects skip this (they go straight to 'running').
     if (status === "ready" && !isWizardMode && panelOverrideRef.current) {
-      setRightPanel("code");
+      setRightPanel("preview");
     }
 
     // Agent actively working — show preview.
@@ -679,12 +700,20 @@ function ConversationPageInner({params}) {
     }
   }, [status, isWizardMode]);
 
-  // Auto-switch to preview when build completes and vercelUrl is available
+  // Auto-switch to preview when a live URL arrives from WebSocket.
+  // Watches deployUrl/previewUrl directly (not repoInfo.vercelUrl) so it fires
+  // only for fresh WS events, not for DB-loaded URLs on page entry.
   useEffect(() => {
-    if (repoInfo.vercelUrl && rightPanel === "build") {
+    if (deployUrl && panelOverrideRef.current) {
       setRightPanel("preview");
     }
-  }, [repoInfo.vercelUrl, rightPanel]);
+  }, [deployUrl]);
+
+  useEffect(() => {
+    if (previewUrl && panelOverrideRef.current) {
+      setRightPanel("preview");
+    }
+  }, [previewUrl]);
 
   const iframeRef = useRef(null);
 
@@ -724,6 +753,8 @@ function ConversationPageInner({params}) {
     error,
     errorStage,
     previewError,
+    previewLoading,
+    previewStatusMsg,
     retryCount,
     retry,
     phases,
@@ -734,6 +765,7 @@ function ConversationPageInner({params}) {
     // Actions
     sendMessage,
     stopSession,
+    stopPreview,
     // Conversation data
     conversation,
     setConversation,
@@ -750,418 +782,661 @@ function ConversationPageInner({params}) {
     panelOverrideRef,
     // Modal trigger
     setShowExportModal,
+    // Plan confirmation
+    planAwaiting,
+    currentPlanData,
+    confirmPlan,
+    rejectPlan,
+    // WebContainers file map — triggers browser sandbox boot in RightPanel
+    previewFileMap,
   };
 
   return (
     <WorkspaceContext.Provider value={ctxValue}>
-    <div
-      className="flex flex-col h-screen bg-[#f8f9fb] dark:bg-[#0d1117] overflow-hidden transition-colors duration-200">
-      {/* Reconnecting banner */}
-      {isReconnecting && (
-        <div className="flex items-center justify-center gap-2 px-4 py-2 bg-yellow-50 dark:bg-yellow-900/20 border-b border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-300 text-sm font-medium">
-          <svg className="animate-spin h-4 w-4 shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-          </svg>
-          Reconnecting to workspace…
-        </div>
-      )}
-      {/* Export Code Modal */}
-      <ExportCodeModal
-        isOpen={showExportModal}
-        onClose={() => setShowExportModal(false)}
-        projectSlug={
-          conversation?.repo_name?.split("/").pop() ||
-          (conversation?.title || "project")
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, "-")
-            .replace(/^-|-$/g, "")
-            .slice(0, 50) ||
-          conversationId
-        }
-        projectId={conversationId}
-      />
-
-      {/* ════════════════════════════════════════════════
-          TOP HEADER BAR — Base44 pixel-perfect
-      ════════════════════════════════════════════════ */}
-      <header className="shrink-0 h-[52px] bg-[#f8f9fc] dark:bg-[#161b22] border-b border-[#e8eaef] dark:border-[#2d333b] flex items-center px-3 z-20">
-        {/* Left: Platform logo / App dropdown / History / Sidebar toggle */}
-        <div
-          className="flex items-center gap-2 min-w-0"
-          style={{flex: "0 0 auto"}}>
-          {/* Platform logo — triggers profile/workspace dropdown */}
-          <div className="relative" ref={profileDropdownRef}>
-            <button
-              onClick={() => {
-                setShowProfileDropdown((v) => !v);
-                setShowAppDropdown(false);
-              }}
-              className="w-8 h-8 rounded-xl bg-[#ef6820] flex items-center justify-center shrink-0 hover:opacity-90 transition-opacity">
-              <svg width="16" height="14" viewBox="0 0 16 14" fill="none">
-                <rect y="0" width="16" height="2" rx="1" fill="white" />
-                <rect y="6" width="16" height="2" rx="1" fill="white" />
-                <rect y="12" width="16" height="2" rx="1" fill="white" />
-              </svg>
-            </button>
-
-            {/* Profile / Workspace dropdown — Base44 style */}
-            {showProfileDropdown && (
-              <div className="absolute top-full left-0 mt-1.5 w-[272px] bg-white dark:bg-[#1c1c1e] border border-[#e5e7eb] dark:border-[#2d333b] rounded-xl shadow-lg z-50 overflow-hidden">
-                {/* User info header */}
-                <div className="flex items-center gap-3 px-4 py-3 border-b border-[#f0f0f0] dark:border-[#2d333b]">
-                  <div className="w-9 h-9 rounded-full bg-[#ef6820] flex items-center justify-center shrink-0 text-white font-bold text-[15px]">
-                    {userName ? userName.charAt(0).toUpperCase() : "U"}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-[14px] font-semibold text-slate-900 dark:text-white leading-tight truncate">
-                      {userName || "My Workspace"}
-                    </p>
-                    <p className="text-[12px] text-slate-400 dark:text-slate-500 leading-tight">
-                      Free plan
-                    </p>
-                  </div>
-                </div>
-
-                {/* Back to all apps */}
-                <button
-                  onClick={() => {
-                    setShowProfileDropdown(false);
-                    window.location.href = "/dashboard/engineer";
-                  }}
-                  className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-white/[0.04] border-b border-[#f0f0f0] dark:border-[#2d333b] transition-colors">
-                  <ChevronLeft className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                  <span className="text-[13px] text-slate-600 dark:text-slate-300">
-                    All apps
-                  </span>
-                </button>
-
-                {/* Credits card */}
-                <div className="mx-3 my-3 border border-slate-200 dark:border-[#2d333b] rounded-xl overflow-hidden bg-[#fafafa] dark:bg-[#0d1117]">
-                  {/* Message credits */}
-                  <div className="px-4 pt-4 pb-3">
-                    <p className="text-[13px] font-semibold text-slate-800 dark:text-slate-100 mb-2.5">
-                      Message credits
-                    </p>
-                    <div className="flex items-center gap-3">
-                      <div className="flex-1 h-[8px] bg-[#f0e8e0] dark:bg-slate-700 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-orange-500 rounded-full"
-                          style={{width: "0%"}}
-                        />
-                      </div>
-                      <span className="text-[13px] text-slate-700 dark:text-slate-300 shrink-0 font-medium">
-                        0/25
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Daily Credits */}
-                  <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 dark:border-[#2d333b]">
-                    <span className="text-[13px] text-slate-600 dark:text-slate-200">
-                      Daily Credits
-                    </span>
-                    <span className="text-[13px] text-slate-700 dark:text-slate-300 font-medium">
-                      0/5
-                    </span>
-                  </div>
-
-                  {/* Integration credits */}
-                  <div className="px-4 pt-3 pb-4 border-t border-slate-100 dark:border-[#2d333b]">
-                    <p className="text-[13px] text-slate-600 dark:text-slate-200 mb-2">
-                      Integration credits
-                    </p>
-                    <div className="flex items-center gap-3">
-                      <div className="flex-1 h-[8px] bg-[#f0e8e0] dark:bg-slate-700 rounded-full" />
-                      <span className="text-[13px] text-slate-700 dark:text-slate-300 shrink-0 font-medium">
-                        0/100
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-2">
-                      Renews monthly
-                    </p>
-                    <button className="text-[13px] font-semibold text-[#ef6820] hover:text-orange-600 mt-1 transition-colors block">
-                      Upgrade your plan
-                    </button>
-                  </div>
-                </div>
-
-                {/* Menu items */}
-                <div className="py-1.5 border-t border-[#f0f0f0] dark:border-[#2d333b]">
-                  {[
-                    {
-                      icon: Settings,
-                      label: "Settings",
-                      href: "/dashboard/engineer/settings",
-                    },
-                    {
-                      icon: CreditCard,
-                      label: "Pricing plans",
-                      href: "/dashboard/engineer/billing",
-                    },
-                    {icon: Gift, label: "Win free credits", href: null},
-                    {icon: BookOpen, label: "Documentation", href: null},
-                    {icon: HelpCircle, label: "Get help", href: null},
-                  ].map(({icon: Icon, label, href}) => (
-                    <button
-                      key={label}
-                      onClick={() => {
-                        setShowProfileDropdown(false);
-                        if (href) window.location.href = href;
-                      }}
-                      className="w-full flex items-center gap-3 px-4 py-2 text-[13px] text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors text-left">
-                      <Icon className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 shrink-0" />
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Breadcrumb separator */}
-          <span className="text-slate-300 dark:text-slate-600 text-[18px] font-light select-none">
-            /
-          </span>
-
-          {/* App title — dropdown trigger */}
-          <div className="relative" ref={appDropdownRef}>
-            <button
-              onClick={() => {
-                setShowAppDropdown((v) => !v);
-                setShowProfileDropdown(false);
-              }}
-              className={cn(
-                "flex items-center gap-2 px-2 py-1 rounded-lg transition-colors",
-                showAppDropdown
-                  ? "bg-slate-100 dark:bg-white/[0.06]"
-                  : "hover:bg-slate-100 dark:hover:bg-white/[0.06]",
-              )}>
-              {/* App icon — rounded square like Base44 */}
-              <div className="w-7 h-7 rounded-lg bg-[#ef6820] flex items-center justify-center shrink-0 overflow-hidden">
-                <Sparkles className="w-3.5 h-3.5 text-white" />
-              </div>
-              <div className="flex flex-col justify-center min-w-0 text-left">
-                <span className="text-[13px] font-semibold text-slate-900 dark:text-white leading-tight truncate max-w-[140px]">
-                  {conversation?.title || wizardDesc || "New Project"}
-                </span>
-                <span className="text-[11px] text-slate-400 dark:text-slate-500 leading-tight truncate max-w-[140px]">
-                  {userName ? `${userName}'s Workspace W...` : "AI Workspace"}
-                </span>
-              </div>
-            </button>
-
-            {/* App dropdown */}
-            {showAppDropdown && (
-              <div className="absolute top-full left-0 mt-1.5 w-52 bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-xl shadow-xl z-50 py-1.5 overflow-hidden">
-                {[
-                  {icon: LayoutGrid, label: "App Overview"},
-                  {icon: Users, label: "Users"},
-                  {icon: Shield, label: "Security"},
-                  {icon: SlidersHorizontal, label: "App Settings"},
-                ].map(({icon: Icon, label}) => (
-                  <button
-                    key={label}
-                    onClick={() => setShowAppDropdown(false)}
-                    className="w-full flex items-center gap-3 px-4 py-2.5 text-[14px] text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors text-left">
-                    <Icon className="w-4 h-4 text-slate-500 dark:text-slate-400 shrink-0" />
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* History */}
-          <button className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors shrink-0">
-            <History className="w-4 h-4" />
-          </button>
-
-          {/* Sidebar toggle — bordered button matching Base44 style */}
-          <button
-            onClick={() => setChatOpen(!chatOpen)}
-            className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-white/[0.06] rounded-lg border border-slate-200 dark:border-[#2d333b] transition-colors shrink-0"
-            title={chatOpen ? "Hide Chat" : "Show Chat"}>
-            {chatOpen ? (
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
+      <div className="flex flex-col h-screen bg-[#f8f9fb] dark:bg-[#0d1117] overflow-hidden transition-colors duration-200">
+        {/* Reconnecting banner */}
+        {isReconnecting && (
+          <div className="flex items-center justify-center gap-2 px-4 py-2 bg-yellow-50 dark:bg-yellow-900/20 border-b border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-300 text-sm font-medium">
+            <svg
+              className="animate-spin h-4 w-4 shrink-0"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24">
+              <circle
+                className="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
                 stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round">
-                <line x1="3" y1="4" x2="3" y2="20" />
-                <polyline points="11 8 7 12 11 16" />
-                <line x1="7" y1="12" x2="21" y2="12" />
-              </svg>
-            ) : (
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round">
-                <line x1="3" y1="4" x2="3" y2="20" />
-                <polyline points="13 8 17 12 13 16" />
-                <line x1="7" y1="12" x2="17" y2="12" />
-              </svg>
-            )}
-          </button>
-        </div>
-
-        {/* Center: Tab Switcher — Base44 segmented control style */}
-        <div className="flex-1 flex items-center justify-center">
-          <div
-            className="flex items-center p-0.5 rounded-[8px] gap-0.5"
-            style={{background: "rgba(0,0,0,0.05)"}}>
-            {[
-              {key: "preview", label: "Preview", visible: true},
-              {key: "dashboard", label: "Dashboard", visible: true},
-              {key: "code", label: "Code", visible: codeTabVisible},
-            ]
-              .filter((tab) => tab.visible)
-              .map((tab) => (
-                <button
-                  key={tab.key}
-                  onClick={() => {
-                    setRightPanel(tab.key);
-                    panelOverrideRef.current = false;
-                  }}
-                  className={cn(
-                    "h-[26px] px-3 text-[13px] transition-all rounded-[6px] whitespace-nowrap",
-                    rightPanel === tab.key
-                      ? "bg-white dark:bg-[#2d333b] font-semibold text-[#111827] dark:text-white shadow-sm"
-                      : "font-normal text-[#6b7280] dark:text-slate-400 hover:text-[#374151] dark:hover:text-white",
-                  )}>
-                  {tab.label}
-                </button>
-              ))}
-          </div>
-        </div>
-
-        {/* Right: Actions — Base44 pixel-perfect */}
-        <div className="flex items-center gap-1" style={{flex: "0 0 auto"}}>
-          {/* Avatar + invite button */}
-          <div className="flex items-center gap-1.5 mr-1">
-            {/* User avatar — 28px circle */}
-            <div className="w-7 h-7 rounded-full bg-slate-500 flex items-center justify-center overflow-hidden shrink-0 text-white text-[11px] font-bold">
-              <User className="w-3.5 h-3.5 text-white" />
-            </div>
-            {/* Invite collaborator — separate 22px circle with border */}
-            <button
-              className="w-[22px] h-[22px] rounded-full border border-[#d1d5db] dark:border-[#444c56] flex items-center justify-center shrink-0 text-[#6b7280] dark:text-slate-400 hover:border-[#9ca3af] hover:bg-[#f3f4f6] dark:hover:bg-white/[0.06] transition-all"
-              title="Invite collaborator">
-              <Plus className="w-3 h-3" />
-            </button>
-          </div>
-
-          {/* Upgrade — exact Base44 gradient: soft peach to cream, orange border, orange text */}
-          <button
-            className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-[13px] font-semibold transition-all ml-1"
-            style={{
-              background:
-                "linear-gradient(85deg, rgba(255,102,0,0.26) -70.38%, rgba(255,222,162,0.18) 98.95%)",
-              border: "1px solid #FFCBB4",
-              color: "#FF631F",
-            }}>
-            <Diamond className="w-3.5 h-3.5 fill-current" />
-            Upgrade
-          </button>
-
-          {/* Export — outlined button next to Publish */}
-          <button
-            onClick={() => setShowExportModal(true)}
-            className="h-8 flex items-center gap-1.5 px-3 rounded-lg text-[13px] font-semibold border border-[#e5e7eb] dark:border-[#444c56] text-[#374151] dark:text-slate-200 hover:bg-[#f3f4f6] dark:hover:bg-white/[0.06] transition-all"
-            title="Export code">
-            <Download className="w-3.5 h-3.5" />
-            Export
-          </button>
-
-          {/* Publish — solid dark h-8 */}
-          <button
-            onClick={() => {
-              if (repoInfo.vercelUrl) window.open(repoInfo.vercelUrl, "_blank");
-            }}
-            className="h-8 flex items-center px-4 rounded-lg text-[13px] font-semibold bg-[#111827] dark:bg-white text-white dark:text-[#111827] hover:bg-[#1f2937] dark:hover:bg-slate-100 transition-all"
-            title="Publish to Vercel">
-            Publish
-          </button>
-        </div>
-      </header>
-
-      {/* ════════════════════════════════════════════════
-          BODY — 2-panel layout: Chat (left) + Preview/Code (right)
-      ════════════════════════════════════════════════ */}
-      <div className="flex-1 flex min-h-0 overflow-hidden">
-        {/* ══ CHAT PANEL (left, collapsible + resizable) ══ */}
-        <div
-          className={cn(
-            "shrink-0 flex flex-col min-w-0 bg-[#f8f9fc] dark:bg-[#0d1117] overflow-hidden",
-            !chatDragging && "transition-all duration-300 ease-in-out",
-            chatOpen
-              ? "border-r border-[#e3e5eb] dark:border-[#21262d]"
-              : "border-r-0",
-          )}
-          style={{ width: chatOpen ? chatWidth : 0 }}>
-          <ChatPanel />
-        </div>
-        {/* end chat panel */}
-
-        {/* ── Resize handle — only visible when chat is open ── */}
-        {chatOpen && (
-          <div
-            className="shrink-0 w-1 relative group cursor-col-resize z-10 select-none"
-            style={{marginLeft: -1}}
-            onPointerDown={(e) => {
-              e.preventDefault();
-              const startX = e.clientX;
-              const startWidth = chatWidth;
-              setChatDragging(true);
-              chatDragRef.current = {startX, startWidth};
-
-              const onMove = (me) => {
-                const delta = me.clientX - chatDragRef.current.startX;
-                const next = Math.min(
-                  CHAT_MAX_WIDTH,
-                  Math.max(
-                    CHAT_MIN_WIDTH,
-                    chatDragRef.current.startWidth + delta,
-                  ),
-                );
-                setChatWidth(next);
-              };
-              const onUp = () => {
-                setChatDragging(false);
-                chatDragRef.current = null;
-                window.removeEventListener("pointermove", onMove);
-                window.removeEventListener("pointerup", onUp);
-              };
-              window.addEventListener("pointermove", onMove);
-              window.addEventListener("pointerup", onUp);
-            }}>
-            {/* Visible drag pill */}
-            <div className="absolute inset-y-0 left-0 right-0 flex items-center justify-center">
-              <div
-                className={cn(
-                  "w-[3px] h-12 rounded-full transition-all duration-150",
-                  chatDragging
-                    ? "bg-[#ef6820] opacity-100 scale-y-110"
-                    : "bg-slate-300 dark:bg-slate-600 opacity-0 group-hover:opacity-100",
-                )}
+                strokeWidth="4"
               />
+              <path
+                className="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+              />
+            </svg>
+            Reconnecting to workspace…
+          </div>
+        )}
+        {/* Export Code Modal */}
+        <ExportCodeModal
+          isOpen={showExportModal}
+          onClose={() => setShowExportModal(false)}
+          projectSlug={
+            conversation?.repo_name?.split("/").pop() ||
+            (conversation?.title || "project")
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")
+              .replace(/^-|-$/g, "")
+              .slice(0, 50) ||
+            conversationId
+          }
+          projectId={conversationId}
+        />
+
+        {/* ── Publish Modal ────────────────────────────────── */}
+        {showPublishModal && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                setShowPublishModal(false);
+              }
+            }}>
+            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+            <div className="relative bg-white dark:bg-[#161b22] rounded-2xl shadow-2xl border border-slate-200 dark:border-[#2d333b] w-full max-w-md mx-4 overflow-hidden">
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 pt-6 pb-4">
+                <div className="flex items-center gap-3">
+                  {publishConfirmed ? (
+                    <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center">
+                      <svg
+                        className="w-5 h-5 text-emerald-500"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2.5}>
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M5 13l4 4L19 7"
+                        />
+                      </svg>
+                    </div>
+                  ) : (
+                    <div className="w-10 h-10 rounded-xl bg-slate-900 dark:bg-white flex items-center justify-center">
+                      <svg
+                        className="w-5 h-5 text-white dark:text-slate-900"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}>
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"
+                        />
+                      </svg>
+                    </div>
+                  )}
+                  <div>
+                    <h3 className="text-[15px] font-bold text-slate-900 dark:text-white">
+                      {publishConfirmed ? "Published!" : "Publish your app"}
+                    </h3>
+                    <p className="text-[12px] text-slate-400 dark:text-slate-500 mt-0.5">
+                      {publishConfirmed
+                        ? "Your app is live on Vercel"
+                        : repoInfo.vercelUrl
+                          ? "Your app has been deployed to Vercel"
+                          : "Deploy your app to Vercel"}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowPublishModal(false)}
+                  className="w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors">
+                  <svg
+                    className="w-4 h-4"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}>
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
+              </div>
+
+              {/* URL display */}
+              <div className="px-6 pb-4">
+                {repoInfo.vercelUrl ? (
+                  <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-[#0d1117] border border-slate-200 dark:border-[#2d333b]">
+                    <div className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+                    <span className="flex-1 text-[13px] font-medium text-slate-700 dark:text-slate-200 truncate">
+                      {repoInfo.vercelUrl}
+                    </span>
+                    <button
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(
+                            repoInfo.vercelUrl,
+                          );
+                          setCopiedUrl(true);
+                          setTimeout(() => setCopiedUrl(false), 2000);
+                        } catch {}
+                      }}
+                      className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg text-[12px] font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-white/[0.08] transition-all">
+                      {copiedUrl ? (
+                        <>
+                          <svg
+                            className="w-3.5 h-3.5 text-emerald-500"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2.5}>
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M5 13l4 4L19 7"
+                            />
+                          </svg>
+                          Copied
+                        </>
+                      ) : (
+                        <>
+                          <svg
+                            className="w-3.5 h-3.5"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth={2}>
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                            />
+                          </svg>
+                          Copy
+                        </>
+                      )}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800/30">
+                    <svg
+                      className="w-4 h-4 text-amber-400 shrink-0"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}>
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                      />
+                    </svg>
+                    <span className="text-[13px] text-amber-700 dark:text-amber-300">
+                      No deployment URL yet — generate a project first.
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Actions */}
+              <div className="px-6 pb-6 flex items-center gap-2">
+                {!publishConfirmed ? (
+                  <>
+                    <button
+                      onClick={() => {
+                        if (repoInfo.vercelUrl) setPublishConfirmed(true);
+                      }}
+                      disabled={!repoInfo.vercelUrl}
+                      className={cn(
+                        "flex-1 h-9 flex items-center justify-center gap-2 rounded-xl text-[13px] font-semibold transition-all",
+                        repoInfo.vercelUrl
+                          ? "bg-[#111827] dark:bg-white text-white dark:text-[#111827] hover:bg-[#1f2937] dark:hover:bg-slate-100 shadow-sm"
+                          : "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed",
+                      )}>
+                      <svg
+                        className="w-3.5 h-3.5"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2.5}>
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"
+                        />
+                      </svg>
+                      Publish
+                    </button>
+                    <button
+                      onClick={() => setShowPublishModal(false)}
+                      className="h-9 px-4 rounded-xl text-[13px] font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors border border-slate-200 dark:border-[#2d333b]">
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={() =>
+                        repoInfo.vercelUrl &&
+                        window.open(repoInfo.vercelUrl, "_blank")
+                      }
+                      className="flex-1 h-9 flex items-center justify-center gap-2 rounded-xl text-[13px] font-semibold bg-emerald-500 hover:bg-emerald-600 text-white transition-all shadow-sm shadow-emerald-500/20">
+                      <svg
+                        className="w-3.5 h-3.5"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={2}>
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+                        />
+                      </svg>
+                      Open in new tab
+                    </button>
+                    <button
+                      onClick={() => setShowPublishModal(false)}
+                      className="h-9 px-4 rounded-xl text-[13px] font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors border border-slate-200 dark:border-[#2d333b]">
+                      Done
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         )}
 
-        <RightPanel />
+        {/* ════════════════════════════════════════════════
+          TOP HEADER BAR — Base44 pixel-perfect
+      ════════════════════════════════════════════════ */}
+        <header className="shrink-0 h-[52px] bg-[#f8f9fc] dark:bg-[#161b22] border-b border-[#e8eaef] dark:border-[#2d333b] flex items-center px-3 z-20">
+          {/* Left: Platform logo / App dropdown / History / Sidebar toggle */}
+          <div
+            className="flex items-center gap-2 min-w-0"
+            style={{flex: "0 0 auto"}}>
+            {/* Platform logo — triggers profile/workspace dropdown */}
+            <div className="relative" ref={profileDropdownRef}>
+              <button
+                onClick={() => {
+                  setShowProfileDropdown((v) => !v);
+                  setShowAppDropdown(false);
+                }}
+                className="w-8 h-8 rounded-xl bg-[#ef6820] flex items-center justify-center shrink-0 hover:opacity-90 transition-opacity">
+                <svg width="16" height="14" viewBox="0 0 16 14" fill="none">
+                  <rect y="0" width="16" height="2" rx="1" fill="white" />
+                  <rect y="6" width="16" height="2" rx="1" fill="white" />
+                  <rect y="12" width="16" height="2" rx="1" fill="white" />
+                </svg>
+              </button>
+
+              {/* Profile / Workspace dropdown — Base44 style */}
+              {showProfileDropdown && (
+                <div className="absolute top-full left-0 mt-1.5 w-[272px] bg-white dark:bg-[#1c1c1e] border border-[#e5e7eb] dark:border-[#2d333b] rounded-xl shadow-lg z-50 overflow-hidden">
+                  {/* User info header */}
+                  <div className="flex items-center gap-3 px-4 py-3 border-b border-[#f0f0f0] dark:border-[#2d333b]">
+                    <div className="w-9 h-9 rounded-full bg-[#ef6820] flex items-center justify-center shrink-0 text-white font-bold text-[15px]">
+                      {userName ? userName.charAt(0).toUpperCase() : "U"}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[14px] font-semibold text-slate-900 dark:text-white leading-tight truncate">
+                        {userName || "My Workspace"}
+                      </p>
+                      <p className="text-[12px] text-slate-400 dark:text-slate-500 leading-tight">
+                        Free plan
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Back to all apps */}
+                  <button
+                    onClick={() => {
+                      setShowProfileDropdown(false);
+                      window.location.href = "/dashboard/engineer";
+                    }}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-white/[0.04] border-b border-[#f0f0f0] dark:border-[#2d333b] transition-colors">
+                    <ChevronLeft className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <span className="text-[13px] text-slate-600 dark:text-slate-300">
+                      All apps
+                    </span>
+                  </button>
+
+                  {/* Credits card */}
+                  <div className="mx-3 my-3 border border-slate-200 dark:border-[#2d333b] rounded-xl overflow-hidden bg-[#fafafa] dark:bg-[#0d1117]">
+                    {/* Message credits */}
+                    <div className="px-4 pt-4 pb-3">
+                      <p className="text-[13px] font-semibold text-slate-800 dark:text-slate-100 mb-2.5">
+                        Message credits
+                      </p>
+                      <div className="flex items-center gap-3">
+                        <div className="flex-1 h-[8px] bg-[#f0e8e0] dark:bg-slate-700 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-orange-500 rounded-full"
+                            style={{width: "0%"}}
+                          />
+                        </div>
+                        <span className="text-[13px] text-slate-700 dark:text-slate-300 shrink-0 font-medium">
+                          0/25
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Daily Credits */}
+                    <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 dark:border-[#2d333b]">
+                      <span className="text-[13px] text-slate-600 dark:text-slate-200">
+                        Daily Credits
+                      </span>
+                      <span className="text-[13px] text-slate-700 dark:text-slate-300 font-medium">
+                        0/5
+                      </span>
+                    </div>
+
+                    {/* Integration credits */}
+                    <div className="px-4 pt-3 pb-4 border-t border-slate-100 dark:border-[#2d333b]">
+                      <p className="text-[13px] text-slate-600 dark:text-slate-200 mb-2">
+                        Integration credits
+                      </p>
+                      <div className="flex items-center gap-3">
+                        <div className="flex-1 h-[8px] bg-[#f0e8e0] dark:bg-slate-700 rounded-full" />
+                        <span className="text-[13px] text-slate-700 dark:text-slate-300 shrink-0 font-medium">
+                          0/100
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-2">
+                        Renews monthly
+                      </p>
+                      <button className="text-[13px] font-semibold text-[#ef6820] hover:text-orange-600 mt-1 transition-colors block">
+                        Upgrade your plan
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Menu items */}
+                  <div className="py-1.5 border-t border-[#f0f0f0] dark:border-[#2d333b]">
+                    {[
+                      {
+                        icon: Settings,
+                        label: "Settings",
+                        href: "/dashboard/engineer/settings",
+                      },
+                      {
+                        icon: CreditCard,
+                        label: "Pricing plans",
+                        href: "/dashboard/engineer/billing",
+                      },
+                      {icon: Gift, label: "Win free credits", href: null},
+                      {icon: BookOpen, label: "Documentation", href: null},
+                      {icon: HelpCircle, label: "Get help", href: null},
+                    ].map(({icon: Icon, label, href}) => (
+                      <button
+                        key={label}
+                        onClick={() => {
+                          setShowProfileDropdown(false);
+                          if (href) window.location.href = href;
+                        }}
+                        className="w-full flex items-center gap-3 px-4 py-2 text-[13px] text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors text-left">
+                        <Icon className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 shrink-0" />
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Breadcrumb separator */}
+            <span className="text-slate-300 dark:text-slate-600 text-[18px] font-light select-none">
+              /
+            </span>
+
+            {/* App title — dropdown trigger */}
+            <div className="relative" ref={appDropdownRef}>
+              <button
+                onClick={() => {
+                  setShowAppDropdown((v) => !v);
+                  setShowProfileDropdown(false);
+                }}
+                className={cn(
+                  "flex items-center gap-2 px-2 py-1 rounded-lg transition-colors",
+                  showAppDropdown
+                    ? "bg-slate-100 dark:bg-white/[0.06]"
+                    : "hover:bg-slate-100 dark:hover:bg-white/[0.06]",
+                )}>
+                {/* App icon — rounded square like Base44 */}
+                <div className="w-7 h-7 rounded-lg bg-[#ef6820] flex items-center justify-center shrink-0 overflow-hidden">
+                  <Sparkles className="w-3.5 h-3.5 text-white" />
+                </div>
+                <div className="flex flex-col justify-center min-w-0 text-left">
+                  <span className="text-[13px] font-semibold text-slate-900 dark:text-white leading-tight truncate max-w-[140px]">
+                    {conversation?.title || wizardDesc || "New Project"}
+                  </span>
+                  <span className="text-[11px] text-slate-400 dark:text-slate-500 leading-tight truncate max-w-[140px]">
+                    {userName ? `${userName}'s Workspace W...` : "AI Workspace"}
+                  </span>
+                </div>
+              </button>
+
+              {/* App dropdown */}
+              {showAppDropdown && (
+                <div className="absolute top-full left-0 mt-1.5 w-52 bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-xl shadow-xl z-50 py-1.5 overflow-hidden">
+                  {[
+                    {icon: LayoutGrid, label: "App Overview"},
+                    {icon: Users, label: "Users"},
+                    {icon: Shield, label: "Security"},
+                    {icon: SlidersHorizontal, label: "App Settings"},
+                  ].map(({icon: Icon, label}) => (
+                    <button
+                      key={label}
+                      onClick={() => setShowAppDropdown(false)}
+                      className="w-full flex items-center gap-3 px-4 py-2.5 text-[14px] text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors text-left">
+                      <Icon className="w-4 h-4 text-slate-500 dark:text-slate-400 shrink-0" />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* History */}
+            <button className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] rounded-lg transition-colors shrink-0">
+              <History className="w-4 h-4" />
+            </button>
+
+            {/* Sidebar toggle — bordered button matching Base44 style */}
+            <button
+              onClick={() => setChatOpen(!chatOpen)}
+              className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-white/[0.06] rounded-lg border border-slate-200 dark:border-[#2d333b] transition-colors shrink-0"
+              title={chatOpen ? "Hide Chat" : "Show Chat"}>
+              {chatOpen ? (
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round">
+                  <line x1="3" y1="4" x2="3" y2="20" />
+                  <polyline points="11 8 7 12 11 16" />
+                  <line x1="7" y1="12" x2="21" y2="12" />
+                </svg>
+              ) : (
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round">
+                  <line x1="3" y1="4" x2="3" y2="20" />
+                  <polyline points="13 8 17 12 13 16" />
+                  <line x1="7" y1="12" x2="17" y2="12" />
+                </svg>
+              )}
+            </button>
+          </div>
+
+          {/* Center: Tab Switcher — Base44 segmented control style */}
+          <div className="flex-1 flex items-center justify-center">
+            <div
+              className="flex items-center p-0.5 rounded-[8px] gap-0.5"
+              style={{background: "rgba(0,0,0,0.05)"}}>
+              {[
+                {key: "preview", label: "Preview", visible: true},
+                {key: "dashboard", label: "Dashboard", visible: true},
+                {key: "code", label: "Code", visible: codeTabVisible},
+              ]
+                .filter((tab) => tab.visible)
+                .map((tab) => (
+                  <button
+                    key={tab.key}
+                    onClick={() => {
+                      setRightPanel(tab.key);
+                      panelOverrideRef.current = false;
+                    }}
+                    className={cn(
+                      "h-[26px] px-3 text-[13px] transition-all rounded-[6px] whitespace-nowrap",
+                      rightPanel === tab.key
+                        ? "bg-white dark:bg-[#2d333b] font-semibold text-[#111827] dark:text-white shadow-sm"
+                        : "font-normal text-[#6b7280] dark:text-slate-400 hover:text-[#374151] dark:hover:text-white",
+                    )}>
+                    {tab.label}
+                  </button>
+                ))}
+            </div>
+          </div>
+
+          {/* Right: Actions — Base44 pixel-perfect */}
+          <div className="flex items-center gap-1" style={{flex: "0 0 auto"}}>
+            {/* Avatar + invite button */}
+            <div className="flex items-center gap-1.5 mr-1">
+              {/* User avatar — 28px circle */}
+              <div className="w-7 h-7 rounded-full bg-slate-500 flex items-center justify-center overflow-hidden shrink-0 text-white text-[11px] font-bold">
+                <User className="w-3.5 h-3.5 text-white" />
+              </div>
+              {/* Invite collaborator — separate 22px circle with border */}
+              <button
+                className="w-[22px] h-[22px] rounded-full border border-[#d1d5db] dark:border-[#444c56] flex items-center justify-center shrink-0 text-[#6b7280] dark:text-slate-400 hover:border-[#9ca3af] hover:bg-[#f3f4f6] dark:hover:bg-white/[0.06] transition-all"
+                title="Invite collaborator">
+                <Plus className="w-3 h-3" />
+              </button>
+            </div>
+
+            {/* Upgrade — exact Base44 gradient: soft peach to cream, orange border, orange text */}
+            <button
+              className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-[13px] font-semibold transition-all ml-1"
+              style={{
+                background:
+                  "linear-gradient(85deg, rgba(255,102,0,0.26) -70.38%, rgba(255,222,162,0.18) 98.95%)",
+                border: "1px solid #FFCBB4",
+                color: "#FF631F",
+              }}>
+              <Diamond className="w-3.5 h-3.5 fill-current" />
+              Upgrade
+            </button>
+
+            {/* Export — outlined button next to Publish */}
+            <button
+              onClick={() => setShowExportModal(true)}
+              className="h-8 flex items-center gap-1.5 px-3 rounded-lg text-[13px] font-semibold border border-[#e5e7eb] dark:border-[#444c56] text-[#374151] dark:text-slate-200 hover:bg-[#f3f4f6] dark:hover:bg-white/[0.06] transition-all"
+              title="Export code">
+              <Download className="w-3.5 h-3.5" />
+              Export
+            </button>
+
+            {/* Publish — solid dark h-8 */}
+            <button
+              onClick={() => {
+                setPublishConfirmed(false);
+                setCopiedUrl(false);
+                setShowPublishModal(true);
+              }}
+              className="h-8 flex items-center px-4 rounded-lg text-[13px] font-semibold bg-[#111827] dark:bg-white text-white dark:text-[#111827] hover:bg-[#1f2937] dark:hover:bg-slate-100 transition-all"
+              title="Publish">
+              Publish
+            </button>
+          </div>
+        </header>
+
+        {/* ════════════════════════════════════════════════
+          BODY — 2-panel layout: Chat (left) + Preview/Code (right)
+      ════════════════════════════════════════════════ */}
+        <div className="flex-1 flex min-h-0 overflow-hidden">
+          {/* ══ CHAT PANEL (left, collapsible + resizable) ══ */}
+          <div
+            className={cn(
+              "shrink-0 flex flex-col min-w-0 bg-[#f8f9fc] dark:bg-[#0d1117] overflow-hidden",
+              !chatDragging && "transition-all duration-300 ease-in-out",
+              chatOpen
+                ? "border-r border-[#e3e5eb] dark:border-[#21262d]"
+                : "border-r-0",
+            )}
+            style={{width: chatOpen ? chatWidth : 0}}>
+            <ChatPanel />
+          </div>
+          {/* end chat panel */}
+
+          {/* ── Resize handle — only visible when chat is open ── */}
+          {chatOpen && (
+            <div
+              className="shrink-0 w-1 relative group cursor-col-resize z-10 select-none"
+              style={{marginLeft: -1}}
+              onPointerDown={(e) => {
+                e.preventDefault();
+                const startX = e.clientX;
+                const startWidth = chatWidth;
+                setChatDragging(true);
+                chatDragRef.current = {startX, startWidth};
+
+                const onMove = (me) => {
+                  const delta = me.clientX - chatDragRef.current.startX;
+                  const next = Math.min(
+                    CHAT_MAX_WIDTH,
+                    Math.max(
+                      CHAT_MIN_WIDTH,
+                      chatDragRef.current.startWidth + delta,
+                    ),
+                  );
+                  setChatWidth(next);
+                };
+                const onUp = () => {
+                  setChatDragging(false);
+                  chatDragRef.current = null;
+                  window.removeEventListener("pointermove", onMove);
+                  window.removeEventListener("pointerup", onUp);
+                };
+                window.addEventListener("pointermove", onMove);
+                window.addEventListener("pointerup", onUp);
+              }}>
+              {/* Visible drag pill */}
+              <div className="absolute inset-y-0 left-0 right-0 flex items-center justify-center">
+                <div
+                  className={cn(
+                    "w-[3px] h-12 rounded-full transition-all duration-150",
+                    chatDragging
+                      ? "bg-[#ef6820] opacity-100 scale-y-110"
+                      : "bg-slate-300 dark:bg-slate-600 opacity-0 group-hover:opacity-100",
+                  )}
+                />
+              </div>
+            </div>
+          )}
+
+          <RightPanel />
+        </div>
+        {/* end body flex */}
       </div>
-      {/* end body flex */}
-    </div>
     </WorkspaceContext.Provider>
   );
 }

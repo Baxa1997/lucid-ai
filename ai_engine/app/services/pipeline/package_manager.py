@@ -58,8 +58,8 @@ def detect_package_manager(workspace_path: str, user_preference: str = "npm") ->
             return "npm"
 
     # No lock file found — use user preference (from settings)
-    pref = (user_preference or "npm").strip().lower()
-    return pref if pref in ("npm", "yarn", "pnpm", "bun") else "npm"
+    pref = (user_preference or "pnpm").strip().lower()
+    return pref if pref in ("npm", "yarn", "pnpm", "bun") else "pnpm"
 
 
 def _pm_install_cmd(pm: str, packages: list = None) -> list:
@@ -103,6 +103,9 @@ def _pm_env(pm: str) -> dict:
         "USER": _user,
         "PATH": f"{_home}/.npm-global/bin:/usr/local/bin:/usr/bin:/bin",
         "npm_config_loglevel": "error",
+        # Shared caches — packages downloaded once are reused across all workspaces
+        "npm_config_cache": "/tmp/npm_cache",
+        "PNPM_HOME": "/tmp/pnpm_global",
     }
     # Enable corepack for yarn/pnpm if needed
     if pm in ("yarn", "pnpm"):

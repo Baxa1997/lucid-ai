@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@codesandbox/sandpack-react": "^2.20.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@monaco-editor/react": "^4.7.0",
     "@prisma/client": "^5.22.0",
@@ -27,6 +28,7 @@
     "@radix-ui/react-tooltip": "^1.2.8",
     "@supabase/mcp-server-supabase": "^0.7.0",
     "@supabase/supabase-js": "^2.98.0",
+    "@webcontainer/api": "^1.6.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.0",
     "cmdk": "^1.1.1",

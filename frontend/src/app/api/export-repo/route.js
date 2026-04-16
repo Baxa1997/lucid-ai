@@ -40,7 +40,7 @@ export async function POST(req) {
       .select('gitlab_project_id')
       .eq('user_id', ctx.userId)
       .eq('project_id', platformProjectId)
-      .single();
+      .maybeSingle();
 
     if (dbErr || !deployment?.gitlab_project_id) {
       return NextResponse.json(

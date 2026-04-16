@@ -111,20 +111,24 @@ async def run_pipeline(
             })
 
             # Initialize a git repo with 'main' as default branch
-            subprocess.run(
+            await asyncio.to_thread(
+                subprocess.run,
                 ["git", "init", "-b", "main"],
                 cwd=workspace_path,
                 capture_output=True, text=True, timeout=10,
             )
-            subprocess.run(
+            await asyncio.to_thread(
+                subprocess.run,
                 ["git", "checkout", "-B", "main"],
                 cwd=workspace_path, capture_output=True, timeout=5,
             )
-            subprocess.run(
+            await asyncio.to_thread(
+                subprocess.run,
                 ["git", "config", "user.name", "Lucid AI"],
                 cwd=workspace_path, capture_output=True, timeout=5,
             )
-            subprocess.run(
+            await asyncio.to_thread(
+                subprocess.run,
                 ["git", "config", "user.email", "ai@lucid.dev"],
                 cwd=workspace_path, capture_output=True, timeout=5,
             )
@@ -266,7 +270,8 @@ async def run_pipeline(
                     json.dump(claude_settings, f, indent=2)
 
                 os.chmod(workspace_path, 0o777)
-                subprocess.run(
+                await asyncio.to_thread(
+                    subprocess.run,
                     ["chmod", "-R", "777", workspace_path],
                     capture_output=True, timeout=10,
                 )
@@ -402,11 +407,11 @@ async def run_pipeline(
                 os.makedirs(workspace_path, exist_ok=True)
                 os.chmod(workspace_path, 0o777)
 
-                subprocess.run(["git", "init", "-b", "main"], cwd=workspace_path,
-                                capture_output=True, text=True, timeout=10)
-                subprocess.run(["git", "config", "user.name", "Lucid AI"],
+                await asyncio.to_thread(subprocess.run, ["git", "init", "-b", "main"],
+                                cwd=workspace_path, capture_output=True, text=True, timeout=10)
+                await asyncio.to_thread(subprocess.run, ["git", "config", "user.name", "Lucid AI"],
                                 cwd=workspace_path, capture_output=True)
-                subprocess.run(["git", "config", "user.email", "ai@lucid.dev"],
+                await asyncio.to_thread(subprocess.run, ["git", "config", "user.email", "ai@lucid.dev"],
                                 cwd=workspace_path, capture_output=True)
 
                 try:
@@ -427,6 +432,26 @@ async def run_pipeline(
                         logger.warning("new_project_mode: no skeleton found for stack=%s", detected_stack)
                 except Exception as _skel_err:
                     logger.warning("new_project_mode: fallback skeleton error: %s", _skel_err)
+
+                # Install deps for fallback skeleton (no install ran above)
+                _fb_pkg = os.path.join(workspace_path, "package.json")
+                if os.path.exists(_fb_pkg):
+                    _fb_pm = detect_package_manager(workspace_path, validated.get("package_manager", "pnpm"))
+                    validated["package_manager"] = _fb_pm
+                    try:
+                        await websocket.send_json({"type": "progress", "message": f"📦 Installing skeleton deps ({_fb_pm})..."})
+                        _fb_install = await asyncio.to_thread(
+                            subprocess.run,
+                            _pm_install_cmd(_fb_pm),
+                            cwd=workspace_path, capture_output=True, text=True, timeout=180,
+                            env=_pm_env(_fb_pm),
+                        )
+                        if _fb_install.returncode == 0:
+                            await websocket.send_json({"type": "progress", "message": f"✅ Dependencies installed ({_fb_pm})"})
+                        else:
+                            logger.warning("new_project_mode fallback: %s install failed: %s", _fb_pm, (_fb_install.stderr or "")[:200])
+                    except Exception as _fb_ie:
+                        logger.warning("new_project_mode fallback: install error: %s", _fb_ie)
 
                 await websocket.send_json({
                     "type": "progress",
@@ -454,7 +479,11 @@ async def run_pipeline(
                 }
                 with open(os.path.join(claude_dir, "settings.json"), "w") as _csf:
                     json.dump(claude_settings, _csf, indent=2)
-                subprocess.run(["chmod", "-R", "777", workspace_path], capture_output=True, timeout=10)
+                await asyncio.to_thread(
+                    subprocess.run,
+                    ["chmod", "-R", "777", workspace_path],
+                    capture_output=True, timeout=10,
+                )
                 logger.info("new_project_mode: .claude/settings.json created, chmod 777 applied")
             except Exception as _cs_err:
                 logger.warning("new_project_mode: .claude/settings.json creation failed: %s", _cs_err)
@@ -541,13 +570,51 @@ async def run_pipeline(
             )
 
             if not success:
-                await _send_phase(5, "Writing code", "Generation failed", "error")
-                return
+                # Check if the user rejected the plan and provided a correction
+                _correction = getattr(websocket, "_plan_correction", None)
+                if _correction:
+                    # Clean up and retry with the corrected description
+                    delattr(websocket, "_plan_correction")
+                    logger.info("Retrying generation with corrected description: %s", _correction[:80])
+                    task = _correction  # Use the correction as the new task
+                    success = await generate_new_project(
+                        description=task,
+                        workspace_path=workspace_path,
+                        validated=validated,
+                        websocket=websocket,
+                        chat_session_id=chat_session_id,
+                        user_jwt=user.get("user_jwt", ""),
+                    )
+                    if not success:
+                        await _send_phase(5, "Writing code", "Generation failed", "error")
+                        return
+                else:
+                    await _send_phase(5, "Writing code", "Generation failed", "error")
+                    return
 
             await asyncio.sleep(0.5)
-            await _send_phase(5, "Writing code", "Code generation complete", "done")
-            await _send_phase(6, "Verifying build", "Build verification complete", "done")
             await _send_file_tree(websocket, workspace_path)
+
+            # ── Phase 6: Verify generated code ────────────────
+            await _send_phase(6, "Verifying build", "Checking generated code for errors…", "active")
+            try:
+                _gen_classification = {
+                    "model": "sonnet",
+                    "model_id": "claude-sonnet-4-6",
+                    "complexity": "medium",
+                    "task_type": "feature",
+                }
+                await verify_build(
+                    workspace_path,
+                    validated["anthropic_api_key"],
+                    _gen_classification,
+                    websocket,
+                )
+                await _send_phase(6, "Verifying build", "Build verified", "done")
+            except Exception as _bv_err:
+                logger.warning("Build verification (generation) non-fatal: %s", _bv_err)
+                await _send_phase(6, "Verifying build", "Build check complete", "done")
+
             plan = ""
 
         else:
@@ -664,21 +731,64 @@ async def run_pipeline(
             await _send_phase(6, "Verifying build", "No changes detected", "error")
             return
 
-        # ── Phase 6.7: Start Live Preview ────────────────
-        preview_url = None
+        # ── Phase 6.7: Start Live Preview (local dev server) ────────
+        # Runs `npm run dev` inside the ai_engine container on a free port
+        # in the range 4000-4050, which are exposed by docker-compose.
+        # Sends preview_ready with http://localhost:{port} — the browser
+        # loads this URL in the preview iframe.
         try:
-            from app.services.dev_server import start_dev_preview
-            _pm = validated.get("package_manager", "npm")
-            preview_url = await start_dev_preview(
+            from app.services.local_preview import start_local_preview
+            _preview_pm = validated.get("package_manager", "npm")
+            await start_local_preview(
                 workspace_path=workspace_path,
+                conversation_id=chat_session_id or conversation_id or task_id,
                 websocket=websocket,
-                chat_session_id=chat_session_id,
-                package_manager=_pm,
+                package_manager=_preview_pm,
             )
-            if preview_url:
-                logger.info("Live preview started: %s", preview_url)
         except Exception as _preview_err:
             logger.warning("Live preview failed (non-fatal): %s", _preview_err)
+            try:
+                await websocket.send_json({
+                    "type": "preview_error",
+                    "error_stage": "start",
+                    "message": "Preview could not be started — click Restart Preview to retry.",
+                })
+            except Exception:
+                pass
+
+        # ── PLAN B: E2B cloud sandbox (commented out) ─────────
+        # Uncomment the block below to fall back to E2B if WebContainers
+        # is not suitable (e.g. native Node modules, server-side rendering
+        # that requires a real process, etc.).
+        #
+        # preview_url = None
+        # try:
+        #     from app.services.dev_server import (
+        #         start_dev_preview, get_active_preview_url,
+        #         sync_files_to_preview,
+        #     )
+        #     _existing_url = get_active_preview_url(chat_session_id=chat_session_id)
+        #     if _existing_url:
+        #         logger.info("E2B sandbox already running at %s — syncing files", _existing_url)
+        #         await sync_files_to_preview(
+        #             workspace_path=workspace_path,
+        #             chat_session_id=chat_session_id,
+        #         )
+        #         await websocket.send_json({
+        #             "type": "preview_ready",
+        #             "preview_url": _existing_url,
+        #             "message": f"🖥️ Preview refreshed at {_existing_url}",
+        #         })
+        #     else:
+        #         _pm = validated.get("package_manager", "pnpm")
+        #         await start_dev_preview(
+        #             workspace_path=workspace_path,
+        #             websocket=websocket,
+        #             chat_session_id=chat_session_id,
+        #             package_manager=_pm,
+        #         )
+        # except Exception as _e2b_err:
+        #     logger.warning("E2B preview failed: %s", _e2b_err)
 
         # ── Phase 7: Commit + Create Repo + Push ──────────
         if validated.get("scratch_mode"):
@@ -686,11 +796,13 @@ async def run_pipeline(
 
             commit_msg = f"Initial commit: {task[:50]} by Lucid AI"
             try:
-                subprocess.run(
+                await asyncio.to_thread(
+                    subprocess.run,
                     ["git", "add", "-A"],
                     cwd=workspace_path, capture_output=True, timeout=30,
                 )
-                commit_result = subprocess.run(
+                commit_result = await asyncio.to_thread(
+                    subprocess.run,
                     ["git", "commit", "-m", commit_msg],
                     cwd=workspace_path, capture_output=True, text=True, timeout=30,
                 )
@@ -790,18 +902,21 @@ async def run_pipeline(
                         "message": "🚀 Pushing code to GitHub...",
                     })
 
-                    subprocess.run(
+                    await asyncio.to_thread(
+                        subprocess.run,
                         ["git", "remote", "add", "origin", auth_url],
                         cwd=workspace_path,
                         capture_output=True, text=True, timeout=10,
                     )
-                    subprocess.run(
+                    await asyncio.to_thread(
+                        subprocess.run,
                         ["git", "branch", "-M", "main"],
                         cwd=workspace_path,
                         capture_output=True, timeout=5,
                     )
 
-                    push_result = subprocess.run(
+                    push_result = await asyncio.to_thread(
+                        subprocess.run,
                         ["git", "push", "-u", "origin", "main"],
                         cwd=workspace_path,
                         capture_output=True, text=True, timeout=60,
@@ -885,20 +1000,22 @@ async def run_pipeline(
                 if os.path.exists(_git_dir):
                     shutil.rmtree(_git_dir)
 
-                subprocess.run(["git", "init", "-b", "main"], cwd=workspace_path,
-                               capture_output=True, text=True, timeout=10)
-                subprocess.run(["git", "config", "user.name", "Lucid AI"],
+                await asyncio.to_thread(subprocess.run, ["git", "init", "-b", "main"],
+                               cwd=workspace_path, capture_output=True, text=True, timeout=10)
+                await asyncio.to_thread(subprocess.run, ["git", "config", "user.name", "Lucid AI"],
                                cwd=workspace_path, capture_output=True)
-                subprocess.run(["git", "config", "user.email", "ai@lucid.dev"],
+                await asyncio.to_thread(subprocess.run, ["git", "config", "user.email", "ai@lucid.dev"],
                                cwd=workspace_path, capture_output=True)
-                subprocess.run(["git", "remote", "add", "origin", new_repo_clone_url],
+                await asyncio.to_thread(subprocess.run,
+                               ["git", "remote", "add", "origin", new_repo_clone_url],
                                cwd=workspace_path, capture_output=True, timeout=10)
 
-                subprocess.run(["git", "add", "-A"], cwd=workspace_path,
-                               capture_output=True, timeout=30)
+                await asyncio.to_thread(subprocess.run, ["git", "add", "-A"],
+                               cwd=workspace_path, capture_output=True, timeout=30)
 
                 commit_msg = f"feat: initial project generated by Lucid AI\n\nProject: {project_desc[:200] or new_repo_name}"
-                commit_result = subprocess.run(
+                commit_result = await asyncio.to_thread(
+                    subprocess.run,
                     ["git", "commit", "-m", commit_msg],
                     cwd=workspace_path, capture_output=True, text=True, timeout=30,
                 )
@@ -1096,9 +1213,13 @@ async def run_pipeline(
                                 "message": "⏳ Deployment started, waiting for build...",
                             })
 
-                            # Poll deployment status (max 120 seconds)
-                            for _ in range(24):
-                                await asyncio.sleep(5)
+                            # Poll deployment status — max 300s (60 × 5s).
+                            # Vercel cold first-builds routinely take 2-4 minutes,
+                            # so the old 120s limit caused false "timed out" reports.
+                            _poll_interval = 5
+                            _poll_max = 60  # 300s total
+                            for _poll_n in range(_poll_max):
+                                await asyncio.sleep(_poll_interval)
                                 status_resp = await client.get(
                                     f"https://api.vercel.com/v13/deployments/{deploy_id}{params}",
                                     headers=vercel_headers,
@@ -1114,6 +1235,16 @@ async def run_pipeline(
                                     elif state in ("ERROR", "CANCELED"):
                                         logger.warning("Vercel deploy failed: state=%s", state)
                                         break
+                                    # Emit progress every ~60s so the UI shows activity
+                                    if _poll_n > 0 and _poll_n % 12 == 0:
+                                        elapsed = _poll_n * _poll_interval
+                                        try:
+                                            await websocket.send_json({
+                                                "type": "progress",
+                                                "message": f"⏳ Still building... ({elapsed}s elapsed)",
+                                            })
+                                        except Exception:
+                                            pass
 
                             await websocket.send_json({
                                 "type": "deploy_ready",
@@ -1180,15 +1311,81 @@ async def run_pipeline(
         # Always destroy any lingering OpenHands conversations
         await openhands_manager.destroy_all()
 
-        # ALWAYS clean up workspace after pipeline completes.
-        if workspace_path and os.path.exists(workspace_path):
-            try:
-                nm_path = os.path.join(workspace_path, "node_modules")
-                if os.path.isdir(nm_path):
-                    shutil.rmtree(nm_path, ignore_errors=True)
-                    logger.info("Cleaned up node_modules: %s", nm_path)
+        # node_modules are kept — the local dev server (start_local_preview)
+        # runs npm run dev in the workspace and needs them to stay on disk.
+        # Cleanup happens when stop_local_preview() is called or on server restart.
 
-                shutil.rmtree(workspace_path, ignore_errors=True)
-                logger.info("Workspace cleaned up after pipeline: %s", workspace_path)
-            except Exception as _cleanup_err:
-                logger.warning("Workspace cleanup failed (non-fatal): %s", _cleanup_err)
+
+
+# ── Sandpack preview helpers ──────────────────────────────────────────────────
+
+
+def _detect_sandpack_template(workspace_path: str) -> str:
+    """Read package.json to pick the right Sandpack template.
+
+    Returns 'nextjs', 'vue', or 'react' (default).
+    """
+    pkg_path = os.path.join(workspace_path, "package.json")
+    try:
+        with open(pkg_path, "r", encoding="utf-8") as f:
+            pkg = json.loads(f.read())
+        all_deps: dict = {}
+        all_deps.update(pkg.get("dependencies", {}))
+        all_deps.update(pkg.get("devDependencies", {}))
+        if "next" in all_deps:
+            return "nextjs"
+        if "vue" in all_deps:
+            return "vue"
+    except Exception:
+        pass
+    return "react"
+
+_PREVIEW_SKIP_DIRS = frozenset({
+    "node_modules", ".git", ".next", "dist", "build",
+    "__pycache__", ".cache", ".turbo", ".vercel",
+})
+_PREVIEW_SKIP_EXTS = frozenset({".lock", ".log"})
+_PREVIEW_MAX_FILE  = 5 * 1024 * 1024  # 5 MB
+
+
+async def _emit_preview_files(workspace_path: str, websocket: WebSocket) -> None:
+    """Collect all workspace files and send them to the frontend as preview_files.
+
+    The frontend's SandpackPreview component receives this message and bundles
+    the project in-browser via Sandpack — no install step, no server needed.
+    Template is auto-detected from package.json (nextjs / vue / react).
+    """
+    def _collect():
+        files: dict[str, str] = {}
+        for root, dirs, filenames in os.walk(workspace_path):
+            dirs[:] = [d for d in dirs if d not in _PREVIEW_SKIP_DIRS]
+            for fname in filenames:
+                _, ext = os.path.splitext(fname)
+                if ext in _PREVIEW_SKIP_EXTS:
+                    continue
+                if fname.startswith(".") and fname not in {".env", ".env.local", ".env.example", ".gitignore"}:
+                    continue
+                abs_path = os.path.join(root, fname)
+                rel_path = os.path.relpath(abs_path, workspace_path)
+                try:
+                    if os.path.getsize(abs_path) > _PREVIEW_MAX_FILE:
+                        continue
+                    with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+                        files[rel_path] = f.read()
+                except Exception:
+                    pass
+        return files
+
+    files = await asyncio.to_thread(_collect)
+    if not files:
+        logger.warning("_emit_preview_files: no files found in %s", workspace_path)
+        return
+
+    template = _detect_sandpack_template(workspace_path)
+    logger.info("_emit_preview_files: sending %d files to frontend (template=%s)", len(files), template)
+    await websocket.send_json({
+        "type": "preview_files",
+        "files": files,
+        "template": template,
+        "message": "Booting browser preview…",
+    })

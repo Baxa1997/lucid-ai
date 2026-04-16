@@ -12,6 +12,7 @@ import {
   Sparkles, FileText, FileCheck2, Copy, Check, Pencil,
   GitBranch, GitPullRequest, ExternalLink, AlertCircle, TriangleAlert,
 } from 'lucide-react';
+import { useWorkspace } from '@/contexts/WorkspaceContext';
 
 // ── Relative time helper (Base44 style) ──────────────────
 export function relativeTime(ts) {
@@ -72,6 +73,29 @@ function PlanBubble({ msg }) {
   // legacy fallbacks
   const legacyFeatures   = planData.features    || [];
   const legacyComponents = planData.components  || [];
+
+  // Confirmation state — only for new (non-history) plan messages
+  const requiresConfirmation = planData.requiresConfirmation && !msg.fromHistory;
+  const [confirmed, setConfirmed] = useState(false);
+  const [showCorrection, setShowCorrection] = useState(false);
+  const [correctionText, setCorrectionText] = useState('');
+  const [rejected, setRejected] = useState(false);
+
+  // Get workspace context for sending confirmation — PlanBubble is always
+  // rendered inside WorkspaceContext.Provider via ChatPanel, so this is safe.
+  const { confirmPlan: ctxConfirmPlan, rejectPlan: ctxRejectPlan } = useWorkspace() || {};
+
+
+  const handleConfirm = () => {
+    setConfirmed(true);
+    if (ctxConfirmPlan) ctxConfirmPlan();
+  };
+
+  const handleReject = () => {
+    if (!correctionText.trim()) return;
+    setRejected(true);
+    if (ctxRejectPlan) ctxRejectPlan(correctionText.trim());
+  };
 
   return (
     <div className="flex items-start gap-3 px-4 py-3 animate-in fade-in duration-300">
@@ -155,9 +179,89 @@ function PlanBubble({ msg }) {
               </div>
             )}
           </div>
+
+          {/* Confirmation buttons — shown only for new plans requiring confirmation */}
+          {requiresConfirmation && !confirmed && !rejected && (
+            <div className="px-4 py-3 bg-slate-50/50 dark:bg-[#161b22]/50 border-t border-slate-100 dark:border-[#2d333b]">
+              {!showCorrection ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleConfirm}
+                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-[13px] font-semibold transition-all shadow-sm shadow-emerald-500/20 hover:shadow-emerald-500/30"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    Looks Good, Start Building
+                  </button>
+                  <button
+                    onClick={() => setShowCorrection(true)}
+                    className="px-4 py-2 rounded-lg border border-slate-200 dark:border-[#2d333b] text-slate-600 dark:text-slate-300 text-[13px] font-medium hover:bg-slate-100 dark:hover:bg-[#21262d] transition-all"
+                  >
+                    Change Direction
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <p className="text-[12px] font-medium text-slate-500 dark:text-slate-400">
+                    Describe what you'd like instead:
+                  </p>
+                  <textarea
+                    value={correctionText}
+                    onChange={(e) => setCorrectionText(e.target.value)}
+                    placeholder="e.g. This should be a professional accounting body website like acca.org, not an online course platform..."
+                    className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] text-[13px] text-slate-700 dark:text-slate-200 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:border-blue-400 dark:focus:border-blue-500 resize-none min-h-[60px]"
+                    rows={2}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleReject();
+                      }
+                    }}
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleReject}
+                      disabled={!correctionText.trim()}
+                      className={cn(
+                        'flex-1 px-4 py-2 rounded-lg text-[13px] font-semibold transition-all',
+                        correctionText.trim()
+                          ? 'bg-blue-500 hover:bg-blue-600 text-white shadow-sm shadow-blue-500/20'
+                          : 'bg-slate-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 cursor-not-allowed',
+                      )}
+                    >
+                      Re-research with this direction
+                    </button>
+                    <button
+                      onClick={() => { setShowCorrection(false); setCorrectionText(''); }}
+                      className="px-3 py-2 rounded-lg text-[13px] text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Confirmed state */}
+          {requiresConfirmation && confirmed && (
+            <div className="px-4 py-2.5 bg-emerald-50 dark:bg-emerald-950/20 border-t border-emerald-100 dark:border-emerald-900/30 flex items-center gap-2">
+              <Check className="w-3.5 h-3.5 text-emerald-500" />
+              <span className="text-[12px] font-medium text-emerald-600 dark:text-emerald-400">Plan confirmed — building your project...</span>
+            </div>
+          )}
+
+          {/* Rejected state */}
+          {requiresConfirmation && rejected && (
+            <div className="px-4 py-2.5 bg-blue-50 dark:bg-blue-950/20 border-t border-blue-100 dark:border-blue-900/30 flex items-center gap-2">
+              <Sparkles className="w-3.5 h-3.5 text-blue-500" />
+              <span className="text-[12px] font-medium text-blue-600 dark:text-blue-400">Re-researching with your direction...</span>
+            </div>
+          )}
         </div>
 
-        <p className="text-[13px] text-slate-500 dark:text-slate-400 mb-2">Let me start building.</p>
+        {!requiresConfirmation && !confirmed && !rejected && (
+          <p className="text-[13px] text-slate-500 dark:text-slate-400 mb-2">Let me start building.</p>
+        )}
 
         {fileWrites.length > 0 && (
           <div className="space-y-1 mb-1">

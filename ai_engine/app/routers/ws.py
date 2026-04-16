@@ -30,7 +30,9 @@ from app.services.vcs.git import push_changes, get_git_status
 from app.services.pipeline import run_pipeline, PLATFORM_GITHUB_TOKEN
 from app.services.event_bus import WebSocketProxy
 from app.services.workspace_manager import workspace_manager
-from app.services.dev_server import launch_dev_preview
+from app.services.dev_server import stop_dev_preview
+
+from app.services.local_preview import start_local_preview
 from app.supabase_client import db_client
 from app.workspace_states import WorkspaceState, transition as ws_transition
 from app.services.workspace_resolver import resolve_workspace_path, ResolvePath
@@ -67,9 +69,11 @@ async def websocket_agent(websocket: WebSocket):
     session: Optional[AgentSession] = None
     streaming_task: Optional[asyncio.Task] = None
     pipeline_task: Optional[asyncio.Task] = None
+    background_preview_task: Optional[asyncio.Task] = None  # track for cleanup
     chat_session_id: Optional[str] = None
     reconnect_chat_session_id: Optional[str] = None
     conversation_id: str = str(uuid.uuid4())  # unique per WS connection
+    explicit_stop: bool = False  # initialise before try so finally block always has it
 
     try:
         # ── 1. Receive initial config ────────────────────
@@ -355,13 +359,19 @@ async def websocket_agent(websocket: WebSocket):
         #   1. Replay chat history to restore the chat panel
         #   2. Detect if generation already completed so we skip the pipeline
         _prev_session_data: dict | None = None  # {platform_repo_url, generation_complete, messages}
+        _skip_workspace_setup = False  # set True when re-entering a completed project
 
         if not existing and project_id:
             try:
+                # Step 1: find the session row using only guaranteed-existing columns.
+                # Do NOT select optional columns (platform_repo_url, generation_complete)
+                # in this query — they require migrations 009/014 which may not be run,
+                # and a PostgREST error here would leave _prev_session_data as None and
+                # cause the pipeline to re-run on every re-entry.
                 async with db_client(user_jwt) as client:
                     prev_s = await (
                         client.table("chat_sessions")
-                        .select("id, platform_repo_url, generation_complete")
+                        .select("id")
                         .eq("user_id", user_id)
                         .eq("project_id", project_id)
                         .order("created_at", desc=True)
@@ -369,9 +379,32 @@ async def websocket_agent(websocket: WebSocket):
                         .execute()
                     )
                 if prev_s.data:
-                    prev_row = prev_s.data[0]
-                    prev_sid = prev_row["id"]
-                    # Load messages from that session
+                    prev_sid = prev_s.data[0]["id"]
+
+                    # Step 2: try to read optional flag columns (added in later migrations).
+                    # Fail silently — if the columns don't exist the flags just stay False/None.
+                    platform_repo_url = None
+                    generation_complete = False
+                    try:
+                        async with db_client(user_jwt) as client:
+                            flags_r = await (
+                                client.table("chat_sessions")
+                                .select("platform_repo_url, generation_complete")
+                                .eq("id", prev_sid)
+                                .maybe_single()
+                                .execute()
+                            )
+                        if flags_r.data:
+                            platform_repo_url = flags_r.data.get("platform_repo_url")
+                            generation_complete = flags_r.data.get("generation_complete", False)
+                    except Exception as _flags_err:
+                        logger.debug(
+                            "Optional flag columns not available for session %s "
+                            "(migrations 009/014 may not be applied): %s",
+                            prev_sid, _flags_err,
+                        )
+
+                    # Step 3: load messages for chat history replay + wizard re-entry detection
                     async with db_client(user_jwt) as client:
                         prev_msgs = await (
                             client.table("chat_messages")
@@ -383,17 +416,17 @@ async def websocket_agent(websocket: WebSocket):
                         )
                     _prev_session_data = {
                         "session_id":          prev_sid,
-                        "platform_repo_url":   prev_row.get("platform_repo_url"),
-                        "generation_complete": prev_row.get("generation_complete", False),
+                        "platform_repo_url":   platform_repo_url,
+                        "generation_complete": generation_complete,
                         "messages":            prev_msgs.data or [],
                     }
                     logger.info(
                         "Found previous session %s for project %s "
                         "(complete=%s, msgs=%d, repo=%s)",
                         prev_sid, project_id,
-                        _prev_session_data["generation_complete"],
+                        generation_complete,
                         len(_prev_session_data["messages"]),
-                        bool(_prev_session_data["platform_repo_url"]),
+                        bool(platform_repo_url),
                     )
             except Exception as _prev_err:
                 logger.warning("Failed to load previous session for project %s: %s", project_id, _prev_err)
@@ -473,17 +506,187 @@ async def websocket_agent(websocket: WebSocket):
                     project_id, _skip_reason,
                 )
                 task = ""   # clear task → pipeline won't auto-run
+                _skip_workspace_setup = True  # skip clone/install/E2B for returning project
+                await ws_transition(
+                    session, websocket, WorkspaceState.READY,
+                    "Project loaded. Ask me to make changes.",
+                )
                 await websocket.send_json({
                     "type": "status",
                     "status": "ready",
+                    "sessionId": session.session_id,
                     "message": "Project loaded. Ask me to make changes.",
                 })
+
+                # ── Start local dev server in background for returning projects ──
+                # Clone the platform repo (or user's repo as fallback) into a
+                # temp workspace, install deps, then start the real dev server.
+                _platform_repo = _prev_session_data.get("platform_repo_url") if _prev_session_data else None
+                _repo_to_clone = _platform_repo or (session.repo_url if session and session.repo_url else None)
+                if _repo_to_clone:
+                    # Capture conv_id for the closure (stable across reconnects)
+                    _bg_conv_id = project_id or conversation_id
+
+                    async def _background_preview():
+                        try:
+                            import subprocess as _sp
+                            from app.services.pipeline.package_manager import (
+                                detect_package_manager as _detect_pm_bg,
+                                _pm_install_cmd as _pm_install_bg,
+                                _pm_env as _pm_env_bg,
+                            )
+                            from app.services.local_preview import get_active_preview_url
+
+                            # ── Re-use an already-running dev server for this session ──
+                            _existing_url = get_active_preview_url(conversation_id=_bg_conv_id)
+                            if _existing_url:
+                                logger.info("bg_preview: reusing active server at %s for %s", _existing_url, _bg_conv_id)
+                                await websocket.send_json({"type": "preview_ready",
+                                                           "preview_url": _existing_url,
+                                                           "message": f"🖥️ Live preview: {_existing_url}"})
+                                return
+
+                            # ── Use a STABLE path per conversation ──────────────────
+                            # Same path across reconnects — avoids re-clone + re-install
+                            # every time the user returns to the workspace page.
+                            _short_id = _bg_conv_id.replace("-", "")[:12]
+                            _tmp = f"/tmp/lucid_ws_{_short_id}"
+                            _nm = os.path.join(_tmp, "node_modules")
+                            _already_installed = os.path.isdir(_nm) and any(os.scandir(_nm))
+
+                            if _already_installed:
+                                # node_modules already present — skip clone + install entirely.
+                                # Just start (or reuse) the dev server.
+                                logger.info("bg_preview: node_modules cache hit for %s — skipping install", _bg_conv_id)
+                                await websocket.send_json({"type": "preview_status",
+                                                           "status": "starting",
+                                                           "message": "Starting preview (cached)…"})
+                            else:
+                                # Fresh workspace — need to clone and install.
+                                await websocket.send_json({"type": "preview_status",
+                                                           "status": "cloning",
+                                                           "message": "Cloning repository for preview…"})
+
+                                os.makedirs(_tmp, exist_ok=True)
+                                _gh_token = (
+                                    os.environ.get("PLATFORM_GITHUB_TOKEN", "")
+                                    or (session.git_token if session else "")
+                                    or ""
+                                )
+                                _auth_url = (
+                                    _repo_to_clone.replace("https://", f"https://x-access-token:{_gh_token}@")
+                                    if _gh_token else _repo_to_clone
+                                )
+
+                                # Clone into a sub-dir first so mkdtemp-like atomicity is preserved,
+                                # then move files up if needed (git needs an empty target).
+                                _clone_target = _tmp if not os.listdir(_tmp) else _tmp
+                                _clone_r = await asyncio.to_thread(
+                                    _sp.run,
+                                    ["git", "clone", "--depth=1", _auth_url, _tmp],
+                                    capture_output=True, timeout=60,
+                                )
+                                if _clone_r.returncode != 0:
+                                    _clone_err = (_clone_r.stderr or b"").decode()[:200]
+                                    logger.warning("bg_preview: clone failed for %s: %s", _repo_to_clone, _clone_err)
+                                    await websocket.send_json({"type": "preview_error",
+                                                               "error_stage": "clone",
+                                                               "message": f"Could not clone repository: {_clone_err or 'check token/URL'}"})
+                                    return
+
+                            # Point session workspace to the preview dir so the
+                            # /api/files/read endpoint can serve file content when
+                            # a user clicks a file in the Code tab.
+                            if session is not None:
+                                session.workspace_dir = _tmp
+
+                            # Send file tree so the Code tab is populated.
+                            # Runs on BOTH cache-hit and fresh-clone paths.
+                            try:
+                                from app.services.pipeline import _send_file_tree
+                                await _send_file_tree(websocket, _tmp)
+                                logger.info("bg_preview: sent file_tree (%s)", _tmp)
+                            except Exception as _ft_err:
+                                logger.debug("bg_preview: file_tree send failed (ok): %s", _ft_err)
+
+                            # Install dependencies (skipped if node_modules already exists)
+                            _pkg_json = os.path.join(_tmp, "package.json")
+                            if os.path.exists(_pkg_json):
+                                _bg_pm = _detect_pm_bg(_tmp, user_package_manager)
+
+                                if not _already_installed:
+                                    await websocket.send_json({"type": "preview_status",
+                                                               "status": "installing",
+                                                               "message": f"Installing dependencies ({_bg_pm})…"})
+                                    logger.info("bg_preview: installing deps with %s for %s", _bg_pm, _bg_conv_id)
+                                    try:
+                                        # Use a shared pnpm content-store so packages are
+                                        # deduplicated across all preview workspaces.
+                                        _install_env = {
+                                            **_pm_env_bg(_bg_pm),
+                                            "PNPM_HOME": "/tmp/pnpm_global",
+                                            "npm_config_cache": "/tmp/npm_cache",
+                                        }
+                                        _install_cmd = _pm_install_bg(_bg_pm)
+                                        # Append --store-dir for pnpm so packages are cached globally
+                                        if _bg_pm == "pnpm":
+                                            _install_cmd = _install_cmd + ["--store-dir", "/tmp/pnpm_store"]
+                                        _bg_install = await asyncio.to_thread(
+                                            _sp.run,
+                                            _install_cmd,
+                                            cwd=_tmp, capture_output=True, text=True,
+                                            timeout=300, env=_install_env,
+                                        )
+                                        if _bg_install.returncode != 0:
+                                            logger.warning("bg_preview: %s install failed: %s", _bg_pm, (_bg_install.stderr or "")[:200])
+                                        else:
+                                            logger.info("bg_preview: deps installed (%s)", _bg_pm)
+                                    except Exception as _bi_err:
+                                        logger.warning("bg_preview: install error (non-fatal): %s", _bi_err)
+
+                                # Start the real dev server
+                                await start_local_preview(
+                                    workspace_path=_tmp,
+                                    conversation_id=_bg_conv_id,
+                                    websocket=websocket,
+                                    package_manager=_bg_pm,
+                                )
+                            else:
+                                logger.info("bg_preview: no package.json — skipping dev server")
+                                await websocket.send_json({"type": "preview_error",
+                                                           "error_stage": "no_package_json",
+                                                           "message": "No package.json found — preview not available for this project."})
+                        except Exception as _bg_err:
+                            logger.warning("bg_preview: failed (non-fatal): %s", _bg_err)
+                            try:
+                                await websocket.send_json({"type": "preview_error",
+                                                           "error_stage": "start",
+                                                           "message": "Preview setup failed — click Restart Preview to retry."})
+                            except Exception:
+                                pass
+
+                    background_preview_task = asyncio.create_task(_background_preview())
 
         else:
             # On reconnect — chat_session_id was already looked up above (early lookup)
             # and stored in chat_session_id via reconnect_chat_session_id. Nothing to do.
             if reconnect_chat_session_id:
                 logger.info("Using chat session %s (found during early reconnect lookup)", reconnect_chat_session_id)
+
+            # If a dev server is already running for this project (started by a
+            # previous connection's _background_preview), tell the frontend immediately.
+            try:
+                from app.services.local_preview import get_active_preview_url
+                _reconnect_conv_id = project_id or conversation_id
+                _reconnect_preview_url = get_active_preview_url(conversation_id=_reconnect_conv_id)
+                if _reconnect_preview_url:
+                    logger.info("reconnect: active preview at %s for %s — sending preview_ready",
+                                _reconnect_preview_url, _reconnect_conv_id)
+                    await websocket.send_json({"type": "preview_ready",
+                                               "preview_url": _reconnect_preview_url,
+                                               "message": f"🖥️ Live preview: {_reconnect_preview_url}"})
+            except Exception as _rp_err:
+                logger.debug("reconnect: preview URL check failed (ok): %s", _rp_err)
 
         # ── 3. Pipeline handles agent execution ──────────
         # NOTE: The old mock gate (sdk.OPENHANDS_AVAILABLE) is removed.
@@ -495,7 +698,23 @@ async def websocket_agent(websocket: WebSocket):
         # ── 4. Session ready — workspace initialized ─────────
         # Only send the "ready" message for NEW sessions.
         # For reconnects we already sent it at step 2 above (reconnected=True).
-        if not existing:
+        # If there is no task to execute, skip the whole workspace setup.
+        # Cloning, npm install, and launching E2B are only useful when the
+        # pipeline is about to run. Without a task they waste 3-5 min and
+        # overwrite the real Vercel URL with a temporary E2B URL.
+        # When the user submits a task later, run_pipeline does lazy setup.
+        if not existing and not task and not _skip_workspace_setup:
+            logger.info("No task on new session for project %s — skipping workspace setup", project_id)
+            _skip_workspace_setup = True
+            await ws_transition(session, websocket, WorkspaceState.READY, "Workspace ready.")
+            await websocket.send_json({
+                "type": "status",
+                "status": "ready",
+                "sessionId": session.session_id,
+                "message": "Project loaded. Send a message to make changes.",
+            })
+
+        if not existing and not _skip_workspace_setup:
             # ── Resolve workspace path (A / B / C) ───────────────
             # Determines what to clone (or not), emits structured progress
             # events so the frontend always shows meaningful loading text.
@@ -613,72 +832,80 @@ async def websocket_agent(websocket: WebSocket):
                 if not clone_fatal and pre_workspace:
                     session.workspace_dir = pre_workspace
 
-                    # ── Validate: package.json must exist for npm install ──────
+                    # ── Validate: package.json must exist for install ──────────
                     import subprocess as _subprocess
+                    from app.services.pipeline.package_manager import (
+                        detect_package_manager as _detect_pm,
+                        _pm_install_cmd,
+                        _pm_env,
+                    )
                     pkg_json = os.path.join(pre_workspace, "package.json")
                     if not os.path.exists(pkg_json):
                         logger.info(
-                            "No package.json in cloned repo — skipping npm install"
+                            "No package.json in cloned repo — skipping install"
                         )
                     else:
-                        # ── INSTALLING: npm install with 60-second hard cap ────
-                        await ws_transition(
-                            session, websocket, WorkspaceState.INSTALLING,
-                            "Installing dependencies...",
-                        )
+                        # Detect from lock files — never blindly use npm.
+                        # Running npm install on a pnpm repo creates package-lock.json
+                        # alongside pnpm-lock.yaml, breaking subsequent pnpm commands.
+                        _pm = _detect_pm(pre_workspace, user_package_manager)
+                        _install_cmd = _pm_install_cmd(_pm)
+                        _install_env = _pm_env(_pm)
+
+                        # ── Install deps silently (no workspace state change) ─────
+                        # 300s (5 min) outer / 290s inner gives room for heavy
+                        # dependency trees (Next.js + shadcn/ui + radix = ~150 pkgs).
+                        # pnpm resolves from cache after the first install so
+                        # subsequent workspaces are much faster (~10-20s).
                         try:
-                            async with asyncio.timeout(60):
+                            async with asyncio.timeout(300):
                                 _install = await asyncio.to_thread(
                                     _subprocess.run,
-                                    [
-                                        "npm", "install",
-                                        "--prefer-offline",
-                                        "--no-audit",
-                                        "--loglevel=error",
-                                    ],
+                                    _install_cmd,
                                     cwd=pre_workspace,
                                     capture_output=True,
                                     text=True,
-                                    timeout=55,
+                                    timeout=290,
+                                    env=_install_env,
                                 )
                             if _install.returncode != 0:
                                 _err = (_install.stderr or _install.stdout or "")[:200]
                                 await websocket.send_json({
                                     "type": "warning",
-                                    "message": f"npm install errors: {_err}",
+                                    "message": f"{_pm} install errors: {_err}",
                                 })
                                 logger.warning(
-                                    "npm install failed (non-fatal) for project %s: %s",
-                                    project_id, _err,
+                                    "%s install failed (non-fatal) for project %s: %s",
+                                    _pm, project_id, _err,
                                 )
                             else:
                                 await websocket.send_json({
                                     "type": "progress",
-                                    "message": "✅ Dependencies installed",
+                                    "message": f"✅ Dependencies installed ({_pm})",
                                 })
                                 logger.info(
-                                    "npm install succeeded for project %s", project_id
+                                    "%s install succeeded for project %s", _pm, project_id
                                 )
                         except _subprocess.TimeoutExpired:
                             await websocket.send_json({
                                 "type": "warning",
-                                "message": "⚠️ npm install timed out — dependencies may be missing",
+                                "message": f"⚠️ {_pm} install timed out — dependencies may be missing",
                             })
                             logger.warning(
-                                "npm install timed out (subprocess) for project %s", project_id
+                                "%s install timed out (subprocess) for project %s", _pm, project_id
                             )
                         except (asyncio.TimeoutError, TimeoutError):
                             await websocket.send_json({
                                 "type": "warning",
-                                "message": "⚠️ npm install timed out after 60s — workspace ready but dependencies may be missing",
+                                "message": f"⚠️ {_pm} install timed out after 5 min — workspace ready but dependencies may be missing",
                             })
                             logger.warning(
-                                "npm install timed out (asyncio) for project %s", project_id
+                                "%s install timed out (asyncio) for project %s", _pm, project_id
                             )
                         except Exception as _install_err:
                             logger.warning(
-                                "npm install error (non-fatal) for project %s: %s",
-                                project_id, _install_err,
+                                "%s install error (non-fatal) for project %s: %s",
+                                _pm, project_id, _install_err,
                             )
 
                     # Send the file tree so the Code tab is populated immediately
@@ -688,19 +915,22 @@ async def websocket_agent(websocket: WebSocket):
                     except Exception as ft_err:
                         logger.warning("Pre-clone file_tree failed: %s", ft_err)
 
-                    # ── Phase 4: Start dev server (STARTING → HEALTH_CHECK) ──
-                    # Non-fatal: if it fails, workspace is still usable.
-                    # Only attempted for JS projects that have a "dev" script.
+                    # ── Start local dev server for live preview ────────────
+                    # Runs npm run dev in the cloned workspace on a free port
+                    # in the 4000-4050 range (exposed by docker-compose).
+                    await ws_transition(
+                        session, websocket, WorkspaceState.STARTING,
+                        "Running the code for Preview...",
+                    )
                     try:
-                        await launch_dev_preview(
+                        await start_local_preview(
                             workspace_path=pre_workspace,
-                            session=session,
+                            conversation_id=project_id or conversation_id,
                             websocket=websocket,
-                            chat_session_id=chat_session_id or "",
                         )
                     except Exception as _dev_err:
                         logger.warning(
-                            "Dev server launch failed (non-fatal) for project %s: %s",
+                            "Local preview failed (non-fatal) for project %s: %s",
                             project_id, _dev_err,
                         )
 
@@ -798,6 +1028,19 @@ async def websocket_agent(websocket: WebSocket):
                 await websocket.send_json({"type": "pong"})
                 continue
 
+            # Stop preview sandbox on demand (user closes preview / navigates away)
+            if msg_type == "stop_preview":
+                if background_preview_task and not background_preview_task.done():
+                    background_preview_task.cancel()
+                    try:
+                        await background_preview_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                await stop_dev_preview(chat_session_id=chat_session_id or "")
+                await websocket.send_json({"type": "preview_stopped"})
+                logger.info("Preview sandbox stopped on user request")
+                continue
+
             # Stop must be checked BEFORE empty-content guard
             # because stop messages typically have no content field
             if msg_type in ("stop", "stop_task"):
@@ -809,6 +1052,27 @@ async def websocket_agent(websocket: WebSocket):
                 })
                 break
 
+            # ── Plan confirmation — user approves or rejects the plan ───
+            if msg_type == "plan_confirm":
+                from app.services.project_generator import resolve_plan_confirmation
+                logger.info("[%s] Plan confirmed by user", getattr(session, "session_id", "?"))
+                resolve_plan_confirmation(websocket, {"confirmed": True})
+                continue
+
+            if msg_type == "plan_reject":
+                from app.services.project_generator import resolve_plan_confirmation
+                correction = data.get("correction", "")
+                logger.info(
+                    "[%s] Plan rejected by user — correction: %s",
+                    getattr(session, "session_id", "?"),
+                    correction[:80],
+                )
+                resolve_plan_confirmation(websocket, {
+                    "confirmed": False,
+                    "correction": correction,
+                })
+                continue
+
             if not content and not followup_images:
                 # Skip truly empty messages (no text AND no images)
                 continue
@@ -817,17 +1081,16 @@ async def websocket_agent(websocket: WebSocket):
             if not content and followup_images:
                 content = f"Analyze the {len(followup_images)} attached image(s) and implement any changes they suggest."
 
-            # ── Retry preview — restart dev server without re-cloning ───
+            # ── Retry preview — restart local dev server ─────────────
             if msg_type == "retry_preview":
                 workspace_path = session.workspace_dir
                 if workspace_path and os.path.isdir(workspace_path):
-                    logger.info("retry_preview: restarting dev server for %s", project_id)
+                    logger.info("retry_preview: restarting local dev server for %s", project_id)
                     try:
-                        await launch_dev_preview(
+                        await start_local_preview(
                             workspace_path=workspace_path,
-                            session=session,
+                            conversation_id=project_id or conversation_id,
                             websocket=websocket,
-                            chat_session_id=chat_session_id or "",
                         )
                     except Exception as retry_preview_err:
                         logger.warning("retry_preview failed: %s", retry_preview_err)
@@ -1018,6 +1281,22 @@ async def websocket_agent(websocket: WebSocket):
         # Destroy workspace only when no background pipeline is running.
         # If the pipeline is still active it needs the workspace on disk.
         if not _pipeline_still_running:
+            # Cancel background preview task (may still be installing deps) so
+            # it can't create a sandbox AFTER we've already run cleanup.
+            if background_preview_task and not background_preview_task.done():
+                background_preview_task.cancel()
+                try:
+                    await background_preview_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                logger.info("Background preview task cancelled on disconnect")
+
+            # Stop E2B preview sandbox
+            try:
+                await stop_dev_preview(chat_session_id=chat_session_id or "")
+            except Exception as exc:
+                logger.debug("Preview sandbox cleanup error (ok): %s", exc)
+
             try:
                 await workspace_manager.destroy_workspace(conversation_id)
                 logger.info("Workspace destroyed for conversation %s", conversation_id)

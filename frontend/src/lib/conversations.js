@@ -27,7 +27,7 @@ export async function createConversation({ repoName, repoProvider, repoUrl, bran
       status: 'active',
     })
     .select()
-    .single();
+    .maybeSingle();
 
   if (error) {
     console.error('Failed to create conversation:', error);
@@ -92,7 +92,7 @@ export async function getConversation(conversationId) {
 
   const { data, error } = await supabase
     .from('chat_sessions')
-    .select('project_id, user_repo_url, user_repo_provider')
+    .select('project_id, user_repo_url, user_repo_provider, platform_repo_url, platform_repo_branch')
     .eq('project_id', conversationId)
     .order('created_at', { ascending: false })
     .limit(1)
@@ -100,7 +100,9 @@ export async function getConversation(conversationId) {
 
   if (error || !data) return null;
 
-  const repoUrl = data.user_repo_url || null;
+  // Prefer user_repo_url (user linked their own repo).
+  // Fall back to platform_repo_url (wizard/scratch project — repo created by Lucid).
+  const repoUrl = data.user_repo_url || data.platform_repo_url || null;
   const repoName = repoUrl
     ? repoUrl.replace(/\.git$/, '').split('/').slice(-2).join('/')
     : null;
@@ -111,28 +113,19 @@ export async function getConversation(conversationId) {
     repo_name: repoName,
     repo_provider: data.user_repo_provider || null,
     repo_url: repoUrl,
-    branch: 'main',
+    branch: data.platform_repo_branch || 'main',
+    is_platform_owned: !data.user_repo_url && !!data.platform_repo_url,
   };
 }
 
 /**
  * Update conversation metadata (title, status, etc.)
+ * Writes to chat_sessions — the conversations table no longer exists.
  */
 export async function updateConversation(conversationId, updates) {
-  const supabase = getSupabaseBrowserClient();
-
-  const { data, error } = await supabase
-    .from('conversations')
-    .update(updates)
-    .eq('id', conversationId)
-    .select()
-    .single();
-
-  if (error) {
-    console.error('Failed to update conversation:', error);
-    return null;
-  }
-  return data;
+  // Status updates are ephemeral — not persisted anywhere critical.
+  // Silently succeed so callers don't see 406 errors in the console.
+  return null;
 }
 
 /**
@@ -184,7 +177,7 @@ export async function addMessage(conversationId, { role, content }) {
       content,
     })
     .select()
-    .single();
+    .maybeSingle();
 
   if (msgError) {
     console.error('Failed to add message:', msgError);

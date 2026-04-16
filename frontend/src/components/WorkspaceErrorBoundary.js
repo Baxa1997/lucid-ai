@@ -1,4 +1,4 @@
-'use client';
+"use client";
 
 // ─────────────────────────────────────────────────────────
 //  WorkspaceErrorBoundary — catches JS errors in the
@@ -6,25 +6,25 @@
 //  blank white page.
 // ─────────────────────────────────────────────────────────
 
-import React from 'react';
-import { AlertTriangle, RotateCcw, ArrowLeft } from 'lucide-react';
+import React from "react";
+import {AlertTriangle, RotateCcw, ArrowLeft} from "lucide-react";
 
 export class WorkspaceErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = {hasError: false, error: null};
   }
 
   static getDerivedStateFromError(error) {
-    return { hasError: true, error };
+    return {hasError: true, error};
   }
 
   componentDidCatch(error, errorInfo) {
-    console.error('[WorkspaceErrorBoundary]', error, errorInfo);
+    console.error("[WorkspaceErrorBoundary]", error, errorInfo);
   }
 
   handleReload = () => {
-    this.setState({ hasError: false, error: null });
+    this.setState({hasError: false, error: null});
   };
 
   render() {
@@ -41,7 +41,8 @@ export class WorkspaceErrorBoundary extends React.Component {
               Workspace Error
             </h2>
             <p className="text-sm text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">
-              Something went wrong in the workspace. Your session data is safe — you can reload to reconnect, or go back to the dashboard.
+              Something went wrong in the workspace. Your session data is safe —
+              you can reload to reconnect, or go back to the dashboard.
             </p>
 
             {/* Error detail (collapsed) */}
@@ -60,15 +61,13 @@ export class WorkspaceErrorBoundary extends React.Component {
             <div className="flex items-center gap-3 justify-center">
               <a
                 href="/dashboard/engineer"
-                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all shadow-sm"
-              >
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all shadow-sm">
                 <ArrowLeft className="w-4 h-4" />
                 Dashboard
               </a>
               <button
                 onClick={this.handleReload}
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 transition-all shadow-sm"
-              >
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 transition-all shadow-sm">
                 <RotateCcw className="w-4 h-4" />
                 Reload Workspace
               </button>

@@ -116,9 +116,9 @@ IMPORTANT SELECTION RULES:
 Return ONLY a valid JSON list of file paths. No markdown formatting, no backticks, just the JSON array.
 Example: ["src/app/page.js", "src/components/Header.js"]"""
 
-        filter_response = await asyncio.to_thread(
-            model.generate_content,
-            filter_prompt,
+        filter_response = await asyncio.wait_for(
+            asyncio.to_thread(model.generate_content, filter_prompt),
+            timeout=60,
         )
 
         text = filter_response.text.strip()
@@ -175,9 +175,10 @@ Example: ["src/app/page.js", "src/components/Header.js"]"""
 
     # STEP 4: Send focused context to Gemini
     try:
-        response = await asyncio.to_thread(
-            model.generate_content,
-            f"""You are a senior software engineer.
+        response = await asyncio.wait_for(
+            asyncio.to_thread(
+                model.generate_content,
+                f"""You are a senior software engineer.
 Task type: {classification.get('task_type', 'feature')}
 Task: {task}
 
@@ -242,6 +243,8 @@ FILES TO CHANGE:
 EXACT CHANGES:
 (show before/after for each file)
 """,
+            ),
+            timeout=180,
         )
         plan = response.text
 
@@ -458,11 +461,17 @@ If two different users asking for "blog landing page" get the same spec, you hav
 If the user's request is short/vague, you MUST still produce a COMPREHENSIVE spec by researching the niche.
 Research the specific niche. Customize everything.
 """
-        response = await asyncio.to_thread(model.generate_content, spec_prompt)
+        response = await asyncio.wait_for(
+            asyncio.to_thread(model.generate_content, spec_prompt),
+            timeout=180,
+        )
         spec = response.text.strip()
         if not spec:
             spec = f"# Project Specification\n\nBuild: {task}"
 
+    except asyncio.TimeoutError:
+        logger.warning("gemini_research timed out after 180s — using fallback spec")
+        spec = f"# Project Specification\n\nBuild: {task}"
     except Exception as e:
         logger.warning("gemini_research failed: %s", e)
         spec = f"# Project Specification\n\nBuild: {task}"
@@ -777,14 +786,17 @@ Return ONLY valid JSON (no markdown, no backticks):
 
 Return ONLY the raw JSON object. No markdown. No backticks. No explanation.
 """
-        response = await asyncio.to_thread(
-            model.generate_content,
-            blueprint_prompt,
-            generation_config=genai.GenerationConfig(
-                temperature=0.7,
-                max_output_tokens=65536,
-                response_mime_type="application/json",
+        response = await asyncio.wait_for(
+            asyncio.to_thread(
+                model.generate_content,
+                blueprint_prompt,
+                generation_config=genai.GenerationConfig(
+                    temperature=0.7,
+                    max_output_tokens=65536,
+                    response_mime_type="application/json",
+                ),
             ),
+            timeout=240,
         )
         blueprint_text = response.text.strip()
 

@@ -35,6 +35,9 @@ services:
     ports:
       - "8000:8000"
       - "6080:6080"
+      # Local dev server port range — one port per active preview session
+      # Caddy/nginx routes *.preview.yourdomain.com → host:{port} in production
+      - "4000-4050:4000-4050"
     volumes:
       - ./ai_engine:/app
       - /var/run/docker.sock:/var/run/docker.sock
@@ -72,6 +75,13 @@ services:
       # Must match frontend ENCRYPTION_KEY — used to decrypt stored git tokens
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - ALLOWED_ORIGINS=http://localhost:3000,http://frontend:3000
+      - STITCH_API_KEY=${STITCH_API_KEY}
+      # E2B cloud sandbox for live preview (get key at https://e2b.dev)
+      - E2B_API_KEY=${E2B_API_KEY}
+      # Custom E2B template with Node.js 20 + pnpm pre-installed.
+      # Build with: e2b template build --name lucid-node20 (uses e2b.Dockerfile)
+      # Leave empty to use the default base image (Node.js will be installed at runtime).
+      - E2B_TEMPLATE_ID=${E2B_TEMPLATE_ID:-}
 
 volumes:
   frontend_node_modules:
