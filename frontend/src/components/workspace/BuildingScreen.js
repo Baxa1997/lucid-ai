@@ -81,6 +81,8 @@ export default function BuildingScreen({
   resolvingProgress,
   isWizardMode,
   convLoading,
+  previewLoading = false,
+  previewStatusMsg = "",
 }) {
   const activePhase = phases.find((p) => p.status === "active");
   const maxDonePhase = phases
@@ -202,6 +204,24 @@ export default function BuildingScreen({
   } else if (researchDone && !codingStarted) {
     buildLabel = "Planning project...";
     buildSubtext = "Research complete. Choosing design style.";
+  }
+
+  // Background preview setup (Cases 2 & 3: returning to existing project).
+  // previewLoading overrides the generic workspace labels with live status.
+  if (previewLoading && previewStatusMsg && status !== "running") {
+    const msg = previewStatusMsg.toLowerCase();
+    if (msg.includes("cloning") || msg.includes("clone")) {
+      buildLabel = "Cloning your project...";
+    } else if (msg.includes("install")) {
+      buildLabel = "Installing dependencies...";
+    } else if (msg.includes("starting") || msg.includes("cached")) {
+      buildLabel = "Running the code for Preview...";
+    } else if (msg.includes("waiting") || msg.includes("health")) {
+      buildLabel = "Waiting for dev server...";
+    } else {
+      buildLabel = "Setting up preview...";
+    }
+    buildSubtext = previewStatusMsg;
   }
 
   return (

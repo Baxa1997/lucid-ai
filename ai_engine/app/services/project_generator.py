@@ -68,6 +68,10 @@ PROTECTED_FILES = {
     "yarn.lock",
     "node_modules",
     ".gitignore",
+    # tailwind.config.js/ts MUST stay protected — no plugins needed.
+    # Animation is provided by tw-animate-css (CSS @import, not a Tailwind plugin).
+    # Color customization happens in globals.css via CSS variables (:root HSL values),
+    # NOT in tailwind.config. That is the correct shadcn/ui pattern.
     "tailwind.config.js",
     "tailwind.config.ts",
     "postcss.config.js",
@@ -256,97 +260,6 @@ def _generate_design_system_name(
     return _random.choice(_fallbacks)
 
 
-async def _call_stitch_mcp(description: str, stitch_api_key: str, timeout: float = 45.0) -> str:
-    """Call Stitch AI MCP directly from Python via JSON-RPC over stdio.
-
-    Because the project uses the direct Anthropic API (not Claude Code CLI),
-    MCP tools are invisible to Claude. We pre-call Stitch ourselves, extract
-    the design reference HTML, and inject it into Claude's prompt so the
-    layout/spacing/card patterns actually influence the generated code.
-
-    Returns trimmed design reference HTML (≤8 KB), or "" on any failure.
-    """
-    if not stitch_api_key:
-        logger.debug("Stitch MCP skipped — no STITCH_API_KEY")
-        return ""
-
-    env = {**os.environ, "STITCH_API_KEY": stitch_api_key}
-
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "npx", "--yes", "@_davideast/stitch-mcp", "proxy",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-            env=env,
-        )
-    except Exception as exc:
-        logger.warning("Stitch MCP — failed to spawn process: %s", exc)
-        return ""
-
-    async def _write_msg(obj: dict) -> None:
-        raw = (json.dumps(obj) + "\n").encode()
-        proc.stdin.write(raw)
-        await proc.stdin.drain()
-
-    async def _read_msg(wait: float = 30.0) -> dict:
-        line = await asyncio.wait_for(proc.stdout.readline(), timeout=wait)
-        return json.loads(line.decode().strip())
-
-    try:
-        # ── MCP handshake ──────────────────────────────────────
-        await _write_msg({
-            "jsonrpc": "2.0", "id": 1, "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "lucid-ai", "version": "1.0"},
-            },
-        })
-        await _read_msg()  # consume initialize response
-
-        await _write_msg({"jsonrpc": "2.0", "method": "notifications/initialized"})
-
-        # ── Call build_site ────────────────────────────────────
-        await _write_msg({
-            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
-            "params": {
-                "name": "build_site",
-                "arguments": {"description": description},
-            },
-        })
-        result = await asyncio.wait_for(_read_msg(wait=timeout), timeout=timeout)
-
-        # ── Extract HTML from content array ───────────────────
-        content_blocks = result.get("result", {}).get("content", [])
-        parts = [
-            b["text"] for b in content_blocks
-            if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
-        ]
-        html = "\n".join(parts)
-
-        if not html:
-            logger.warning("Stitch MCP returned empty content")
-            return ""
-
-        logger.info("Stitch MCP returned %d chars of design reference", len(html))
-        return html[:8000]  # cap at ~8 KB to keep prompt manageable
-
-    except asyncio.TimeoutError:
-        logger.warning("Stitch MCP timed out after %.0fs — skipping", timeout)
-        return ""
-    except Exception as exc:
-        logger.warning("Stitch MCP call failed (non-fatal): %s", exc)
-        return ""
-    finally:
-        try:
-            proc.stdin.close()
-            await asyncio.wait_for(proc.wait(), timeout=5.0)
-        except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
 
 
 async def _send_phase(websocket, phase: int, title: str, description: str, status: str) -> None:
@@ -697,6 +610,33 @@ def _detect_pm(workspace_path: str) -> str:
 
 
 # ╔══════════════════════════════════════════════════════════════╗
+# ║  HELPER — Extract design signal from raw Stitch HTML         ║
+# ║  Converts a 15-40 KB HTML blob into a compact ~500-char JSON ║
+def _salvage_partial_json(partial: str) -> Optional[dict]:
+    """Try to extract complete file objects from a truncated JSON stream.
+
+    When the stream is cut mid-way, we attempt to find all complete
+    {"path": ..., "content": ...} objects and return them wrapped in a files list.
+    """
+    import re as _re
+    files = []
+    # Find all complete path+content pairs using a non-greedy regex
+    for m in _re.finditer(
+        r'\{\s*"path"\s*:\s*"([^"]+)"\s*,\s*"content"\s*:\s*"((?:[^"\\]|\\.)*)"\s*\}',
+        partial,
+        _re.DOTALL,
+    ):
+        path = m.group(1)
+        content = m.group(2).encode().decode("unicode_escape").replace("\\n", "\n").replace('\\"', '"')
+        if path and content and len(content) > 10:
+            files.append({"path": path, "content": content})
+    if files:
+        logger.info("_salvage_partial_json: recovered %d files from truncated stream", len(files))
+        return {"files": files}
+    return None
+
+
+# ╔══════════════════════════════════════════════════════════════╗
 # ║  STEP 1 — call_claude_for_json()                             ║
 # ║  Direct Claude Messages API call → returns parsed JSON dict  ║
 # ╚══════════════════════════════════════════════════════════════╝
@@ -763,99 +703,119 @@ async def call_claude_for_json(
 
     async def _make_request(use_model: str) -> Optional[dict]:
         payload["model"] = use_model
+        # Use streaming so:
+        # 1. First token arrives in <5s instead of waiting for the full response
+        # 2. We send heartbeat progress updates so the user isn't staring at a blank screen
+        # 3. We avoid httpx read-timeout killing a slow but valid generation
+        stream_payload = {**payload, "stream": True}
         try:
-            async with httpx.AsyncClient(timeout=600.0) as client:
-                response = await client.post(
-                    CLAUDE_API_URL,
-                    headers=headers,
-                    json=payload,
-                )
+            raw_chunks: list[str] = []
+            last_heartbeat = 0.0
+            import time as _time
 
-            if response.status_code != 200:
-                error_text = response.text[:500]
-                logger.error(
-                    "Claude API error %d with %s: %s",
-                    response.status_code, use_model, error_text,
-                )
-                # Instant user-facing error for auth/credit failures
-                if response.status_code in (401, 403):
-                    await _ws_send(websocket, "error", "❌ Anthropic API key is invalid. Check your API key in Settings.")
-                elif response.status_code == 402 or (response.status_code == 400 and "credit balance" in error_text.lower()):
-                    await _ws_send(websocket, "error", "❌ Anthropic API credits depleted. Add credits at console.anthropic.com.")
-                elif response.status_code == 429:
-                    await _ws_send(websocket, "error", "⚠️ Anthropic rate limit hit. Retrying in a moment...")
-                elif response.status_code == 529:
-                    await _ws_send(websocket, "error", "⚠️ Anthropic API overloaded. Retrying...")
-                else:
-                    await _ws_send(websocket, "error", f"❌ Claude API error ({response.status_code}). Try again.")
-                return None
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=600.0)) as client:
+                async with client.stream(
+                    "POST", CLAUDE_API_URL, headers=headers, json=stream_payload
+                ) as response:
+                    if response.status_code != 200:
+                        error_text = await response.aread()
+                        error_text = error_text.decode()[:500]
+                        logger.error(
+                            "Claude API error %d with %s: %s",
+                            response.status_code, use_model, error_text,
+                        )
+                        if response.status_code in (401, 403):
+                            await _ws_send(websocket, "error", "❌ Anthropic API key is invalid.")
+                        elif response.status_code in (400, 402) and "credit" in error_text.lower():
+                            await _ws_send(websocket, "error", "❌ Anthropic API credits depleted.")
+                        elif response.status_code == 429:
+                            await _ws_send(websocket, "error", "⚠️ Anthropic rate limit hit. Retrying...")
+                        elif response.status_code == 529:
+                            await _ws_send(websocket, "error", "⚠️ Anthropic API overloaded. Retrying...")
+                        else:
+                            await _ws_send(websocket, "error", f"❌ Claude API error ({response.status_code}).")
+                        return None
 
-            data = response.json()
-            
-            # Check for truncation (stop_reason == "max_tokens")
-            stop_reason = data.get("stop_reason", "")
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        raw_chunks.append(line[6:])
+                        # Heartbeat every 15s so the user sees progress
+                        now = _time.monotonic()
+                        if now - last_heartbeat > 15:
+                            last_heartbeat = now
+                            try:
+                                await websocket.send_json({"type": "progress", "message": "⏳ Writing files..."})
+                            except Exception:
+                                pass
+
+            # Reconstruct full response from SSE stream
+            response_data: dict = {}
+            tool_input_parts: list[str] = []
+            stop_reason = ""
+            for chunk_str in raw_chunks:
+                if chunk_str == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(chunk_str)
+                except Exception:
+                    continue
+                ctype = chunk.get("type", "")
+                if ctype == "message_start":
+                    pass
+                elif ctype == "content_block_delta":
+                    delta = chunk.get("delta", {})
+                    if delta.get("type") == "input_json_delta":
+                        tool_input_parts.append(delta.get("partial_json", ""))
+                elif ctype == "message_delta":
+                    stop_reason = chunk.get("delta", {}).get("stop_reason", "")
+
             is_truncated = stop_reason == "max_tokens"
             if is_truncated:
                 logger.warning("Claude (%s) response truncated (max_tokens). Attempting salvage...", use_model)
                 await _ws_send(websocket, "progress", "⚠️ Response was long — salvaging complete files...")
-            
-            # Method 1: Extract from tool_use block (guaranteed valid JSON)
-            for block in data.get("content", []):
-                if block.get("type") == "tool_use" and block.get("name") == "write_project_files":
-                    result = block.get("input", {})
+
+            # Parse the assembled tool_use input JSON
+            full_input = "".join(tool_input_parts)
+            if full_input:
+                try:
+                    result = json.loads(full_input)
                     if isinstance(result, dict) and result.get("files"):
                         files = result["files"]
-                        
-                        # TRUNCATION RECOVERY: If truncated, the LAST file
-                        # likely has incomplete content. Remove it to avoid
-                        # writing a broken file to disk.
                         if is_truncated and len(files) > 1:
-                            last_file = files[-1]
-                            last_content = last_file.get("content", "")
-                            # Heuristic: if last file content is very short or
-                            # doesn't end with a valid closing pattern, drop it
+                            last_content = files[-1].get("content", "")
                             if (
                                 len(last_content) < 50
                                 or not last_content.rstrip().endswith((";", "}", ">", ");", "/>", "*/", "\n"))
                             ):
                                 dropped = files.pop()
                                 logger.warning(
-                                    "Truncation recovery: dropped incomplete file '%s' (%d chars)",
-                                    dropped.get("path", "?"), len(last_content),
+                                    "Truncation recovery: dropped incomplete file '%s'",
+                                    dropped.get("path", "?"),
                                 )
-                                await _ws_send(
-                                    websocket, "progress",
-                                    f"⚠️ Dropped 1 truncated file — {len(files)} complete files salvaged",
-                                )
-                        
-                        logger.info(
-                            "Claude (%s) returned %d files via tool_use%s",
-                            use_model, len(files),
-                            " (truncation-salvaged)" if is_truncated else "",
-                        )
+                        logger.info("Claude (%s) returned %d files via stream", use_model, len(files))
                         return {"files": files}
-            
-            # Method 2: Fallback — extract from text content (for compatibility)
-            text = ""
-            for block in data.get("content", []):
-                if block.get("type") == "text":
-                    text += block["text"]
-            
-            if text:
-                result = _parse_json_response(text)
-                if result and result.get("files"):
-                    logger.info(
-                        "Claude (%s) returned %d files via text fallback",
-                        use_model, len(result["files"]),
-                    )
-                    return result
-            
-            logger.error("Claude response had no files (neither tool_use nor text)")
+                except json.JSONDecodeError:
+                    # Truncated JSON — try salvage
+                    logger.warning("Truncated JSON from stream — attempting partial salvage")
+                    salvaged = _salvage_partial_json(full_input)
+                    if salvaged and salvaged.get("files"):
+                        logger.info("Salvaged %d files from truncated stream", len(salvaged["files"]))
+                        return salvaged
+
+            logger.error("Claude stream had no tool_use input (model=%s, stop=%s)", use_model, stop_reason)
+            # Send actual error details to help debug
+            await _ws_send(websocket, "warning", f"⚠️ Phase returned empty response (stop={stop_reason}). Retrying...")
             return None
 
+        except httpx.TimeoutException as te:
+            logger.error("Claude API stream timeout (%s): %s", use_model, te)
+            await _ws_send(websocket, "error", "❌ Claude API timed out. Check your connection and try again.")
+            return None
         except Exception as exc:
             logger.error("Claude API call failed (%s): %s", use_model, exc)
             return None
+
 
     # Try with primary model (Opus)
     result = await _make_request(model)
@@ -1387,29 +1347,35 @@ CRITICAL: Every value from REAL internet research. Original copy. Domain-specifi
         f"gemini-2.5-flash:generateContent?key={gemini_key}"
     )
 
-    # Build payload — try with thinking mode first, fall back without it if rejected.
-    def _build_gemini_payload(with_thinking: bool) -> dict:
-        cfg: dict = {
-            "maxOutputTokens": 32000,
-        }
-        if with_thinking:
-            # temperature=1.0 required when thinkingBudget > 0
-            cfg["temperature"] = 1.0
-            cfg["thinkingConfig"] = {"thinkingBudget": 10000}
-        else:
-            cfg["temperature"] = 0.7
+    # No thinking mode — adds latency with negligible quality gain for structured prompts.
+    # Output capped at 8K — the structured blueprint format never needs more.
+    def _build_gemini_payload() -> dict:
         return {
             "contents": [{"parts": [{"text": research_prompt}]}],
-            "generationConfig": cfg,
+            "generationConfig": {
+                "maxOutputTokens": 8000,
+                "temperature": 0.3,
+            },
             "tools": [{"google_search": {}}],
+            "systemInstruction": {
+                "parts": [{
+                    "text": (
+                        "You are a senior product researcher and UX strategist. "
+                        "Return precise, factual, structured output only. "
+                        "Use real-world product references and industry-standard design patterns. "
+                        "Prioritize specificity over generality — name actual colors (HSL values), "
+                        "real font pairings, and concrete UI patterns used by top products in the domain. "
+                        "Never hallucinate — if unsure about a specific value, use the most common industry default."
+                    )
+                }]
+            },
         }
 
-    gemini_payload = _build_gemini_payload(with_thinking=True)
+    gemini_payload = _build_gemini_payload()
 
     # Retry logic: up to 3 attempts for 429 rate-limits.
-    # On 400 with thinkingConfig, retry once without thinking mode.
     _max_attempts = 3
-    _thinking_enabled = True
+    _thinking_enabled = False
     response = None
     for _attempt in range(1, _max_attempts + 1):
         try:
@@ -1432,16 +1398,6 @@ CRITICAL: Every value from REAL internet research. Original copy. Domain-specifi
             if _attempt < _max_attempts:
                 await asyncio.sleep(_backoff)
                 continue
-
-        # 400 with thinking enabled → model may not support thinkingConfig; retry without it
-        if response.status_code == 400 and _thinking_enabled:
-            _err_body = response.text[:400]
-            if "thinkingConfig" in _err_body or "thinking" in _err_body.lower() or "invalid" in _err_body.lower():
-                logger.warning("Gemini rejected thinkingConfig — retrying without thinking mode")
-                await _ws_send(websocket, "progress", "⚠️ Thinking mode unavailable — retrying with standard mode...")
-                _thinking_enabled = False
-                gemini_payload = _build_gemini_payload(with_thinking=False)
-                continue  # retry immediately without thinking
 
         break  # non-retryable response
 
@@ -1535,6 +1491,140 @@ CRITICAL: Every value from REAL internet research. Original copy. Domain-specifi
         pass
 
     return text
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  STEP 3b — _fast_haiku_research()                           ║
+# ║  Claude Haiku blueprint for simple archetypes (~5-8s)        ║
+# ║  Skips Gemini entirely for landing pages, blogs, portfolios  ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+_SIMPLE_RESEARCH_ARCHETYPES = {"single_page_landing", "blog", "portfolio"}
+
+async def _fast_haiku_research(
+    description: str,
+    classification: dict,
+    consumer_hints: dict,
+    api_key: str,
+    websocket,
+) -> str:
+    """Generate a compact design blueprint using Claude Haiku (~5-8s).
+
+    Used for simple archetypes (landing page, blog, portfolio) instead of
+    the full Gemini call (~60-120s).  Produces the same ===SECTION=== format
+    that the rest of the pipeline expects.
+    """
+    import httpx
+
+    await _ws_send(websocket, "progress", "⚡ Fast blueprint (landing page pattern)...")
+
+    layout = classification.get("layout_archetype", "single_page_landing")
+    domain = classification.get("domain", "general")
+
+    # Pull domain hint if available
+    hint = consumer_hints.get(domain, {})
+    hint_text = ""
+    if hint:
+        hint_text = (
+            f"\nDOMAIN CONTEXT:\n"
+            f"Reference sites: {hint.get('refs', '')}\n"
+            f"Key pages: {hint.get('pages', '')}\n"
+            f"Key UI: {hint.get('key_ui', '')}\n"
+            f"Vibe: {hint.get('vibe', '')}\n"
+        )
+
+    prompt = f"""You are a senior UI/UX strategist. Generate a concise design blueprint for this project.
+
+PROJECT: "{description}"
+TYPE: {layout.replace('_', ' ')} | DOMAIN: {domain}
+{hint_text}
+
+Output EXACTLY the following sections (use these exact headers):
+
+===CLASSIFICATION===
+layout_archetype: {layout}
+domain: {domain}
+is_single_page: {"yes" if layout == "single_page_landing" else "no"}
+nav_style: top_header
+has_admin_features: no
+reasoning: confirmed
+
+===SITES_ANALYZED===
+[3 real reference sites for this domain with brief notes on what makes their design excellent]
+
+===DESIGN_SYSTEM_NAME===
+[2-3 word evocative name, e.g. "Midnight Forge" or "Coastal Drift"]
+
+===KEY_COMPONENTS===
+[List 6-8 specific UI components this project needs, with purpose]
+
+===PAGES===
+[List all pages/routes with brief description. For landing pages: just / with sections list]
+
+===UI_PATTERNS===
+[5-6 specific interaction patterns: hover states, animations, layouts used by top sites in this domain]
+
+===COPY_TONE===
+[Voice, tone, and messaging style. 3-4 specific adjectives + 1 example headline]
+
+===DOMAIN_MUST_HAVES===
+[5-7 non-negotiable features/sections that every great {domain} site has]
+
+Be specific and opinionated — name real colors (HSL values), actual font names, concrete UI patterns.
+Output only the sections above, no preamble."""
+
+    payload = {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 2000,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, read=60.0)) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers=headers,
+                json=payload,
+            )
+        if resp.status_code != 200:
+            logger.warning("Haiku research failed (%d) — using hint fallback", resp.status_code)
+            return _build_hint_fallback_research(description, classification, hint)
+        data = resp.json()
+        text = "".join(
+            b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"
+        )
+        if not text:
+            return _build_hint_fallback_research(description, classification, hint)
+        await _ws_send(websocket, "progress", "✅ Blueprint ready — building project schema...")
+        return text
+    except Exception as exc:
+        logger.warning("Haiku research exception: %s — using hint fallback", exc)
+        return _build_hint_fallback_research(description, classification, hint)
+
+
+def _build_hint_fallback_research(description: str, classification: dict, hint: dict) -> str:
+    """Zero-latency fallback: construct minimal research from _CONSUMER_HINTS."""
+    layout = classification.get("layout_archetype", "single_page_landing")
+    domain = classification.get("domain", "general")
+    return (
+        f"===CLASSIFICATION===\n"
+        f"layout_archetype: {layout}\ndomain: {domain}\n"
+        f"is_single_page: {'yes' if layout == 'single_page_landing' else 'no'}\n"
+        f"nav_style: top_header\nhas_admin_features: no\nreasoning: fallback\n\n"
+        f"===SITES_ANALYZED===\n{hint.get('refs', 'Industry-standard reference sites')}\n\n"
+        f"===DESIGN_SYSTEM_NAME===\nClean Slate\n\n"
+        f"===KEY_COMPONENTS===\n{hint.get('key_ui', 'Hero section, feature grid, CTA buttons, footer')}\n\n"
+        f"===PAGES===\n{hint.get('pages', '/ (main landing page with all sections)')}\n\n"
+        f"===UI_PATTERNS===\nSmooth scroll, fade-in on scroll, hover lift effects, gradient CTAs\n\n"
+        f"===COPY_TONE===\nConfident, clear, action-oriented. {hint.get('vibe', 'Clean and modern.')}\n\n"
+        f"===DOMAIN_MUST_HAVES===\n{hint.get('entities', 'Hero, Features, Testimonials, CTA, Footer')}\n\n"
+        f"Project: {description}\nApp type: {layout}\n"
+    )
 
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -1651,6 +1741,7 @@ NEXTJS_WEBSITE_RULES = """
 
 ### What YOU generate:
 - src/app/globals.css — UPDATE the :root CSS variables for the project theme
+  IMPORTANT: Keep `@import "tw-animate-css"` at the top — NEVER replace with tailwindcss-animate
 - src/config/site.js — REWRITE with the project name, description, URL
 - src/config/navigation.js — REWRITE with the project's nav items
 - src/app/(marketing)/page.js — REWRITE with section component imports
@@ -1863,6 +1954,7 @@ CONTRAST (never violate):
 
 NEVER hardcode hex/rgb colors in components.
 Always use Tailwind classes: bg-primary, text-foreground, bg-muted, etc.
+NEVER add tailwindcss-animate to tailwind.config.js plugins — animations come from `tw-animate-css` via CSS @import.
 
 ====================================
 UI QUALITY STANDARDS
@@ -2010,23 +2102,81 @@ NEVER hardcode mock data arrays inside service files.
 Mock data lives in db.json at the project root (served by json-server).
 
 ====================================
-STITCH AI — UI POLISH LAYER
+TYPOGRAPHY HIERARCHY (non-negotiable)
 ====================================
-A Stitch AI design reference may be provided in the user message under
-"UI POLISH LAYER — STITCH AI DESIGN REFERENCE". If present:
+Every page must have a clear 4-level hierarchy:
+  L1 — Page title: text-3xl font-bold tracking-tight (one per page)
+  L2 — Section title: text-xl font-semibold (cards, panels)
+  L3 — Item label: text-sm font-medium text-foreground
+  L4 — Supporting: text-sm text-muted-foreground
+
+NEVER use font-bold for body copy. NEVER use the same size for L1 and L2.
+Data labels (table headers, form labels): text-xs font-medium uppercase tracking-wider text-muted-foreground
+
+====================================
+NAVIGATION QUALITY
+====================================
+Sidebar active item: bg-primary/10 text-primary font-medium border-l-2 border-primary
+Sidebar hover: hover:bg-muted transition-colors duration-150
+Breadcrumb on nested pages: text-sm text-muted-foreground with / separator, current page text-foreground
+Top-nav active link: text-primary font-medium underline-offset-4 underline
+
+====================================
+FEEDBACK PATTERNS (non-negotiable)
+====================================
+After EVERY user action (create/update/delete/submit):
+  - Success: useToast() — "✓ {Entity} created successfully"
+  - Error: useToast({ variant: "destructive" }) — "Failed to save. Please try again."
+  - Delete: Always show AlertDialog confirmation first, then proceed
+
+Mutations must show BOTH a disabled state AND a loading spinner on the submit button.
+Never silently succeed/fail — always surface feedback.
+
+====================================
+SPACING DENSITY RULES
+====================================
+Content pages (admin/dashboard): compact-to-comfortable
+  - Table rows: py-3 px-4 (not py-6)
+  - Form rows: space-y-4 (not space-y-8)
+  - Card padding: p-4 md:p-6
+  - Section gap: gap-4 md:gap-6
+
+Landing pages: comfortable-to-spacious
+  - Hero: min-h-[80vh] py-24 md:py-32
+  - Sections: py-20 md:py-28
+  - Feature cards: p-8 gap-8
+
+NEVER mix dense and spacious sections on the same page.
+
+====================================
+DATA VISUALIZATION SELECTION
+====================================
+Choose chart type by data shape:
+  KPI over time → LineChart (smooth, area fill with 10% opacity)
+  Category comparison → BarChart (horizontal for many items)
+  Part-to-whole → DonutChart (max 6 segments)
+  Distribution → AreaChart with gradient fill
+  Always use CSS variable colors: fill="hsl(var(--primary))" etc.
+  Always include a legend and labeled axes.
+  Wrap charts in Card with title + time-period selector.
+
+====================================
+DESIGN SPEC BLOCK
+====================================
+Every generation includes a "UI DESIGN SPEC (from research)" block in the prompt.
+This block contains domain-specific colors, fonts, spacing, and component patterns
+derived from Gemini deep research on real products in the same industry.
 
 WHAT TO DO:
-  - Study the spatial patterns: grid columns, gap sizes, padding ratios, card borders
-  - Study typography: heading sizes, font-weight, letter-spacing hierarchy
-  - Study component style: shadow depth, border-radius, button shape, icon sizing
-  - ADAPT these patterns into React/Vue JSX with Tailwind classes
+  - Apply the color palette exactly to the CSS theme variables (:root HSL values)
+  - Use the design personality and typography to set the tone for all components
+  - Use spatial pattern cues for gap/padding/border-radius decisions
+  - Build components that feel PURPOSE-BUILT for the specific domain
 
 RULES (critical):
-  - Do NOT copy HTML verbatim — convert every element to JSX
-  - Replace all inline styles with Tailwind classes (bg-primary, text-foreground, etc.)
-  - Use existing shadcn/ui components where applicable
-  - The Stitch reference is UI-ONLY — do not change page structure, routes, or entities
-  - If no Stitch reference is in the message, apply your own professional judgment
+  - All colors from the spec → CSS variables, then Tailwind tokens (bg-primary, etc.)
+  - Never hardcode hex in component files — CSS variables only
+  - The design spec is UI-ONLY — do not change page structure, routes, or entities
 """
 
 
@@ -2117,14 +2267,13 @@ async def _generate_new_project_inner(
     skills = _load_skills(app_type, stack, layout_archetype=_layout_archetype)
     await _ws_send(websocket, "progress", "📚 Loading component skills...")
     
-    # ── Step 3: Gemini ULTRA-DEEP research ──
+    # ── Step 3: Gemini research (all project types) ──
     await _ws_send(websocket, "progress", "🔬 Researching real products in this domain...")
-    research_quality = "full"  # Track research quality for gating
+    research_quality = "full"
     try:
         research = await gemini_deep_research(
             description, _classification, stack, gemini_key, websocket,
         )
-        # Research quality gate: check if we got meaningful research
         if len(research) < 200:
             research_quality = "minimal"
             logger.warning("Research returned minimal content (%d chars)", len(research))
@@ -2561,45 +2710,6 @@ async def _generate_new_project_inner(
     except Exception as _plan_exc:
         logger.warning("Failed to emit plan message (non-fatal): %s", _plan_exc)
 
-    # ════════════════════════════════════════════════════════════
-    #  STEP B — Phase 4: Fetch Stitch design reference
-    #  This is real work, not a cosmetic delay.
-    #  Order: Gemini research → Schema → Plan shown → Stitch → Code
-    # ════════════════════════════════════════════════════════════
-    _stitch_api_key = os.environ.get("STITCH_API_KEY", "")
-    _stitch_description = (
-        f"{_layout_archetype.replace('_', ' ')} {stack} — {description[:60]}"
-    )
-
-    _theme_d     = project_schema.get("theme", {})
-    _disp_font   = " + ".join(f for f in [_theme_d.get("heading_font", ""), _theme_d.get("body_font", "")] if f) or "Inter"
-    _disp_color  = _theme_d.get("primary", "")
-    _design_summary = f"{_disp_font} · {_disp_color}" if _disp_color else _disp_font
-
-    await _send_phase(
-        websocket, 4,
-        "Fetching design reference",
-        f"Calling Stitch AI for UI patterns — {_plan_design_system_name}",
-        "active",
-    )
-
-    stitch_html = await _call_stitch_mcp(_stitch_description, _stitch_api_key)
-
-    if stitch_html:
-        _stitch_status = f"Design reference loaded — {_design_summary}"
-        await _ws_send(websocket, "progress", "✅ Stitch design reference ready")
-    else:
-        _stitch_status = f"Using research-based design — {_design_summary}"
-        await _ws_send(websocket, "progress", "ℹ️ Stitch unavailable — proceeding with Gemini research design")
-
-    await _send_phase(
-        websocket, 4,
-        "Fetching design reference",
-        _stitch_status,
-        "done",
-    )
-    await asyncio.sleep(1.2)   # brief pause so user sees Phase 4 done
-
     # ── PHASE GATE: Research complete → Coding starts ──
     await _send_phase(websocket, 3, "Researching project", f"Research complete ({research_quality})", "done")
     await asyncio.sleep(0.5)
@@ -2651,53 +2761,30 @@ async def _generate_new_project_inner(
             _is_consumer = False
             _is_blog = False
 
-    if stitch_html:
-        # We have a live Stitch reference — inject it directly.
-        # Claude reads the HTML and adapts the layout/spacing/card patterns
-        # to React/Vue JSX with Tailwind classes.
+    # Build a schema-driven design spec from Gemini research.
+    # Every variable here comes from the project-specific schema, making each
+    # generation unique.
+    _primary_desc  = _primary_hsl or "brand color"
+    _accent_desc   = _accent_hsl or "accent"
+    _vibe_desc     = _vibe or "modern"
+    _font_desc     = (
+        f"{_h_font} (headings) + {_b_font} (body)"
+        if _h_font else "Inter (headings) + system-ui (body)"
+    )
+    _card_desc     = _card_cls or "rounded-lg border border-border shadow-sm p-6"
+    _brand_name    = project_schema.get("brand", {}).get("name", description[:30])
+    _radius        = project_schema.get("theme", {}).get("radius", "0.5rem")
+
+    # ── Extract blog sub-type for richer design spec ──────────
+    _blog_subtype = {
+        "blog":          ("article listing, rich-text article body, author profiles, category/tag pages, comment section", "editorial, typographic — generous line-height, strong heading hierarchy"),
+        "documentation": ("sidebar navigation tree, code blocks with syntax highlight, search bar, versioned tabs, breadcrumbs, 'On this page' anchor list", "developer-focused, clean mono — high contrast code blocks, compact prose"),
+        "portfolio":     ("project grid/cards with cover image + tags + live/github links, case-study detail page, skills section, testimonials, contact form", "creative, personal — bold hero with your name/role, distinctive layout personality"),
+    }.get(app_type, ("articles, pages, content sections", "clean typographic"))
+    _blog_key_ui, _blog_personality = _blog_subtype
+
+    if _is_blog:
         stitch_instruction = f"""
-====================================
-STITCH AI DESIGN REFERENCE (pre-fetched)
-====================================
-The following is a real Stitch AI design reference for this project type.
-Study the layout structure, spacing ratios, card styles, typography hierarchy,
-and color usage. Then ADAPT these patterns into React/Vue JSX with Tailwind classes.
-
-RULES:
-- Do NOT copy HTML verbatim — convert every element to React/Vue JSX
-- Replace inline styles with Tailwind classes (bg-primary, text-foreground, etc.)
-- Keep the SPATIAL patterns (grid columns, gap sizes, padding ratios)
-- Replace any raw colors with the project's design tokens from research
-
-STITCH REFERENCE HTML:
-{stitch_html}
-====================================
-"""
-    else:
-        # No live Stitch reference — build a schema-driven design spec from Gemini research.
-        # Every variable here comes from the project-specific schema, making each
-        # generation unique even without a Stitch API key.
-        _primary_desc  = _primary_hsl or "brand color"
-        _accent_desc   = _accent_hsl or "accent"
-        _vibe_desc     = _vibe or "modern"
-        _font_desc     = (
-            f"{_h_font} (headings) + {_b_font} (body)"
-            if _h_font else "Inter (headings) + system-ui (body)"
-        )
-        _card_desc     = _card_cls or "rounded-lg border border-border shadow-sm p-6"
-        _brand_name    = project_schema.get("brand", {}).get("name", description[:30])
-        _radius        = project_schema.get("theme", {}).get("radius", "0.5rem")
-
-        # ── Extract blog sub-type for richer design spec ──────────
-        _blog_subtype = {
-            "blog":          ("article listing, rich-text article body, author profiles, category/tag pages, comment section", "editorial, typographic — generous line-height, strong heading hierarchy"),
-            "documentation": ("sidebar navigation tree, code blocks with syntax highlight, search bar, versioned tabs, breadcrumbs, 'On this page' anchor list", "developer-focused, clean mono — high contrast code blocks, compact prose"),
-            "portfolio":     ("project grid/cards with cover image + tags + live/github links, case-study detail page, skills section, testimonials, contact form", "creative, personal — bold hero with your name/role, distinctive layout personality"),
-        }.get(app_type, ("articles, pages, content sections", "clean typographic"))
-        _blog_key_ui, _blog_personality = _blog_subtype
-
-        if _is_blog:
-            stitch_instruction = f"""
 ====================================
 DESIGN SPEC — "{_plan_design_system_name}" ({app_type.replace('_', ' ').title()})
 ====================================
@@ -2728,24 +2815,24 @@ SPATIAL PATTERNS — content site, NO admin sidebar:
 
 DO NOT use CSS variable syntax. Tailwind utility classes only.
 """
-        elif _is_consumer:
-            _consumer_hint = _CONSUMER_HINTS.get(app_type, {})
-            _consumer_vibe  = _consumer_hint.get("vibe", _vibe_desc)
-            # Research output (from Gemini) wins over hardcoded hints for ALL fields.
-            # _CONSUMER_HINTS is ONLY a last-resort fallback when Gemini returns empty.
-            _consumer_key_ui = (
-                _research_key_components
-                or _consumer_hint.get("key_ui", "domain-specific cards, hero section, feature sections")
-            )
-            _consumer_pages = (
-                _research_pages
-                or _consumer_hint.get("pages", "home, about, contact and all key domain pages")
-            )
-            _consumer_domain_must_haves = (
-                _research_domain_must_haves
-                or ""
-            )
-            stitch_instruction = f"""
+    elif _is_consumer:
+        _consumer_hint = _CONSUMER_HINTS.get(app_type, {})
+        _consumer_vibe  = _consumer_hint.get("vibe", _vibe_desc)
+        # Research output (from Gemini) wins over hardcoded hints for ALL fields.
+        # _CONSUMER_HINTS is ONLY a last-resort fallback when Gemini returns empty.
+        _consumer_key_ui = (
+            _research_key_components
+            or _consumer_hint.get("key_ui", "domain-specific cards, hero section, feature sections")
+        )
+        _consumer_pages = (
+            _research_pages
+            or _consumer_hint.get("pages", "home, about, contact and all key domain pages")
+        )
+        _consumer_domain_must_haves = (
+            _research_domain_must_haves
+            or ""
+        )
+        stitch_instruction = f"""
 ====================================
 DESIGN SPEC — "{_plan_design_system_name}" ({_layout_archetype.replace('_', ' ').title()} / {_domain.replace('_', ' ').title()})
 ====================================
@@ -2788,15 +2875,15 @@ CRITICAL: Every component must be specific to "{description[:60]}" — NOT a gen
 Do NOT use generic placeholder content — use realistic data specific to "{description[:40]}".
 DO NOT use CSS variable syntax. Tailwind utility classes only.
 """
-        elif _is_landing:
-            # Build ordered section list from schema for domain-specific structure
-            _landing_sections = _sections or []
-            _section_list = "\n".join(
-                f"- {s.get('type', s.get('headline', 'Section'))}: {s.get('subheadline', s.get('headline', ''))}"
-                for s in _landing_sections[:12]
-            ) or "- Hero (value prop + CTA)\n- Features\n- Social proof\n- Pricing\n- FAQ\n- Final CTA"
+    elif _is_landing:
+        # Build ordered section list from schema for domain-specific structure
+        _landing_sections = _sections or []
+        _section_list = "\n".join(
+            f"- {s.get('type', s.get('headline', 'Section'))}: {s.get('subheadline', s.get('headline', ''))}"
+            for s in _landing_sections[:12]
+        ) or "- Hero (value prop + CTA)\n- Features\n- Social proof\n- Pricing\n- FAQ\n- Final CTA"
 
-            stitch_instruction = f"""
+        stitch_instruction = f"""
 ====================================
 DESIGN SPEC — "{_plan_design_system_name}" (Landing Page)
 ====================================
@@ -2828,12 +2915,12 @@ SPATIAL PATTERNS — apply exactly with Tailwind classes:
 CRITICAL: Write original, compelling copy for THIS specific product — not lorem ipsum.
 DO NOT use CSS variable syntax. Use only Tailwind utility classes.
 """
-        else:
-            _admin_components_block = (
-                f"\nDOMAIN-SPECIFIC COMPONENTS (from research — build these exactly):\n{_research_key_components}\n"
-                if _research_key_components else ""
-            )
-            stitch_instruction = f"""
+    else:
+        _admin_components_block = (
+            f"\nDOMAIN-SPECIFIC COMPONENTS (from research — build these exactly):\n{_research_key_components}\n"
+            if _research_key_components else ""
+        )
+        stitch_instruction = f"""
 ====================================
 DESIGN SPEC — "{_plan_design_system_name}"
 ====================================
@@ -2914,7 +3001,7 @@ FILE TREE:
 {template_context}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-UI POLISH LAYER — STITCH AI DESIGN REFERENCE
+UI DESIGN SPEC (from research)
 ⚠️  FOR VISUAL/UI IMPROVEMENTS ONLY.
     Do NOT change pages, routes, entities, or nav items — those are fixed above.
     Only use this to improve: card styles, spacing ratios, color usage,
@@ -2926,12 +3013,13 @@ UI POLISH LAYER — STITCH AI DESIGN REFERENCE
 Call the write_project_files tool with ALL files.
 """
     
+    PHASE1_MAX_TOKENS = 24000 if _is_landing else MAX_TOKENS
     result1 = await call_claude_for_json(
         system_prompt=SYSTEM_PROMPT,
         user_prompt=phase1_prompt,
         api_key=api_key,
         websocket=websocket,
-        max_tokens=MAX_TOKENS,
+        max_tokens=PHASE1_MAX_TOKENS,
         model=MODEL,
     )
     if result1:
@@ -3047,13 +3135,8 @@ ALSO: Implement DOMAIN_MUST_HAVES from research:
 (gallery masonry, booking calendar, reservation widget, menu filtering, interactive map, etc.)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-UI POLISH — CONSUMER WEBSITE PATTERNS
+UI DESIGN SPEC (from research)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-- Hero: full-width with domain-appropriate image treatment (overlay gradient, large headline)
-- Section spacing: py-20 md:py-28, max-w-6xl mx-auto px-4 sm:px-6 lg:px-8
-- Cards: rounded-xl overflow-hidden shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300
-- Primary CTA: bg-primary text-primary-foreground px-8 py-4 rounded-lg font-semibold hover:opacity-90
-- Images: use picsum.photos for realistic photos (https://picsum.photos/seed/[domain][N]/800/600)
 {stitch_instruction}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
 
@@ -3087,33 +3170,13 @@ ALSO: Create any domain-specific specialized views from DOMAIN_MUST_HAVES in the
 - Maps, calendars, kanban boards, timelines, etc.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-UI POLISH LAYER — STITCH AI DESIGN REFERENCE
-⚠️  FOR VISUAL/UI IMPROVEMENTS ONLY.
-    Entities and CRUD structure are fixed above (from schema).
-    Only use this to improve: table density, card padding, form layout,
-    badge styles, button shapes, empty-state visuals, sidebar widths.
-    Do NOT add or remove entities/fields based on this reference.
+UI DESIGN SPEC (from research)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {stitch_instruction}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
     else:
         # Build the UI polish block for landing sections
-        if stitch_html:
-            _stitch_ui_polish = f"""
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-UI POLISH LAYER — STITCH AI DESIGN REFERENCE
-⚠️  FOR VISUAL/UI IMPROVEMENTS ONLY.
-    The sections to build are fixed above (from schema).
-    Only use this to improve: card spacing, grid gaps, typography scale,
-    button shapes, hero layout ratios, shadow/border patterns.
-    Do NOT add or remove sections based on this reference.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-STITCH REFERENCE HTML (adapt to React JSX + Tailwind — do NOT copy verbatim):
-{stitch_html[:4000]}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-"""
-        else:
-            _stitch_ui_polish = """
+        _stitch_ui_polish = """
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 UI POLISH LAYER — SECTION SPATIAL PATTERNS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -3166,9 +3229,14 @@ CURRENT FILE TREE (foundation already written):
 Call the write_project_files tool with ALL files.
 """
     
-    # Phase 2 is the heaviest — all CRUD modules or all sections in one call.
-    # Give it 2x the normal token budget to avoid truncation on big admin panels.
-    PHASE2_MAX_TOKENS = 64000
+    # Phase 2 token budget — sized by complexity to avoid 15+ min waits.
+    # Landing pages need fewer tokens (sections only); admin panels need more.
+    if _is_landing:
+        PHASE2_MAX_TOKENS = 24000   # sections only — fast, 2-4 min
+    elif _is_admin:
+        PHASE2_MAX_TOKENS = 40000   # CRUD modules — moderate, 5-7 min
+    else:
+        PHASE2_MAX_TOKENS = 32000   # blogs, consumer apps — standard
     
     result2 = await call_claude_for_json(
         system_prompt=SYSTEM_PROMPT,
@@ -3183,8 +3251,12 @@ Call the write_project_files tool with ALL files.
         total_files += written
         await _ws_send(websocket, "progress", f"✅ Content: {len(written)} files")
     else:
-        await _ws_send(websocket, "progress", "⚠️ Phase 2 returned no files — continuing with Phase 3...")
-        logger.warning("Phase 2 (content) returned no files")
+        logger.error("Phase 2 (content) returned no files — likely truncated (budget: %d)", PHASE2_MAX_TOKENS)
+        await websocket.send_json({
+            "type": "chat_message",
+            "role": "system",
+            "content": "⚠️ Phase 2 generated no files (response was truncated). Phase 3 will attempt to fill the gap.",
+        })
     
     # Rebuild file tree for Phase 3
     file_tree_3 = _build_file_tree(workspace_path)
@@ -3326,12 +3398,13 @@ CURRENT FILE TREE (foundation + content already written):
 Call the write_project_files tool with ALL files.
 """
     
+    PHASE3_MAX_TOKENS = 20000 if _is_landing else MAX_TOKENS
     result3 = await call_claude_for_json(
         system_prompt=SYSTEM_PROMPT,
         user_prompt=phase3_prompt,
         api_key=api_key,
         websocket=websocket,
-        max_tokens=MAX_TOKENS,
+        max_tokens=PHASE3_MAX_TOKENS,
         model=MODEL,
     )
     if result3:
@@ -3339,8 +3412,8 @@ Call the write_project_files tool with ALL files.
         total_files += written
         await _ws_send(websocket, "progress", f"✅ Pages: {len(written)} files")
     else:
-        await _ws_send(websocket, "progress", "⚠️ Phase 3 returned no files — proceeding with build...")
-        logger.warning("Phase 3 (extra pages) returned no files")
+        logger.warning("Phase 3 (extra pages) returned no files (budget: %d)", PHASE3_MAX_TOKENS)
+        await _ws_send(websocket, "progress", "⚠️ Phase 3 skipped — proceeding with build...")
     
     if not total_files:
         await _ws_send(websocket, "error", "❌ No files were generated. Check API key and credits.")

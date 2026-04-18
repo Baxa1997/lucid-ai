@@ -12,10 +12,11 @@ import logging
 logger = logging.getLogger(__name__)
 
 # ── Centralized Gemini Models ─────────────────────────────────
-# gemini-2.0-flash: fast + cheap for classification, research, analysis (8K output)
-# gemini-2.5-flash: for blueprint generation (65K output — no truncation)
-GEMINI_MODEL = "gemini-2.0-flash"
-GEMINI_BLUEPRINT_MODEL = "gemini-2.5-flash"
+# gemini-2.0-flash : fast + cheap for classification and codebase explore (8K output)
+# gemini-2.5-flash : for deep research and blueprint generation (65K output, Google Search grounding)
+GEMINI_MODEL           = "gemini-2.0-flash"   # classify, explore, implementation plan
+GEMINI_RESEARCH_MODEL  = "gemini-2.5-flash"   # product research (gemini_research / gemini_deep_research)
+GEMINI_BLUEPRINT_MODEL = "gemini-2.5-flash"   # blueprint → plan.json (gemini_create_plan)
 
 # ── Fallback Gemini API Key ──────────────────────────────────
 # Used when the user doesn't have their own key in Settings.

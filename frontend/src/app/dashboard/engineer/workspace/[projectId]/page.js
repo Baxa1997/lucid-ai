@@ -196,11 +196,11 @@ function ConversationPageInner({params}) {
             // E2B sandbox URLs (.e2b.dev) expire after 30 min → treat as temporary.
             // Only Vercel (.vercel.app) URLs are truly persistent.
             // A fresh E2B preview will be created when the WS connects.
+            // Exclude only true ephemeral tunnel/sandbox URLs that expire quickly.
+            // localhost URLs from the local dev server ARE valid — keep them.
             const isTemporaryUrl =
               storedUrl &&
-              (storedUrl.includes("localhost") ||
-                storedUrl.includes("127.0.0.1") ||
-                storedUrl.includes(".e2b.dev") ||
+              (storedUrl.includes(".e2b.dev") ||
                 storedUrl.includes(".e2b.app") ||
                 storedUrl.includes(".loca.lt") ||
                 storedUrl.includes(".ngrok") ||
@@ -399,6 +399,20 @@ function ConversationPageInner({params}) {
   const [showPublishModal, setShowPublishModal] = useState(false);
   const [publishConfirmed, setPublishConfirmed] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(false);
+
+  // A "real" deployment URL is any non-localhost URL — e.g. .vercel.app, custom domain.
+  // localhost / 127.0.0.1 is the local dev preview only, not a Vercel deployment.
+  const vercelDeployUrl = (() => {
+    const u = repoInfo.vercelUrl;
+    if (!u) return null;
+    try {
+      const parsed = new URL(u);
+      if (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") return null;
+      return u;
+    } catch {
+      return null;
+    }
+  })();
   const [showAppDropdown, setShowAppDropdown] = useState(false);
   const [showProfileDropdown, setShowProfileDropdown] = useState(false);
   const appDropdownRef = useRef(null);
@@ -602,7 +616,14 @@ function ConversationPageInner({params}) {
       status === "health_check" ||
       status === "preparing";
 
-    if (isActivelyBuilding) {
+    // Keep building screen active while background preview is setting up
+    // (cloning repo, installing deps, waiting for dev server health check).
+    // Do NOT gate on !repoInfo.vercelUrl — the DB may have a stale/broken URL
+    // stored from a previous session. We must show BuildingScreen until the
+    // fresh WS-provided URL arrives, overwriting the stale one.
+    const isBgPreviewRunning = previewLoading;
+
+    if (isActivelyBuilding || isBgPreviewRunning) {
       setBuildingActive(true);
     } else if (
       // Don't start the debounce-hide during initial idle — wait for at least
@@ -625,7 +646,7 @@ function ConversationPageInner({params}) {
       }, 1200);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, phases, isWizardMode, repoInfo.vercelUrl, previewError]);
+  }, [status, phases, isWizardMode, repoInfo.vercelUrl, previewError, previewLoading]);
 
   // Cleanup latch timer on unmount
   useEffect(
@@ -671,6 +692,20 @@ function ConversationPageInner({params}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
 
+  // Track previous vercelUrl to detect the transition null → url (first time preview is ready).
+  const prevVercelUrlRef = useRef(repoInfo.vercelUrl);
+  useEffect(() => {
+    const prev = prevVercelUrlRef.current;
+    prevVercelUrlRef.current = repoInfo.vercelUrl;
+    // When a preview URL first becomes available, always switch to Preview
+    // regardless of what tab the user is on. Reset panelOverrideRef so future
+    // status-based auto-switches can still fire (e.g. next task → running → preview).
+    if (!prev && repoInfo.vercelUrl) {
+      setRightPanel("preview");
+      panelOverrideRef.current = true;
+    }
+  }, [repoInfo.vercelUrl]);
+
   // Auto-switch right panel on status transitions — only when the user hasn't
   // manually picked a tab (panelOverrideRef.current === true).
   // Using a ref (not state) means reading/writing never triggers a re-render,
@@ -703,15 +738,19 @@ function ConversationPageInner({params}) {
   // Auto-switch to preview when a live URL arrives from WebSocket.
   // Watches deployUrl/previewUrl directly (not repoInfo.vercelUrl) so it fires
   // only for fresh WS events, not for DB-loaded URLs on page entry.
+  // Always switch — a fresh preview URL is significant enough to override the
+  // user's last tab choice (they want to see the running app).
   useEffect(() => {
-    if (deployUrl && panelOverrideRef.current) {
+    if (deployUrl) {
       setRightPanel("preview");
+      panelOverrideRef.current = true;
     }
   }, [deployUrl]);
 
   useEffect(() => {
-    if (previewUrl && panelOverrideRef.current) {
+    if (previewUrl) {
       setRightPanel("preview");
+      panelOverrideRef.current = true;
     }
   }, [previewUrl]);
 
@@ -882,14 +921,14 @@ function ConversationPageInner({params}) {
                   )}
                   <div>
                     <h3 className="text-[15px] font-bold text-slate-900 dark:text-white">
-                      {publishConfirmed ? "Published!" : "Publish your app"}
+                      {publishConfirmed ? "Published!" : "Publish to Vercel"}
                     </h3>
                     <p className="text-[12px] text-slate-400 dark:text-slate-500 mt-0.5">
                       {publishConfirmed
                         ? "Your app is live on Vercel"
-                        : repoInfo.vercelUrl
+                        : vercelDeployUrl
                           ? "Your app has been deployed to Vercel"
-                          : "Deploy your app to Vercel"}
+                          : "Connect Vercel to deploy your project"}
                     </p>
                   </div>
                 </div>
@@ -911,20 +950,18 @@ function ConversationPageInner({params}) {
                 </button>
               </div>
 
-              {/* URL display */}
+              {/* URL display — only shows real Vercel/production URLs, never localhost */}
               <div className="px-6 pb-4">
-                {repoInfo.vercelUrl ? (
+                {vercelDeployUrl ? (
                   <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-[#0d1117] border border-slate-200 dark:border-[#2d333b]">
                     <div className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
                     <span className="flex-1 text-[13px] font-medium text-slate-700 dark:text-slate-200 truncate">
-                      {repoInfo.vercelUrl}
+                      {vercelDeployUrl}
                     </span>
                     <button
                       onClick={async () => {
                         try {
-                          await navigator.clipboard.writeText(
-                            repoInfo.vercelUrl,
-                          );
+                          await navigator.clipboard.writeText(vercelDeployUrl);
                           setCopiedUrl(true);
                           setTimeout(() => setCopiedUrl(false), 2000);
                         } catch {}
@@ -966,21 +1003,15 @@ function ConversationPageInner({params}) {
                     </button>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800/30">
+                  <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-[#0d1117] border border-slate-200 dark:border-[#2d333b]">
                     <svg
-                      className="w-4 h-4 text-amber-400 shrink-0"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}>
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                      />
+                      className="w-4 h-4 text-slate-400 shrink-0"
+                      fill="currentColor"
+                      viewBox="0 0 24 24">
+                      <path d="M11.293 1.293a1 1 0 011.414 0l8.5 8.5A1 1 0 0121 11.5h-2v9a1 1 0 01-1 1H6a1 1 0 01-1-1v-9H3a1 1 0 01-.707-1.707l8.5-8.5z" />
                     </svg>
-                    <span className="text-[13px] text-amber-700 dark:text-amber-300">
-                      No deployment URL yet — generate a project first.
+                    <span className="text-[13px] text-slate-500 dark:text-slate-400">
+                      Connect your GitHub repo to Vercel to get a deployment URL.
                     </span>
                   </div>
                 )}
@@ -992,12 +1023,12 @@ function ConversationPageInner({params}) {
                   <>
                     <button
                       onClick={() => {
-                        if (repoInfo.vercelUrl) setPublishConfirmed(true);
+                        if (vercelDeployUrl) setPublishConfirmed(true);
                       }}
-                      disabled={!repoInfo.vercelUrl}
+                      disabled={!vercelDeployUrl}
                       className={cn(
                         "flex-1 h-9 flex items-center justify-center gap-2 rounded-xl text-[13px] font-semibold transition-all",
-                        repoInfo.vercelUrl
+                        vercelDeployUrl
                           ? "bg-[#111827] dark:bg-white text-white dark:text-[#111827] hover:bg-[#1f2937] dark:hover:bg-slate-100 shadow-sm"
                           : "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed",
                       )}>
@@ -1013,7 +1044,7 @@ function ConversationPageInner({params}) {
                           d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"
                         />
                       </svg>
-                      Publish
+                      {vercelDeployUrl ? "Mark as Published" : "Not deployed yet"}
                     </button>
                     <button
                       onClick={() => setShowPublishModal(false)}
@@ -1025,8 +1056,8 @@ function ConversationPageInner({params}) {
                   <>
                     <button
                       onClick={() =>
-                        repoInfo.vercelUrl &&
-                        window.open(repoInfo.vercelUrl, "_blank")
+                        vercelDeployUrl &&
+                        window.open(vercelDeployUrl, "_blank")
                       }
                       className="flex-1 h-9 flex items-center justify-center gap-2 rounded-xl text-[13px] font-semibold bg-emerald-500 hover:bg-emerald-600 text-white transition-all shadow-sm shadow-emerald-500/20">
                       <svg

@@ -17,12 +17,8 @@ from typing import Optional
 
 logger = logging.getLogger("lucid.knowledge")
 
-# Path to the knowledge directory (relative to this file)
-_KNOWLEDGE_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "..", "knowledge"
-)
-_KNOWLEDGE_DIR = os.path.normpath(_KNOWLEDGE_DIR)
+# Path to the knowledge directory — this file lives inside it.
+_KNOWLEDGE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def _read_file(filepath: str, max_chars: int = 8000) -> str:
@@ -379,7 +375,6 @@ def get_pattern_knowledge(project_type: str) -> str:
         "portfolio": "website_landing.md",
         "social": "admin_panel.md",
         "booking": "website_landing.md",
-        "documentation": "website_landing.md",
     }
 
     filename = pattern_map.get(project_type, "website_landing.md")
@@ -406,6 +401,20 @@ def get_quality_standards() -> str:
 
     if content:
         return f"\n## CODING STANDARDS — FOLLOW EXACTLY\n{content}\n"
+    return ""
+
+
+def get_ux_skill() -> str:
+    """Load the UX/Frontend skill definition (SKILL.md).
+
+    SKILL.md activates the 'Senior UX Engineer + Accessibility Expert' persona
+    and provides design principles, component checklists, and anti-patterns.
+    Injected at the TOP of CLAUDE.md so it has the highest influence on generation.
+    """
+    filepath = os.path.join(_KNOWLEDGE_DIR, "SKILL.md")
+    content = _read_file(filepath, max_chars=10000)
+    if content:
+        return f"\n## UX SKILL — SENIOR UX ENGINEER PERSONA\n{content}\n"
     return ""
 
 
@@ -447,11 +456,15 @@ def build_knowledge_context(task: str, stack: str = "") -> dict:
     project_type = classify_project_type(task)
     logger.info("Knowledge loader: project_type=%s, stack=%s", project_type, stack)
 
+    ux_skill = get_ux_skill()
     patterns = get_pattern_knowledge(project_type)
     quality = get_quality_standards()
     framework = get_framework_knowledge(stack)
 
     full = ""
+    # UX skill first — highest priority context
+    if ux_skill:
+        full += ux_skill
     if patterns:
         full += patterns
     if quality:
@@ -461,6 +474,7 @@ def build_knowledge_context(task: str, stack: str = "") -> dict:
 
     return {
         "project_type": project_type,
+        "ux_skill": ux_skill,
         "pattern_knowledge": patterns,
         "quality_standards": quality,
         "framework_knowledge": framework,
@@ -587,8 +601,12 @@ Ask yourself: "Would npm run build pass right now?"
 
 """
 
+    # UX skill first — establishes the Senior UX Engineer persona (highest priority).
+    # Pattern knowledge and quality standards follow; framework rules come last.
+    claude_md += ctx.get("ux_skill", "")
     claude_md += ctx.get("pattern_knowledge", "")
     claude_md += "\n" + ctx.get("quality_standards", "")
+    claude_md += ctx.get("framework_knowledge", "")
 
     # Write to workspace
     claude_md_path = os.path.join(workspace_path, "CLAUDE.md")

@@ -253,17 +253,13 @@ async def run_pipeline(
                             "Bash(sudo*)",
                         ],
                     },
-                    # Stitch AI MCP — Google's design system generator.
-                    # Provides: build_site, get_screen_code, get_screen_image tools.
-                    # Auth: API key (set via STITCH_API_KEY env var).
+                    # Sequential Thinking MCP — forces step-by-step decomposition
+                    # before writing files, improving generation quality.
                     "mcpServers": {
-                        "stitch": {
+                        "sequentialthinking": {
                             "command": "npx",
-                            "args": ["@_davideast/stitch-mcp", "proxy"],
-                            "env": {
-                                "STITCH_API_KEY": os.environ.get("STITCH_API_KEY", ""),
-                            },
-                        }
+                            "args": ["-y", "@modelcontextprotocol/server-sequentialthinking"],
+                        },
                     },
                 }
                 with open(os.path.join(claude_dir, "settings.json"), "w") as f:
@@ -475,7 +471,15 @@ async def run_pipeline(
                             "Bash(git commit*)", "Bash(git push*)",
                             "Bash(rm -rf*)", "Bash(sudo*)",
                         ],
-                    }
+                    },
+                    # Sequential Thinking MCP — forces step-by-step decomposition
+                    # before writing files, improving generation quality.
+                    "mcpServers": {
+                        "sequentialthinking": {
+                            "command": "npx",
+                            "args": ["-y", "@modelcontextprotocol/server-sequentialthinking"],
+                        },
+                    },
                 }
                 with open(os.path.join(claude_dir, "settings.json"), "w") as _csf:
                     json.dump(claude_settings, _csf, indent=2)
@@ -594,6 +598,17 @@ async def run_pipeline(
 
             await asyncio.sleep(0.5)
             await _send_file_tree(websocket, workspace_path)
+
+            # ── Instant Sandpack preview — send all source files to the
+            # browser NOW so the user sees a live preview immediately while
+            # build verification and the local dev server spin up in the
+            # background.  The frontend switches from Sandpack to the real
+            # iframe automatically when preview_ready arrives later.
+            try:
+                await _emit_preview_files(workspace_path, websocket)
+                logger.info("Emitted preview_files for instant Sandpack preview")
+            except Exception as _spk_err:
+                logger.warning("Sandpack preview_files emit failed (non-fatal): %s", _spk_err)
 
             # ── Phase 6: Verify generated code ────────────────
             await _send_phase(6, "Verifying build", "Checking generated code for errors…", "active")
@@ -726,6 +741,8 @@ async def run_pipeline(
             await _send_phase(6, "Verifying build", "Build verification complete", "done")
 
         # ── Phase 6.5: Verify changes ────────────────────
+        # NOTE: For edit-mode (existing repos), skip UX polish to keep the
+        # pipeline fast and focused — UX polish is only for new project generation.
         changed = await verify_changes(workspace_path, websocket)
         if not changed:
             await _send_phase(6, "Verifying build", "No changes detected", "error")
@@ -755,6 +772,19 @@ async def run_pipeline(
                 })
             except Exception:
                 pass
+
+        # ── Phase 6.8: UX Polish (new projects only, AFTER preview starts) ──
+        # Runs AFTER start_local_preview so the user sees the preview immediately.
+        # UX polish changes are included in the Phase 7 commit.
+        if validated.get("scratch_mode") or validated.get("new_project_mode"):
+            try:
+                from .step8_ux_polish import run_ux_polish
+                await _send_phase(6, "UX polish", "Auditing loading states, empty states, hover effects…", "active")
+                await run_ux_polish(workspace_path, validated["anthropic_api_key"], websocket)
+                await _send_phase(6, "UX polish", "UX audit complete", "done")
+                await _send_file_tree(websocket, workspace_path)
+            except Exception as _polish_err:
+                logger.warning("UX polish failed (non-fatal): %s", _polish_err)
 
         # ── PLAN B: E2B cloud sandbox (commented out) ─────────
         # Uncomment the block below to fall back to E2B if WebContainers

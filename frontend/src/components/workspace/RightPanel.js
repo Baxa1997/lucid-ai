@@ -420,12 +420,16 @@ export default function RightPanel() {
                 {repoInfo.vercelUrl
                   ? (() => {
                       try {
-                        return new URL(repoInfo.vercelUrl).hostname;
+                        const u = new URL(repoInfo.vercelUrl);
+                        if (u.hostname === "localhost" || u.hostname === "127.0.0.1") {
+                          return "Preview";
+                        }
+                        return u.hostname;
                       } catch {
-                        return repoInfo.vercelUrl;
+                        return "Preview";
                       }
                     })()
-                  : "/"}
+                  : "Preview"}
               </div>
               <button
                 className="text-[#9ca3af] hover:text-[#6b7280] transition-colors"
@@ -472,7 +476,7 @@ export default function RightPanel() {
             onConfirm={confirmPlan}
             onReject={rejectPlan}
           />
-        ) : buildingActive && !repoInfo.vercelUrl && status !== "error" ? (
+        ) : buildingActive && (!repoInfo.vercelUrl || previewLoading) && !previewFileMap && status !== "error" ? (
           <BuildingScreen
             status={status}
             phases={phases}
@@ -480,6 +484,8 @@ export default function RightPanel() {
             resolvingProgress={resolvingProgress}
             isWizardMode={isWizardMode}
             convLoading={convLoading}
+            previewLoading={previewLoading}
+            previewStatusMsg={previewStatusMsg}
           />
         ) : (
           <>
@@ -615,17 +621,29 @@ export default function RightPanel() {
                     </div>
                   </div>
                 ) : previewFileMap ? (
-                  /* ── Fallback: Sandpack in-browser preview (no running server) ── */
-                  <div className="relative flex-1 min-h-0">
-                    {status === "running" && (
-                      <div className="absolute top-0 left-0 right-0 h-[2px] overflow-hidden pointer-events-none z-20">
-                        <div className="absolute inset-y-0 w-1/2 bg-gradient-to-r from-transparent via-blue-400 to-transparent animate-hmr-slide" />
+                  /* ── Sandpack in-browser preview — shows immediately after code
+                       generation while the local dev server boots in background ── */
+                  <div className="relative flex-1 min-h-0 flex flex-col">
+                    {/* Live server starting banner — disappears when iframe takes over */}
+                    {!repoInfo.vercelUrl && (
+                      <div className="shrink-0 flex items-center gap-2 px-3 py-1.5 bg-blue-50 dark:bg-blue-950/40 border-b border-blue-100 dark:border-blue-900/60">
+                        <Loader2 className="w-3 h-3 text-blue-400 animate-spin shrink-0" />
+                        <span className="text-[11px] text-blue-600 dark:text-blue-400 font-medium">
+                          Browser preview • Live server starting…
+                        </span>
                       </div>
                     )}
-                    <SandpackPreview
-                      files={previewFileMap.files}
-                      template={previewFileMap.template}
-                    />
+                    <div className="relative flex-1 min-h-0">
+                      {status === "running" && (
+                        <div className="absolute top-0 left-0 right-0 h-[2px] overflow-hidden pointer-events-none z-20">
+                          <div className="absolute inset-y-0 w-1/2 bg-gradient-to-r from-transparent via-blue-400 to-transparent animate-hmr-slide" />
+                        </div>
+                      )}
+                      <SandpackPreview
+                        files={previewFileMap.files}
+                        template={previewFileMap.template}
+                      />
+                    </div>
                   </div>
                 ) : previewError ? (
                   retryCount >= 3 ? (

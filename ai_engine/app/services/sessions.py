@@ -560,9 +560,15 @@ async def destroy_session(session_id: str) -> None:
         except Exception as exc:
             logger.error("Error closing conversation: %s", exc)
 
-    # Clean up local workspace directory
+    # Clean up local workspace directory.
+    # Only delete session-specific workspaces (under the storage root).
+    # Shared preview workspaces (/tmp/lucid_ws_*) are managed by
+    # local_preview.py and must NOT be deleted here — the dev server
+    # process is still running and uses those files.
     if session.workspace_dir and os.path.isdir(session.workspace_dir):
-        shutil.rmtree(session.workspace_dir, ignore_errors=True)
+        _wd = session.workspace_dir
+        if not _wd.startswith("/tmp/lucid_ws_"):
+            shutil.rmtree(_wd, ignore_errors=True)
 
 
 async def reap_expired_sessions() -> None:

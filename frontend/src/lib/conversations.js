@@ -49,7 +49,6 @@ export async function listConversations() {
     .from('chat_sessions')
     .select('project_id, user_repo_url, user_repo_provider, title, created_at, updated_at')
     .eq('user_id', user.id)
-    .is('platform_repo_url', null)   // platform-generated projects live in All Apps, not here
     .order('updated_at', { ascending: false });
 
   if (error) return [];

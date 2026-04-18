@@ -15,7 +15,7 @@ import logging
 import google.generativeai as genai
 from fastapi import WebSocket
 
-from .constants import GEMINI_MODEL, GEMINI_BLUEPRINT_MODEL
+from .constants import GEMINI_MODEL, GEMINI_BLUEPRINT_MODEL, GEMINI_RESEARCH_MODEL
 from .ws_utils import _send_chat_message
 
 logger = logging.getLogger(__name__)
@@ -355,7 +355,29 @@ async def gemini_research(
 
     try:
         genai.configure(api_key=gemini_key)
-        model = genai.GenerativeModel(GEMINI_MODEL)
+        _research_system_instruction = (
+            "You are a world-class product researcher and UX strategist. "
+            "You research real products (Stripe, Linear, Notion, Vercel, Airbnb, Shopify, etc.) "
+            "and distill what makes them premium. "
+            "Return precise, factual, structured specifications. "
+            "Prioritize specificity: name real color palettes (HSL values), actual font pairings, "
+            "and proven UI patterns. Never use generic placeholders — every spec must be unique "
+            "to the requested domain."
+        )
+        # Try to enable Google Search grounding (requires Gemini 2.5 model + SDK support)
+        try:
+            _search_tool = genai.protos.Tool(google_search=genai.protos.GoogleSearch())
+            model = genai.GenerativeModel(
+                GEMINI_RESEARCH_MODEL,
+                system_instruction=_research_system_instruction,
+                tools=[_search_tool],
+            )
+        except (AttributeError, Exception):
+            # SDK version does not support google_search grounding — use model without tools
+            model = genai.GenerativeModel(
+                GEMINI_RESEARCH_MODEL,
+                system_instruction=_research_system_instruction,
+            )
 
         spec_prompt = f"""You are a world-class product researcher and UX designer.
 A user wants to build a COMPLETE, PRODUCTION-READY project. Your job is to RESEARCH what this type of project actually needs in the real world, then write a detailed specification.
@@ -462,7 +484,14 @@ If the user's request is short/vague, you MUST still produce a COMPREHENSIVE spe
 Research the specific niche. Customize everything.
 """
         response = await asyncio.wait_for(
-            asyncio.to_thread(model.generate_content, spec_prompt),
+            asyncio.to_thread(
+                model.generate_content,
+                spec_prompt,
+                generation_config=genai.GenerationConfig(
+                    temperature=0.3,
+                    max_output_tokens=16384,
+                ),
+            ),
             timeout=180,
         )
         spec = response.text.strip()

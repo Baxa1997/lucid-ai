@@ -383,9 +383,10 @@ async def build_project_schema(
         "do NOT default to generic blue-tech colors unless the direction calls for it."
     )
 
-    # We need raw JSON output here, not file-based tool_use.
-    # Use a direct Claude call without the write_project_files tool.
+    # Stream the schema response so the user sees heartbeat progress
+    # instead of a silent 30-60s freeze.
     import httpx
+    import time as _time
 
     headers = {
         "Content-Type": "application/json",
@@ -395,29 +396,52 @@ async def build_project_schema(
 
     payload = {
         "model": "claude-sonnet-4-6",  # Fast + cheap for parsing
-        "max_tokens": 16000,
+        "max_tokens": 8000,            # Schema JSON never needs 16K
+        "stream": True,
         "system": _SCHEMA_SYSTEM,
         "messages": [{"role": "user", "content": user_prompt}],
     }
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
+        text_parts: list[str] = []
+        _last_heartbeat = _time.monotonic()
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0)) as client:
+            async with client.stream(
+                "POST",
                 "https://api.anthropic.com/v1/messages",
                 headers=headers,
                 json=payload,
-            )
+            ) as response:
+                if response.status_code != 200:
+                    error_body = await response.aread()
+                    logger.error("Schema parse API error %d: %s", response.status_code, error_body[:300])
+                    await _ws_send(websocket, "progress", "⚠️ Schema parse failed — using research text directly")
+                    return _build_fallback_schema(description, app_type)
 
-        if response.status_code != 200:
-            logger.error("Schema parse API error %d: %s", response.status_code, response.text[:300])
-            await _ws_send(websocket, "progress", "⚠️ Schema parse failed — using research text directly")
-            return _build_fallback_schema(description, app_type)
+                async for line in response.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    raw = line[6:]
+                    if raw == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
 
-        data = response.json()
-        text = ""
-        for block in data.get("content", []):
-            if block.get("type") == "text":
-                text += block["text"]
+                    if chunk.get("type") == "content_block_delta":
+                        delta = chunk.get("delta", {})
+                        if delta.get("type") == "text_delta":
+                            text_parts.append(delta.get("text", ""))
+
+                    # Heartbeat every 12s so the user sees something
+                    _now = _time.monotonic()
+                    if _now - _last_heartbeat > 12:
+                        _last_heartbeat = _now
+                        await _ws_send(websocket, "progress", "📐 Building project structure...")
+
+        text = "".join(text_parts)
 
         if not text:
             logger.error("Schema parse returned empty text")

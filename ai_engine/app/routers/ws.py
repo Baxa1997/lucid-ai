@@ -289,11 +289,25 @@ async def websocket_agent(websocket: WebSocket):
             # ── Send file tree immediately on reconnect ──────────
             # Without this, the Code tab stays empty until the user sends
             # a follow-up task. The file tree must be sent every time.
-            if session.workspace_dir and os.path.isdir(session.workspace_dir):
+            # Prefer the stable /tmp/lucid_ws_* path (populated by background
+            # preview) because it always has the real source files. Fall back
+            # to session.workspace_dir when the preview path doesn't exist yet.
+            _reconnect_ft_path = None
+            if project_id:
+                _rc_short = project_id.replace("-", "")[:12]
+                _rc_preview_tmp = f"/tmp/lucid_ws_{_rc_short}"
+                if os.path.isdir(_rc_preview_tmp):
+                    _reconnect_ft_path = _rc_preview_tmp
+                    # Keep session workspace_dir in sync
+                    session.workspace_dir = _rc_preview_tmp
+            if not _reconnect_ft_path and session.workspace_dir and os.path.isdir(session.workspace_dir):
+                _reconnect_ft_path = session.workspace_dir
+            if _reconnect_ft_path:
                 try:
                     from app.services.pipeline import _send_file_tree
-                    await _send_file_tree(websocket, session.workspace_dir)
-                    logger.info("Sent file_tree on reconnect for session %s", session.session_id)
+                    await _send_file_tree(websocket, _reconnect_ft_path)
+                    logger.info("Sent file_tree on reconnect for session %s from %s",
+                                session.session_id, _reconnect_ft_path)
                 except Exception as ft_err:
                     logger.warning("Failed to send file_tree on reconnect: %s", ft_err)
         else:
@@ -385,17 +399,19 @@ async def websocket_agent(websocket: WebSocket):
                     # Fail silently — if the columns don't exist the flags just stay False/None.
                     platform_repo_url = None
                     generation_complete = False
+                    user_repo_url = None
                     try:
                         async with db_client(user_jwt) as client:
                             flags_r = await (
                                 client.table("chat_sessions")
-                                .select("platform_repo_url, generation_complete")
+                                .select("platform_repo_url, user_repo_url, generation_complete")
                                 .eq("id", prev_sid)
                                 .maybe_single()
                                 .execute()
                             )
                         if flags_r.data:
                             platform_repo_url = flags_r.data.get("platform_repo_url")
+                            user_repo_url = flags_r.data.get("user_repo_url")
                             generation_complete = flags_r.data.get("generation_complete", False)
                     except Exception as _flags_err:
                         logger.debug(
@@ -417,6 +433,7 @@ async def websocket_agent(websocket: WebSocket):
                     _prev_session_data = {
                         "session_id":          prev_sid,
                         "platform_repo_url":   platform_repo_url,
+                        "user_repo_url":       user_repo_url,
                         "generation_complete": generation_complete,
                         "messages":            prev_msgs.data or [],
                     }
@@ -492,6 +509,7 @@ async def websocket_agent(websocket: WebSocket):
             )
             if _prev_session_data and (
                 _prev_session_data.get("platform_repo_url")
+                or _prev_session_data.get("user_repo_url")
                 or _prev_session_data.get("generation_complete")
                 or _wizard_reentry
             ):
@@ -522,7 +540,8 @@ async def websocket_agent(websocket: WebSocket):
                 # Clone the platform repo (or user's repo as fallback) into a
                 # temp workspace, install deps, then start the real dev server.
                 _platform_repo = _prev_session_data.get("platform_repo_url") if _prev_session_data else None
-                _repo_to_clone = _platform_repo or (session.repo_url if session and session.repo_url else None)
+                _user_repo = _prev_session_data.get("user_repo_url") if _prev_session_data else None
+                _repo_to_clone = _platform_repo or _user_repo or (session.repo_url if session and session.repo_url else None)
                 if _repo_to_clone:
                     # Capture conv_id for the closure (stable across reconnects)
                     _bg_conv_id = project_id or conversation_id
@@ -537,10 +556,26 @@ async def websocket_agent(websocket: WebSocket):
                             )
                             from app.services.local_preview import get_active_preview_url
 
+                            # ── Stable path — computed first so the early-return path
+                            # can also send the file tree and update workspace_dir. ──
+                            _short_id = _bg_conv_id.replace("-", "")[:12]
+                            _tmp = f"/tmp/lucid_ws_{_short_id}"
+
                             # ── Re-use an already-running dev server for this session ──
                             _existing_url = get_active_preview_url(conversation_id=_bg_conv_id)
                             if _existing_url:
                                 logger.info("bg_preview: reusing active server at %s for %s", _existing_url, _bg_conv_id)
+                                # Update session workspace_dir so /api/files/read works
+                                if session is not None:
+                                    session.workspace_dir = _tmp
+                                # Send file tree so the Code tab is populated
+                                if os.path.isdir(_tmp):
+                                    try:
+                                        from app.services.pipeline import _send_file_tree
+                                        await _send_file_tree(websocket, _tmp)
+                                        logger.info("bg_preview: sent file_tree on server-reuse (%s)", _tmp)
+                                    except Exception as _ft_reuse_err:
+                                        logger.debug("bg_preview: file_tree send on reuse failed (ok): %s", _ft_reuse_err)
                                 await websocket.send_json({"type": "preview_ready",
                                                            "preview_url": _existing_url,
                                                            "message": f"🖥️ Live preview: {_existing_url}"})
@@ -549,8 +584,7 @@ async def websocket_agent(websocket: WebSocket):
                             # ── Use a STABLE path per conversation ──────────────────
                             # Same path across reconnects — avoids re-clone + re-install
                             # every time the user returns to the workspace page.
-                            _short_id = _bg_conv_id.replace("-", "")[:12]
-                            _tmp = f"/tmp/lucid_ws_{_short_id}"
+                            # (_tmp already computed above)
                             _nm = os.path.join(_tmp, "node_modules")
                             _already_installed = os.path.isdir(_nm) and any(os.scandir(_nm))
 
@@ -567,6 +601,16 @@ async def websocket_agent(websocket: WebSocket):
                                                            "status": "cloning",
                                                            "message": "Cloning repository for preview…"})
 
+                                # Clean stale partial-clone directory so git doesn't
+                                # refuse to clone into a non-empty target.
+                                if os.path.isdir(_tmp) and os.listdir(_tmp):
+                                    import shutil as _shutil
+                                    try:
+                                        _shutil.rmtree(_tmp)
+                                        logger.info("bg_preview: cleared stale directory %s before re-clone", _tmp)
+                                    except Exception as _rm_err:
+                                        logger.warning("bg_preview: could not clear stale dir %s: %s", _tmp, _rm_err)
+
                                 os.makedirs(_tmp, exist_ok=True)
                                 _gh_token = (
                                     os.environ.get("PLATFORM_GITHUB_TOKEN", "")
@@ -578,14 +622,28 @@ async def websocket_agent(websocket: WebSocket):
                                     if _gh_token else _repo_to_clone
                                 )
 
-                                # Clone into a sub-dir first so mkdtemp-like atomicity is preserved,
-                                # then move files up if needed (git needs an empty target).
-                                _clone_target = _tmp if not os.listdir(_tmp) else _tmp
-                                _clone_r = await asyncio.to_thread(
-                                    _sp.run,
-                                    ["git", "clone", "--depth=1", _auth_url, _tmp],
-                                    capture_output=True, timeout=60,
-                                )
+                                try:
+                                    _clone_r = await asyncio.wait_for(
+                                        asyncio.to_thread(
+                                            _sp.run,
+                                            ["git", "clone", "--depth=1", _auth_url, _tmp],
+                                            capture_output=True,
+                                        ),
+                                        timeout=90,
+                                    )
+                                except (asyncio.TimeoutError, TimeoutError):
+                                    logger.warning("bg_preview: clone timed out (90s) for %s", _repo_to_clone)
+                                    await websocket.send_json({"type": "preview_error",
+                                                               "error_stage": "clone",
+                                                               "message": "Clone timed out — repository may be too large or the network is slow."})
+                                    return
+                                except Exception as _clone_exc:
+                                    logger.warning("bg_preview: clone exception for %s: %s", _repo_to_clone, _clone_exc)
+                                    await websocket.send_json({"type": "preview_error",
+                                                               "error_stage": "clone",
+                                                               "message": f"Clone failed: {str(_clone_exc)[:160]}"})
+                                    return
+
                                 if _clone_r.returncode != 0:
                                     _clone_err = (_clone_r.stderr or b"").decode()[:200]
                                     logger.warning("bg_preview: clone failed for %s: %s", _repo_to_clone, _clone_err)
@@ -938,6 +996,31 @@ async def websocket_agent(websocket: WebSocket):
                         "Workspace fully initialized for project %s at %s",
                         project_id, pre_workspace,
                     )
+
+                    # ── Auto bug scan (background) ─────────────────────────────
+                    # Run a lightweight quality scan on the freshly cloned repo.
+                    # Results appear in the chat as a structured report.
+                    # Runs in the background so it never blocks workspace startup.
+                    if api_key:
+                        _scan_workspace = pre_workspace
+                        _scan_api_key   = api_key
+
+                        async def _background_bug_scan():
+                            try:
+                                # Small delay so the workspace READY message arrives first
+                                await asyncio.sleep(3)
+                                from app.services.auto_bug_fixer import scan_and_report_bugs
+                                await scan_and_report_bugs(
+                                    workspace_path=_scan_workspace,
+                                    api_key=_scan_api_key,
+                                    websocket=websocket,
+                                    auto_fix=False,  # report only; user can ask to fix
+                                )
+                            except Exception as _scan_err:
+                                logger.warning("Background bug scan failed (non-fatal): %s", _scan_err)
+
+                        asyncio.create_task(_background_bug_scan())
+
                 elif not clone_fatal:
                     await websocket.send_json({
                         "type": "status",
@@ -1111,10 +1194,69 @@ async def websocket_agent(websocket: WebSocket):
                 # Explicit push request from client
                 new_branch = data.get("newBranch")
                 await _auto_push_if_needed(
-                    websocket, session, 
+                    websocket, session,
                     commit_message=content or "Manual push by user",
                     new_branch=new_branch
                 )
+                continue
+
+            # ── Bug scan / fix shortcut ───────────────────────────
+            # Detect intent: "scan for bugs", "fix the bugs", "run quality check", etc.
+            # Also detects pasted error traces (webpack errors, module-not-found, etc.)
+            _content_lower = content.lower().strip()
+            _is_scan_intent = any(kw in _content_lower for kw in (
+                "scan for bugs", "scan my code", "find bugs", "check for bugs",
+                "run quality", "quality check", "code review", "audit the code",
+                "check code quality",
+            ))
+            _is_fix_intent = any(kw in _content_lower for kw in (
+                "fix the bugs", "fix the issues", "fix bugs", "apply the fixes",
+                "auto fix", "auto-fix", "fix all bugs", "fix the errors",
+                "fix this", "fix it", "fix the error",
+            ))
+            # Detect pasted error traces: if the message looks like a build/runtime
+            # error (contains Error:, at line, Cannot find module, etc.) treat it
+            # as a fix request automatically — no keyword needed.
+            _looks_like_error = (
+                not _is_fix_intent
+                and session.workspace_dir
+                and any(sig in content for sig in (
+                    "Error:", "error TS", "Module not found", "Cannot find module",
+                    "SyntaxError", "TypeError", "ReferenceError", "Failed to compile",
+                    "webpack error", "Build failed", "ENOENT", "Unhandled error",
+                    "Uncaught ", "at Object.", "at Module.",
+                ))
+            )
+            if _looks_like_error:
+                _is_fix_intent = True
+
+            if (_is_scan_intent or _is_fix_intent) and session.workspace_dir and api_key:
+                workspace_path = session.workspace_dir
+                _do_fix = _is_fix_intent
+                try:
+                    from app.services.auto_bug_fixer import scan_and_report_bugs
+                    await websocket.send_json({
+                        "type": "chat_message",
+                        "role": "agent",
+                        "content": (
+                            "🔧 **Running bug scan and applying fixes…**"
+                            if _do_fix
+                            else "🔍 **Running code quality scan…**"
+                        ),
+                    })
+                    await scan_and_report_bugs(
+                        workspace_path=workspace_path,
+                        api_key=api_key,
+                        websocket=websocket,
+                        auto_fix=_do_fix,
+                    )
+                except Exception as _scan_exc:
+                    logger.warning("On-demand bug scan failed: %s", _scan_exc)
+                    await websocket.send_json({
+                        "type": "chat_message",
+                        "role": "agent",
+                        "content": f"⚠️ Bug scan failed: {str(_scan_exc)[:120]}",
+                    })
                 continue
 
             logger.info("[%s] Follow-up: %s", session.session_id, content[:80])
@@ -1281,15 +1423,27 @@ async def websocket_agent(websocket: WebSocket):
         # Destroy workspace only when no background pipeline is running.
         # If the pipeline is still active it needs the workspace on disk.
         if not _pipeline_still_running:
-            # Cancel background preview task (may still be installing deps) so
-            # it can't create a sandbox AFTER we've already run cleanup.
+            # Background preview task lifecycle on disconnect:
+            #   • explicit_stop (user pressed Stop) → cancel immediately
+            #   • network disconnect / browser close  → let it finish in the
+            #     background so the dev server completes startup and registers
+            #     its URL in _active_servers.  The reconnect path reads
+            #     get_active_preview_url() and sends preview_ready to the new
+            #     WebSocket.  _emit() in local_preview.py already swallows
+            #     send errors, so the task completes cleanly after disconnect.
             if background_preview_task and not background_preview_task.done():
-                background_preview_task.cancel()
-                try:
-                    await background_preview_task
-                except (asyncio.CancelledError, Exception):
-                    pass
-                logger.info("Background preview task cancelled on disconnect")
+                if explicit_stop:
+                    background_preview_task.cancel()
+                    try:
+                        await background_preview_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                    logger.info("Background preview task cancelled on explicit stop")
+                else:
+                    logger.info(
+                        "Background preview task detached on disconnect — "
+                        "running in background until dev server is ready"
+                    )
 
             # Stop E2B preview sandbox
             try:
