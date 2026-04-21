@@ -17,7 +17,7 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-white dark:bg-[#0d1117] flex items-center justify-center">
-      <div className="w-6 h-6 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
+      <div className="w-6 h-6 rounded-full border-2 border-emerald-500 border-t-transparent animate-spin" />
     </div>
   );
 }

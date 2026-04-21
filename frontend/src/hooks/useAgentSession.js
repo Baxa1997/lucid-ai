@@ -95,11 +95,18 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   const [previewError, setPreviewError] = useState(null);
   const [retryCount, setRetryCount] = useState(0);
 
+  // ── Live agent status — shown in chat panel during generation ───────────────
+  // { label: string, subtext: string } | null
+  // Updated on task_phase (active) and key progress messages; cleared on complete.
+  const [agentStatus, setAgentStatus] = useState(null);
+
   // ── Plan confirmation state ──────────────────────────────
   // planAwaiting: backend has sent a plan and is waiting for confirm/reject
   // currentPlanData: the planData object from the latest plan message
+  // planConfirmed: true after user clicks Confirm (from either panel or chat bubble)
   const [planAwaiting, setPlanAwaiting] = useState(false);
   const [currentPlanData, setCurrentPlanData] = useState(null);
+  const [planConfirmed, setPlanConfirmed] = useState(false);
 
   // ── Refs ─────────────────────────────────────────────────
   const idCounter = useRef(0);
@@ -329,6 +336,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         if (step === 'finished') {
           // Flush phases + file changes into a permanent chat message
           setFinishSummary(summary || '');
+          setAgentStatus(null);
           setTimeout(() => flushPhasesToChat(summary || ''), 150);
           setState('ready');
           return;
@@ -513,18 +521,26 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
           // Clear previous task's completion state
           setCompletionSummary('');
           setPhases([{ ...msg }]);
-          return;
+        } else {
+          setPhases(prev => {
+            const updated = [...prev];
+            const idx = updated.findIndex(p => p.phase === msg.phase);
+            if (idx >= 0) {
+              updated[idx] = { ...updated[idx], ...msg };
+            } else {
+              updated.push({ ...msg });
+            }
+            return updated.sort((a, b) => a.phase - b.phase);
+          });
         }
-        setPhases(prev => {
-          const updated = [...prev];
-          const idx = updated.findIndex(p => p.phase === msg.phase);
-          if (idx >= 0) {
-            updated[idx] = { ...updated[idx], ...msg };
-          } else {
-            updated.push({ ...msg });
-          }
-          return updated.sort((a, b) => a.phase - b.phase);
-        });
+        // Update live chat status indicator
+        if (msg.status === 'active') {
+          const PHASE_ICONS = { 1: '✓', 2: '📁', 3: '🔍', 4: '📐', 5: '✍️', 6: '🔨', 7: '🚀', 8: '🌐' };
+          const icon = PHASE_ICONS[msg.phase] || '⚡';
+          setAgentStatus({ label: `${icon} ${msg.title}`, subtext: msg.description || '' });
+        } else if (msg.status === 'error') {
+          setAgentStatus({ label: `❌ ${msg.title}`, subtext: msg.description || 'Failed' });
+        }
         return;
       }
 
@@ -628,8 +644,9 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         // The TaskProgress UI already shows the completion state clearly.
         // Pushing 'Task completed.' to chat was confusing during multi-phase pipelines.
         setState('ready');
+        setAgentStatus(null);
         if (msg.message) pushLog(`[Complete] ${msg.message}`, 'system');
-        
+
         // Refresh task status
         setSteps([]);
         setFinishSummary(msg.message || '');
@@ -663,6 +680,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       // ─── Error ──────────────────────────────────
       if (msg.type === 'error') {
         const errMsg = msg.message || 'Unknown error';
+        setAgentStatus(null);
         pushChat('system', `⚠️ ${errMsg}`);
         pushLog(errMsg, 'error');
         if (errMsg.includes('Authentication') || errMsg.includes('Timeout waiting')) {
@@ -676,6 +694,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
 
       if (msg.type === 'stopped') {
         setState('ready');
+        setAgentStatus(null);
         pushChat('system', `⛔ ${msg.message || 'Task stopped by user.'}`);
         pushLog(`[Stopped] ${msg.message || 'Task stopped'}`, 'system');
         setSteps([]);
@@ -785,12 +804,12 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         return;
       }
 
-      // ─── Progress — only show in terminal logs, NOT in chat ────
+      // ─── Progress — show in terminal logs; also update live status subtext ────
       if (msg.type === 'progress') {
         const text = msg.message || '';
         pushLog(text, 'system');
-        // Progress messages go to terminal/logs panel only.
-        // Chat stays clean for actual conversation + deploy results.
+        // Update live status indicator subtext (keep current label)
+        setAgentStatus(prev => prev ? { ...prev, subtext: text } : null);
         return;
       }
 
@@ -954,12 +973,14 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   );
 
   const sendMessageInternal = useCallback(
-    (text, images = []) => {
+    (text, images = [], options = {}) => {
       if (!manager?.isOpen) {
         pushLog('Not connected — cannot send message', 'error');
         return;
       }
       const payload = { type: 'message', content: text };
+      if (options.mode) payload.mode = options.mode;
+      if (options.webSearch !== undefined) payload.web_search = options.webSearch;
       if (images.length > 0) {
         payload.images = images.map((img) => ({
           name: img.name,
@@ -982,13 +1003,13 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   );
 
   const sendMessage = useCallback(
-    (text, images = []) => {
+    (text, images = [], options = {}) => {
       if (!text?.trim() && images.length === 0) return;
       if (!manager?.isOpen) {
         startSession(text?.trim() || '');
         return;
       }
-      sendMessageInternal(text?.trim() || '', images);
+      sendMessageInternal(text?.trim() || '', images, options);
     },
     [startSession, sendMessageInternal]
   );
@@ -1207,19 +1228,25 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     retryCount,      // number — how many retries the user has attempted
     retry,           // (hint?: 'preview') => void — trigger recovery
 
+    // Live agent status shown in chat panel during generation
+    agentStatus,
+
     // Plan confirmation — approve or reject the plan before code generation
     planAwaiting,
     currentPlanData,
+    planConfirmed,
     confirmPlan: useCallback(() => {
       if (!manager?.isOpen) return;
       manager.send({ type: 'plan_confirm' });
       setPlanAwaiting(false);
+      setPlanConfirmed(true);
       pushLog('Plan confirmed — starting code generation...', 'system');
     }, [pushLog]),
     rejectPlan: useCallback((correction) => {
       if (!manager?.isOpen) return;
       manager.send({ type: 'plan_reject', correction });
       setPlanAwaiting(false);
+      setPlanConfirmed(false);
       setCurrentPlanData(null);
       pushLog(`Plan rejected — re-researching: ${correction?.slice(0, 60)}...`, 'system');
     }, [pushLog]),

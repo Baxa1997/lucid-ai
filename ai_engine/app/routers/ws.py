@@ -542,7 +542,36 @@ async def websocket_agent(websocket: WebSocket):
                 _platform_repo = _prev_session_data.get("platform_repo_url") if _prev_session_data else None
                 _user_repo = _prev_session_data.get("user_repo_url") if _prev_session_data else None
                 _repo_to_clone = _platform_repo or _user_repo or (session.repo_url if session and session.repo_url else None)
-                if _repo_to_clone:
+
+                # Also check if there's already a cached workspace in /tmp from the
+                # original generation — if so, we can restart the dev server without
+                # re-cloning even if we have no repo URL (e.g. push failed mid-way).
+                _bg_conv_id_early = project_id or conversation_id
+                _short_early = _bg_conv_id_early.replace("-", "")[:12]
+                _cached_tmp = f"/tmp/lucid_ws_{_short_early}"
+                _has_cached_ws = (
+                    os.path.isdir(_cached_tmp)
+                    and os.path.isdir(os.path.join(_cached_tmp, "node_modules"))
+                )
+
+                # Check if dev server is already alive — if so skip all the setup below
+                _early_active_url = None
+                try:
+                    from app.services.local_preview import get_active_preview_url as _gap
+                    _early_active_url = _gap(conversation_id=_bg_conv_id_early)
+                except Exception:
+                    pass
+                if _early_active_url:
+                    try:
+                        await websocket.send_json({"type": "preview_ready",
+                                                   "preview_url": _early_active_url,
+                                                   "message": f"🖥️ Live preview: {_early_active_url}"})
+                        if session is not None:
+                            session.workspace_dir = _cached_tmp
+                    except Exception:
+                        pass
+
+                if _repo_to_clone or _has_cached_ws:
                     # Capture conv_id for the closure (stable across reconnects)
                     _bg_conv_id = project_id or conversation_id
 
@@ -733,6 +762,9 @@ async def websocket_agent(websocket: WebSocket):
 
             # If a dev server is already running for this project (started by a
             # previous connection's _background_preview), tell the frontend immediately.
+            # If not running but a cached workspace exists (node_modules present),
+            # restart the dev server in the background so the preview recovers
+            # automatically without requiring the user to click "Restart Preview".
             try:
                 from app.services.local_preview import get_active_preview_url
                 _reconnect_conv_id = project_id or conversation_id
@@ -743,6 +775,39 @@ async def websocket_agent(websocket: WebSocket):
                     await websocket.send_json({"type": "preview_ready",
                                                "preview_url": _reconnect_preview_url,
                                                "message": f"🖥️ Live preview: {_reconnect_preview_url}"})
+                else:
+                    # Dev server died — try to restart from cached workspace
+                    _recon_ws = None
+                    if project_id:
+                        _rc_short = project_id.replace("-", "")[:12]
+                        _recon_tmp = f"/tmp/lucid_ws_{_rc_short}"
+                        if os.path.isdir(_recon_tmp) and os.path.isdir(os.path.join(_recon_tmp, "node_modules")):
+                            _recon_ws = _recon_tmp
+                            if session is not None:
+                                session.workspace_dir = _recon_ws
+                    if not _recon_ws and session and session.workspace_dir:
+                        _sd = session.workspace_dir
+                        if os.path.isdir(_sd) and os.path.isdir(os.path.join(_sd, "node_modules")):
+                            _recon_ws = _sd
+                    if _recon_ws:
+                        _rc_conv = _reconnect_conv_id
+                        _rc_ws = _recon_ws
+                        _rc_pm = user_package_manager
+
+                        async def _reconnect_dev_restart():
+                            try:
+                                await start_local_preview(
+                                    workspace_path=_rc_ws,
+                                    conversation_id=_rc_conv,
+                                    websocket=websocket,
+                                    package_manager=_rc_pm,
+                                )
+                            except Exception as _rde:
+                                logger.warning("reconnect: dev server restart failed: %s", _rde)
+
+                        background_preview_task = asyncio.create_task(_reconnect_dev_restart())
+                        logger.info("reconnect: restarting dev server for %s from cached workspace %s",
+                                    _rc_conv, _recon_ws)
             except Exception as _rp_err:
                 logger.debug("reconnect: preview URL check failed (ok): %s", _rp_err)
 
@@ -1105,6 +1170,8 @@ async def websocket_agent(websocket: WebSocket):
             msg_type = data.get("type", "message")
             content = data.get("content", "")
             followup_images = data.get("images", [])
+            chat_mode = data.get("mode", "edit")       # "edit" (default) or "discuss"
+            web_search = data.get("web_search", True)  # frontend toggle
 
             # Heartbeat ping — respond and continue
             if msg_type == "ping":
@@ -1293,17 +1360,26 @@ async def websocket_agent(websocket: WebSocket):
             })
 
             # Build follow-up task with conversation context
-            logger.info("[%s] Starting task: %s", session.session_id, content[:100])
+            logger.info("[%s] Starting task: %s (mode=%s, web_search=%s)",
+                        session.session_id, content[:100], chat_mode, web_search)
             context_briefing = await build_conversation_context(user_id, project_id, user_jwt)
             image_note = (
                 f"\n\n[User attached {len(followup_images)} image(s) — "
                 "they will be analyzed for visual context.]"
                 if followup_images else ""
             )
+            # Discuss mode: agent must NOT modify files — analysis/explanation only
+            _discuss_prefix = (
+                "[DISCUSS MODE — Analyze and explain only. "
+                "Do NOT write, edit, or delete any files. Just answer the question.]\n\n"
+                if chat_mode == "discuss" else ""
+            )
+            # Web search hint for the pipeline (Gemini research step reads this)
+            _web_search_note = "" if web_search else "\n\n[Web search disabled — use only existing codebase knowledge.]"
             full_task = (
-                f"{context_briefing}\n\nCURRENT TASK: {content}{image_note}"
+                f"{context_briefing}\n\nCURRENT TASK: {_discuss_prefix}{content}{image_note}{_web_search_note}"
                 if context_briefing
-                else f"{content}{image_note}"
+                else f"{_discuss_prefix}{content}{image_note}{_web_search_note}"
             )
 
             # Run follow-up pipeline via orchestrator (handles hydration + stop + completion)
@@ -1353,9 +1429,13 @@ async def websocket_agent(websocket: WebSocket):
     finally:
         # Pipeline task lifecycle on disconnect:
         #   • explicit_stop (user pressed Stop) → cancel immediately
-        #   • network disconnect / browser close  → detach WebSocket from proxy
-        #     so the pipeline keeps running silently; events buffer in Redis
-        #     and are replayed when the client reconnects.
+        #   • network disconnect / browser close  → check Redis availability:
+        #       - Redis available  → detach + buffer events for reconnect replay
+        #       - Redis unavailable (no Redis in docker-compose) → schedule a
+        #         watchdog that cancels the pipeline after RECONNECT_GRACE_SECONDS
+        #         to avoid burning API credits on a session that can never be
+        #         recovered (in-memory only, no persistence).
+        _RECONNECT_GRACE_SECONDS = 120  # 2 minutes to reconnect before aborting
         if pipeline_task and not pipeline_task.done():
             if explicit_stop:
                 pipeline_task.cancel()
@@ -1369,10 +1449,44 @@ async def websocket_agent(websocket: WebSocket):
                 # Events are published to Redis Stream until the task finishes.
                 if session and session.ws_proxy is not None:
                     session.ws_proxy.detach()
-                logger.info(
-                    "Pipeline task detached on disconnect — running in background "
-                    "for session %s", getattr(session, "session_id", "?")
-                )
+
+                # Check if Redis is available for session persistence.
+                # Without Redis, session cannot survive a browser reload, so
+                # we cap background running time to RECONNECT_GRACE_SECONDS.
+                _redis_available = False
+                try:
+                    from app.services.redis_client import get_redis as _get_redis
+                    _redis_available = _get_redis() is not None
+                except Exception:
+                    pass
+
+                if not _redis_available:
+                    # No Redis → schedule a watchdog to cancel the pipeline
+                    # if no reconnection happens within the grace period.
+                    _pt = pipeline_task
+                    async def _disconnect_watchdog() -> None:
+                        await asyncio.sleep(_RECONNECT_GRACE_SECONDS)
+                        if not _pt.done():
+                            _pt.cancel()
+                            logger.warning(
+                                "Pipeline cancelled after %ds disconnect timeout "
+                                "(no Redis — session unrecoverable). "
+                                "Session: %s",
+                                _RECONNECT_GRACE_SECONDS,
+                                getattr(session, "session_id", "?"),
+                            )
+                    asyncio.create_task(_disconnect_watchdog())
+                    logger.info(
+                        "Pipeline detached (no Redis) — will auto-cancel in %ds if "
+                        "client does not reconnect. Session: %s",
+                        _RECONNECT_GRACE_SECONDS,
+                        getattr(session, "session_id", "?"),
+                    )
+                else:
+                    logger.info(
+                        "Pipeline task detached on disconnect — running in background "
+                        "for session %s", getattr(session, "session_id", "?")
+                    )
 
         if streaming_task:
             streaming_task.cancel()
@@ -1456,6 +1570,16 @@ async def websocket_agent(websocket: WebSocket):
                 logger.info("Workspace destroyed for conversation %s", conversation_id)
             except Exception as exc:
                 logger.error("Failed to destroy workspace for conversation %s: %s", conversation_id, exc)
+
+        # Cancel any pending plan confirmation Future so the generator
+        # doesn't block forever waiting for a user that already disconnected.
+        try:
+            from app.services.project_generator import pending_plan_confirmations
+            fut = pending_plan_confirmations.pop(id(websocket), None)
+            if fut and not fut.done():
+                fut.cancel()
+        except Exception:
+            pass
 
         logger.info("WebSocket session cleaned up")
 

@@ -97,6 +97,43 @@ async def start_local_preview(
                     message="No preview ports available — please wait and retry.")
         return None
 
+    # ── Pre-flight: restore template UI files from git (fixes corrupted ui/ files) ─
+    try:
+        from app.services.post_generation_fixer import restore_template_ui_files
+        if restore_template_ui_files(workspace_path):
+            logger.info("local_preview: restored src/components/ui/ from git HEAD")
+    except Exception as _ui_err:
+        logger.debug("local_preview: UI restore skipped: %s", _ui_err)
+
+    # ── Pre-flight: restore missing @tailwind directives in globals.css ─
+    # If Claude's rewrite of the theme CSS stripped the @tailwind base/
+    # components/utilities directives, every component renders unstyled.
+    # This fixer prepends them when absent.
+    try:
+        from app.services.post_generation_fixer import fix_missing_tailwind_directives
+        patched_css = fix_missing_tailwind_directives(workspace_path)
+        if patched_css:
+            logger.warning(
+                "local_preview: restored @tailwind directives in %d CSS file(s): %s",
+                len(patched_css), patched_css,
+            )
+    except Exception as _css_err:
+        logger.debug("local_preview: tailwind directive fixer skipped: %s", _css_err)
+
+    # ── Pre-flight: unescape HTML entities that leaked into JSX attributes ─
+    # Claude sometimes writes className=&quot;...&quot; instead of className="..."
+    # which the SWC parser rejects with "Expression expected". Unescape first.
+    try:
+        from app.services.post_generation_fixer import fix_html_entities_in_attributes
+        fixed_attrs = fix_html_entities_in_attributes(workspace_path)
+        if fixed_attrs:
+            logger.warning(
+                "local_preview: unescaped HTML entities in attributes of %d file(s): %s",
+                len(fixed_attrs), fixed_attrs,
+            )
+    except Exception as _attr_err:
+        logger.debug("local_preview: attribute-entity fixer skipped: %s", _attr_err)
+
     # ── Pre-flight: fix dynamic route conflicts ───────────
     try:
         from app.services.post_generation_fixer import fix_dynamic_route_conflicts
@@ -108,8 +145,7 @@ async def start_local_preview(
         logger.debug("local_preview: route conflict fixer skipped: %s", _fix_err)
 
     # ── Pre-flight: fix named-import / default-export mismatches ─
-    # Prevents "Unsupported Server Component type: undefined" at runtime
-    # (e.g. `import { X }` from a file that only has `export default function X`)
+    # Case A: `import { X }` from a file that only has `export default function X`
     try:
         from app.services.post_generation_fixer import fix_named_import_default_export_mismatch
         mismatches = fix_named_import_default_export_mismatch(workspace_path)
@@ -118,6 +154,36 @@ async def start_local_preview(
                         len(mismatches), mismatches)
     except Exception as _fix_err2:
         logger.debug("local_preview: import mismatch fixer skipped: %s", _fix_err2)
+
+    # Case B: `import X from './X'` but X.jsx has no `export default` (only named export)
+    try:
+        from app.services.post_generation_fixer import fix_missing_default_export
+        missing = fix_missing_default_export(workspace_path)
+        if missing:
+            logger.info("local_preview: added missing default export in %d file(s): %s",
+                        len(missing), missing)
+    except Exception as _fix_err3:
+        logger.debug("local_preview: missing-default-export fixer skipped: %s", _fix_err3)
+
+    # ── Pre-flight: eslint --fix (auto-fixes unescaped entities, etc.) ──
+    # Runs after all code fixers so ESLint operates on the corrected files.
+    # Fixes are committed in Phase 7, so Vercel also receives clean code.
+    try:
+        _eslint_cmd = (
+            "npx eslint --fix 'src/**/*.{js,jsx,ts,tsx}' "
+            "--rule 'react/no-unescaped-entities: error' "
+            "--no-ignore 2>/dev/null || true"
+        )
+        _eslint_proc = await asyncio.create_subprocess_shell(
+            _eslint_cmd,
+            cwd=workspace_path,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(_eslint_proc.wait(), timeout=30)
+        logger.info("local_preview: eslint --fix completed")
+    except Exception as _esl_err:
+        logger.debug("local_preview: eslint --fix skipped: %s", _esl_err)
 
     # ── Build the start command ───────────────────────────
     cmd = _build_start_cmd(workspace_path, package_manager, port)

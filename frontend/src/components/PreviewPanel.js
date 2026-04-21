@@ -62,9 +62,9 @@ export default function PreviewPanel({
   return (
     <div className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-lg overflow-hidden my-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-800 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30">
+      <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-800 bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/30">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-500/15 flex items-center justify-center">
+          <div className="w-8 h-8 rounded-full bg-emerald-100 dark:bg-emerald-500/15 flex items-center justify-center">
             <span className="text-lg">🔍</span>
           </div>
           <div>
@@ -160,7 +160,7 @@ export default function PreviewPanel({
                 onChange={(e) => setFeedback(e.target.value)}
                 placeholder="Describe the issue — what should be fixed?"
                 rows={3}
-                className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 resize-none outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 transition-all"
+                className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 resize-none outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500 transition-all"
                 autoFocus
               />
               <div className="flex gap-2">
@@ -169,7 +169,7 @@ export default function PreviewPanel({
                   disabled={!feedback.trim()}
                   className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 font-bold text-sm rounded-xl transition-all ${
                     feedback.trim()
-                      ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-600/20'
+                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-600/20'
                       : 'bg-slate-100 dark:bg-slate-800 text-slate-300 dark:text-slate-600 cursor-not-allowed'
                   }`}
                 >

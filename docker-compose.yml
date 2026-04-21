@@ -2,7 +2,7 @@ services:
   frontend:
     build:
       context: ./frontend
-    pull_policy: build
+    pull_policy: missing
     ports:
       - "3000:3000"
     volumes:
@@ -31,7 +31,7 @@ services:
   ai_engine:
     build:
       context: ./ai_engine
-    pull_policy: build
+    pull_policy: missing
     ports:
       - "8000:8000"
       - "6080:6080"

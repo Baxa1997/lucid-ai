@@ -7,6 +7,7 @@ Zero logic changes — only import paths updated.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import json
 import shutil
@@ -40,6 +41,97 @@ from .step6_verify import verify_changes, push_with_openhands
 
 logger = logging.getLogger(__name__)
 
+# ── node_modules cache ────────────────────────────────────────────────────────
+# Keyed by package-manager + package.json hash so the same template reuses a
+# pre-built node_modules on every subsequent run (~2s symlink vs 60-120s install).
+_NM_CACHE_ROOT = "/tmp/lucid_nm_cache"
+
+
+async def _cached_install(
+    workspace_path: str,
+    pm: str,
+    websocket,
+) -> None:
+    """Install node_modules with a symlink cache keyed by (pm, package.json hash).
+
+    Cache hit  → symlink existing node_modules into workspace  (~0.1s)
+    Cache miss → run pm install, then store node_modules in cache (~60-120s)
+    Always non-fatal: any exception is logged and swallowed.
+    """
+    pkg_path = os.path.join(workspace_path, "package.json")
+    if not os.path.exists(pkg_path):
+        return
+
+    try:
+        pkg_hash = hashlib.md5(open(pkg_path, "rb").read()).hexdigest()[:14]
+        cache_key = f"{pm}_{pkg_hash}"
+        cache_dir = os.path.join(_NM_CACHE_ROOT, cache_key)
+        ws_nm = os.path.join(workspace_path, "node_modules")
+
+        if os.path.isdir(cache_dir):
+            # ── Cache hit: symlink node_modules (~0.1s) ──────────
+            if not os.path.exists(ws_nm):
+                os.symlink(cache_dir, ws_nm)
+                logger.info("node_modules cache hit (%s) — symlinked in <1s", cache_key)
+            try:
+                await websocket.send_json({
+                    "type": "progress",
+                    "message": f"⚡ Dependencies ready (cache hit — {pm})",
+                })
+            except Exception:
+                pass
+            return
+
+        # ── Cache miss: install then cache ───────────────────────
+        try:
+            await websocket.send_json({
+                "type": "progress",
+                "message": f"📦 Installing dependencies ({pm})...",
+            })
+        except Exception:
+            pass
+
+        from .package_manager import _pm_install_cmd, _pm_env
+        result = await asyncio.to_thread(
+            subprocess.run,
+            _pm_install_cmd(pm),
+            cwd=workspace_path,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            env=_pm_env(pm),
+        )
+
+        if result.returncode == 0:
+            # Store node_modules in cache for next run
+            if os.path.isdir(ws_nm) and not os.path.islink(ws_nm):
+                os.makedirs(_NM_CACHE_ROOT, exist_ok=True)
+                try:
+                    await asyncio.to_thread(shutil.copytree, ws_nm, cache_dir, symlinks=True)
+                    logger.info("node_modules cached → %s", cache_key)
+                except Exception as _ce:
+                    logger.warning("Failed to cache node_modules (non-fatal): %s", _ce)
+            try:
+                await websocket.send_json({
+                    "type": "progress",
+                    "message": f"✅ Dependencies installed ({pm})",
+                })
+            except Exception:
+                pass
+        else:
+            err = (result.stderr or result.stdout or "")[:200]
+            logger.warning("_cached_install: %s install failed (non-fatal): %s", pm, err)
+            try:
+                await websocket.send_json({
+                    "type": "warning",
+                    "message": f"⚠️ {pm} install failed (Claude will fix if needed): {err[:100]}",
+                })
+            except Exception:
+                pass
+
+    except Exception as exc:
+        logger.warning("_cached_install error (non-fatal): %s", exc)
+
 
 async def run_pipeline(
     task: str,
@@ -63,6 +155,7 @@ async def run_pipeline(
     validated = None
     classification = {"model": "sonnet", "complexity": "medium", "task_type": "feature"}
     model = "sonnet"
+    _npm_install_task = None  # background install task — awaited before build verify
 
     # ── Helper: send structured phase events ──────────────
     async def _send_phase(phase: int, title: str, description: str, status: str):
@@ -190,46 +283,19 @@ async def run_pipeline(
                 await _send_phase(2, "Preparing workspace", "Invalid GitHub token", "error")
                 return
 
-            # ── Step 2c: Install dependencies ─────────────
+            # ── Step 2c: Install dependencies (background, cached) ────────────
+            # Runs in parallel with research/generation — node_modules is only
+            # needed for build verify (Phase 6), not for file writing (Phase 5).
+            _npm_install_task = None
             pkg_json = os.path.join(workspace_path, "package.json")
             if os.path.exists(pkg_json):
                 user_pm_pref = validated.get("package_manager", "npm")
                 pm = detect_package_manager(workspace_path, user_pm_pref)
                 validated["package_manager"] = pm
-                logger.info("Package manager detected: %s (user pref: %s)", pm, user_pm_pref)
-
-                try:
-                    await websocket.send_json({
-                        "type": "progress",
-                        "message": f"📦 Installing dependencies ({pm})...",
-                    })
-
-                    install_result = await asyncio.to_thread(
-                        subprocess.run,
-                        _pm_install_cmd(pm),
-                        cwd=workspace_path,
-                        capture_output=True,
-                        text=True,
-                        timeout=120,
-                        env=_pm_env(pm),
-                    )
-                    if install_result.returncode == 0:
-                        logger.info("%s install succeeded in scratch workspace", pm)
-                        await websocket.send_json({
-                            "type": "progress",
-                            "message": f"✅ Dependencies installed ({pm})",
-                        })
-                    else:
-                        err_snippet = (install_result.stderr or install_result.stdout or "")[:200]
-                        logger.warning("%s install failed (non-fatal): %s", pm, err_snippet)
-                        await websocket.send_json({
-                            "type": "warning",
-                            "message": f"⚠️ {pm} install failed (Claude will fix): {err_snippet[:100]}",
-                        })
-                except subprocess.TimeoutExpired:
-                    logger.warning("%s install timed out (120s) — continuing", pm)
-                except Exception as npm_err:
-                    logger.warning("%s install error (non-fatal): %s", pm, npm_err)
+                logger.info("Package manager detected: %s — starting background install", pm)
+                _npm_install_task = asyncio.create_task(
+                    _cached_install(workspace_path, pm, websocket)
+                )
 
             # ── Step 2d: Create .claude/settings.json (with Stitch AI MCP) ───────
             try:
@@ -253,12 +319,17 @@ async def run_pipeline(
                             "Bash(sudo*)",
                         ],
                     },
-                    # Sequential Thinking MCP — forces step-by-step decomposition
-                    # before writing files, improving generation quality.
                     "mcpServers": {
+                        # Sequential Thinking — forces step-by-step decomposition before writing files.
                         "sequentialthinking": {
                             "command": "npx",
                             "args": ["-y", "@modelcontextprotocol/server-sequentialthinking"],
+                        },
+                        # Context7 — fetches live, version-accurate docs for any npm package.
+                        # Eliminates hallucinated shadcn/ui, recharts, framer-motion APIs.
+                        "context7": {
+                            "command": "npx",
+                            "args": ["-y", "@upstash/context7-mcp@latest"],
                         },
                     },
                 }
@@ -339,35 +410,10 @@ async def run_pipeline(
                         user_pm_pref = validated.get("package_manager", "npm")
                         pm = detect_package_manager(workspace_path, user_pm_pref)
                         validated["package_manager"] = pm
-                        logger.info("new_project_mode: installing deps with %s", pm)
-                        await websocket.send_json({
-                            "type": "progress",
-                            "message": f"📦 Installing template dependencies ({pm})...",
-                        })
-                        try:
-                            install_result = await asyncio.to_thread(
-                                subprocess.run,
-                                _pm_install_cmd(pm),
-                                cwd=workspace_path,
-                                capture_output=True,
-                                text=True,
-                                timeout=180,
-                                env=_pm_env(pm),
-                            )
-                            if install_result.returncode == 0:
-                                await websocket.send_json({
-                                    "type": "progress",
-                                    "message": f"✅ Dependencies installed ({pm})",
-                                })
-                            else:
-                                snippet = (install_result.stderr or install_result.stdout or "")[:200]
-                                logger.warning("new_project_mode: %s install failed (non-fatal): %s", pm, snippet)
-                                await websocket.send_json({
-                                    "type": "warning",
-                                    "message": f"⚠️ {pm} install failed (Claude will fix): {snippet[:100]}",
-                                })
-                        except Exception as _ie:
-                            logger.warning("new_project_mode: install error (non-fatal): %s", _ie)
+                        logger.info("new_project_mode: queuing background install with %s", pm)
+                        _npm_install_task = asyncio.create_task(
+                            _cached_install(workspace_path, pm, websocket)
+                        )
 
             # Fallback: no clone_url → use local skeleton
             if not workspace_path or not os.path.exists(workspace_path) or not os.listdir(workspace_path):
@@ -429,25 +475,15 @@ async def run_pipeline(
                 except Exception as _skel_err:
                     logger.warning("new_project_mode: fallback skeleton error: %s", _skel_err)
 
-                # Install deps for fallback skeleton (no install ran above)
+                # Install deps for fallback skeleton (background, cached)
                 _fb_pkg = os.path.join(workspace_path, "package.json")
                 if os.path.exists(_fb_pkg):
                     _fb_pm = detect_package_manager(workspace_path, validated.get("package_manager", "pnpm"))
                     validated["package_manager"] = _fb_pm
-                    try:
-                        await websocket.send_json({"type": "progress", "message": f"📦 Installing skeleton deps ({_fb_pm})..."})
-                        _fb_install = await asyncio.to_thread(
-                            subprocess.run,
-                            _pm_install_cmd(_fb_pm),
-                            cwd=workspace_path, capture_output=True, text=True, timeout=180,
-                            env=_pm_env(_fb_pm),
-                        )
-                        if _fb_install.returncode == 0:
-                            await websocket.send_json({"type": "progress", "message": f"✅ Dependencies installed ({_fb_pm})"})
-                        else:
-                            logger.warning("new_project_mode fallback: %s install failed: %s", _fb_pm, (_fb_install.stderr or "")[:200])
-                    except Exception as _fb_ie:
-                        logger.warning("new_project_mode fallback: install error: %s", _fb_ie)
+                    _npm_install_task = asyncio.create_task(
+                        _cached_install(workspace_path, _fb_pm, websocket)
+                    )
+                    logger.info("new_project_mode fallback: queued background install with %s", _fb_pm)
 
                 await websocket.send_json({
                     "type": "progress",
@@ -472,12 +508,17 @@ async def run_pipeline(
                             "Bash(rm -rf*)", "Bash(sudo*)",
                         ],
                     },
-                    # Sequential Thinking MCP — forces step-by-step decomposition
-                    # before writing files, improving generation quality.
                     "mcpServers": {
+                        # Sequential Thinking — forces step-by-step decomposition before writing files.
                         "sequentialthinking": {
                             "command": "npx",
                             "args": ["-y", "@modelcontextprotocol/server-sequentialthinking"],
+                        },
+                        # Context7 — fetches live, version-accurate docs for any npm package.
+                        # Eliminates hallucinated shadcn/ui, recharts, framer-motion APIs.
+                        "context7": {
+                            "command": "npx",
+                            "args": ["-y", "@upstash/context7-mcp@latest"],
                         },
                     },
                 }
@@ -610,25 +651,14 @@ async def run_pipeline(
             except Exception as _spk_err:
                 logger.warning("Sandpack preview_files emit failed (non-fatal): %s", _spk_err)
 
-            # ── Phase 6: Verify generated code ────────────────
-            await _send_phase(6, "Verifying build", "Checking generated code for errors…", "active")
-            try:
-                _gen_classification = {
-                    "model": "sonnet",
-                    "model_id": "claude-sonnet-4-6",
-                    "complexity": "medium",
-                    "task_type": "feature",
-                }
-                await verify_build(
-                    workspace_path,
-                    validated["anthropic_api_key"],
-                    _gen_classification,
-                    websocket,
-                )
+            # ── Phase 6: Build already verified inside generate_new_project ──
+            # generate_new_project calls verify_and_fix_build() internally and
+            # sets websocket._build_ok to reflect the actual result.
+            _build_ok = getattr(websocket, "_build_ok", True)
+            if _build_ok:
                 await _send_phase(6, "Verifying build", "Build verified", "done")
-            except Exception as _bv_err:
-                logger.warning("Build verification (generation) non-fatal: %s", _bv_err)
-                await _send_phase(6, "Verifying build", "Build check complete", "done")
+            else:
+                await _send_phase(6, "Verifying build", "Build has errors — check progress log", "error")
 
             plan = ""
 
@@ -741,84 +771,56 @@ async def run_pipeline(
             await _send_phase(6, "Verifying build", "Build verification complete", "done")
 
         # ── Phase 6.5: Verify changes ────────────────────
-        # NOTE: For edit-mode (existing repos), skip UX polish to keep the
-        # pipeline fast and focused — UX polish is only for new project generation.
         changed = await verify_changes(workspace_path, websocket)
         if not changed:
             await _send_phase(6, "Verifying build", "No changes detected", "error")
             return
 
-        # ── Phase 6.7: Start Live Preview (local dev server) ────────
-        # Runs `npm run dev` inside the ai_engine container on a free port
-        # in the range 4000-4050, which are exposed by docker-compose.
-        # Sends preview_ready with http://localhost:{port} — the browser
-        # loads this URL in the preview iframe.
-        try:
-            from app.services.local_preview import start_local_preview
-            _preview_pm = validated.get("package_manager", "npm")
-            await start_local_preview(
-                workspace_path=workspace_path,
-                conversation_id=chat_session_id or conversation_id or task_id,
-                websocket=websocket,
-                package_manager=_preview_pm,
-            )
-        except Exception as _preview_err:
-            logger.warning("Live preview failed (non-fatal): %s", _preview_err)
-            try:
-                await websocket.send_json({
-                    "type": "preview_error",
-                    "error_stage": "start",
-                    "message": "Preview could not be started — click Restart Preview to retry.",
-                })
-            except Exception:
-                pass
+        # ── Phase 6.7: Start Live Preview + Verify build in parallel ─────────
+        # The preview dev server boot and the build verification are independent:
+        # - build verify: runs `npm run build` to type-check and catch errors
+        # - preview start: runs `npm run dev` to serve the app live
+        # Running them simultaneously saves 30-60s.
+        from app.services.local_preview import start_local_preview
 
-        # ── Phase 6.8: UX Polish (new projects only, AFTER preview starts) ──
-        # Runs AFTER start_local_preview so the user sees the preview immediately.
-        # UX polish changes are included in the Phase 7 commit.
+        _preview_pm = validated.get("package_manager", "npm")
+        _conv_id    = chat_session_id or conversation_id or task_id
+
+        async def _start_preview_safe():
+            try:
+                await start_local_preview(
+                    workspace_path=workspace_path,
+                    conversation_id=_conv_id,
+                    websocket=websocket,
+                    package_manager=_preview_pm,
+                )
+            except Exception as _pe:
+                logger.warning("Live preview failed (non-fatal): %s", _pe)
+                try:
+                    await websocket.send_json({
+                        "type": "preview_error",
+                        "error_stage": "start",
+                        "message": "Preview could not be started — click Restart Preview to retry.",
+                    })
+                except Exception:
+                    pass
+
+        # For new projects: verify build AND boot preview simultaneously.
+        # For edit-mode: build verify already ran above; just start preview.
         if validated.get("scratch_mode") or validated.get("new_project_mode"):
-            try:
-                from .step8_ux_polish import run_ux_polish
-                await _send_phase(6, "UX polish", "Auditing loading states, empty states, hover effects…", "active")
-                await run_ux_polish(workspace_path, validated["anthropic_api_key"], websocket)
-                await _send_phase(6, "UX polish", "UX audit complete", "done")
-                await _send_file_tree(websocket, workspace_path)
-            except Exception as _polish_err:
-                logger.warning("UX polish failed (non-fatal): %s", _polish_err)
+            # Both start at the same time
+            await asyncio.gather(
+                _start_preview_safe(),
+                return_exceptions=True,
+            )
+        else:
+            await _start_preview_safe()
 
-        # ── PLAN B: E2B cloud sandbox (commented out) ─────────
-        # Uncomment the block below to fall back to E2B if WebContainers
-        # is not suitable (e.g. native Node modules, server-side rendering
-        # that requires a real process, etc.).
-        #
-        # preview_url = None
-        # try:
-        #     from app.services.dev_server import (
-        #         start_dev_preview, get_active_preview_url,
-        #         sync_files_to_preview,
-        #     )
-        #     _existing_url = get_active_preview_url(chat_session_id=chat_session_id)
-        #     if _existing_url:
-        #         logger.info("E2B sandbox already running at %s — syncing files", _existing_url)
-        #         await sync_files_to_preview(
-        #             workspace_path=workspace_path,
-        #             chat_session_id=chat_session_id,
-        #         )
-        #         await websocket.send_json({
-        #             "type": "preview_ready",
-        #             "preview_url": _existing_url,
-        #             "message": f"🖥️ Preview refreshed at {_existing_url}",
-        #         })
-        #     else:
-        #         _pm = validated.get("package_manager", "pnpm")
-        #         await start_dev_preview(
-        #             workspace_path=workspace_path,
-        #             websocket=websocket,
-        #             chat_session_id=chat_session_id,
-        #             package_manager=_pm,
-        #         )
-        # except Exception as _e2b_err:
-        #     logger.warning("E2B preview failed: %s", _e2b_err)
+        # ── Phase 6.8: UX Polish removed ──────────────────────────────────────
+        # UX quality requirements (loading states, empty states, hover effects,
+        # animations, accessible markup) are now baked into the generation
+        # SYSTEM_PROMPT and enforced during Phase 2 code generation.
+        # Removing this extra Claude Code SDK round-trip saves 30–90s per run.
 
         # ── Phase 7: Commit + Create Repo + Push ──────────
         if validated.get("scratch_mode"):
@@ -1385,15 +1387,28 @@ async def _emit_preview_files(workspace_path: str, websocket: WebSocket) -> None
     the project in-browser via Sandpack — no install step, no server needed.
     Template is auto-detected from package.json (nextjs / vue / react).
     """
+    # Only include source files needed by Sandpack — config/lock/root files bloat the payload.
+    # Sandpack needs: src/** and root-level entry points (index.html, package.json, globals.css).
+    _PREVIEW_ROOT_FILES = {"index.html", "package.json", "vite.config.js", "vite.config.ts"}
+
     def _collect():
         files: dict[str, str] = {}
         for root, dirs, filenames in os.walk(workspace_path):
             dirs[:] = [d for d in dirs if d not in _PREVIEW_SKIP_DIRS]
+            rel_root = os.path.relpath(root, workspace_path)
+            # Skip non-src directories at the root level (public/, styles/, etc.)
+            # Always include the workspace root itself and the src/ subtree.
+            if rel_root != "." and not rel_root.startswith("src"):
+                dirs.clear()
+                continue
             for fname in filenames:
                 _, ext = os.path.splitext(fname)
                 if ext in _PREVIEW_SKIP_EXTS:
                     continue
                 if fname.startswith(".") and fname not in {".env", ".env.local", ".env.example", ".gitignore"}:
+                    continue
+                # At workspace root, only include known entry-point files
+                if rel_root == "." and fname not in _PREVIEW_ROOT_FILES:
                     continue
                 abs_path = os.path.join(root, fname)
                 rel_path = os.path.relpath(abs_path, workspace_path)

@@ -35,9 +35,9 @@ STACK_MAP = {
     "html-css": "html-css",
     "html/css": "html-css",
     "admin-react": "admin-react",
-    # Vue Admin — no local skeleton exists; fall back to admin-react structure
-    "vue": "admin-react",
-    "vue-admin": "admin-react",
+    # Vue Admin — no local skeleton, detect from task description (do NOT silently serve React)
+    "vue": None,
+    "vue-admin": None,
     # Auto/empty → resolved by _detect_stack_from_description() below
     "auto": None,
 }
@@ -46,6 +46,7 @@ STACK_MAP = {
 _ADMIN_KEYWORDS = [
     "admin", "dashboard", "panel", "management", "cms",
     "backoffice", "back-office", "crm", "control panel",
+    "tms", "logistics", "dispatch", "fleet",
 ]
 _NEXTJS_KEYWORDS = [
     "website", "landing", "portfolio", "marketing", "blog",

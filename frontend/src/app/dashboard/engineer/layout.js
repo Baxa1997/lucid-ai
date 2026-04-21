@@ -334,7 +334,7 @@ export default function EngineerLayout({ children }) {
               <Tooltip label="Expand sidebar" show={true}>
                 <button
                   onClick={toggleCollapsed}
-                  className="w-10 h-10 rounded-xl bg-gradient-to-br from-slate-800 to-slate-900 dark:from-slate-200 dark:to-slate-300 flex items-center justify-center hover:opacity-90 transition-all shadow-sm"
+                  className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center hover:opacity-90 transition-all shadow-sm shadow-emerald-500/30"
                 >
                   <Zap className="w-4 h-4 text-white fill-current" />
                 </button>
@@ -352,7 +352,7 @@ export default function EngineerLayout({ children }) {
                   }}
                   className="flex items-center gap-2.5 hover:opacity-80 transition-opacity"
                 >
-                  <div className="w-8 h-8 bg-gradient-to-br from-slate-800 to-slate-900 dark:from-slate-200 dark:to-slate-300 rounded-lg flex items-center justify-center shrink-0 shadow-sm">
+                  <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-lg flex items-center justify-center shrink-0 shadow-sm shadow-emerald-500/30">
                     <Zap className="w-4 h-4 text-white fill-current" />
                   </div>
                   <span className="font-bold text-slate-900 dark:text-white text-[17px] tracking-tight">Lucid AI</span>
@@ -382,7 +382,7 @@ export default function EngineerLayout({ children }) {
                 className={cn(
                   "w-full flex items-center justify-center rounded-xl text-[13px] font-semibold transition-all duration-150 active:scale-[0.97]",
                   collapsed ? "p-2.5" : "gap-2 px-3 py-2.5",
-                  "bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-slate-100 shadow-sm"
+                  "bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:opacity-90 shadow-sm shadow-emerald-500/25"
                 )}
               >
                 <Plus className="w-4 h-4 shrink-0" strokeWidth={2.5} />
@@ -395,14 +395,14 @@ export default function EngineerLayout({ children }) {
           {wizardIsActive && (
             <div className={cn("px-4 pb-0.5 pt-2", collapsed && "px-2")}>
               <div className={cn(
-                "w-full flex items-center rounded-xl text-[13px] font-medium bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400 border border-blue-200/60 dark:border-blue-500/15",
+                "w-full flex items-center rounded-xl text-[13px] font-medium bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-500/15",
                 collapsed ? "justify-center p-2.5" : "gap-3 px-3 py-2"
               )}>
-                <Sparkles className="w-4 h-4 shrink-0 text-blue-500 dark:text-blue-400" strokeWidth={2} />
+                <Sparkles className="w-4 h-4 shrink-0 text-emerald-500 dark:text-emerald-400" strokeWidth={2} />
                 {!collapsed && (
                   <>
                     <span className="flex-1 text-left">New Project</span>
-                    <div className="w-1.5 h-1.5 rounded-full bg-blue-500 dark:bg-blue-400 animate-pulse shrink-0" />
+                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 animate-pulse shrink-0" />
                   </>
                 )}
               </div>
@@ -439,7 +439,7 @@ export default function EngineerLayout({ children }) {
                     <p className="text-[13px] font-semibold text-slate-800 dark:text-white leading-tight">Upgrade your plan</p>
                     <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">Get more out of your apps</p>
                   </div>
-                  <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-400 to-blue-500 flex items-center justify-center shrink-0 shadow-sm">
+                  <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shrink-0 shadow-sm">
                     <Sparkles className="w-4 h-4 text-white" />
                   </div>
                 </button>

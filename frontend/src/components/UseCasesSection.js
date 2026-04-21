@@ -25,13 +25,13 @@ function DocsMockup() {
           <div className="text-slate-700 leading-relaxed text-[10px]">
             Scanning repository structure and generating comprehensive documentation...
           </div>
-          <div className="mt-1 text-blue-600">$ lucid docs generate --source ./src</div>
+          <div className="mt-1 text-emerald-600">$ lucid docs generate --source ./src</div>
           <div className="text-emerald-600 text-[9px] mt-1 leading-relaxed">
             ✓ Parsed 147 files<br />
             ✓ Extracted 23 API endpoints<br />
             ✓ Generated 12 doc pages
           </div>
-          <div className="text-blue-600 mt-1">$ lucid docs publish</div>
+          <div className="text-emerald-600 mt-1">$ lucid docs publish</div>
           <div className="text-emerald-600">Published to docs.yourapp.com</div>
         </div>
         <div className="flex-1 bg-white p-2.5 flex flex-col">
@@ -41,7 +41,7 @@ function DocsMockup() {
             <div className="text-slate-500 text-[9px]">## Authentication</div>
             <div className="bg-slate-900 text-emerald-400 p-1.5 rounded text-[8px]">POST /api/auth/login</div>
             <div className="text-slate-500 text-[9px]">## Users</div>
-            <div className="bg-slate-900 text-cyan-400 p-1.5 rounded text-[8px]">GET /api/users/:id</div>
+            <div className="bg-slate-900 text-teal-400 p-1.5 rounded text-[8px]">GET /api/users/:id</div>
           </div>
         </div>
       </div>
@@ -66,10 +66,10 @@ function AnalyticsMockup() {
           <div className="text-slate-400 text-[9px]">Lucid AI · 7:02 AM</div>
           <div className="text-slate-700 text-[10px]">I have completed the requested visualizations:</div>
           <div className="mt-1 border border-slate-200 rounded-lg p-2 bg-white">
-            <div className="h-1 w-full bg-blue-200 rounded mb-1" />
-            <div className="h-1 w-3/4 bg-cyan-200 rounded mb-1" />
-            <div className="h-1 w-1/2 bg-blue-300 rounded mb-1" />
-            <div className="h-1 w-2/3 bg-cyan-300 rounded" />
+            <div className="h-1 w-full bg-emerald-200 rounded mb-1" />
+            <div className="h-1 w-3/4 bg-teal-200 rounded mb-1" />
+            <div className="h-1 w-1/2 bg-emerald-300 rounded mb-1" />
+            <div className="h-1 w-2/3 bg-teal-300 rounded" />
             <div className="text-[8px] text-slate-400 mt-1">Price Trend Analysis</div>
           </div>
           <div className="text-slate-400 text-[9px] mt-1 flex items-center gap-1.5">
@@ -78,7 +78,7 @@ function AnalyticsMockup() {
         </div>
         <div className="flex-1 bg-[#1e293b] p-2.5 flex flex-col text-[9px] text-slate-300">
           <div className="flex gap-2 mb-2 text-[8px]">
-            <span className="text-blue-400 border-b border-blue-400 pb-0.5">Shell</span>
+            <span className="text-emerald-400 border-b border-emerald-400 pb-0.5">Shell</span>
             <span className="text-slate-500">Browser</span>
             <span className="text-slate-500">Editor</span>
             <span className="text-slate-500">Planner</span>
@@ -111,7 +111,7 @@ function AppDevMockup() {
         <div className="flex-[1.2] bg-slate-50 p-3 border-r border-slate-100 flex flex-col gap-2 text-left">
           <div className="text-slate-400 text-[9px]">Lucid AI · 3:15 PM</div>
           <div className="text-slate-700 text-[10px]">Fixed 3 critical bugs and added test coverage.</div>
-          <div className="text-blue-600 mt-1">$ npm run test -- --coverage</div>
+          <div className="text-emerald-600 mt-1">$ npm run test -- --coverage</div>
           <div className="text-emerald-600 text-[9px] mt-1 leading-relaxed">
             PASS src/UserDashboard.test.tsx<br />
             ✓ renders user profile (12ms)<br />
@@ -126,7 +126,7 @@ function AppDevMockup() {
             <span className="text-slate-400">localhost:3000</span>
           </div>
           <div className="flex-1 bg-slate-50 rounded-lg p-2 flex flex-col gap-1.5 text-[9px] border border-slate-100">
-            <div className="h-4 w-full bg-blue-100 rounded" />
+            <div className="h-4 w-full bg-emerald-100 rounded" />
             <div className="flex gap-1.5 flex-1">
               <div className="flex-1 bg-white rounded border border-slate-100 p-1">
                 <div className="h-1.5 w-8 bg-slate-200 rounded mb-1" />
@@ -149,19 +149,19 @@ function AppDevMockup() {
 const features = [
   {
     title: "Documentation",
-    color: "from-blue-500 to-cyan-400",
+    color: "from-emerald-500 to-teal-400",
     bullets: ["Auto-generate docs from code or URL", "API reference & SDK documentation", "Compete with enterprise doc platforms"],
     mockup: <DocsMockup />
   },
   {
     title: "Data Engineering + Analysis",
-    color: "from-blue-600 to-cyan-500",
+    color: "from-teal-600 to-emerald-500",
     bullets: ["Data warehouse migrations", "ETL development", "Data cleaning and preprocessing"],
     mockup: <AnalyticsMockup />
   },
   {
     title: "Application Development",
-    color: "from-emerald-400 to-cyan-400",
+    color: "from-emerald-400 to-teal-400",
     bullets: ["Bug fixes & edge case resolution", "Unit and E2E testing", "Building SaaS integrations", "Frontend & backend debugging"],
     mockup: <AppDevMockup />
   }
@@ -172,20 +172,20 @@ const features = [
 const bottomCards = [
   {
     title: "Planning",
-    icon: <Map className="w-5 h-5 text-blue-600" />,
-    iconBg: "bg-blue-100",
+    icon: <Map className="w-5 h-5 text-emerald-600" />,
+    iconBg: "bg-emerald-100",
     items: ["Roadmap generation", "Sprint & milestone planning", "Architecture decisions"]
   },
   {
     title: "Bug & Issue Triage",
-    icon: <ListChecks className="w-5 h-5 text-cyan-600" />,
-    iconBg: "bg-cyan-100",
+    icon: <ListChecks className="w-5 h-5 text-teal-600" />,
+    iconBg: "bg-teal-100",
     items: ["Automated on-call response", "Ticket resolution", "CI/CD autotriage"]
   },
   {
     title: "Documentation",
-    icon: <FileText className="w-5 h-5 text-violet-600" />,
-    iconBg: "bg-violet-100",
+    icon: <FileText className="w-5 h-5 text-emerald-600" />,
+    iconBg: "bg-emerald-100",
     items: ["Enterprise-grade docs", "API reference generation", "Maintaining documentation"]
   }
 ];
@@ -264,7 +264,7 @@ export default function UseCasesSection() {
     <section className="px-6 sm:px-10 pb-24 max-w-[1400px] mx-auto w-full">
       <div className="mb-16">
         <h2 className="text-4xl sm:text-5xl font-bold text-slate-900 dark:text-slate-100 mb-6">
-          Use <span className="text-blue-500 dark:text-blue-400">cases</span>
+          Use <span className="text-emerald-500 dark:text-emerald-400">cases</span>
         </h2>
         <p className="text-lg text-slate-500 dark:text-slate-400 max-w-2xl leading-relaxed">
           From implementing new features to fixing thousands of lint errors, 
@@ -398,7 +398,7 @@ export default function UseCasesSection() {
             <ul className="space-y-3">
               {card.items.map((item, j) => (
                 <li key={j} className="flex items-center gap-2.5 text-[14px] font-medium text-slate-500 dark:text-slate-400">
-                  <div className="w-1.5 h-1.5 rounded-full bg-blue-500 dark:bg-blue-400 shrink-0" />
+                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 shrink-0" />
                   {item}
                 </li>
               ))}

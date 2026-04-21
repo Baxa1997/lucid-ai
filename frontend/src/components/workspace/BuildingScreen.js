@@ -195,7 +195,7 @@ export default function BuildingScreen({
       p.title?.toLowerCase().includes("design"),
   );
   const codingStarted = phases.find(
-    (p) => p.phase === 5 && p.status === "active",
+    (p) => p.phase === 5 && (p.status === "active" || p.status === "done"),
   );
 
   if (designDone && !codingStarted) {
@@ -228,24 +228,24 @@ export default function BuildingScreen({
     <div className="h-full flex flex-col items-center justify-center relative overflow-hidden bg-white dark:bg-[#0d1117]">
       {/* Animated orbs — neutral blue/indigo tones for dark mode visibility */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-[12%] left-[8%] w-80 h-80 bg-blue-300/15 dark:bg-blue-500/8 rounded-full blur-3xl animate-orb-1" />
-        <div className="absolute top-[35%] right-[6%] w-64 h-64 bg-indigo-300/15 dark:bg-indigo-500/8 rounded-full blur-3xl animate-orb-2" />
-        <div className="absolute bottom-[15%] left-[28%] w-72 h-72 bg-blue-200/15 dark:bg-blue-600/6 rounded-full blur-3xl animate-orb-3" />
+        <div className="absolute top-[12%] left-[8%] w-80 h-80 bg-emerald-300/15 dark:bg-emerald-500/8 rounded-full blur-3xl animate-orb-1" />
+        <div className="absolute top-[35%] right-[6%] w-64 h-64 bg-teal-300/15 dark:bg-teal-500/8 rounded-full blur-3xl animate-orb-2" />
+        <div className="absolute bottom-[15%] left-[28%] w-72 h-72 bg-emerald-200/15 dark:bg-emerald-600/6 rounded-full blur-3xl animate-orb-3" />
       </div>
       <div className="absolute bottom-0 left-0 right-0 h-[40%] bg-gradient-to-t from-slate-50/40 via-slate-50/15 to-transparent dark:from-slate-900/20 dark:via-slate-900/5 dark:to-transparent pointer-events-none" />
 
       {/* Logo with pulse rings */}
       <div className="relative z-10 mb-6">
         <div
-          className="absolute -inset-5 rounded-full bg-blue-400/8 dark:bg-blue-400/5 animate-pulse"
+          className="absolute -inset-5 rounded-full bg-emerald-400/8 dark:bg-emerald-400/5 animate-pulse"
           style={{animationDuration: "3s"}}
         />
         <div
-          className="absolute -inset-3 rounded-full bg-blue-400/12 dark:bg-blue-400/8 animate-pulse"
+          className="absolute -inset-3 rounded-full bg-emerald-400/12 dark:bg-emerald-400/8 animate-pulse"
           style={{animationDuration: "2.2s", animationDelay: "0.4s"}}
         />
-        <div className="absolute -inset-1.5 rounded-full bg-blue-400/20 dark:bg-blue-400/10" />
-        <div className="relative w-20 h-20 rounded-full bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center shadow-xl shadow-blue-500/25">
+        <div className="absolute -inset-1.5 rounded-full bg-emerald-400/20 dark:bg-emerald-400/10" />
+        <div className="relative w-20 h-20 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-xl shadow-emerald-500/25">
           <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
             <rect
               x="8"
@@ -300,7 +300,7 @@ export default function BuildingScreen({
           {[0, 1, 2].map((i) => (
             <div
               key={i}
-              className="w-1.5 h-1.5 rounded-full bg-blue-400/70"
+              className="w-1.5 h-1.5 rounded-full bg-emerald-400/70"
               style={{
                 animation: "dot-bounce 1.4s ease-in-out infinite",
                 animationDelay: `${i * 0.22}s`,

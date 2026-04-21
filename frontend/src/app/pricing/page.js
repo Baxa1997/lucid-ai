@@ -34,7 +34,7 @@ const plans = [
     monthly: 15,
     yearly: 12,
     icon: Sparkles,
-    accent: 'blue',
+    accent: 'teal',
     credits: [
       { label: 'generation credits', value: '200', unit: '/mo' },
       { label: 'project slots', value: '5', unit: '' },
@@ -55,7 +55,7 @@ const plans = [
     monthly: 30,
     yearly: 24,
     icon: Rocket,
-    accent: 'violet',
+    accent: 'emerald',
     credits: [
       { label: 'generation credits', value: '500', unit: '/mo' },
       { label: 'project slots', value: '15', unit: '' },
@@ -118,8 +118,8 @@ export default function PricingPage() {
 
   const accentClasses = {
     slate:  { bg: 'bg-slate-100 dark:bg-slate-800', text: 'text-slate-600 dark:text-slate-300', btn: 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-slate-100' },
-    blue:   { bg: 'bg-blue-50 dark:bg-blue-500/10', text: 'text-blue-600 dark:text-blue-400', btn: 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-slate-100' },
-    violet: { bg: 'bg-violet-50 dark:bg-violet-500/10', text: 'text-violet-600 dark:text-violet-400', btn: 'bg-violet-600 text-white hover:bg-violet-700 shadow-sm shadow-violet-600/20' },
+    teal:    { bg: 'bg-teal-50 dark:bg-teal-500/10', text: 'text-teal-600 dark:text-teal-400', btn: 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-slate-100' },
+    emerald: { bg: 'bg-emerald-50 dark:bg-emerald-500/10', text: 'text-emerald-600 dark:text-emerald-400', btn: 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:opacity-90 shadow-sm shadow-emerald-600/20' },
     amber:  { bg: 'bg-amber-50 dark:bg-amber-500/10', text: 'text-amber-600 dark:text-amber-400', btn: 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-slate-100' },
   };
 
@@ -182,7 +182,7 @@ export default function PricingPage() {
                   )}
                 >
                   {plan.featured && (
-                    <div className="absolute -top-px left-1/2 -translate-x-1/2 px-3 py-1 bg-violet-600 text-white text-[10px] font-bold rounded-b-lg uppercase tracking-wider">
+                    <div className="absolute -top-px left-1/2 -translate-x-1/2 px-3 py-1 bg-gradient-to-r from-emerald-500 to-teal-600 text-white text-[10px] font-bold rounded-b-lg uppercase tracking-wider">
                       Most Popular
                     </div>
                   )}

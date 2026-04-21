@@ -83,13 +83,16 @@ function PlanBubble({ msg }) {
 
   // Get workspace context for sending confirmation — PlanBubble is always
   // rendered inside WorkspaceContext.Provider via ChatPanel, so this is safe.
-  const { confirmPlan: ctxConfirmPlan, rejectPlan: ctxRejectPlan } = useWorkspace() || {};
+  const { confirmPlan: ctxConfirmPlan, rejectPlan: ctxRejectPlan, planConfirmed: ctxPlanConfirmed } = useWorkspace() || {};
 
 
   const handleConfirm = () => {
     setConfirmed(true);
     if (ctxConfirmPlan) ctxConfirmPlan();
   };
+
+  // Sync with context — if user confirmed via right panel, mirror that here
+  const isConfirmed = confirmed || (requiresConfirmation && ctxPlanConfirmed);
 
   const handleReject = () => {
     if (!correctionText.trim()) return;
@@ -181,16 +184,16 @@ function PlanBubble({ msg }) {
           </div>
 
           {/* Confirmation buttons — shown only for new plans requiring confirmation */}
-          {requiresConfirmation && !confirmed && !rejected && (
+          {requiresConfirmation && !isConfirmed && !rejected && (
             <div className="px-4 py-3 bg-slate-50/50 dark:bg-[#161b22]/50 border-t border-slate-100 dark:border-[#2d333b]">
               {!showCorrection ? (
                 <div className="flex items-center gap-2">
                   <button
                     onClick={handleConfirm}
-                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-[13px] font-semibold transition-all shadow-sm shadow-emerald-500/20 hover:shadow-emerald-500/30"
+                    className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-[13px] font-semibold transition-all shadow-sm shadow-emerald-500/20 hover:shadow-emerald-500/30"
                   >
                     <Check className="w-3.5 h-3.5" />
-                    Looks Good, Start Building
+                    Confirm
                   </button>
                   <button
                     onClick={() => setShowCorrection(true)}
@@ -243,7 +246,7 @@ function PlanBubble({ msg }) {
           )}
 
           {/* Confirmed state */}
-          {requiresConfirmation && confirmed && (
+          {requiresConfirmation && isConfirmed && (
             <div className="px-4 py-2.5 bg-emerald-50 dark:bg-emerald-950/20 border-t border-emerald-100 dark:border-emerald-900/30 flex items-center gap-2">
               <Check className="w-3.5 h-3.5 text-emerald-500" />
               <span className="text-[12px] font-medium text-emerald-600 dark:text-emerald-400">Plan confirmed — building your project...</span>

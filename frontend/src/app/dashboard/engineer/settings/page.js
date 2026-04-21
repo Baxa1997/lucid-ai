@@ -21,14 +21,14 @@ const tabs = [
     label: 'LLM',
     description: 'AI model configuration',
     Icon: Cpu,
-    color: 'blue',
+    color: 'emerald',
   },
   {
     id: 'mcp',
     label: 'MCP',
     description: 'Server connections',
     Icon: HardDrive,
-    color: 'violet',
+    color: 'emerald',
   },
   {
     id: 'application',
@@ -61,8 +61,8 @@ const tabs = [
 ];
 
 const colorMap = {
-  blue:    { bg: 'bg-blue-50 dark:bg-blue-500/10',    border: 'border-blue-100 dark:border-blue-500/20',   text: 'text-blue-600 dark:text-blue-400',    icon: 'text-blue-500',   activeBg: 'bg-blue-600',    dot: 'bg-blue-500' },
-  violet:  { bg: 'bg-violet-50 dark:bg-violet-500/10',  border: 'border-violet-100 dark:border-violet-500/20', text: 'text-violet-600 dark:text-violet-400',  icon: 'text-violet-500', activeBg: 'bg-violet-600',  dot: 'bg-violet-500' },
+  blue:    { bg: 'bg-emerald-50 dark:bg-emerald-500/10', border: 'border-emerald-100 dark:border-emerald-500/20', text: 'text-emerald-600 dark:text-emerald-400', icon: 'text-emerald-500', activeBg: 'bg-emerald-600', dot: 'bg-emerald-500' },
+  violet:  { bg: 'bg-teal-50 dark:bg-teal-500/10', border: 'border-teal-100 dark:border-teal-500/20', text: 'text-teal-600 dark:text-teal-400', icon: 'text-teal-500', activeBg: 'bg-teal-600', dot: 'bg-teal-500' },
   emerald: { bg: 'bg-emerald-50 dark:bg-emerald-500/10', border: 'border-emerald-100 dark:border-emerald-500/20',text: 'text-emerald-600 dark:text-emerald-400', icon: 'text-emerald-500',activeBg: 'bg-emerald-600', dot: 'bg-emerald-500' },
   amber:   { bg: 'bg-amber-50 dark:bg-amber-500/10',   border: 'border-amber-100 dark:border-amber-500/20',  text: 'text-amber-600 dark:text-amber-400',   icon: 'text-amber-500',  activeBg: 'bg-amber-600',   dot: 'bg-amber-500' },
   rose:    { bg: 'bg-rose-50 dark:bg-rose-500/10',     border: 'border-rose-100 dark:border-rose-500/20',    text: 'text-rose-600 dark:text-rose-400',     icon: 'text-rose-500',   activeBg: 'bg-rose-600',    dot: 'bg-rose-500' },
@@ -130,7 +130,7 @@ function Toggle({ checked, onChange, label, description }) {
         onClick={() => onChange(!checked)}
         className={cn(
           "relative w-11 h-6 rounded-full transition-colors duration-200 shrink-0",
-          checked ? "bg-blue-600" : "bg-slate-200 dark:bg-slate-700"
+          checked ? "bg-emerald-600" : "bg-slate-200 dark:bg-slate-700"
         )}
       >
         <span
@@ -155,7 +155,7 @@ function Dropdown({ value, options, onChange, placeholder }) {
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 hover:border-blue-300 dark:hover:border-blue-500/50 focus:border-blue-300 focus:ring-2 focus:ring-blue-500/10 transition-all outline-none"
+        className="w-full flex items-center justify-between px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 hover:border-emerald-300 dark:hover:border-emerald-500/50 focus:border-emerald-300 focus:ring-2 focus:ring-emerald-500/10 transition-all outline-none"
       >
         <span className={value ? 'text-slate-700 dark:text-slate-200' : 'text-slate-400 dark:text-slate-500'}>{value || placeholder}</span>
         <ChevronDown className={cn("w-4 h-4 text-slate-400 transition-transform", open && "rotate-180")} />
@@ -172,11 +172,11 @@ function Dropdown({ value, options, onChange, placeholder }) {
                   onClick={() => { onChange(opt); setOpen(false); }}
                   className={cn(
                     "w-full flex items-center justify-between px-4 py-2.5 text-sm text-left hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors",
-                    value === opt ? "text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10" : "text-slate-600 dark:text-slate-300"
+                    value === opt ? "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10" : "text-slate-600 dark:text-slate-300"
                   )}
                 >
                   {opt}
-                  {value === opt && <Check className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />}
+                  {value === opt && <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />}
                 </button>
               ))}
             </div>
@@ -336,16 +336,16 @@ const LLMTab = forwardRef(function LLMTab(_, ref) {
                     className={cn(
                       "flex items-center gap-3 px-4 py-3 rounded-xl border text-sm font-medium transition-all text-left",
                       isSelected
-                        ? "border-blue-400 dark:border-blue-500 bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-300 shadow-sm"
-                        : "border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:border-blue-300 dark:hover:border-blue-500/60 hover:bg-white dark:hover:bg-slate-700"
+                        ? "border-emerald-400 dark:border-emerald-500 bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 shadow-sm"
+                        : "border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:border-emerald-300 dark:hover:border-emerald-500/60 hover:bg-white dark:hover:bg-slate-700"
                     )}
                   >
                     <span className={cn(
                       "w-2 h-2 rounded-full shrink-0",
-                      isSelected ? "bg-blue-500" : "bg-slate-300 dark:bg-slate-600"
+                      isSelected ? "bg-emerald-500" : "bg-slate-300 dark:bg-slate-600"
                     )} />
                     {cfg.label}
-                    {isSelected && <Check className="w-4 h-4 ml-auto text-blue-500" />}
+                    {isSelected && <Check className="w-4 h-4 ml-auto text-emerald-500" />}
                   </button>
                 );
               })}
@@ -394,7 +394,7 @@ const LLMTab = forwardRef(function LLMTab(_, ref) {
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               placeholder={hasKey ? '••••••••••••••••••••  (key saved — paste to replace)' : `Paste your ${providerLabel} API key…`}
-              className="w-full px-4 py-2.5 pr-10 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
+              className="w-full px-4 py-2.5 pr-10 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-emerald-300 dark:focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 outline-none transition-all"
             />
             <button
               type="button"
@@ -410,7 +410,7 @@ const LLMTab = forwardRef(function LLMTab(_, ref) {
               href={docsUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-blue-600 dark:text-blue-400 hover:text-blue-500 underline underline-offset-2 transition-colors"
+              className="text-emerald-600 dark:text-emerald-400 hover:text-emerald-500 underline underline-offset-2 transition-colors"
             >
               Get one here ↗
             </a>
@@ -436,7 +436,7 @@ const LLMTab = forwardRef(function LLMTab(_, ref) {
               <input
                 type="text"
                 placeholder={'https://api.anthropic.com'}
-                className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
+                className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-emerald-300 dark:focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 outline-none transition-all"
               />
             </FieldRow>
             <div className="border-t border-slate-100 dark:border-slate-800" />
@@ -444,7 +444,7 @@ const LLMTab = forwardRef(function LLMTab(_, ref) {
               <input
                 type="text"
                 placeholder="e.g. gemini/gemini-3-flash-preview"
-                className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
+                className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-emerald-300 dark:focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 outline-none transition-all"
               />
             </FieldRow>
           </div>
@@ -469,8 +469,8 @@ const LLMTab = forwardRef(function LLMTab(_, ref) {
           className={cn(
             "flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm active:scale-[0.98]",
             saving
-              ? "bg-blue-400 text-white cursor-not-allowed"
-              : "bg-blue-600 text-white hover:bg-blue-700 shadow-blue-600/15"
+              ? "bg-emerald-400 text-white cursor-not-allowed"
+              : "bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-600/15"
           )}
         >
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
@@ -518,7 +518,7 @@ function MCPTab() {
         <div className="mb-5">
           <button
             onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 transition-all shadow-sm shadow-blue-600/15 active:scale-[0.98]"
+            className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm shadow-emerald-600/15 active:scale-[0.98]"
           >
             <Plus className="w-4 h-4" />
             Add Server
@@ -540,8 +540,8 @@ function MCPTab() {
               {servers.map((server) => (
                 <div key={server.id} className="flex items-center justify-between px-5 py-4 hover:bg-slate-50/50 dark:hover:bg-slate-800/50 transition-colors">
                   <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-lg bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 flex items-center justify-center">
-                      <Server className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                    <div className="w-9 h-9 rounded-lg bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-100 dark:border-emerald-500/20 flex items-center justify-center">
+                      <Server className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                     </div>
                     <div>
                       <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">{server.name}</p>
@@ -573,8 +573,8 @@ function MCPTab() {
           <div className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-2xl animate-slide-up">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 flex items-center justify-center">
-                  <HardDrive className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                <div className="w-8 h-8 rounded-lg bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-100 dark:border-emerald-500/20 flex items-center justify-center">
+                  <HardDrive className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                 </div>
                 <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100">Add MCP Server</h3>
               </div>
@@ -593,7 +593,7 @@ function MCPTab() {
                   value={newServerName}
                   onChange={(e) => setNewServerName(e.target.value)}
                   placeholder="e.g. My MCP Server"
-                  className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
+                  className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-emerald-300 dark:focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 outline-none transition-all"
                   autoFocus
                 />
               </div>
@@ -604,7 +604,7 @@ function MCPTab() {
                   value={newServerUrl}
                   onChange={(e) => setNewServerUrl(e.target.value)}
                   placeholder="e.g. http://localhost:3001"
-                  className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
+                  className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-emerald-300 dark:focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 outline-none transition-all"
                 />
               </div>
             </div>
@@ -621,7 +621,7 @@ function MCPTab() {
                 className={cn(
                   "px-5 py-2 rounded-xl text-sm font-bold transition-all",
                   newServerName.trim()
-                    ? "bg-blue-600 text-white hover:bg-blue-700 shadow-sm shadow-blue-600/15"
+                    ? "bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm shadow-emerald-600/15"
                     : "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed"
                 )}
               >
@@ -733,7 +733,7 @@ function ApplicationTab() {
               type="text"
               value={gitUsername}
               onChange={(e) => setGitUsername(e.target.value)}
-              className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
+              className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 focus:border-emerald-300 dark:focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 outline-none transition-all"
             />
           </FieldRow>
 
@@ -744,7 +744,7 @@ function ApplicationTab() {
               type="text"
               value={gitEmail}
               onChange={(e) => setGitEmail(e.target.value)}
-              className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
+              className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 focus:border-emerald-300 dark:focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 outline-none transition-all"
             />
           </FieldRow>
         </div>
@@ -764,9 +764,9 @@ function ApplicationTab() {
             placeholder="Select package manager..."
           />
         </FieldRow>
-        <div className="mt-4 flex items-start gap-2 p-3 bg-blue-50 dark:bg-blue-500/10 border border-blue-100 dark:border-blue-500/20 rounded-xl">
-          <Info className="w-4 h-4 text-blue-500 dark:text-blue-400 shrink-0 mt-0.5" />
-          <p className="text-xs text-blue-600 dark:text-blue-400 leading-relaxed">
+        <div className="mt-4 flex items-start gap-2 p-3 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-100 dark:border-emerald-500/20 rounded-xl">
+          <Info className="w-4 h-4 text-emerald-500 dark:text-emerald-400 shrink-0 mt-0.5" />
+          <p className="text-xs text-emerald-600 dark:text-emerald-400 leading-relaxed">
             For existing projects, the agent will automatically detect the package manager from lock files (yarn.lock, package-lock.json, pnpm-lock.yaml, or bun.lockb).
           </p>
         </div>
@@ -790,8 +790,8 @@ function ApplicationTab() {
           className={cn(
             "flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm active:scale-[0.98]",
             saving
-              ? "bg-blue-400 text-white cursor-not-allowed"
-              : "bg-blue-600 text-white hover:bg-blue-700 shadow-blue-600/15"
+              ? "bg-emerald-400 text-white cursor-not-allowed"
+              : "bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-600/15"
           )}
         >
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
@@ -848,7 +848,7 @@ function SecretsTab() {
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
                   placeholder="e.g. OpenAI_API_Key"
-                  className="w-full px-4 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
+                  className="w-full px-4 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-emerald-300 dark:focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 outline-none transition-all"
                   autoFocus
                 />
               </FieldRow>
@@ -860,7 +860,7 @@ function SecretsTab() {
                   value={newValue}
                   onChange={(e) => setNewValue(e.target.value)}
                   rows={4}
-                  className="w-full px-4 py-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all resize-none font-mono"
+                  className="w-full px-4 py-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-emerald-300 dark:focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 outline-none transition-all resize-none font-mono"
                 />
               </FieldRow>
 
@@ -872,7 +872,7 @@ function SecretsTab() {
                   value={newDescription}
                   onChange={(e) => setNewDescription(e.target.value)}
                   placeholder="What is this secret used for?"
-                  className="w-full px-4 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-300 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all"
+                  className="w-full px-4 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-emerald-300 dark:focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 outline-none transition-all"
                 />
               </FieldRow>
 
@@ -883,7 +883,7 @@ function SecretsTab() {
                   className={cn(
                     "px-5 py-2 rounded-xl text-sm font-bold transition-all",
                     newName.trim() && newValue.trim()
-                      ? "bg-blue-600 text-white hover:bg-blue-700 shadow-sm shadow-blue-600/15"
+                      ? "bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm shadow-emerald-600/15"
                       : "bg-slate-100 dark:bg-slate-700 text-slate-400 dark:text-slate-500 cursor-not-allowed"
                   )}
                 >
@@ -902,7 +902,7 @@ function SecretsTab() {
           <div className="mb-5">
             <button
               onClick={() => setShowAddForm(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 transition-all shadow-sm shadow-blue-600/15 active:scale-[0.98]"
+              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-bold hover:bg-emerald-700 transition-all shadow-sm shadow-emerald-600/15 active:scale-[0.98]"
             >
               <Plus className="w-4 h-4" />
               Add a new secret
@@ -1279,7 +1279,7 @@ export default function SettingsPage() {
                   <div className={cn(
                     "w-7 h-7 rounded-md flex items-center justify-center shrink-0 transition-colors",
                     isActive
-                      ? `${colors?.activeBg || 'bg-blue-600'} text-white`
+                      ? `${colors?.activeBg || 'bg-emerald-600'} text-white`
                       : "bg-slate-200/60 dark:bg-slate-700/60 text-slate-400 dark:text-slate-500 group-hover:text-slate-500 dark:group-hover:text-slate-400"
                   )}>
                     <tab.Icon className="w-3.5 h-3.5" />
@@ -1316,12 +1316,12 @@ export default function SettingsPage() {
               className={cn(
                 "flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[12px] font-semibold transition-all active:scale-[0.98]",
                 headerSaving
-                  ? "bg-blue-400 text-white cursor-not-allowed"
+                  ? "bg-emerald-400 text-white cursor-not-allowed"
                   : headerSaveStatus === 'success'
                     ? "bg-emerald-600 text-white"
                     : activeTab !== 'llm'
                       ? "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed"
-                      : "bg-blue-600 text-white hover:bg-blue-700 shadow-sm shadow-blue-600/20"
+                      : "bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm shadow-emerald-600/20"
               )}
             >
               {headerSaving

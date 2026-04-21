@@ -24,7 +24,7 @@ export default function DocsHeader() {
         {/* Left: Logo + Search */}
         <div className="flex items-center gap-6">
           <Link href="/" className="flex items-center gap-2">
-            <div className="w-7 h-7 bg-gradient-to-br from-violet-600 to-indigo-600 rounded-lg flex items-center justify-center text-white">
+            <div className="w-7 h-7 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-lg flex items-center justify-center text-white">
               <Box className="w-4 h-4 stroke-[2.5]" />
             </div>
             <span className="text-[16px] font-bold tracking-tight text-slate-900 dark:text-slate-100">Lucid AI <span className="text-slate-400 dark:text-slate-500 font-normal">Docs</span></span>
@@ -53,8 +53,8 @@ export default function DocsHeader() {
 
         {/* Right: Actions */}
         <div className="flex items-center gap-2">
-          <button className="flex items-center gap-1.5 px-3 py-1.5 text-[13px] font-medium text-slate-600 dark:text-slate-400 hover:text-violet-600 dark:hover:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-500/10 rounded-lg transition-all">
-            <Sparkles className="w-3.5 h-3.5 text-violet-500 dark:text-violet-400" />
+          <button className="flex items-center gap-1.5 px-3 py-1.5 text-[13px] font-medium text-slate-600 dark:text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 rounded-lg transition-all">
+            <Sparkles className="w-3.5 h-3.5 text-emerald-500 dark:text-emerald-400" />
             Ask AI
           </button>
 
@@ -64,7 +64,7 @@ export default function DocsHeader() {
             Support
           </Link>
 
-          <Link href="/" className="bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-[13px] font-semibold px-4 py-1.5 rounded-lg hover:shadow-lg hover:shadow-violet-500/25 transition-all">
+          <Link href="/" className="bg-gradient-to-r from-emerald-500 to-teal-600 text-white text-[13px] font-semibold px-4 py-1.5 rounded-lg hover:shadow-lg hover:shadow-emerald-500/25 transition-all">
             Lucid AI →
           </Link>
           

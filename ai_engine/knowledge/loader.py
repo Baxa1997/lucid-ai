@@ -21,6 +21,66 @@ logger = logging.getLogger("lucid.knowledge")
 _KNOWLEDGE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+def safe_gemini_text(response_json: dict) -> str:
+    """Extract text from a Gemini generateContent response, tolerating every
+    observed response shape.
+
+    Gemini returns wildly different shapes depending on finish state:
+    - Normal:   {candidates: [{content: {parts: [{text: "..."}]}}]}
+    - String:   {candidates: [{content: "raw text"}]}          (rare)
+    - Thinking: parts contain {thought: true, text: "..."}      → filtered out
+    - Parts-as-strings: {content: {parts: ["text", ...]}}        (seen on some grounding paths)
+    - Blocked:  {candidates: []} + {promptFeedback: {blockReason: "SAFETY"}}
+    - Error:    {error: {message: "..."}}
+
+    Raises RuntimeError for blocked/missing candidates (caller decides whether
+    to fall back). Returns empty string if candidates exist but produced no
+    usable text — caller should treat that as "retry or fail".
+    """
+    if not isinstance(response_json, dict):
+        raise RuntimeError(
+            f"Gemini response is not a dict: {type(response_json).__name__}"
+        )
+
+    candidates = response_json.get("candidates") or []
+    if not isinstance(candidates, list) or not candidates:
+        block_reason = (
+            (response_json.get("promptFeedback") or {}).get("blockReason")
+            or (response_json.get("error") or {}).get("message")
+            or "unknown"
+        )
+        raise RuntimeError(f"Gemini returned no candidates (blockReason={block_reason})")
+
+    candidate = candidates[0] if isinstance(candidates[0], dict) else {}
+    if candidate.get("finishReason") == "SAFETY":
+        raise RuntimeError("Gemini blocked response due to safety filter")
+
+    content = candidate.get("content", {})
+
+    if isinstance(content, str):
+        return content
+
+    if not isinstance(content, dict):
+        return ""
+
+    parts = content.get("parts")
+    if not isinstance(parts, list):
+        return ""
+
+    chunks: list[str] = []
+    for p in parts:
+        if isinstance(p, dict):
+            if p.get("thought"):
+                continue
+            txt = p.get("text")
+            if isinstance(txt, str) and txt:
+                chunks.append(txt)
+        elif isinstance(p, str) and p:
+            chunks.append(p)
+
+    return "\n".join(chunks)
+
+
 def _read_file(filepath: str, max_chars: int = 8000) -> str:
     """Read a file, returning empty string on failure."""
     try:
@@ -128,8 +188,32 @@ LAYOUT_ARCHETYPES = {
 }
 
 
-def _build_rich_classification(layout_archetype: str, domain: str) -> dict:
-    """Build a rich classification dict from layout_archetype + domain."""
+# Structural families — Gemini research is allowed to refine WITHIN a family
+# (e.g. admin_dashboard → crm) but must NOT cross family boundaries.
+_STRUCTURAL_FAMILIES: dict[str, set] = {
+    "single":   {"single_page_landing"},
+    "consumer": {"consumer_website", "portfolio", "blog", "marketplace"},
+    "admin":    {"admin_dashboard", "crm", "tms", "saas_dashboard", "ecommerce"},
+}
+
+def get_structural_family(layout_archetype: str) -> str:
+    """Return the structural family name for a layout_archetype."""
+    for family, members in _STRUCTURAL_FAMILIES.items():
+        if layout_archetype in members:
+            return family
+    return "consumer"
+
+
+def _build_rich_classification(
+    layout_archetype: str,
+    domain: str,
+    locked: bool = False,
+) -> dict:
+    """Build a rich classification dict from layout_archetype + domain.
+
+    locked=True means the classification came from an explicit keyword match and
+    must not be overridden by Gemini's research-time correction.
+    """
     meta = LAYOUT_ARCHETYPES.get(layout_archetype, LAYOUT_ARCHETYPES["consumer_website"])
     # app_type: for admin-like types use "admin_panel", for landing use "landing_page",
     # for known consumer domains use domain string, otherwise use layout hint
@@ -150,16 +234,46 @@ def _build_rich_classification(layout_archetype: str, domain: str) -> dict:
         "nav_style": meta["nav_style"],
         "has_admin_features": meta["has_admin_features"],
         "has_sidebar": meta["has_sidebar"],
+        "classification_locked": locked,
     }
+
+
+_DOMAIN_KW_MAP = [
+    (["restaurant", "food", "cafe", "bakery", "catering", "menu", "chef"], "food_restaurant"),
+    (["travel", "tourism", "hotel", "vacation", "destination", "tour"], "travel"),
+    (["real estate", "property", "apartment", "rental", "listing", "agent", "broker"], "real_estate"),
+    (["fitness", "gym", "workout", "yoga", "crossfit", "personal trainer"], "fitness"),
+    (["booking", "reservation", "appointment", "scheduling"], "booking"),
+    (["medical", "health", "clinic", "doctor", "dental", "pharmacy", "wellness"], "healthcare"),
+    (["school", "university", "course", "learning", "academy", "e-learning"], "education"),
+    (["entertainment", "movie", "cinema", "streaming", "music", "gaming"], "entertainment"),
+    (["social", "community", "forum", "network", "social media"], "social"),
+    (["finance", "banking", "accounting", "fintech", "investment", "insurance",
+      "acca", "cpa", "cfa", "icaew", "cima", "chartered accountant", "aat", "chartered"], "finance"),
+    (["fashion", "clothing", "apparel", "boutique"], "fashion"),
+    (["automotive", "cars", "vehicles", "dealer", "auto"], "automotive"),
+    (["events", "concert", "ticket", "conference", "meetup"], "events"),
+    (["saas", "software", "startup", "platform", "app", "tool", "product"], "saas"),
+]
+
+
+def _detect_domain(text: str) -> str:
+    """Return best-matching domain for a description, or 'general'."""
+    for kws, dom in _DOMAIN_KW_MAP:
+        if any(kw in text for kw in kws):
+            return dom
+    return "general"
 
 
 def _classify_static(task: str) -> dict:
     """Static keyword-based fallback classifier. Returns rich classification dict."""
+    import re as _re
     task_lower = (task or "").lower()
 
-    # "landing page" explicit signal — HIGHEST priority
-    if "landing page" in task_lower:
-        return _build_rich_classification("single_page_landing", "general")
+    # "landing page" OR standalone "landing" word → single_page_landing (HIGHEST priority).
+    # Catches: "acca landing", "startup landing", "saas landing", "landing for X", etc.
+    if "landing page" in task_lower or _re.search(r'\blanding\b', task_lower):
+        return _build_rich_classification("single_page_landing", _detect_domain(task_lower), locked=True)
 
     # TMS / logistics / transport signals — before admin check
     tms_kw = [
@@ -170,7 +284,7 @@ def _classify_static(task: str) -> dict:
         "truck", "carrier", "cargo", "freight",
     ]
     if any(kw in task_lower for kw in tms_kw):
-        return _build_rich_classification("tms", "logistics")
+        return _build_rich_classification("tms", "logistics", locked=True)
 
     # CRM signals — before admin check
     crm_kw = [
@@ -179,7 +293,7 @@ def _classify_static(task: str) -> dict:
         "prospect", "opportunity management",
     ]
     if any(kw in task_lower for kw in crm_kw):
-        return _build_rich_classification("crm", "sales")
+        return _build_rich_classification("crm", "sales", locked=True)
 
     # General admin / management signals
     admin_kw = [
@@ -195,59 +309,42 @@ def _classify_static(task: str) -> dict:
     if any(kw in task_lower for kw in admin_kw):
         # Detect specific admin subtypes
         if any(kw in task_lower for kw in ["project management", "task", "sprint", "agile", "kanban board", "team workspace"]):
-            return _build_rich_classification("saas_dashboard", "saas")
-        return _build_rich_classification("admin_dashboard", "general")
+            return _build_rich_classification("saas_dashboard", "saas", locked=True)
+        return _build_rich_classification("admin_dashboard", "general", locked=True)
 
     # SaaS / project management
     saas_kw = ["project management", "task manager", "team workspace", "sprint", "agile",
                "collaboration tool", "team productivity", "saas platform"]
     if any(kw in task_lower for kw in saas_kw):
-        return _build_rich_classification("saas_dashboard", "saas")
+        return _build_rich_classification("saas_dashboard", "saas", locked=True)
 
     # E-commerce
     ecom_kw = ["ecommerce", "e-commerce", "online shop", "online store",
                "sell products", "product catalog", "checkout", "cart"]
     if any(kw in task_lower for kw in ecom_kw):
-        return _build_rich_classification("ecommerce", "retail")
+        return _build_rich_classification("ecommerce", "retail", locked=True)
 
     # Blog / content
     blog_kw = ["blog", "articles", "magazine", "publication", "news site", "content platform"]
     if any(kw in task_lower for kw in blog_kw):
-        return _build_rich_classification("blog", "content")
+        return _build_rich_classification("blog", "content", locked=True)
 
     # Portfolio
     portfolio_kw = ["portfolio", "showcase", "personal site", "design agency",
                     "freelancer", "photographer", "creative studio"]
     if any(kw in task_lower for kw in portfolio_kw):
-        return _build_rich_classification("portfolio", "creative")
+        return _build_rich_classification("portfolio", "creative", locked=True)
 
     # Marketplace
     marketplace_kw = ["marketplace", "listing platform", "buy and sell",
                       "two-sided", "buyers and sellers"]
     if any(kw in task_lower for kw in marketplace_kw):
-        return _build_rich_classification("marketplace", "commerce")
+        return _build_rich_classification("marketplace", "commerce", locked=True)
 
-    # Domain detection for consumer websites
-    # The "website" keyword combined with a domain → consumer_website
-    domain_map = [
-        (["restaurant", "food", "cafe", "bakery", "catering", "menu", "chef"], "food_restaurant"),
-        (["travel", "tourism", "hotel", "vacation", "destination", "tour"], "travel"),
-        (["real estate", "property", "apartment", "rental", "listing", "agent", "broker"], "real_estate"),
-        (["fitness", "gym", "workout", "yoga", "crossfit", "personal trainer"], "fitness"),
-        (["booking", "reservation", "appointment", "scheduling"], "booking"),
-        (["medical", "health", "clinic", "doctor", "dental", "pharmacy", "wellness"], "healthcare"),
-        (["school", "university", "course", "learning", "academy", "e-learning"], "education"),
-        (["entertainment", "movie", "cinema", "streaming", "music", "gaming"], "entertainment"),
-        (["social", "community", "forum", "network", "social media"], "social"),
-        (["finance", "banking", "accounting", "fintech", "investment", "insurance",
-          "acca", "cpa", "cfa", "icaew", "cima", "chartered accountant"], "finance"),
-        (["fashion", "clothing", "apparel", "boutique"], "fashion"),
-        (["automotive", "cars", "vehicles", "dealer", "auto"], "automotive"),
-        (["events", "concert", "ticket", "conference", "meetup"], "events"),
-    ]
-    for keywords, domain in domain_map:
-        if any(kw in task_lower for kw in keywords):
-            return _build_rich_classification("consumer_website", domain)
+    # Domain detection for consumer websites — reuse the shared _domain_kw_map
+    detected = _detect_domain(task_lower)
+    if detected != "general":
+        return _build_rich_classification("consumer_website", detected)
 
     # Default: treat as consumer website (multi-page public site)
     return _build_rich_classification("consumer_website", "general")
@@ -272,13 +369,24 @@ async def classify_project_type_ai(task: str, gemini_api_key: str = "") -> dict:
     if not gemini_api_key:
         return _classify_static(task)
 
+    # Fast-path: landing / one-pager synonyms are unambiguous — skip Gemini to save time.
+    # Lock the classification so neither Gemini research nor the schema validator can
+    # escalate this to a multi-page consumer_website (which generated spurious
+    # /about, /menu, /contact routes on a "coffee shop landing page" prompt).
+    import re as _re2
+    _t = task.lower()
+    _landing_phrases = ("landing page", "one-page", "one page", "one pager", "one-pager",
+                        "single page", "single-page", "scrollable page", "scroll-through page")
+    if any(p in _t for p in _landing_phrases) or _re2.search(r'\blanding\b', _t):
+        return _build_rich_classification("single_page_landing", _detect_domain(_t), locked=True)
+
     try:
         import httpx
 
         prompt = f"""Classify this project description into a LAYOUT ARCHETYPE and DOMAIN.
 
 LAYOUT ARCHETYPES (choose ONE):
-- single_page_landing: ONE scrollable page, anchor-link nav. Signals: "landing page", "one-page", "promo page", "product launch"
+- single_page_landing: ONE scrollable page, anchor-link nav. Signals: "landing page", "one-page", "promo page", "product launch", "[brand/product] landing" (e.g. "acca landing", "saas landing", "startup landing")
 - consumer_website: Multi-page public site, top header nav. Signals: "X website", "website for X", "[brand] website", business site
 - admin_dashboard: Internal tool, sidebar nav, CRUD tables, KPIs. Signals: "management system", "admin panel", "ops tool", "back-office"
 - crm: Customer pipeline, sidebar, kanban, contacts/deals. Signals: "CRM", "sales pipeline", "lead management", "customer tracker"
@@ -293,8 +401,9 @@ DOMAIN (specific industry/niche):
 finance | food_restaurant | logistics | fitness | healthcare | real_estate | education | automotive | fashion | entertainment | events | travel | social | saas | legal | construction | retail | hospitality | government | general
 
 CRITICAL RULES:
-- "landing page for X" → ALWAYS single_page_landing (even if X is a finance company, restaurant, etc.)
+- "landing page for X" OR "X landing" (any word + landing) → ALWAYS single_page_landing, domain = X's industry
 - "X website" or "website for X" → consumer_website (use the domain of X)
+- Abbreviations like "acca" (finance body), "saas", "b2b" should inform the domain, not the archetype
 - Anything with "management", "system", "tracker", "ops", "admin", "panel" → admin type
 - "TMS", "freight", "fleet", "dispatch", "logistics" → tms
 - "CRM", "pipeline", "leads", "deals", "contacts" → crm
@@ -315,25 +424,7 @@ JSON:"""
 
         if response.status_code == 200:
             data = response.json()
-            candidates = data.get("candidates", [])
-            if not candidates:
-                raise RuntimeError("No candidates")
-
-            candidate = candidates[0]
-            content = candidate.get("content", {})
-
-            if isinstance(content, str):
-                result_text = content
-            elif isinstance(content, dict):
-                parts = content.get("parts", [])
-                if parts and isinstance(parts[0], dict):
-                    result_text = parts[0].get("text", "")
-                elif parts and isinstance(parts[0], str):
-                    result_text = parts[0]
-                else:
-                    result_text = ""
-            else:
-                result_text = ""
+            result_text = safe_gemini_text(data)
 
             # Parse JSON response
             result_text = result_text.strip()
@@ -358,32 +449,58 @@ JSON:"""
     return _classify_static(task)
 
 
-def get_pattern_knowledge(project_type: str) -> str:
+def get_pattern_knowledge(project_type: str, layout_archetype: str = "") -> str:
     """Load the architecture pattern knowledge for the given project type.
 
     Returns a markdown string with code patterns that Claude should follow.
+    Routed first by layout_archetype (specific), then by project_type (legacy).
     """
-    # Map project types to pattern files
-    pattern_map = {
-        "admin_panel": "admin_panel.md",
-        "ecommerce": "admin_panel.md",  # uses same CRUD patterns
-        "analytics": "admin_panel.md",  # sidebar + charts
-        "saas_app": "website_landing.md",  # landing + admin hybrid
-        "landing_page": "website_landing.md",
-        "blog": "admin_panel.md",        # multi-page routing, entities (articles/authors/categories)
-        "documentation": "website_landing.md",
-        "portfolio": "website_landing.md",
-        "social": "admin_panel.md",
-        "booking": "website_landing.md",
+    # layout_archetype → pattern file (most specific)
+    _archetype_pattern_map = {
+        "crm":               "crm_saas.md",
+        "saas_dashboard":    "crm_saas.md",
+        "ecommerce":         "ecommerce.md",
+        "admin_dashboard":   "admin_panel.md",
+        "tms":               "admin_panel.md",
+        "consumer_website":  "consumer_website.md",
+        "portfolio":         "consumer_website.md",
+        "marketplace":       "consumer_website.md",
+        "blog":              "website_landing.md",
+        "single_page_landing": "website_landing.md",
     }
 
-    filename = pattern_map.get(project_type, "website_landing.md")
+    # Legacy project_type fallback
+    _legacy_pattern_map = {
+        "admin_panel":    "admin_panel.md",
+        "ecommerce":      "ecommerce.md",
+        "analytics":      "admin_panel.md",
+        "saas_app":       "crm_saas.md",
+        "landing_page":   "website_landing.md",
+        "blog":           "website_landing.md",
+        "documentation":  "website_landing.md",
+        "portfolio":      "consumer_website.md",
+        "social":         "admin_panel.md",
+        "booking":        "consumer_website.md",
+        "food_restaurant": "consumer_website.md",
+        "healthcare":     "consumer_website.md",
+        "real_estate":    "consumer_website.md",
+        "fitness":        "consumer_website.md",
+        "finance":        "consumer_website.md",
+        "travel":         "consumer_website.md",
+    }
+
+    if layout_archetype:
+        filename = _archetype_pattern_map.get(layout_archetype, "website_landing.md")
+    else:
+        filename = _legacy_pattern_map.get(project_type, "website_landing.md")
+
     filepath = os.path.join(_KNOWLEDGE_DIR, "patterns", filename)
     content = _read_file(filepath)
 
     if content:
+        label = layout_archetype or project_type
         return (
-            f"\n## ARCHITECTURE PATTERN: {project_type.upper().replace('_', ' ')}\n"
+            f"\n## ARCHITECTURE PATTERN: {label.upper().replace('_', ' ')}\n"
             f"Follow these exact code patterns when implementing components.\n"
             f"Copy the structure — adapt the content to the specific project.\n\n"
             f"{content}\n"
@@ -440,7 +557,7 @@ def get_framework_knowledge(stack: str) -> str:
     return ""
 
 
-def build_knowledge_context(task: str, stack: str = "") -> dict:
+def build_knowledge_context(task: str, stack: str = "", layout_archetype: str = "") -> dict:
     """Build the complete knowledge context for a project.
 
     Returns a dict with:
@@ -450,14 +567,14 @@ def build_knowledge_context(task: str, stack: str = "") -> dict:
       - framework_knowledge: str — framework-specific rules markdown
       - full_context: str — all three combined into one injection block
 
-    This is the main entry point. Call this once per project and inject
-    `full_context` into every Claude prompt.
+    Pass layout_archetype (from Gemini research) for precise pattern routing.
     """
     project_type = classify_project_type(task)
-    logger.info("Knowledge loader: project_type=%s, stack=%s", project_type, stack)
+    logger.info("Knowledge loader: project_type=%s layout_archetype=%s stack=%s",
+                project_type, layout_archetype, stack)
 
     ux_skill = get_ux_skill()
-    patterns = get_pattern_knowledge(project_type)
+    patterns = get_pattern_knowledge(project_type, layout_archetype=layout_archetype)
     quality = get_quality_standards()
     framework = get_framework_knowledge(stack)
 

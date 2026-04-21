@@ -18,7 +18,7 @@ export default function DocDashboardPage() {
       {/* ── TOP NAVIGATION ── */}
       <header className="h-16 border-b border-slate-100 dark:border-slate-800 flex items-center px-6 justify-between bg-white dark:bg-[#0d1117] shrink-0 z-30 relative transition-colors duration-200">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white shadow-md shadow-indigo-500/20">
+          <div className="w-8 h-8 bg-emerald-600 rounded-lg flex items-center justify-center text-white shadow-md shadow-emerald-500/20">
             <Book className="w-4 h-4 text-white" />
           </div>
           <div className="flex flex-col">
@@ -34,7 +34,7 @@ export default function DocDashboardPage() {
            {/* Pro Button - Shiny Effect */}
            <button 
              onClick={() => setShowPublishPanel(!showPublishPanel)}
-             className="relative overflow-hidden group bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-semibold pl-4 pr-5 py-2 rounded-full shadow-lg shadow-indigo-500/30 hover:shadow-indigo-600/40 hover:-translate-y-0.5 transition-all duration-300 text-xs flex items-center gap-2"
+             className="relative overflow-hidden group bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-semibold pl-4 pr-5 py-2 rounded-full shadow-lg shadow-emerald-500/30 hover:shadow-emerald-600/40 hover:-translate-y-0.5 transition-all duration-300 text-xs flex items-center gap-2"
            >
              <div className="absolute inset-0 bg-white/20 group-hover:translate-x-full transition-transform duration-700 -skew-x-12 -translate-x-[150%]"></div>
              <Zap className="w-3.5 h-3.5 text-yellow-300 fill-current" />
@@ -56,7 +56,7 @@ export default function DocDashboardPage() {
           
           <div className="p-4 border-b border-slate-100 dark:border-slate-800">
             <button className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-slate-300 dark:hover:border-slate-600 hover:text-slate-900 dark:hover:text-slate-100 font-medium py-2 px-3 rounded-lg text-xs flex items-center justify-center gap-2 shadow-sm transition-all">
-              <Sparkles className="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-400" />
+              <Sparkles className="w-3.5 h-3.5 text-emerald-500 dark:text-emerald-400" />
               Auto-Generate Structure
             </button>
           </div>
@@ -110,17 +110,17 @@ export default function DocDashboardPage() {
             
             {/* Magic Input */}
             <div className="mb-12 relative group">
-               <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/20 to-purple-500/20 rounded-2xl blur-lg opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
-               <div className="relative bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm rounded-xl p-1 flex items-center gap-2 focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-500 transition-all">
-                  <div className="w-10 h-10 rounded-lg bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center shrink-0">
-                     <Sparkles className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+               <div className="absolute inset-0 bg-gradient-to-r from-emerald-500/20 to-teal-500/20 rounded-2xl blur-lg opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+               <div className="relative bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm rounded-xl p-1 flex items-center gap-2 focus-within:ring-2 focus-within:ring-emerald-500/20 focus-within:border-emerald-500 transition-all">
+                  <div className="w-10 h-10 rounded-lg bg-emerald-50 dark:bg-emerald-500/10 flex items-center justify-center shrink-0">
+                     <Sparkles className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
                   </div>
-                  <input 
-                    type="text" 
-                    placeholder="Paste a URL or code snippet to auto-write this page..." 
+                  <input
+                    type="text"
+                    placeholder="Paste a URL or code snippet to auto-write this page..."
                     className="flex-1 bg-transparent border-none outline-none text-sm text-slate-700 dark:text-slate-200 placeholder:text-slate-400 dark:placeholder:text-slate-500 h-10 px-2"
                   />
-                  <button className="bg-indigo-600 text-white text-xs font-medium px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors">
+                  <button className="bg-emerald-600 text-white text-xs font-medium px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors">
                     Generate
                   </button>
                </div>
@@ -131,7 +131,7 @@ export default function DocDashboardPage() {
               <h1 className="text-4xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight mb-6">Authentication</h1>
               
               <p className="text-lg text-slate-600 dark:text-slate-400 leading-relaxed mb-6">
-                Lucid AI uses a secure <span className="font-medium text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10 px-1 rounded">JWT-based authentication</span> system 
+                Lucid AI uses a secure <span className="font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-1 rounded">JWT-based authentication</span> system 
                 to ensure that your API requests are authorized. Before you can make calls to the Core API, 
                 you need to obtain an access token.
               </p>
@@ -190,7 +190,7 @@ export default function DocDashboardPage() {
                 <div className="space-y-4">
                    <div className="flex items-start justify-between">
                       <div className="flex gap-3">
-                         <div className="w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-500/10 flex items-center justify-center text-indigo-600 dark:text-indigo-400 mt-0.5">
+                         <div className="w-8 h-8 rounded-lg bg-emerald-50 dark:bg-emerald-500/10 flex items-center justify-center text-emerald-600 dark:text-emerald-400 mt-0.5">
                             <Globe className="w-4 h-4" />
                          </div>
                          <div>
@@ -201,13 +201,13 @@ export default function DocDashboardPage() {
                       <ToggleSwitch checked={true} />
                    </div>
                    
-                   <input className="w-full text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-slate-700 dark:text-slate-200 focus:outline-none focus:border-indigo-500 transition-colors" value="docs.lucid.ai" readOnly />
+                   <input className="w-full text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1.5 text-slate-700 dark:text-slate-200 focus:outline-none focus:border-emerald-500 transition-colors" value="docs.lucid.ai" readOnly />
                 </div>
 
                 {/* Setting Group 2 */}
                 <div className="flex items-start justify-between">
                   <div className="flex gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-purple-50 dark:bg-purple-500/10 flex items-center justify-center text-purple-600 dark:text-purple-400 mt-0.5">
+                      <div className="w-8 h-8 rounded-lg bg-teal-50 dark:bg-teal-500/10 flex items-center justify-center text-teal-600 dark:text-teal-400 mt-0.5">
                         <FileText className="w-4 h-4" />
                       </div>
                       <div>
@@ -258,12 +258,12 @@ function NavItem({ active, label, onClick }) {
       className={cn(
         "px-2 py-1.5 rounded-md cursor-pointer flex items-center justify-between group transition-colors",
         active 
-          ? "bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-400 font-medium" 
+          ? "bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 font-medium"
           : "text-slate-500 dark:text-slate-400 hover:bg-slate-100/80 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-200"
       )}
     >
       <span className="text-xs">{label}</span>
-      {active && <div className="w-1.5 h-1.5 rounded-full bg-indigo-500"></div>}
+      {active && <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>}
     </div>
   );
 }
@@ -272,7 +272,7 @@ function ToggleSwitch({ checked }) {
   return (
     <div className={cn(
       "w-9 h-5 rounded-full relative cursor-pointer transition-colors duration-300",
-      checked ? "bg-indigo-600" : "bg-slate-300 dark:bg-slate-600"
+      checked ? "bg-emerald-600" : "bg-slate-300 dark:bg-slate-600"
     )}>
       <div className={cn(
         "absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-300",

@@ -38,6 +38,7 @@ export default function ChatPanel() {
     convLoading,
     isWizardMode,
     setConversation,
+    agentStatus,
   } = useWorkspace();
 
   // ── Chat-local state ────────────────────────────────────
@@ -52,6 +53,8 @@ export default function ChatPanel() {
   const [showFigmaInput, setShowFigmaInput] = useState(false);
   const [figmaUrl, setFigmaUrl] = useState('');
   const [chatMode, setChatMode] = useState('edit');
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef(null);
 
   const chatEndRef = useRef(null);
   const chatContainerRef = useRef(null);
@@ -90,7 +93,7 @@ export default function ChatPanel() {
     if (!chatInput.trim() && attachedImages.length === 0) return;
     panelOverrideRef.current = true;
     const text = chatInput.trim();
-    sendMessage(text, attachedImages);
+    sendMessage(text, attachedImages, { mode: chatMode, webSearch: webSearchEnabled });
     setChatInput('');
     setAttachedImages([]);
 
@@ -167,6 +170,31 @@ export default function ChatPanel() {
     if (videoInputRef.current) videoInputRef.current.value = '';
     setShowToolsMenu(false);
   };
+
+  const handleVoice = useCallback(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = 'en-US';
+    recognition.onstart = () => setIsListening(true);
+    recognition.onresult = (e) => {
+      const transcript = e.results[0][0].transcript;
+      setChatInput((prev) => prev ? `${prev} ${transcript}` : transcript);
+    };
+    recognition.onerror = () => setIsListening(false);
+    recognition.onend = () => setIsListening(false);
+    recognitionRef.current = recognition;
+    recognition.start();
+  }, [isListening]);
 
   const handleFigmaSubmit = () => {
     if (!figmaUrl.trim()) return;
@@ -249,13 +277,13 @@ export default function ChatPanel() {
       {/* Full-page drag-and-drop overlay (fixed, covers whole viewport) */}
       {isDragging && (
         <div
-          className="fixed inset-0 z-[100] bg-blue-500/10 dark:bg-blue-500/15 backdrop-blur-[2px] border-2 border-dashed border-blue-400 dark:border-blue-500 flex items-center justify-center"
+          className="fixed inset-0 z-[100] bg-emerald-500/10 dark:bg-emerald-500/15 backdrop-blur-[2px] border-2 border-dashed border-emerald-400 dark:border-emerald-500 flex items-center justify-center"
           onDragLeave={handleDragLeave}
           onDragOver={handleDragOver}
           onDrop={handleDrop}>
-          <div className="flex flex-col items-center gap-3 bg-white/90 dark:bg-slate-900/90 rounded-2xl px-8 py-6 shadow-xl border border-blue-200 dark:border-blue-800">
-            <div className="w-14 h-14 rounded-2xl bg-blue-50 dark:bg-blue-500/15 border border-blue-200 dark:border-blue-700 flex items-center justify-center">
-              <FileImage className="w-6 h-6 text-blue-500" />
+          <div className="flex flex-col items-center gap-3 bg-white/90 dark:bg-slate-900/90 rounded-2xl px-8 py-6 shadow-xl border border-emerald-200 dark:border-emerald-800">
+            <div className="w-14 h-14 rounded-2xl bg-emerald-50 dark:bg-emerald-500/15 border border-emerald-200 dark:border-emerald-700 flex items-center justify-center">
+              <FileImage className="w-6 h-6 text-emerald-500" />
             </div>
             <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Drop images here</p>
             <p className="text-xs text-slate-400 dark:text-slate-500">PNG, JPG, GIF up to 5 files</p>
@@ -278,7 +306,7 @@ export default function ChatPanel() {
 
           {!convLoading && messages.length === 0 && status === 'ready' && !isWizardMode && (
             <div className="flex flex-col items-center justify-center py-20 text-center px-6">
-              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center mb-4 shadow-sm shadow-blue-500/20">
+              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center mb-4 shadow-sm shadow-emerald-500/20">
                 <Sparkles className="w-5 h-5 text-white" />
               </div>
               <p className="text-[14px] font-medium text-slate-500 dark:text-slate-400">
@@ -338,7 +366,7 @@ export default function ChatPanel() {
             };
             return (
               <div className="flex items-center gap-2.5 px-4 py-2.5 animate-in fade-in duration-500">
-                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center shrink-0 shadow-sm shadow-blue-500/15">
+                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shrink-0 shadow-sm shadow-emerald-500/15">
                   <Sparkles className="w-3 h-3 text-white" />
                 </div>
                 <span className="text-[13px] text-slate-500 dark:text-slate-400">
@@ -348,7 +376,7 @@ export default function ChatPanel() {
                   {[0, 200, 400].map((delay) => (
                     <span
                       key={delay}
-                      className="w-1 h-1 rounded-full bg-blue-400/70 animate-bounce"
+                      className="w-1 h-1 rounded-full bg-emerald-400/70 animate-bounce"
                       style={{ animationDelay: `${delay}ms`, animationDuration: '1s' }}
                     />
                   ))}
@@ -356,29 +384,6 @@ export default function ChatPanel() {
               </div>
             );
           })()}
-
-          {/* Thinking indicator — mid-conversation, after first agent reply */}
-          {status === 'running' &&
-            messages.filter((m) => !m.fromHistory && m.role === 'agent').length > 0 &&
-            messages.filter((m) => !m.fromHistory).slice(-1)[0]?.role !== 'agent' && (
-              <div className="flex items-center gap-3 px-4 py-3 w-full animate-in fade-in duration-300">
-                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center shrink-0 shadow-sm shadow-blue-500/20">
-                  <Sparkles className="w-3.5 h-3.5 text-white" />
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[13px] font-medium text-slate-500 dark:text-slate-400">Thinking</span>
-                  <div className="flex items-center gap-1">
-                    {[0, 200, 400].map((delay) => (
-                      <span
-                        key={delay}
-                        className="w-[5px] h-[5px] rounded-full bg-slate-400 dark:bg-slate-500 animate-thinking-dot"
-                        style={{ animationDelay: `${delay}ms` }}
-                      />
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
 
           <div ref={chatEndRef} className="h-4" />
         </div>
@@ -452,8 +457,8 @@ export default function ChatPanel() {
               onChange={(e) => setChatInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="What would you like to change?"
-              className="w-full px-4 pt-3.5 pb-8 min-h-[80px] max-h-[160px] outline-none text-[13px] text-[#1f2937] dark:text-slate-100 placeholder:text-[#9ca3af] dark:placeholder:text-slate-500 resize-none leading-relaxed"
-              style={{ background: 'transparent' }}
+              className="w-full px-4 pt-3.5 pb-8 min-h-[80px] max-h-[240px] outline-none text-[13px] text-[#1f2937] dark:text-slate-100 placeholder:text-[#9ca3af] dark:placeholder:text-slate-500 resize-none leading-relaxed break-words"
+              style={{ background: 'transparent', wordBreak: 'break-word', overflowWrap: 'break-word' }}
               rows={2}
             />
           </div>
@@ -488,11 +493,11 @@ export default function ChatPanel() {
                     <div className="border-t border-slate-100 dark:border-[#2d333b]" />
                     <div className="py-1">
                       <button type="button" onClick={() => setWebSearchEnabled(!webSearchEnabled)} className="w-full flex items-center gap-3 px-3 py-2.5 text-[13px] text-left hover:bg-slate-50 dark:hover:bg-white/[0.04]">
-                        <Globe className={cn('w-4 h-4', webSearchEnabled ? 'text-blue-500' : 'text-slate-400')} />
-                        <span className={cn('flex-1 font-medium', webSearchEnabled ? 'text-blue-600 dark:text-blue-400' : 'text-slate-700 dark:text-slate-300')}>
+                        <Globe className={cn('w-4 h-4', webSearchEnabled ? 'text-emerald-500' : 'text-slate-400')} />
+                        <span className={cn('flex-1 font-medium', webSearchEnabled ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-700 dark:text-slate-300')}>
                           Web search
                         </span>
-                        {webSearchEnabled && <Check className="w-4 h-4 text-blue-500" />}
+                        {webSearchEnabled && <Check className="w-4 h-4 text-emerald-500" />}
                       </button>
                     </div>
                     {showFigmaInput && (
@@ -502,13 +507,13 @@ export default function ChatPanel() {
                           value={figmaUrl}
                           onChange={(e) => setFigmaUrl(e.target.value)}
                           placeholder="https://figma.com/file/..."
-                          className="w-full text-[12px] px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] text-slate-700 dark:text-slate-300 outline-none focus:border-blue-400"
+                          className="w-full text-[12px] px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] text-slate-700 dark:text-slate-300 outline-none focus:border-emerald-400"
                           onKeyDown={(e) => e.key === 'Enter' && handleFigmaSubmit()}
                         />
                         <button
                           type="button"
                           onClick={handleFigmaSubmit}
-                          className="mt-1.5 w-full text-[12px] font-semibold bg-blue-500 text-white rounded-lg py-1.5 hover:bg-blue-600 transition-colors">
+                          className="mt-1.5 w-full text-[12px] font-semibold bg-emerald-500 text-white rounded-lg py-1.5 hover:bg-emerald-600 transition-colors">
                           Add Figma link
                         </button>
                       </div>
@@ -560,8 +565,14 @@ export default function ChatPanel() {
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
-                className="p-1.5 text-[#6b7280] hover:text-[#374151] dark:text-slate-400 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/[0.06] rounded-md transition-colors"
-                title="Voice input">
+                onClick={handleVoice}
+                className={cn(
+                  'p-1.5 rounded-md transition-colors',
+                  isListening
+                    ? 'text-red-500 bg-red-50 dark:bg-red-900/20 animate-pulse'
+                    : 'text-[#6b7280] hover:text-[#374151] dark:text-slate-400 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/[0.06]',
+                )}
+                title={isListening ? 'Stop listening' : 'Voice input'}>
                 <Mic className="w-4 h-4" />
               </button>
 

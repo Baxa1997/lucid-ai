@@ -26,7 +26,7 @@ export default function UsageDocsPage() {
       {/* ── Sidebar TOC ── */}
       <aside className="w-[200px] shrink-0 border-r border-slate-200 dark:border-slate-800/60 bg-white dark:bg-[#0d1117] overflow-y-auto py-6 px-3">
         <div className="flex items-center gap-2 px-3 mb-5">
-          <BookOpen className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+          <BookOpen className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
           <span className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-[0.1em]">
             Usage Guide
           </span>
@@ -44,7 +44,7 @@ export default function UsageDocsPage() {
               className={cn(
                 "block px-3 py-2 rounded-lg text-[13px] font-medium transition-all duration-150",
                 activeSection === section.id
-                  ? "bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400"
+                  ? "bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
                   : "text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-white/[0.03] hover:text-slate-700 dark:hover:text-slate-300"
               )}
             >
@@ -61,7 +61,7 @@ export default function UsageDocsPage() {
           {/* Title */}
           <div className="mb-8">
             <div className="flex items-center gap-3 mb-4">
-              <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-600/20">
+              <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-lg shadow-emerald-600/20">
                 <Zap className="w-5 h-5 text-white fill-current" />
               </div>
               <div>
@@ -73,7 +73,7 @@ export default function UsageDocsPage() {
                 </p>
               </div>
             </div>
-            <div className="h-px bg-gradient-to-r from-blue-500/30 via-slate-200 dark:via-slate-800 to-transparent mt-6" />
+            <div className="h-px bg-gradient-to-r from-emerald-500/30 via-slate-200 dark:via-slate-800 to-transparent mt-6" />
           </div>
 
           {/* ═══════════════════════════════════════════════
@@ -81,7 +81,7 @@ export default function UsageDocsPage() {
           ═══════════════════════════════════════════════ */}
           <section id="getting-started" className="mb-10 scroll-mt-8">
             <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-4 flex items-center gap-3">
-              <Play className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+              <Play className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
               Getting Started
             </h2>
             <p className="text-[15px] text-slate-600 dark:text-slate-300 leading-relaxed mb-6">
@@ -100,8 +100,8 @@ export default function UsageDocsPage() {
                   { step: '4', text: 'Review the AI\'s changes and approve', icon: CheckCircle2 },
                 ].map((item) => (
                   <div key={item.step} className="flex items-start gap-4">
-                    <div className="w-7 h-7 rounded-lg bg-blue-50 dark:bg-blue-500/10 border border-blue-100 dark:border-blue-500/20 flex items-center justify-center shrink-0 mt-0.5">
-                      <span className="text-xs font-bold text-blue-700 dark:text-blue-400">{item.step}</span>
+                    <div className="w-7 h-7 rounded-lg bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-100 dark:border-emerald-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                      <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400">{item.step}</span>
                     </div>
                     <div className="flex items-center gap-2 text-[14px] text-slate-600 dark:text-slate-300 font-medium pt-1">
                       <item.icon className="w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0" />
@@ -112,9 +112,9 @@ export default function UsageDocsPage() {
               </div>
             </div>
 
-            <div className="flex items-start gap-3 p-4 bg-blue-50 dark:bg-blue-500/5 border border-blue-200 dark:border-blue-500/20 rounded-xl">
-              <Zap className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
-              <p className="text-sm text-blue-800 dark:text-blue-300 leading-relaxed">
+            <div className="flex items-start gap-3 p-4 bg-emerald-50 dark:bg-emerald-500/5 border border-emerald-200 dark:border-emerald-500/20 rounded-xl">
+              <Zap className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+              <p className="text-sm text-emerald-800 dark:text-emerald-300 leading-relaxed">
                 <strong>Tip:</strong> You can also start a scratch session without connecting a repository. 
                 Just click "Start from Scratch" on the main dashboard to experiment freely.
               </p>
@@ -138,7 +138,7 @@ export default function UsageDocsPage() {
               <div>
                 <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 mb-2">Step 1: Navigate to Integrations</h3>
                 <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">
-                  Go to <code className="px-1.5 py-0.5 bg-slate-100 dark:bg-white/[0.06] rounded text-blue-600 dark:text-blue-400 text-xs font-mono">Integrations</code> in the sidebar. You'll see available Git providers listed as cards.
+                  Go to <code className="px-1.5 py-0.5 bg-slate-100 dark:bg-white/[0.06] rounded text-emerald-600 dark:text-emerald-400 text-xs font-mono">Integrations</code> in the sidebar. You'll see available Git providers listed as cards.
                 </p>
               </div>
 
@@ -165,7 +165,7 @@ export default function UsageDocsPage() {
           ═══════════════════════════════════════════════ */}
           <section id="select-project" className="mb-10 scroll-mt-8">
             <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-4 flex items-center gap-3">
-              <FolderGit2 className="w-5 h-5 text-violet-600 dark:text-violet-400" />
+              <FolderGit2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
               Select Project & Branch
             </h2>
             <p className="text-[15px] text-slate-600 dark:text-slate-300 leading-relaxed mb-6">
@@ -175,8 +175,8 @@ export default function UsageDocsPage() {
             <div className="bg-white dark:bg-[#151b23] rounded-2xl border border-slate-200 dark:border-slate-700/50 p-6">
               <div className="space-y-5">
                 <div className="flex items-start gap-4">
-                  <div className="w-8 h-8 rounded-lg bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 flex items-center justify-center shrink-0">
-                    <GitBranch className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                  <div className="w-8 h-8 rounded-lg bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-100 dark:border-emerald-500/20 flex items-center justify-center shrink-0">
+                    <GitBranch className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                   </div>
                   <div>
                     <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 mb-1">Select Provider</h3>
@@ -187,8 +187,8 @@ export default function UsageDocsPage() {
                 </div>
 
                 <div className="flex items-start gap-4">
-                  <div className="w-8 h-8 rounded-lg bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 flex items-center justify-center shrink-0">
-                    <FolderGit2 className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                  <div className="w-8 h-8 rounded-lg bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-100 dark:border-emerald-500/20 flex items-center justify-center shrink-0">
+                    <FolderGit2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                   </div>
                   <div>
                     <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 mb-1">Pick a Repository</h3>
@@ -200,8 +200,8 @@ export default function UsageDocsPage() {
                 </div>
 
                 <div className="flex items-start gap-4">
-                  <div className="w-8 h-8 rounded-lg bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 flex items-center justify-center shrink-0">
-                    <GitBranch className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+                  <div className="w-8 h-8 rounded-lg bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-100 dark:border-emerald-500/20 flex items-center justify-center shrink-0">
+                    <GitBranch className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                   </div>
                   <div>
                     <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 mb-1">Choose a Branch</h3>
@@ -230,7 +230,7 @@ export default function UsageDocsPage() {
           ═══════════════════════════════════════════════ */}
           <section id="give-task" className="mb-10 scroll-mt-8">
             <h2 className="text-2xl font-bold text-slate-900 dark:text-slate-100 mb-4 flex items-center gap-3">
-              <MessageSquare className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+              <MessageSquare className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
               Give a Task
             </h2>
             <p className="text-[15px] text-slate-600 dark:text-slate-300 leading-relaxed mb-6">
@@ -283,12 +283,12 @@ export default function UsageDocsPage() {
                 {
                   title: 'Planning',
                   desc: 'The agent analyzes your request and creates an execution plan.',
-                  color: 'blue',
+                  color: 'teal',
                 },
                 {
                   title: 'Coding',
                   desc: 'It writes or modifies files in a sandboxed Docker container, ensuring your actual code is safe.',
-                  color: 'violet',
+                  color: 'emerald',
                 },
                 {
                   title: 'Running Commands',
@@ -304,8 +304,7 @@ export default function UsageDocsPage() {
                 <div key={phase.title} className="flex items-start gap-4 bg-white dark:bg-[#151b23] rounded-xl border border-slate-200 dark:border-slate-700/50 p-5">
                   <div className={cn(
                     "w-3 h-3 rounded-full shrink-0 mt-1.5",
-                    phase.color === 'blue' ? 'bg-blue-500' :
-                    phase.color === 'violet' ? 'bg-violet-500' :
+                    phase.color === 'teal' ? 'bg-teal-500' :
                     phase.color === 'emerald' ? 'bg-emerald-500' : 'bg-amber-500'
                   )} />
                   <div>

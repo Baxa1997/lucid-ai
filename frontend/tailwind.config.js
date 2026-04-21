@@ -43,9 +43,10 @@ module.exports = {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
-        // ── Existing custom colors ──
-        'electric-indigo': '#6F00FF',
-        'cyber-lime': '#CCFF00',
+        // ── Brand colors ──
+        'brand': '#059669',           // emerald-600 — primary brand
+        'brand-teal': '#0d9488',      // teal-600 — gradient end
+        'brand-light': '#d1fae5',     // emerald-100 — light backgrounds
         'glass-bg': 'rgba(255, 255, 255, 0.05)',
         'glass-border': 'rgba(255, 255, 255, 0.1)',
       },
@@ -58,7 +59,7 @@ module.exports = {
         'gradient-radial': 'radial-gradient(var(--tw-gradient-stops))',
         'gradient-conic':
           'conic-gradient(from 180deg at 50% 50%, var(--tw-gradient-stops))',
-        'cyber-gradient': 'linear-gradient(to right, #6F00FF, #CCFF00)',
+        'brand-gradient': 'linear-gradient(to right, #059669, #0d9488)',
       },
       backdropBlur: {
         xs: '2px',

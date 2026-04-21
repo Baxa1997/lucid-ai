@@ -209,25 +209,25 @@ export default function CommandPalette({ isOpen, onClose, projects = [], convers
                       className={cn(
                         "w-full flex items-center gap-3 px-5 py-2.5 text-left transition-colors",
                         isSelected
-                          ? "bg-indigo-50 dark:bg-indigo-500/[0.08]"
+                          ? "bg-emerald-50 dark:bg-emerald-500/[0.08]"
                           : "hover:bg-slate-50 dark:hover:bg-white/[0.02]"
                       )}
                     >
                       <div className={cn(
                         "w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-colors",
                         isSelected
-                          ? "bg-indigo-100 dark:bg-indigo-500/20"
+                          ? "bg-emerald-100 dark:bg-emerald-500/20"
                           : "bg-slate-100 dark:bg-white/[0.04]"
                       )}>
                         <Icon className={cn(
                           "w-3.5 h-3.5",
-                          isSelected ? "text-indigo-600 dark:text-indigo-400" : "text-slate-400 dark:text-slate-500"
+                          isSelected ? "text-emerald-600 dark:text-emerald-400" : "text-slate-400 dark:text-slate-500"
                         )} />
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className={cn(
                           "text-[13px] font-medium truncate",
-                          isSelected ? "text-indigo-700 dark:text-indigo-300" : "text-slate-700 dark:text-slate-300"
+                          isSelected ? "text-emerald-700 dark:text-emerald-300" : "text-slate-700 dark:text-slate-300"
                         )}>
                           {item.label}
                         </p>
@@ -242,7 +242,7 @@ export default function CommandPalette({ isOpen, onClose, projects = [], convers
                       )}
                       <ArrowRight className={cn(
                         "w-3.5 h-3.5 shrink-0 transition-colors",
-                        isSelected ? "text-indigo-400 dark:text-indigo-500" : "text-slate-300 dark:text-slate-700"
+                        isSelected ? "text-emerald-400 dark:text-emerald-500" : "text-slate-300 dark:text-slate-700"
                       )} />
                     </button>
                   );

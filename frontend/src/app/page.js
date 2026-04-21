@@ -10,7 +10,7 @@ import Footer from '@/components/Footer';
 
 export default function LandingPage() {
   return (
-    <div className="min-h-screen bg-[#FDFDFD] dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans selection:bg-violet-100 selection:text-violet-900 dark:selection:bg-violet-900 dark:selection:text-violet-100 font-inter flex flex-col transition-colors duration-200">
+    <div className="min-h-screen bg-[#FDFDFD] dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans selection:bg-emerald-100 selection:text-emerald-900 dark:selection:bg-emerald-900 dark:selection:text-emerald-100 font-inter flex flex-col transition-colors duration-200">
       
       <Navbar />
 

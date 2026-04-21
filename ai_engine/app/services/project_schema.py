@@ -137,6 +137,10 @@ PROJECT: {description}
 APP TYPE: {app_type}
 STACK: {stack}
 
+CRITICAL: The authoritative layout_archetype is "{app_type}" — this was determined before the research.
+If the research ===CLASSIFICATION=== block shows a DIFFERENT layout_archetype, IGNORE it.
+You MUST follow the rules for "{app_type}" exactly, regardless of what the research says.
+
 === RESEARCH TEXT ===
 {research}
 === END RESEARCH ===
@@ -270,8 +274,8 @@ Return JSON with this EXACT structure:
   }}
 }}
 
-The research text contains ===CLASSIFICATION=== with layout_archetype and is_single_page.
-Read it to determine the correct schema structure. Use these rules:
+The APP TYPE field in the user message specifies the authoritative layout_archetype.
+Use that — NOT the ===CLASSIFICATION=== block in the research (the research may have been corrected by the researcher and may differ). Apply these rules based on the APP TYPE:
 
 For layout_archetype = single_page_landing (is_single_page: yes):
 - "entities" → empty []
@@ -312,13 +316,459 @@ For layout_archetype = blog:
 - "navigation" → top header nav items
 - "mock_db" → all entity data with realistic blog content
 
-CRITICAL RULE: Always parse ===CLASSIFICATION=== from the research first to determine which
-structure applies. is_single_page: yes → NEVER create separate page routes.
+CRITICAL RULE: Use the APP TYPE from the user message to determine the structure — not ===CLASSIFICATION=== in the research.
+single_page_landing → NEVER create separate page routes — sections only, pages must be empty [].
 admin types → use sidebar nav groups, not top header.
 
 IMPORTANT: Generate 15-20 rows of REALISTIC mock data per entity.
 Use real-sounding names, realistic numbers, proper date formats, varied statuses.
 Every mock row must have ALL fields defined."""
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  PYTHON-ONLY RESEARCH PARSER                                 ║
+# ║  Parses Gemini ===BLOCKS=== with regex — zero LLM cost       ║
+# ║  Used to:                                                    ║
+# ║    • Fill theme/fonts/brand/nav for ALL project types        ║
+# ║    • Build FULL schema for single_page_landing (skip Claude) ║
+# ║    • Reduce admin Claude call to entity-only sections        ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+import re as _re_sp
+import copy as _copy_sp
+
+
+def _extract_block(research: str, header: str, max_chars: int = 3000) -> str:
+    """Extract the text content of a ===HEADER=== block."""
+    if header not in research:
+        return ""
+    start = research.index(header) + len(header)
+    rest = research[start:]
+    end_pos = rest.find("===")
+    end = start + end_pos if end_pos != -1 else start + max_chars
+    return research[start:end].strip()
+
+
+def _parse_css_variables(block: str) -> dict:
+    """Parse ===CSS_VARIABLES=== text → theme dict with bare HSL values."""
+    theme: dict = {}
+    if not block:
+        return theme
+
+    # Strip hsl() wrappers if present
+    block = block.replace("hsl(", "").replace(")", "")
+
+    _key_map = {
+        "--primary": "primary",
+        "--primary-foreground": "primary_foreground",
+        "--secondary": "secondary",
+        "--secondary-foreground": "secondary_foreground",
+        "--accent": "accent",
+        "--accent-foreground": "accent_foreground",
+        "--background": "background",
+        "--foreground": "foreground",
+        "--card": "card",
+        "--card-foreground": "card_foreground",
+        "--muted": "muted",
+        "--muted-foreground": "muted_foreground",
+        "--border": "border",
+        "--ring": "ring",
+        "--destructive": "destructive",
+        "--destructive-foreground": "destructive_foreground",
+        "--radius": "radius",
+        "--sidebar-background": "sidebar_bg",
+        "--sidebar-foreground": "sidebar_fg",
+    }
+
+    for part in _re_sp.split(r"[|\n]", block):
+        part = part.strip()
+        m = _re_sp.match(r"--([\w-]+)\s*:\s*(.+)", part)
+        if not m:
+            continue
+        css_key = f"--{m.group(1).strip()}"
+        raw_val = m.group(2).strip().rstrip(",").strip()
+        # Drop anything after a semicolon or pipe that leaked through
+        raw_val = _re_sp.split(r"[;|]", raw_val)[0].strip()
+        schema_key = _key_map.get(css_key)
+        if schema_key and raw_val:
+            theme[schema_key] = raw_val
+
+    return theme
+
+
+def _parse_fonts(block: str) -> dict:
+    """Parse ===FONTS=== text → partial theme dict + overall_vibe."""
+    result: dict = {}
+    if not block:
+        return result
+    for line in block.splitlines():
+        line = line.strip()
+        if line.startswith("heading:"):
+            m = _re_sp.match(r"heading:\s*([^(]+)(?:\(([^)]+)\))?", line)
+            if m:
+                result["heading_font"] = m.group(1).strip()
+                url_raw = (m.group(2) or "").strip()
+                if "fonts.googleapis.com" in url_raw:
+                    result["heading_font_url"] = url_raw
+        elif line.startswith("body:"):
+            m = _re_sp.match(r"body:\s*([^(]+)(?:\(([^)]+)\))?", line)
+            if m:
+                result["body_font"] = m.group(1).strip()
+                url_raw = (m.group(2) or "").strip()
+                if "fonts.googleapis.com" in url_raw:
+                    result["body_font_url"] = url_raw
+        elif line.startswith("overall_vibe:"):
+            result["overall_vibe"] = line.split(":", 1)[1].strip()
+    return result
+
+
+def _parse_header_nav(block: str) -> tuple:
+    """Parse ===HEADER=== text → (brand_name, list[nav_item_dict])."""
+    brand = ""
+    nav_items: list = []
+    if not block:
+        return brand, nav_items
+    for line in block.splitlines():
+        line = line.strip()
+        if line.startswith("logo:"):
+            brand = line.split(":", 1)[1].strip()
+        elif line.startswith("nav_items:"):
+            items_str = line.split(":", 1)[1].strip()
+            for raw in items_str.split(","):
+                label = raw.strip().strip('"').strip("'")
+                # Skip URL fragments or Tailwind utility tokens
+                if not label or "http" in label or "bg-" in label or "px-" in label:
+                    continue
+                nav_items.append({
+                    "label": label,
+                    "path": f"#{label.lower().replace(' ', '-')}",
+                    "icon": "Circle",
+                })
+    return brand, nav_items
+
+
+def _parse_sidebar_nav(block: str) -> list:
+    """Parse ===SIDEBAR=== text → list of nav-group dicts."""
+    groups: list = []
+    current: dict = {}
+    if not block:
+        return groups
+    for line in block.splitlines():
+        line_s = line.strip()
+        m = _re_sp.match(r"\[group:\s*(.+?)\]", line_s)
+        if m:
+            if current and current.get("items"):
+                groups.append(current)
+            current = {"group": m.group(1).strip(), "items": []}
+            continue
+        if not current:
+            continue
+        m2 = _re_sp.match(r"-\s*label:\s*([^|]+)", line_s)
+        if m2:
+            label = m2.group(1).strip()
+            path_m = _re_sp.search(r"path:\s*(/\S*)", line_s)
+            icon_m = _re_sp.search(r"icon:\s*(\w+)", line_s)
+            current["items"].append({
+                "label": label,
+                "path": path_m.group(1) if path_m else f"/{label.lower().replace(' ', '-')}",
+                "icon": icon_m.group(1) if icon_m else "Circle",
+            })
+    if current and current.get("items"):
+        groups.append(current)
+    return groups
+
+
+def _parse_sections(block: str) -> list:
+    """Parse ===SECTIONS=== text → list of section dicts for landing pages."""
+    sections: list = []
+    current: dict = {}
+    if not block:
+        return sections
+    for line in block.splitlines():
+        ls = line.strip()
+        m = _re_sp.match(r"\[section:\s*(\w[\w_]*)\]", ls)
+        if m:
+            if current:
+                sections.append(current)
+            current = {
+                "type": m.group(1),
+                "headline": "",
+                "subheadline": "",
+                "content": {},
+                "animation": "",
+            }
+            continue
+        if not current:
+            continue
+        if ls.startswith("headline:"):
+            current["headline"] = ls.split(":", 1)[1].strip().strip('"').strip("'")
+        elif ls.startswith("subheadline:"):
+            current["subheadline"] = ls.split(":", 1)[1].strip().strip('"').strip("'")
+        elif ls.startswith("layout:"):
+            current["content"]["layout"] = ls.split(":", 1)[1].strip()
+        elif ls.startswith("background:"):
+            current["content"]["background"] = ls.split(":", 1)[1].strip()
+        elif ls.startswith("cta_primary:"):
+            val = ls.split(":", 1)[1].strip()
+            current["content"]["cta_primary"] = val.split("|")[0].strip().strip('"')
+        elif ls.startswith("animation:"):
+            current["animation"] = ls.split(":", 1)[1].strip()
+        elif ls.startswith("hero_image:"):
+            current["content"]["hero_image"] = ls.split(":", 1)[1].strip()
+        elif ls.startswith("items:"):
+            current["content"]["items"] = ls.split(":", 1)[1].strip()
+    if current:
+        sections.append(current)
+    return sections
+
+
+def _parse_pages_block(block: str) -> list:
+    """Parse ===PAGES=== text → list of page dicts for consumer sites.
+
+    Captures path, title, description, AND sections list so Phase 2 gets
+    explicit section specs per page instead of having to fish them out of
+    the raw research blob.
+    """
+    pages: list = []
+    current: dict = {}
+    if not block:
+        return pages
+    for line in block.splitlines():
+        ls = line.strip()
+        m = _re_sp.match(r"\[page:\s*(.+?)\]", ls)
+        if m:
+            if current:
+                pages.append(current)
+            title = m.group(1).strip().title()
+            current = {
+                "title": title,
+                "path": "/",
+                "component": title.replace(" ", "") + "Page",
+                "type": "custom",
+                "description": "",
+                "sections": [],   # new: section list for this page
+            }
+            continue
+        if not current:
+            continue
+        if ls.startswith("path:"):
+            current["path"] = ls.split(":", 1)[1].strip()
+        elif ls.startswith("hero_headline:"):
+            current["description"] = ls.split(":", 1)[1].strip().strip('"').strip("'")
+        elif ls.startswith("purpose:") and not current.get("description"):
+            current["description"] = ls.split(":", 1)[1].strip()
+        elif ls.startswith("sections:"):
+            # "sections: hero, services, team, contact-form"
+            raw_sections = ls.split(":", 1)[1].strip()
+            current["sections"] = [s.strip() for s in raw_sections.split(",") if s.strip()]
+    if current:
+        pages.append(current)
+    return pages
+
+
+def _parse_kpis(block: str) -> list:
+    """Parse ===DASHBOARD_KPIS=== text → list of KPI dicts."""
+    kpis: list = []
+    if not block:
+        return kpis
+    for line in block.splitlines():
+        ls = line.strip()
+        if not ls or not ls[0].isdigit():
+            continue
+        parts = _re_sp.split(r"\s*\|\s*", ls)
+        kpi: dict = {}
+        for part in parts:
+            part = _re_sp.sub(r"^\d+\.\s*", "", part).strip()
+            if ":" in part:
+                k, v = part.split(":", 1)
+                kpi[k.strip().lower()] = v.strip()
+        if kpi.get("label"):
+            kpis.append({
+                "label": kpi.get("label", ""),
+                "value": kpi.get("value", "0"),
+                "change": kpi.get("change", "+0%"),
+                "trend": kpi.get("trend", "up"),
+                "icon": kpi.get("icon", "TrendingUp"),
+                "color": kpi.get("color", "text-primary"),
+            })
+    return kpis
+
+
+def _parse_status_badges(block: str) -> dict:
+    """Parse ===STATUS_BADGES=== text → {status: tailwind_classes}."""
+    badges: dict = {}
+    if not block:
+        return badges
+    for line in block.splitlines():
+        ls = line.strip()
+        if ":" in ls and ("bg-" in ls or "text-" in ls):
+            k, v = ls.split(":", 1)
+            status = k.strip().lower()
+            classes = v.strip()
+            if status and classes:
+                badges[status] = classes
+    return badges
+
+
+def _derive_design_direction(research: str) -> str:
+    """Derive design direction from Gemini research instead of random selection.
+
+    Reads overall_vibe from ===FONTS=== and primary hue from ===CSS_VARIABLES===
+    to pick the most fitting design direction for the schema builder.
+    This replaces the previous random.choice() approach which could contradict
+    Gemini's researched color palette.
+    """
+    fonts_block = _extract_block(research, "===FONTS===", max_chars=400)
+    vibe = ""
+    for line in fonts_block.splitlines():
+        if line.strip().startswith("overall_vibe:"):
+            vibe = line.split(":", 1)[1].strip().lower()
+            break
+
+    vibe_lower = vibe.lower()
+    _vibe_map = [
+        (["dark", "moody", "noir", "deep", "cinema", "cinematic"],
+         "dark and moody with deep backgrounds and light text — tech/creative aesthetic"),
+        (["minimal", "clean", "airy", "white", "simple"],
+         "light and airy with generous whitespace and subtle shadows — minimal SaaS"),
+        (["bold", "contrast", "vibrant", "vivid", "startup", "energetic"],
+         "bold and high-contrast with a vivid accent color — conversion-focused startup"),
+        (["warm", "earth", "amber", "terracotta", "human", "friendly"],
+         "warm earth tones (amber, sand, terracotta) — human and approachable"),
+        (["glass", "gradient", "glassmorphism"],
+         "vibrant gradient hero with glassmorphism cards — modern web app"),
+        (["corporate", "professional", "b2b", "navy", "enterprise"],
+         "clean corporate palette (navy, slate, white) — professional B2B"),
+        (["playful", "colorful", "fun", "consumer", "casual"],
+         "playful and colorful (coral, teal, yellow) — consumer product"),
+        (["neon", "developer", "technical", "dev", "code"],
+         "sophisticated dark mode with neon accent — developer / technical tool"),
+        (["elegant", "luxury", "premium", "serif", "refined", "upscale"],
+         "elegant near-monochrome with serif headings — premium / luxury brand"),
+        (["green", "eco", "sustain", "health", "natural", "organic"],
+         "green-forward eco palette — sustainability / health product"),
+        (["ai", "data", "analytics", "purple", "indigo", "intelligence"],
+         "purple-to-indigo gradient — AI / data / analytics product"),
+        (["energy", "fitness", "sport", "orange", "gaming", "action"],
+         "orange and black high-energy — fitness / sports / gaming"),
+    ]
+    for keywords, direction in _vibe_map:
+        if any(k in vibe_lower for k in keywords):
+            return direction
+
+    # Fall back to hue-based detection from primary CSS variable
+    css_block = _extract_block(research, "===CSS_VARIABLES===", max_chars=600)
+    primary_hsl = ""
+    for part in _re_sp.split(r"[|\n]", css_block):
+        m = _re_sp.match(r"\s*--primary\s*:\s*(.+)", part.strip())
+        if m:
+            primary_hsl = m.group(1).strip()
+            break
+
+    hue_m = _re_sp.search(r"(\d+(?:\.\d+)?)", primary_hsl)
+    if hue_m:
+        hue = float(hue_m.group(1))
+        if hue < 30 or hue >= 330:
+            return "bold and high-contrast with a vivid accent color — conversion-focused startup"
+        if hue < 60:
+            return "warm earth tones (amber, sand, terracotta) — human and approachable"
+        if hue < 150:
+            return "green-forward eco palette — sustainability / health product"
+        if hue < 210:
+            return "light and airy with generous whitespace and subtle shadows — minimal SaaS"
+        if hue < 270:
+            return "purple-to-indigo gradient — AI / data / analytics product"
+        return "sophisticated dark mode with neon accent — developer / technical tool"
+
+    # If still nothing, return the raw vibe string — still better than random
+    return f"design consistent with the researched aesthetic: {vibe or 'clean and professional'}"
+
+
+def _parse_schema_from_research(
+    research: str,
+    description: str,
+    classification: dict,
+    stack: str,
+) -> dict:
+    """Parse Gemini research ===BLOCKS=== into a schema dict — zero LLM cost.
+
+    Covers: theme (CSS vars + fonts), brand, navigation, sections (landing),
+    KPIs (admin), status badges, pages (consumer), design_system name.
+
+    Does NOT cover (admin-only, still needs LLM):
+      entity fields with proper types, 15-20 mock data rows, design_system
+      Tailwind token strings (card_classes, section_spacing, etc.).
+    """
+    schema = _copy_sp.deepcopy(EMPTY_SCHEMA)
+    layout = classification.get("layout_archetype", "single_page_landing")
+    domain = classification.get("domain", "general")
+
+    # ── Theme: CSS variables ──────────────────────────────────
+    css_block = _extract_block(research, "===CSS_VARIABLES===", max_chars=1200)
+    if css_block:
+        schema["theme"].update(_parse_css_variables(css_block))
+
+    # ── Theme: Fonts ──────────────────────────────────────────
+    fonts_block = _extract_block(research, "===FONTS===", max_chars=600)
+    parsed_fonts = _parse_fonts(fonts_block)
+    for fk in ("heading_font", "heading_font_url", "body_font", "body_font_url"):
+        if parsed_fonts.get(fk):
+            schema["theme"][fk] = parsed_fonts[fk]
+    if parsed_fonts.get("overall_vibe"):
+        schema["design_system"]["overall_vibe"] = parsed_fonts["overall_vibe"]
+
+    # ── Brand ─────────────────────────────────────────────────
+    header_block = _extract_block(research, "===HEADER===", max_chars=600)
+    brand_name, nav_items = _parse_header_nav(header_block)
+    if not brand_name:
+        clean = description.split("\n\n---\n\n")[0].strip()
+        brand_name = clean[:50].split(".")[0].split(",")[0].strip() or "Project"
+    schema["brand"]["name"] = brand_name
+    schema["brand"]["domain"] = domain
+    schema["brand"]["description"] = description.split("\n\n---\n\n")[0].strip()[:200]
+
+    # ── Design system name ────────────────────────────────────
+    ds_name = _extract_block(research, "===DESIGN_SYSTEM_NAME===", max_chars=100).strip().strip('"').strip("'")
+    if ds_name and len(ds_name) < 60:
+        schema["design_system"]["name"] = ds_name
+
+    # ── Status badges ─────────────────────────────────────────
+    badges_block = _extract_block(research, "===STATUS_BADGES===", max_chars=800)
+    if badges_block:
+        schema["status_badges"] = _parse_status_badges(badges_block)
+
+    # ── Dashboard KPIs (admin archetypes) ────────────────────
+    _is_admin = layout in {"admin_dashboard", "crm", "tms", "saas_dashboard", "ecommerce"}
+    kpis_block = _extract_block(research, "===DASHBOARD_KPIS===", max_chars=1500)
+    if kpis_block:
+        kpis = _parse_kpis(kpis_block)
+        if kpis:
+            schema["dashboard"]["kpis"] = kpis
+
+    # ── Navigation ────────────────────────────────────────────
+    if _is_admin:
+        sidebar_block = _extract_block(research, "===SIDEBAR===", max_chars=2500)
+        groups = _parse_sidebar_nav(sidebar_block)
+        if groups:
+            schema["navigation"] = groups
+    elif nav_items:
+        schema["navigation"] = [{"group": "main", "items": nav_items}]
+
+    # ── Sections (landing pages only) ─────────────────────────
+    if layout == "single_page_landing":
+        sections_block = _extract_block(research, "===SECTIONS===", max_chars=6000)
+        parsed_secs = _parse_sections(sections_block)
+        if parsed_secs:
+            schema["sections"] = parsed_secs
+
+    # ── Pages (consumer / blog / marketplace) ─────────────────
+    elif layout in {"consumer_website", "marketplace", "portfolio", "blog"}:
+        pages_block = _extract_block(research, "===PAGES===", max_chars=4000)
+        parsed_pages = _parse_pages_block(pages_block)
+        if parsed_pages:
+            schema["pages"] = parsed_pages
+
+    return schema
 
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -334,50 +784,99 @@ async def build_project_schema(
     websocket=None,
 ) -> dict[str, Any]:
     """Parse Gemini research into a structured project schema.
-    
-    Uses Claude Sonnet (fast + cheap) for parsing — NOT code generation.
-    Cost: ~$0.05-0.10 per call (4-8K output tokens with Sonnet).
-    
+
+    Fast path (no LLM):
+      - single_page_landing → Python-only parser (~0s, saves 20-40s)
+
+    Focused path (Claude, reduced tokens):
+      - admin archetypes → passes only ENTITIES/SIDEBAR/KPI blocks to Claude
+        then overlays Python-parsed theme/fonts/brand on top
+
+    Fallback path (Claude, full research):
+      - consumer_website, blog, marketplace, portfolio
+
     Returns the canonical schema dict, or a fallback if parsing fails.
     """
-    import random
-    import string
-    from app.services.project_generator import call_claude_for_json, _ws_send
+    from app.services.project_generator import _ws_send
 
     await _ws_send(websocket, "progress", "📐 Building project schema...")
 
-    # ── Inject a random design seed so each generation is unique ────────────
-    # Without this, the same description always produces the same color tokens,
-    # fonts, and section order because LLMs are nearly deterministic on
-    # structured-output prompts.  The seed breaks that symmetry cheaply.
-    _session_seed = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
-    _design_directions = [
-        "dark and moody with deep backgrounds and light text — tech/creative aesthetic",
-        "light and airy with generous whitespace and subtle shadows — minimal SaaS",
-        "bold and high-contrast with a vivid accent color — conversion-focused startup",
-        "warm earth tones (amber, sand, terracotta) — human and approachable",
-        "vibrant gradient hero with glassmorphism cards — modern web app",
-        "clean corporate palette (navy, slate, white) — professional B2B",
-        "playful and colorful (coral, teal, yellow) — consumer product",
-        "sophisticated dark mode with neon accent — developer / technical tool",
-        "elegant near-monochrome with serif headings — premium / luxury brand",
-        "green-forward eco palette — sustainability / health product",
-        "purple-to-indigo gradient — AI / data / analytics product",
-        "orange and black high-energy — fitness / sports / gaming",
-    ]
-    _design_direction = random.choice(_design_directions)
+    # Classification dict for the Python parser helpers
+    _classification = {
+        "layout_archetype": app_type,
+        "domain": description.split()[0].lower() if description else "general",
+    }
+
+    # ── Fast path: Python-only, zero LLM cost ────────────────────────────────
+    # Covers: single_page_landing always, consumer/portfolio/marketplace when
+    # Python parser yields enough structure (pages ≥ 2 + theme populated).
+    _python_fast_types = {"single_page_landing", "consumer_website", "portfolio", "marketplace", "blog"}
+    if app_type in _python_fast_types:
+        py_schema = _parse_schema_from_research(research, description, _classification, stack)
+        py_schema = _validate_schema(py_schema, layout_archetype=app_type)
+        section_count = len(py_schema.get("sections", []))
+        page_count = len(py_schema.get("pages", []))
+        nav_items = sum(len(g.get("items", [])) for g in py_schema.get("navigation", []))
+        has_theme = bool(py_schema.get("theme", {}).get("primary"))
+
+        # Consumer/portfolio/marketplace require at least 2 pages to skip Claude.
+        # Landing pages always use Python path — never fall through to Claude.
+        # If sections are empty (Gemini formatted differently), build defaults from nav.
+        if app_type == "single_page_landing" and section_count < 2:
+            _default_sections = [
+                {"type": "hero", "headline": "", "subheadline": "", "content": {}, "animation": "fade-up"},
+                {"type": "features", "headline": "", "subheadline": "", "content": {}, "animation": "fade-up"},
+                {"type": "how_it_works", "headline": "", "subheadline": "", "content": {}, "animation": "fade-up"},
+                {"type": "testimonials", "headline": "", "subheadline": "", "content": {}, "animation": "fade-up"},
+                {"type": "pricing", "headline": "", "subheadline": "", "content": {}, "animation": "fade-up"},
+                {"type": "faq", "headline": "", "subheadline": "", "content": {}, "animation": "fade-up"},
+                {"type": "cta_final", "headline": "", "subheadline": "", "content": {}, "animation": "fade-up"},
+            ]
+            py_schema["sections"] = _default_sections
+            section_count = len(_default_sections)
+        _sufficient = section_count >= 2 or (page_count >= 2 and has_theme)
+        if _sufficient:
+            label = f"{section_count} sections" if section_count else f"{page_count} pages"
+            logger.info("Schema built (fast-parse): %s nav=%d", label, nav_items)
+            await _ws_send(
+                websocket, "progress",
+                f"✅ Schema built: {label}, {nav_items} nav items (instant)",
+            )
+            return py_schema
+        # Insufficient — fall through to Claude for this type
+
+    # ── Design direction: derived from Gemini research (not random) ───────────
+    _design_direction = _derive_design_direction(research)
+
+    # ── Admin archetypes: pass only entity-relevant blocks to Claude ──────────
+    _admin_archetypes = {"admin_dashboard", "crm", "tms", "saas_dashboard", "ecommerce"}
+    _is_admin = app_type in _admin_archetypes
+    if _is_admin:
+        _focused_headers = [
+            "===APP_CLASSIFICATION===",
+            "===ENTITIES===",
+            "===SIDEBAR===",
+            "===DASHBOARD_KPIS===",
+            "===STATUS_BADGES===",
+        ]
+        focused_parts: list[str] = []
+        for hdr in _focused_headers:
+            blk = _extract_block(research, hdr, max_chars=5000)
+            if blk:
+                focused_parts.append(f"{hdr}\n{blk}\n")
+        research_for_claude = "\n".join(focused_parts) if focused_parts else research[:12000]
+    else:
+        research_for_claude = research[:24000]  # consumer / blog / marketplace
 
     user_prompt = _SCHEMA_USER_TEMPLATE.format(
         description=description,
         app_type=app_type,
         stack=stack,
-        research=research[:24000],  # Thinking mode outputs 20K+ — raised from 12K
+        research=research_for_claude,
     )
-    # Append the seed + direction AFTER the template so it influences design choices
-    # without breaking the JSON structure rules.
+    # Append design direction after the template — influences colors/fonts
     user_prompt += (
-        f"\n\nSESSION SEED: {_session_seed}\n"
-        f"DESIGN DIRECTION FOR THIS RUN: {_design_direction}\n"
+        f"\n\nDESIGN DIRECTION FOR THIS RUN: {_design_direction}\n"
         "Apply this design direction to theme colors, fonts, and overall_vibe. "
         "Make the palette feel PURPOSE-BUILT for this specific product — "
         "do NOT default to generic blue-tech colors unless the direction calls for it."
@@ -454,7 +953,31 @@ async def build_project_schema(
             return _build_fallback_schema(description, app_type)
 
         # Validate and fill missing fields
-        schema = _validate_schema(schema)
+        schema = _validate_schema(schema, layout_archetype=app_type)
+
+        # ── Overlay Python-parsed theme/fonts for admin projects ──────────────
+        # Claude only saw entity blocks, so theme may be generic; override with
+        # Gemini's researched CSS variables and fonts.
+        if _is_admin:
+            py_schema = _parse_schema_from_research(research, description, _classification, stack)
+            _theme_overrides = (
+                "heading_font", "heading_font_url", "body_font", "body_font_url",
+                "primary", "primary_foreground", "background", "foreground",
+                "card", "card_foreground", "muted", "muted_foreground",
+                "accent", "accent_foreground", "border", "ring",
+                "sidebar_bg", "sidebar_fg",
+            )
+            for field in _theme_overrides:
+                py_val = py_schema["theme"].get(field, "")
+                empty_val = EMPTY_SCHEMA["theme"].get(field, "")
+                if py_val and py_val != empty_val:
+                    schema["theme"][field] = py_val
+            # Brand name from research header (more accurate than LLM guess)
+            if py_schema["brand"].get("name") and not schema["brand"].get("name"):
+                schema["brand"]["name"] = py_schema["brand"]["name"]
+            # Design system name from research if Claude left it blank
+            if py_schema["design_system"].get("name") and not schema["design_system"].get("name"):
+                schema["design_system"]["name"] = py_schema["design_system"]["name"]
 
         entity_count = len(schema.get("entities", []))
         page_count = len(schema.get("pages", []))
@@ -535,8 +1058,15 @@ def _extract_json(text: str) -> Optional[dict]:
     return None
 
 
-def _validate_schema(schema: dict) -> dict:
-    """Fill missing fields with safe defaults and validate cross-references."""
+def _validate_schema(schema: dict, layout_archetype: str = "") -> dict:
+    """Fill missing fields with safe defaults and validate cross-references.
+
+    `layout_archetype` is the AUTHORITATIVE archetype from the classifier. When
+    set to `single_page_landing` we hard-lock pages=[] and skip nav→page
+    expansion — prevents the coffee-shop-landing bug where nav items like
+    "Menu"/"About"/"Contact" auto-generated /menu, /about, /contact routes
+    even though the project is a single-page scroll site.
+    """
     import copy
 
     # Ensure all top-level keys exist
@@ -576,54 +1106,73 @@ def _validate_schema(schema: dict) -> dict:
                 "inForm": False,
             })
 
-    # CROSS-REFERENCE CHECK: Every entity must have list + form pages
-    existing_entity_pages = {
-        p.get("entity") for p in schema.get("pages", [])
-        if p.get("type") in ("crud_list", "crud_form")
-    }
-    for entity in schema.get("entities", []):
-        slug = entity.get("slug", "")
-        name = entity.get("name", "Item")
-        if slug and slug not in existing_entity_pages:
-            # Add missing pages
-            schema["pages"].extend([
-                {
-                    "path": f"/{slug}",
-                    "title": f"{name}s",
-                    "component": f"{name}ListPage",
-                    "type": "crud_list",
-                    "entity": slug,
-                },
-                {
-                    "path": f"/{slug}/new",
-                    "title": f"New {name}",
-                    "component": f"{name}FormPage",
-                    "type": "crud_form",
-                    "entity": slug,
-                },
-                {
-                    "path": f"/{slug}/:id",
-                    "title": f"Edit {name}",
-                    "component": f"{name}FormPage",
-                    "type": "crud_form",
-                    "entity": slug,
-                },
-            ])
+    # Determine if this is a landing page. AUTHORITATIVE source: layout_archetype
+    # from the classifier. Fall back to heuristic (sections present, no entities)
+    # only when the caller didn't supply the archetype.
+    if layout_archetype == "single_page_landing":
+        _is_landing_schema = True
+        # Pre-empt nav→page expansion below by clearing any pages Claude
+        # or the research parser accidentally emitted.
+        schema["pages"] = []
+    else:
+        _is_landing_schema = bool(schema.get("sections")) and not schema.get("entities")
 
-    # CROSS-REFERENCE CHECK: Navigation items must have pages
-    all_page_paths = {p.get("path", "") for p in schema.get("pages", [])}
-    for group in schema.get("navigation", []):
-        for item in group.get("items", []):
-            item_path = item.get("path", "")
-            if item_path and item_path not in all_page_paths:
-                # Add a page for orphan nav items
-                component = item.get("label", "Page").replace(" ", "")
-                schema["pages"].append({
-                    "path": item_path,
-                    "title": item.get("label", "Page"),
-                    "component": f"{component}Page",
-                    "type": "custom",
-                })
+    if not _is_landing_schema:
+        # CROSS-REFERENCE CHECK: Every entity must have list + form pages (admin only)
+        existing_entity_pages = {
+            p.get("entity") for p in schema.get("pages", [])
+            if p.get("type") in ("crud_list", "crud_form")
+        }
+        for entity in schema.get("entities", []):
+            slug = entity.get("slug", "")
+            name = entity.get("name", "Item")
+            if slug and slug not in existing_entity_pages:
+                schema["pages"].extend([
+                    {
+                        "path": f"/{slug}",
+                        "title": f"{name}s",
+                        "component": f"{name}ListPage",
+                        "type": "crud_list",
+                        "entity": slug,
+                    },
+                    {
+                        "path": f"/{slug}/new",
+                        "title": f"New {name}",
+                        "component": f"{name}FormPage",
+                        "type": "crud_form",
+                        "entity": slug,
+                    },
+                    {
+                        "path": f"/{slug}/:id",
+                        "title": f"Edit {name}",
+                        "component": f"{name}FormPage",
+                        "type": "crud_form",
+                        "entity": slug,
+                    },
+                ])
+
+        # CROSS-REFERENCE CHECK: Navigation items must have pages.
+        # Skip anchor links (/#section-id) — those are intra-page anchors, not routes.
+        all_page_paths = {p.get("path", "") for p in schema.get("pages", [])}
+        for group in schema.get("navigation", []):
+            for item in group.get("items", []):
+                item_path = item.get("path", "")
+                if not item_path:
+                    continue
+                if item_path.startswith("#") or item_path.startswith("/#"):
+                    continue  # anchor link — not a route
+                if item_path not in all_page_paths:
+                    component = item.get("label", "Page").replace(" ", "")
+                    schema["pages"].append({
+                        "path": item_path,
+                        "title": item.get("label", "Page"),
+                        "component": f"{component}Page",
+                        "type": "custom",
+                    })
+
+    # For landing pages: ensure pages is empty (no spurious route stubs)
+    if _is_landing_schema:
+        schema["pages"] = []
 
     # Build mock_db from entities if missing
     if not schema.get("mock_db"):
@@ -892,7 +1441,6 @@ def schema_to_sections_spec(schema: dict) -> str:
         if section.get("subheadline"):
             lines.append(f"   subheadline: \"{section['subheadline']}\"")
         if section.get("content"):
-            # Truncate long content
             content = str(section["content"])
             if len(content) > 200:
                 content = content[:200] + "..."
@@ -900,5 +1448,110 @@ def schema_to_sections_spec(schema: dict) -> str:
         if section.get("animation"):
             lines.append(f"   animation: {section['animation']}")
         lines.append("")
+
+    return "\n".join(lines)
+
+
+def schema_to_pages_spec(schema: dict) -> str:
+    """Convert schema pages into an explicit per-page section spec for consumer websites.
+
+    Unlike schema_to_sections_spec (which is for single-page landings), this produces
+    a structured list of ALL pages with their required sections so Phase 2 doesn't have
+    to extract them from the raw 16K research blob.
+    """
+    pages = schema.get("pages", [])
+    if not pages:
+        return ""
+
+    lines = ["## PAGES TO BUILD (create ALL — every page, every section listed)\n"]
+    for i, page in enumerate(pages, 1):
+        path = page.get("path", "/")
+        title = page.get("title", "Page").replace("Page", "").strip()
+        desc = page.get("description", "")
+        sections = page.get("sections", [])
+        component = page.get("component", f"{title.replace(' ', '')}Page")
+
+        lines.append(f"{i}. **{title}** → `{path}` (component: `{component}`)")
+        if desc:
+            lines.append(f"   Purpose: {desc}")
+        if sections:
+            lines.append(f"   Sections: {', '.join(sections)}")
+        else:
+            # Fallback hints per common page names
+            _fallback_sections = {
+                "home":      "hero, stats/trust-bar, services/features, testimonials, cta",
+                "about":     "hero, story/mission, team-grid, values, timeline",
+                "services":  "hero, service-cards-grid, process/how-it-works, faq",
+                "contact":   "hero, contact-form, map/address, social-links",
+                "pricing":   "hero, pricing-cards, feature-comparison, faq, cta",
+                "work":      "hero, project-grid, case-study-cards, cta",
+                "menu":      "hero, category-tabs, menu-item-grid, dietary-filters",
+                "team":      "hero, team-member-grid, culture/values-section",
+                "listings":  "hero, filter-bar, listing-cards-grid, pagination",
+                "gallery":   "hero, masonry-image-grid, lightbox, category-filter",
+            }
+            page_key = title.lower().replace(" ", "")
+            hint = next((v for k, v in _fallback_sections.items() if k in page_key), None)
+            if hint:
+                lines.append(f"   Sections (fallback): {hint}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def schema_to_extra_pages_spec(schema: dict) -> str:
+    """List all nav items that don't have a corresponding entity CRUD page.
+
+    Admin/CRM panels often have sidebar items like 'Reports', 'Analytics',
+    'Calendar', 'Help' that aren't entity-based. These are 'extra pages' that
+    Phase 3 must build — this helper makes them explicit instead of relying on
+    Claude to notice missing pages.
+    """
+    # Collect paths already covered by entity CRUD
+    entity_paths: set = set()
+    for entity in schema.get("entities", []):
+        slug = entity.get("slug", "")
+        if slug:
+            entity_paths.update({f"/{slug}", f"/{slug}/new", f"/{slug}/:id"})
+    entity_paths.add("/dashboard")
+    entity_paths.add("/settings")
+
+    extra: list = []
+    for group in schema.get("navigation", []):
+        for item in group.get("items", []):
+            path = item.get("path", "")
+            label = item.get("label", "")
+            icon = item.get("icon", "Circle")
+            # Skip entity CRUD paths, settings, dashboard, and anchor links
+            if not path or path.startswith("#") or path in entity_paths:
+                continue
+            # Also skip if any entity slug appears in the path
+            if any(f"/{slug}" in path for slug in
+                   (e.get("slug", "") for e in schema.get("entities", []))):
+                continue
+            extra.append({"path": path, "label": label, "icon": icon})
+
+    if not extra:
+        return ""
+
+    lines = ["## EXTRA PAGES (sidebar nav items without CRUD — build these as full pages)\n"]
+    for p in extra:
+        lines.append(f"- **{p['label']}** → `{p['path']}` (icon: {p['icon']})")
+        # Add a hint for common page types
+        label_lower = p["label"].lower()
+        if any(k in label_lower for k in ["report", "analytic", "stat", "insight"]):
+            lines.append("  Build: charts/graphs page with recharts — revenue trends, top metrics, date range filter")
+        elif any(k in label_lower for k in ["calendar", "schedule", "appointment"]):
+            lines.append("  Build: calendar grid view (7-col week grid) with event cards + month navigation")
+        elif any(k in label_lower for k in ["help", "support", "faq", "docs"]):
+            lines.append("  Build: FAQ accordion + search bar + contact support card")
+        elif any(k in label_lower for k in ["notif", "inbox", "message"]):
+            lines.append("  Build: notification list with read/unread state, type icons, timestamps")
+        elif any(k in label_lower for k in ["map", "route", "location", "track"]):
+            lines.append("  Build: map placeholder (div with bg-muted, pin icons, route cards below)")
+        elif any(k in label_lower for k in ["profile", "account", "user"]):
+            lines.append("  Build: user profile card + edit form + password change section")
+        else:
+            lines.append("  Build: full page appropriate for this feature — not a stub or placeholder")
 
     return "\n".join(lines)

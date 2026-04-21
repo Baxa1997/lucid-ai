@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import logging
 from typing import Optional
 
@@ -825,6 +826,104 @@ def fix_named_import_default_export_mismatch(workspace_path: str) -> list[str]:
 
 
 # ╔══════════════════════════════════════════════════════════════╗
+# ║  FIXER 4b — Missing Default Export Fixer                   ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+# Matches:  import Foo from './something'  (no braces = default import)
+_DEFAULT_IMPORT_RE = re.compile(
+    r'^import\s+(\w+)\s+from\s+[\'"]([^\'"]+)[\'"]',
+    re.MULTILINE,
+)
+# Matches a named export of a specific name that could serve as the default
+_NAMED_EXPORT_FN_RE = re.compile(
+    r'export\s+(?:function|class|const|let|var)\s+(\w+)'
+)
+
+
+def fix_missing_default_export(workspace_path: str) -> list[str]:
+    """Add a missing `export default` to component files imported as default.
+
+    The bug:
+        // page.js
+        import HeroSection from '@/components/sections/HeroSection'
+
+        // HeroSection.jsx — only has:
+        export function HeroSection() { ... }   // named, no default
+
+    Result: HeroSection resolves to undefined → crash.
+
+    Fix: append `export default HeroSection;` to any component file that
+    is imported as a default import but has no `export default` statement.
+    Only adds the default when the file has exactly one top-level named
+    export whose name matches the imported identifier.
+
+    Returns list of file paths that were modified.
+    """
+    fixed_files: list[str] = []
+
+    src_dir = os.path.join(workspace_path, "src")
+    if not os.path.isdir(src_dir):
+        src_dir = workspace_path
+
+    for root, dirs, files in os.walk(src_dir):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+
+        for fname in files:
+            ext = os.path.splitext(fname)[1].lower()
+            if ext not in _JSX_EXTENSIONS:
+                continue
+
+            filepath = os.path.join(root, fname)
+            try:
+                with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except Exception:
+                continue
+
+            for m in _DEFAULT_IMPORT_RE.finditer(content):
+                imported_name = m.group(1)   # e.g. "HeroSection"
+                import_path   = m.group(2)   # e.g. "@/components/sections/HeroSection"
+
+                resolved = _resolve_import_path(import_path, filepath, workspace_path)
+                if not resolved or resolved == "THIRD_PARTY" or not os.path.isfile(resolved):
+                    continue
+
+                try:
+                    with open(resolved, "r", encoding="utf-8", errors="replace") as rf:
+                        target = rf.read()
+                except Exception:
+                    continue
+
+                # Skip if the target already has a default export
+                if _HAS_DEFAULT_EXPORT_RE.search(target):
+                    continue
+
+                # Find named exports in the target file
+                named_exports = _NAMED_EXPORT_FN_RE.findall(target)
+                if imported_name not in named_exports:
+                    continue  # Can't confidently add default for unknown name
+
+                # Append default export
+                new_target = target.rstrip() + f"\n\nexport default {imported_name};\n"
+                try:
+                    with open(resolved, "w", encoding="utf-8") as wf:
+                        wf.write(new_target)
+                    rel = os.path.relpath(resolved, workspace_path)
+                    fixed_files.append(rel)
+                    logger.info(
+                        "fix_missing_default_export: added 'export default %s' to %s",
+                        imported_name, rel,
+                    )
+                except Exception as exc:
+                    logger.warning("fix_missing_default_export: write failed for %s: %s", resolved, exc)
+
+    if fixed_files:
+        logger.info("Missing-default-export fixer fixed %d file(s)", len(fixed_files))
+
+    return fixed_files
+
+
+# ╔══════════════════════════════════════════════════════════════╗
 # ║  FIXER 5 — Dynamic Route Conflict Remover                  ║
 # ╚══════════════════════════════════════════════════════════════╝
 
@@ -919,6 +1018,483 @@ def fix_dynamic_route_conflicts(workspace_path: str) -> list[str]:
 
 
 # ╔══════════════════════════════════════════════════════════════╗
+# ║  FIXER 5 — JSX Unescaped Entities                          ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+# Matches bare apostrophes/quotes inside JSX text nodes (not inside attributes or JS strings).
+# Strategy: replace ' and " that appear between > and < (i.e. JSX text content).
+_JSX_TEXT_RE = re.compile(r">((?:[^<]|\n)*?)<", re.DOTALL)
+
+
+def _escape_jsx_text(match: re.Match) -> str:
+    text = match.group(1)
+    # Skip if this contains a JSX expression {..} — escaping inside JS breaks the code.
+    # e.g. {item.id === 'active' ? 'Yes' : 'No'} must NOT be touched.
+    if "{" in text:
+        return match.group(0)
+    text = text.replace("'", "&apos;")
+    text = text.replace('"', "&quot;")
+    return f">{text}<"
+
+
+def fix_unescaped_entities(workspace_path: str) -> list[str]:
+    """Replace bare ' and \" in JSX text nodes with HTML entities.
+
+    Fixes react/no-unescaped-entities ESLint errors that cause Vercel build failures.
+    Only touches text between JSX tags (>...<), not JS strings or attribute values.
+    """
+    fixed_files = []
+    src_dir = os.path.join(workspace_path, "src")
+    if not os.path.isdir(src_dir):
+        src_dir = workspace_path
+
+    for root, dirs, files in os.walk(src_dir):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for fname in files:
+            if os.path.splitext(fname)[1].lower() not in {".jsx", ".tsx"}:
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                    original = f.read()
+            except Exception:
+                continue
+
+            fixed = _JSX_TEXT_RE.sub(_escape_jsx_text, original)
+            if fixed != original:
+                try:
+                    with open(fpath, "w", encoding="utf-8") as f:
+                        f.write(fixed)
+                    fixed_files.append(os.path.relpath(fpath, workspace_path))
+                except Exception as e:
+                    logger.warning("fix_unescaped_entities: could not write %s: %s", fpath, e)
+
+    if fixed_files:
+        logger.info("Unescaped entities fixer fixed %d file(s)", len(fixed_files))
+    return fixed_files
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  FIXER 6 — <img> → <Image /> (Next.js)                     ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+# Matches <img ...> or <img ... /> tags (self-closing or not)
+_IMG_TAG_RE = re.compile(r"<img\b([^>]*?)(?:/>|>)", re.IGNORECASE)
+
+# Extract src, alt, className, width, height attributes
+_ATTR_RE = re.compile(r'\b(src|alt|className|class|width|height|style)\s*=\s*(["\{][^"}\n]*["\}]|\w+)', re.IGNORECASE)
+
+
+def _img_to_image(match: re.Match) -> str:
+    attrs_str = match.group(1)
+    attrs = {}
+    for m in _ATTR_RE.finditer(attrs_str):
+        raw_key = m.group(1)
+        # Normalize: both 'class' and 'className' stored under 'classname'
+        key = "classname" if raw_key.lower() in ("class", "classname") else raw_key.lower()
+        attrs[key] = m.group(2)
+
+    # Build Next.js <Image> props
+    parts = []
+    if "src" in attrs:
+        parts.append(f"src={attrs['src']}")
+    if "alt" in attrs:
+        parts.append(f"alt={attrs['alt']}")
+    else:
+        parts.append('alt=""')
+    if "width" in attrs and "height" in attrs:
+        parts.append(f"width={attrs['width']}")
+        parts.append(f"height={attrs['height']}")
+    else:
+        # No explicit dimensions — use safe defaults (fill requires parent position:relative)
+        parts.append("width={800}")
+        parts.append("height={600}")
+    if "classname" in attrs:
+        parts.append(f"className={attrs['classname']}")
+    if "style" in attrs:
+        parts.append(f"style={attrs['style']}")
+
+    return f"<Image {' '.join(parts)} />"
+
+
+_NEXT_IMAGE_IMPORT_RE = re.compile(r"^import\s+Image\s+from\s+['\"]next/image['\"]", re.MULTILINE)
+
+
+def fix_img_tags(workspace_path: str) -> list[str]:
+    """Replace <img> with Next.js <Image /> and add the import if missing.
+
+    Fixes @next/next/no-img-element ESLint warnings that fail Vercel builds.
+    Only applies to Next.js projects (checks for next.config.* or app/ directory).
+    """
+    # Only run for Next.js projects
+    is_nextjs = (
+        os.path.exists(os.path.join(workspace_path, "next.config.mjs"))
+        or os.path.exists(os.path.join(workspace_path, "next.config.js"))
+        or os.path.isdir(os.path.join(workspace_path, "src", "app"))
+    )
+    if not is_nextjs:
+        return []
+
+    fixed_files = []
+    src_dir = os.path.join(workspace_path, "src")
+    if not os.path.isdir(src_dir):
+        src_dir = workspace_path
+
+    for root, dirs, files in os.walk(src_dir):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for fname in files:
+            if os.path.splitext(fname)[1].lower() not in {".jsx", ".tsx"}:
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except Exception:
+                continue
+
+            if "<img" not in content.lower():
+                continue
+
+            new_content = _IMG_TAG_RE.sub(_img_to_image, content)
+            if new_content == content:
+                continue
+
+            # Add next/image import if not already present
+            if not _NEXT_IMAGE_IMPORT_RE.search(new_content):
+                # Insert after the last existing import line
+                import_insert = 'import Image from "next/image";\n'
+                last_import = max(
+                    (m.end() for m in re.finditer(r"^import\b.*$", new_content, re.MULTILINE)),
+                    default=0,
+                )
+                new_content = new_content[:last_import] + "\n" + import_insert + new_content[last_import:]
+
+            try:
+                with open(fpath, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                fixed_files.append(os.path.relpath(fpath, workspace_path))
+            except Exception as e:
+                logger.warning("fix_img_tags: could not write %s: %s", fpath, e)
+
+    if fixed_files:
+        logger.info("img→Image fixer fixed %d file(s)", len(fixed_files))
+    return fixed_files
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  FIXER 7 — next.config.js Image Domains Patcher            ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+# External image hosts the AI commonly uses in generated projects.
+# picsum.photos is the most frequent source of "unconfigured host" build errors.
+_IMAGE_HOSTNAMES = [
+    "picsum.photos",
+    "images.unsplash.com",
+    "source.unsplash.com",
+    "via.placeholder.com",
+    "placehold.co",
+    "loremflickr.com",
+    "dummyimage.com",
+    "randomuser.me",
+    "i.pravatar.cc",
+    "api.dicebear.com",
+    "avatars.githubusercontent.com",
+    "lh3.googleusercontent.com",
+    "images.pexels.com",
+]
+
+_REMOTE_PATTERNS_BLOCK = """
+  images: {
+    remotePatterns: [
+      { protocol: 'https', hostname: 'picsum.photos' },
+      { protocol: 'https', hostname: 'images.unsplash.com' },
+      { protocol: 'https', hostname: 'source.unsplash.com' },
+      { protocol: 'https', hostname: 'via.placeholder.com' },
+      { protocol: 'https', hostname: 'placehold.co' },
+      { protocol: 'https', hostname: 'loremflickr.com' },
+      { protocol: 'https', hostname: 'dummyimage.com' },
+      { protocol: 'https', hostname: 'randomuser.me' },
+      { protocol: 'https', hostname: 'i.pravatar.cc' },
+      { protocol: 'https', hostname: 'api.dicebear.com' },
+      { protocol: 'https', hostname: 'avatars.githubusercontent.com' },
+      { protocol: 'https', hostname: 'lh3.googleusercontent.com' },
+      { protocol: 'https', hostname: 'images.pexels.com' },
+    ],
+  },"""
+
+
+def _find_matching_close_brace(content: str, open_pos: int) -> int:
+    """Return the index of the closing } that matches content[open_pos] == '{'.
+
+    Returns -1 if no matching brace is found (malformed input).
+    content[open_pos] must be '{'.
+    """
+    depth = 0
+    for i in range(open_pos, len(content)):
+        ch = content[i]
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
+
+
+def fix_next_config_image_domains(workspace_path: str) -> bool:
+    """Patch next.config.js / next.config.mjs to allow common external image hosts.
+
+    The AI uses picsum.photos and similar services for placeholder images.
+    Without configuring remotePatterns, Next.js Image throws a build error.
+    Returns True if the config was patched, False if unchanged or not found.
+    """
+    for cfg_name in ("next.config.js", "next.config.mjs"):
+        cfg_path = os.path.join(workspace_path, cfg_name)
+        if not os.path.exists(cfg_path):
+            continue
+
+        try:
+            with open(cfg_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except Exception as e:
+            logger.warning("fix_next_config_image_domains: could not read %s: %s", cfg_path, e)
+            continue
+
+        # Already patched — skip
+        if "picsum.photos" in content:
+            logger.debug("fix_next_config_image_domains: %s already has picsum.photos", cfg_name)
+            return False
+
+        patched = False
+
+        # Pattern 1: `const/let/var nextConfig = { ... }`
+        obj_match = re.search(r'(?:const|let|var)\s+nextConfig\s*=\s*\{', content)
+        if obj_match:
+            open_pos = obj_match.end() - 1  # the '{' at end of match
+            close_pos = _find_matching_close_brace(content, open_pos)
+            if close_pos != -1 and "remotePatterns" not in content[open_pos:close_pos]:
+                content = content[:close_pos] + _REMOTE_PATTERNS_BLOCK + "\n" + content[close_pos:]
+                patched = True
+
+        # Pattern 2: `module.exports = { ... }` or `export default { ... }`
+        if not patched:
+            export_match = re.search(
+                r'(?:module\.exports\s*=\s*|export\s+default\s+)\{', content
+            )
+            if export_match:
+                open_pos = export_match.end() - 1  # the '{' at end of match
+                close_pos = _find_matching_close_brace(content, open_pos)
+                if close_pos != -1 and "remotePatterns" not in content[open_pos:close_pos]:
+                    content = content[:close_pos] + _REMOTE_PATTERNS_BLOCK + "\n" + content[close_pos:]
+                    patched = True
+
+        # Pattern 3: fallback — append a standalone images block export
+        if not patched:
+            content += (
+                "\n// Auto-patched by Lucid AI — allow external image hosts\n"
+                f"/** @type {{import('next').NextConfig}} */\n"
+                f"module.exports = {{{_REMOTE_PATTERNS_BLOCK}\n}};\n"
+            )
+            patched = True
+
+        try:
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            logger.info("fix_next_config_image_domains: patched %s with remotePatterns", cfg_name)
+            return True
+        except Exception as e:
+            logger.warning("fix_next_config_image_domains: could not write %s: %s", cfg_path, e)
+
+    return False
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  FIXER — Restore template UI components from git            ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+def restore_template_ui_files(workspace_path: str) -> bool:
+    """Restore src/components/ui/ to git HEAD (original template state).
+
+    Claude sometimes overwrites shadcn/ui files with broken implementations
+    despite the PROTECTED_UI_DIR write-filter.  This is the nuclear option:
+    after all generation phases complete, hard-reset ui/ back to the cloned
+    template so any corrupted file (parse error, wrong import) is undone.
+
+    Returns True if git checkout succeeded, False otherwise.
+    """
+    ui_rel = os.path.join("src", "components", "ui")
+    ui_abs = os.path.join(workspace_path, ui_rel)
+    if not os.path.isdir(ui_abs):
+        return False
+
+    try:
+        result = subprocess.run(
+            ["git", "checkout", "HEAD", "--", ui_rel],
+            cwd=workspace_path,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode == 0:
+            logger.info("restore_template_ui_files: restored %s from git HEAD", ui_rel)
+            return True
+        else:
+            logger.warning(
+                "restore_template_ui_files: git checkout failed (rc=%d): %s",
+                result.returncode, result.stderr.strip()[:200],
+            )
+            return False
+    except Exception as exc:
+        logger.warning("restore_template_ui_files: error: %s", exc)
+        return False
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  FIXER — Missing Tailwind directives in globals.css         ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+_TAILWIND_CSS_CANDIDATES = (
+    "src/app/globals.css",
+    "src/styles/globals.css",
+    "src/styles/global.css",
+    "src/index.css",
+    "src/main.css",
+    "app/globals.css",
+)
+
+_TAILWIND_PREAMBLE = (
+    '@tailwind base;\n'
+    '@tailwind components;\n'
+    '@tailwind utilities;\n'
+    '@import "tw-animate-css";\n'
+)
+
+
+# Attribute value wrapped in HTML entities: className=&quot;...&quot; or onClick=&apos;...&apos;
+# These are output by Claude when it over-generalizes the "escape quotes" rule to
+# attribute values, producing JSX the SWC parser cannot read. Safe to unescape
+# because real attribute values only ever use plain " or ' as delimiters.
+_ATTR_ENTITY_QUOT_RE = re.compile(r'(\b[a-zA-Z_][\w:-]*)=&quot;(.*?)&quot;', re.DOTALL)
+_ATTR_ENTITY_APOS_RE = re.compile(r"(\b[a-zA-Z_][\w:-]*)=&apos;(.*?)&apos;", re.DOTALL)
+
+
+def fix_html_entities_in_attributes(workspace_path: str) -> list[str]:
+    """Unescape &quot; / &apos; that appear as JSX attribute-value delimiters.
+
+    Claude occasionally writes `className=&quot;flex gap-2&quot;` instead of
+    `className="flex gap-2"`, which the JSX/SWC parser rejects with
+    "Expression expected". This fixer detects the pattern and rewrites the
+    attribute delimiters back to literal quotes. Text-node entities (between
+    > and <) are left untouched because they are a legitimate JSX escape.
+
+    Returns the list of file paths that were patched.
+    """
+    fixed_files: list[str] = []
+    src_dir = os.path.join(workspace_path, "src")
+    if not os.path.isdir(src_dir):
+        src_dir = workspace_path
+
+    for root, dirs, files in os.walk(src_dir):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for fname in files:
+            if os.path.splitext(fname)[1].lower() not in {".jsx", ".tsx", ".js", ".ts"}:
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                    original = f.read()
+            except Exception:
+                continue
+
+            if "=&quot;" not in original and "=&apos;" not in original:
+                continue
+
+            fixed = _ATTR_ENTITY_QUOT_RE.sub(r'\1="\2"', original)
+            fixed = _ATTR_ENTITY_APOS_RE.sub(r"\1='\2'", fixed)
+
+            if fixed != original:
+                try:
+                    with open(fpath, "w", encoding="utf-8") as f:
+                        f.write(fixed)
+                    fixed_files.append(os.path.relpath(fpath, workspace_path))
+                    logger.warning(
+                        "fix_html_entities_in_attributes: unescaped attribute delimiters in %s",
+                        os.path.relpath(fpath, workspace_path),
+                    )
+                except Exception as exc:
+                    logger.warning("fix_html_entities_in_attributes: write failed for %s: %s", fpath, exc)
+
+    if fixed_files:
+        logger.info("HTML-entity-in-attributes fixer fixed %d file(s)", len(fixed_files))
+    return fixed_files
+
+
+def fix_missing_tailwind_directives(workspace_path: str) -> list[str]:
+    """Prepend missing @tailwind directives to globals.css / global.css.
+
+    When Claude rewrites the theme CSS it sometimes drops the @tailwind
+    base/components/utilities directives at the top of the file, which
+    silently disables every Tailwind class across the whole app (site
+    renders unstyled). This fixer is deterministic: it inspects each
+    known CSS entry-point and prepends the directives only when they
+    are missing. Files that already contain all three directives are
+    left untouched.
+
+    Returns the list of file paths that were patched.
+    """
+    patched: list[str] = []
+
+    for rel_path in _TAILWIND_CSS_CANDIDATES:
+        abs_path = os.path.join(workspace_path, rel_path)
+        if not os.path.isfile(abs_path):
+            continue
+
+        try:
+            with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except Exception as exc:
+            logger.debug("fix_missing_tailwind_directives: read failed for %s: %s", rel_path, exc)
+            continue
+
+        # Detect all three directives (order/whitespace tolerant).
+        has_base = bool(re.search(r'^\s*@tailwind\s+base\s*;', content, re.MULTILINE))
+        has_comp = bool(re.search(r'^\s*@tailwind\s+components\s*;', content, re.MULTILINE))
+        has_util = bool(re.search(r'^\s*@tailwind\s+utilities\s*;', content, re.MULTILINE))
+
+        if has_base and has_comp and has_util:
+            continue
+
+        # Rebuild: strip any partial directives + tw-animate-css import, then
+        # prepend the canonical 4-line preamble.
+        cleaned = re.sub(
+            r'^\s*@tailwind\s+(base|components|utilities)\s*;\s*\n',
+            "",
+            content,
+            flags=re.MULTILINE,
+        )
+        cleaned = re.sub(
+            r'^\s*@import\s+["\']tw-animate-css["\']\s*;\s*\n',
+            "",
+            cleaned,
+            flags=re.MULTILINE,
+        )
+        new_content = _TAILWIND_PREAMBLE + cleaned.lstrip("\n")
+
+        try:
+            with open(abs_path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            patched.append(rel_path)
+            logger.warning(
+                "fix_missing_tailwind_directives: restored @tailwind directives in %s",
+                rel_path,
+            )
+        except Exception as exc:
+            logger.warning("fix_missing_tailwind_directives: write failed for %s: %s", rel_path, exc)
+
+    return patched
+
+
+# ╔══════════════════════════════════════════════════════════════╗
 # ║  MAIN ENTRY POINT — Run All Fixers                         ║
 # ╚══════════════════════════════════════════════════════════════╝
 
@@ -945,8 +1521,20 @@ async def run_all_fixers(
         "stubs_created": [],
         "route_conflicts_fixed": [],
         "import_mismatches_fixed": [],
+        "entities_fixed": [],
+        "img_tags_fixed": [],
+        "next_config_patched": False,
         "total_fixes": 0,
     }
+
+    # -1. Restore src/components/ui/ from git HEAD — undoes any AI overwrites of
+    #     shadcn/ui template files (parse errors, wrong imports, etc.)
+    try:
+        restored = restore_template_ui_files(workspace_path)
+        if restored:
+            await _ws_send(websocket, "progress", "🔧 Restored template UI components from git")
+    except Exception as e:
+        logger.warning("UI restore fixer failed (non-fatal): %s", e)
 
     # 0. Strip 'use client' from static config/data files (MUST run first)
     # navigation.js, site.js, etc. must never have 'use client' — they are
@@ -994,6 +1582,18 @@ async def run_all_fixers(
     except Exception as e:
         logger.warning("Named-import mismatch fixer failed (non-fatal): %s", e)
 
+    # 3b. Fix missing default exports (import X from file that only has export function X)
+    try:
+        fixed = fix_missing_default_export(workspace_path)
+        results["missing_default_export_fixed"] = fixed
+        if fixed:
+            await _ws_send(
+                websocket, "progress",
+                f"🔧 Added missing default export in {len(fixed)} file(s): {', '.join(fixed)}",
+            )
+    except Exception as e:
+        logger.warning("Missing-default-export fixer failed (non-fatal): %s", e)
+
     # 4. Fix dynamic route conflicts ([id] vs [slug] under same parent)
     try:
         removed = fix_dynamic_route_conflicts(workspace_path)
@@ -1015,7 +1615,48 @@ async def run_all_fixers(
             await _ws_send(websocket, "progress", f"✅ Created {len(stubs)} stub files for missing imports")
     except Exception as e:
         logger.warning("Import resolver failed (non-fatal): %s", e)
-    
+
+    # 4b. Unescape HTML entities that ended up as JSX attribute delimiters
+    #     (Claude sometimes writes className=&quot;...&quot; which breaks the parser).
+    #     MUST run before the text-node escaper so we don't double-escape.
+    try:
+        fixed = fix_html_entities_in_attributes(workspace_path)
+        results["attribute_entities_fixed"] = fixed
+        if fixed:
+            await _ws_send(
+                websocket, "progress",
+                f"🔧 Unescaped HTML entities in JSX attributes of {len(fixed)} file(s)",
+            )
+    except Exception as e:
+        logger.warning("Attribute-entity fixer failed (non-fatal): %s", e)
+
+    # 5. Fix unescaped JSX entities (' and " in text nodes → &apos; / &quot;)
+    try:
+        fixed = fix_unescaped_entities(workspace_path)
+        results["entities_fixed"] = fixed
+        if fixed:
+            await _ws_send(websocket, "progress", f"🔧 Escaped JSX entities in {len(fixed)} file(s)")
+    except Exception as e:
+        logger.warning("Unescaped entities fixer failed (non-fatal): %s", e)
+
+    # 6. Replace <img> with Next.js <Image /> (only for Next.js projects)
+    try:
+        fixed = fix_img_tags(workspace_path)
+        results["img_tags_fixed"] = fixed
+        if fixed:
+            await _ws_send(websocket, "progress", f"🔧 Replaced <img> with <Image /> in {len(fixed)} file(s)")
+    except Exception as e:
+        logger.warning("img→Image fixer failed (non-fatal): %s", e)
+
+    # 7. Patch next.config.js with external image remotePatterns (picsum.photos etc.)
+    try:
+        patched = fix_next_config_image_domains(workspace_path)
+        results["next_config_patched"] = patched
+        if patched:
+            await _ws_send(websocket, "progress", "🔧 Patched next.config.js with image remotePatterns")
+    except Exception as e:
+        logger.warning("next.config image domain patcher failed (non-fatal): %s", e)
+
     results["total_fixes"] = (
         len(results["config_stripped"])
         + len(results["use_client_fixed"])
@@ -1023,6 +1664,9 @@ async def run_all_fixers(
         + len(results["stubs_created"])
         + len(results["route_conflicts_fixed"])
         + len(results["import_mismatches_fixed"])
+        + len(results["entities_fixed"])
+        + len(results["img_tags_fixed"])
+        + (1 if results["next_config_patched"] else 0)
     )
 
     if results["total_fixes"] > 0:

@@ -36,7 +36,6 @@ import FileViewer from "@/components/workspace/FileViewer";
 import FileExplorer from "@/components/agent/FileExplorer";
 import TaskProgress from "@/components/TaskProgress";
 import BuildingScreen from "@/components/workspace/BuildingScreen";
-import SandpackPreview from "@/components/workspace/SandpackPreview";
 
 // ── PlanReviewPanel — full right-panel plan review UI ────────
 function PlanReviewPanel({planData, onConfirm, onReject}) {
@@ -94,8 +93,8 @@ function PlanReviewPanel({planData, onConfirm, onReject}) {
   if (rejected) {
     return (
       <div className="flex flex-col items-center justify-center h-full bg-white dark:bg-[#0d1117] gap-4">
-        <div className="w-14 h-14 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
-          <Sparkles className="w-7 h-7 text-blue-500" />
+        <div className="w-14 h-14 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center">
+          <Sparkles className="w-7 h-7 text-emerald-500" />
         </div>
         <p className="text-[15px] font-semibold text-slate-800 dark:text-slate-100">
           Re-researching with your direction...
@@ -109,7 +108,7 @@ function PlanReviewPanel({planData, onConfirm, onReject}) {
       {/* Header */}
       <div className="shrink-0 px-8 pt-10 pb-6 border-b border-slate-100 dark:border-[#1c2128]">
         <div className="flex items-center gap-3 mb-2">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center shadow-sm shadow-blue-500/20">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-sm shadow-emerald-500/20">
             <Sparkles className="w-4.5 h-4.5 text-white" />
           </div>
           <span className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">
@@ -156,7 +155,7 @@ function PlanReviewPanel({planData, onConfirm, onReject}) {
                 <div
                   key={i}
                   className="flex items-start gap-2.5 px-3 py-2 rounded-lg bg-slate-50 dark:bg-[#161b22] border border-slate-100 dark:border-[#2d333b]">
-                  <ArrowRight className="w-3.5 h-3.5 text-blue-400 dark:text-blue-500 shrink-0 mt-0.5" />
+                  <ArrowRight className="w-3.5 h-3.5 text-emerald-400 dark:text-emerald-500 shrink-0 mt-0.5" />
                   <span className="text-[13px] leading-snug">
                     <span className="font-medium text-slate-800 dark:text-slate-100">
                       {typeof p === "string" ? p : p.name}
@@ -222,9 +221,9 @@ function PlanReviewPanel({planData, onConfirm, onReject}) {
           <div className="flex items-center gap-3">
             <button
               onClick={handleConfirm}
-              className="flex-1 flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-[14px] font-semibold transition-all shadow-sm shadow-emerald-500/20 hover:shadow-emerald-500/30">
+              className="flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-[14px] font-semibold transition-all shadow-sm shadow-emerald-500/20 hover:shadow-emerald-500/30">
               <Check className="w-4 h-4" />
-              Looks Good, Start Building
+              Confirm
             </button>
             <button
               onClick={() => setShowCorrection(true)}
@@ -242,7 +241,7 @@ function PlanReviewPanel({planData, onConfirm, onReject}) {
               onChange={(e) => setCorrectionText(e.target.value)}
               autoFocus
               placeholder="e.g. Make it a professional accounting body website like acca.org, not an online course platform..."
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] text-[13px] text-slate-700 dark:text-slate-200 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:border-blue-400 dark:focus:border-blue-500 resize-none min-h-[72px]"
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] text-[13px] text-slate-700 dark:text-slate-200 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:border-emerald-400 dark:focus:border-emerald-500 resize-none min-h-[72px]"
               rows={3}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
@@ -258,7 +257,7 @@ function PlanReviewPanel({planData, onConfirm, onReject}) {
                 className={cn(
                   "flex-1 px-5 py-2.5 rounded-xl text-[13px] font-semibold transition-all",
                   correctionText.trim()
-                    ? "bg-blue-500 hover:bg-blue-600 text-white shadow-sm shadow-blue-500/20"
+                    ? "bg-emerald-500 hover:bg-emerald-600 text-white shadow-sm shadow-emerald-500/20"
                     : "bg-slate-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 cursor-not-allowed",
                 )}>
                 Re-research with this direction
@@ -494,7 +493,7 @@ export default function RightPanel() {
               <div className="h-full overflow-y-auto bg-white dark:bg-[#0d1117] p-6 lg:p-10 custom-scrollbar">
                 <div className="max-w-4xl mx-auto space-y-8">
                   <div className="flex items-center gap-4 border-b border-slate-100 dark:border-[#1c2128] pb-6">
-                    <div className="w-12 h-12 rounded-xl bg-blue-500 flex items-center justify-center shrink-0">
+                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shrink-0">
                       <Sparkles className="w-6 h-6 text-white" />
                     </div>
                     <div>
@@ -556,7 +555,7 @@ export default function RightPanel() {
                         )}
                         <a
                           href="mailto:support@lucid.ai"
-                          className="text-[13px] text-blue-600 dark:text-blue-400 hover:underline">
+                          className="text-[13px] text-emerald-600 dark:text-emerald-400 hover:underline">
                           Contact support
                         </a>
                       </div>
@@ -607,7 +606,7 @@ export default function RightPanel() {
                   <div className="relative flex-1 min-h-0 flex flex-col bg-[#f1f2f6] dark:bg-[#161b22]">
                     {status === "running" && (
                       <div className="absolute top-0 left-0 right-0 h-[2px] overflow-hidden pointer-events-none z-20">
-                        <div className="absolute inset-y-0 w-1/2 bg-gradient-to-r from-transparent via-blue-400 to-transparent animate-hmr-slide" />
+                        <div className="absolute inset-y-0 w-1/2 bg-gradient-to-r from-transparent via-emerald-400 to-transparent animate-hmr-slide" />
                       </div>
                     )}
                     <div className="relative flex-1 flex flex-col overflow-hidden">
@@ -617,31 +616,6 @@ export default function RightPanel() {
                         title="Live Preview"
                         className="flex-1 w-full border-0 bg-white"
                         sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
-                      />
-                    </div>
-                  </div>
-                ) : previewFileMap ? (
-                  /* ── Sandpack in-browser preview — shows immediately after code
-                       generation while the local dev server boots in background ── */
-                  <div className="relative flex-1 min-h-0 flex flex-col">
-                    {/* Live server starting banner — disappears when iframe takes over */}
-                    {!repoInfo.vercelUrl && (
-                      <div className="shrink-0 flex items-center gap-2 px-3 py-1.5 bg-blue-50 dark:bg-blue-950/40 border-b border-blue-100 dark:border-blue-900/60">
-                        <Loader2 className="w-3 h-3 text-blue-400 animate-spin shrink-0" />
-                        <span className="text-[11px] text-blue-600 dark:text-blue-400 font-medium">
-                          Browser preview • Live server starting…
-                        </span>
-                      </div>
-                    )}
-                    <div className="relative flex-1 min-h-0">
-                      {status === "running" && (
-                        <div className="absolute top-0 left-0 right-0 h-[2px] overflow-hidden pointer-events-none z-20">
-                          <div className="absolute inset-y-0 w-1/2 bg-gradient-to-r from-transparent via-blue-400 to-transparent animate-hmr-slide" />
-                        </div>
-                      )}
-                      <SandpackPreview
-                        files={previewFileMap.files}
-                        template={previewFileMap.template}
                       />
                     </div>
                   </div>
@@ -726,15 +700,22 @@ export default function RightPanel() {
                       Preview Not Available
                     </h3>
                     <p className="text-[14px] text-slate-500 dark:text-slate-400 max-w-sm mb-6">
-                      This project has not been deployed yet, or the preview URL
-                      is missing.
+                      The preview server may have stopped. Try restarting it.
                     </p>
-                    <button
-                      onClick={() => setRightPanel("code")}
-                      className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-[13px] font-semibold hover:bg-slate-800 dark:hover:bg-slate-100 transition-colors shadow-sm">
-                      <Code2 className="w-4 h-4" />
-                      View Source Code
-                    </button>
+                    <div className="flex flex-col items-center gap-3 w-full max-w-xs">
+                      <button
+                        onClick={() => retry("preview")}
+                        className="w-full flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-[13px] font-semibold hover:bg-slate-800 dark:hover:bg-slate-100 transition-colors shadow-sm">
+                        <RefreshCw className="w-4 h-4" />
+                        Restart Preview
+                      </button>
+                      <button
+                        onClick={() => setRightPanel("code")}
+                        className="flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors">
+                        <Code2 className="w-4 h-4" />
+                        View Source Code
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>

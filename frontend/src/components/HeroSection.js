@@ -23,13 +23,13 @@ export default function HeroSection() {
         
         {/* Badge */}
         <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-[#1e293b] text-slate-300 text-[11px] font-medium mb-6 -mt-8 cursor-pointer hover:bg-[#334155] transition-colors shadow-sm w-fit border border-slate-700/50">
-          <span className="bg-[#0f172a] text-cyan-400 px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wide border border-slate-700">New</span>
+          <span className="bg-[#0f172a] text-emerald-400 px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wide border border-slate-700">New</span>
           <span className="text-white">Introducing Lucid Review</span>
           <ChevronRight className="w-3 h-3 text-slate-500" />
         </div>
 
         <h1 className="text-4xl sm:text-5xl lg:text-[3rem] font-bold tracking-tight text-slate-900 dark:text-slate-100 leading-[1.1] mb-6">
-          <span className="text-transparent bg-clip-text bg-gradient-to-r from-violet-600 to-indigo-600 dark:from-violet-400 dark:to-indigo-400">LucidAI</span>: The AI Software engineer
+          <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-500 to-teal-600 dark:from-emerald-400 dark:to-teal-500">LucidAI</span>: The AI Software engineer
         </h1>
         
         <p className="text-lg text-slate-500 dark:text-slate-400 leading-relaxed mb-8 max-w-lg font-medium">
@@ -37,7 +37,7 @@ export default function HeroSection() {
         </p>
 
         <div className="flex items-center gap-4 mb-10">
-          <Link href={isLoggedIn ? '/dashboard/engineer' : '/login'} className="bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-[15px] font-semibold px-8 py-3.5 rounded-lg shadow-lg shadow-violet-500/25 hover:shadow-violet-600/40 hover:-translate-y-0.5 transition-all duration-200 inline-block text-center">
+          <Link href={isLoggedIn ? '/dashboard/engineer' : '/login'} className="bg-gradient-to-r from-emerald-500 to-teal-600 text-white text-[15px] font-semibold px-8 py-3.5 rounded-lg shadow-lg shadow-emerald-500/25 hover:shadow-emerald-600/40 hover:-translate-y-0.5 transition-all duration-200 inline-block text-center">
             {isLoggedIn ? 'Go to Dashboard' : 'Get Started'}
           </Link>
           <button className="bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-[15px] font-bold px-8 py-3.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all shadow-sm">
@@ -49,7 +49,7 @@ export default function HeroSection() {
         <div className="flex flex-col gap-2 w-full max-w-lg">
           {/* Step 1 */}
           <div className="flex items-center gap-4 p-4 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-md transform hover:-translate-y-0.5 transition-all cursor-pointer relative overflow-hidden group">
-            <div className="absolute left-0 top-0 bottom-0 w-1 bg-violet-600"></div>
+            <div className="absolute left-0 top-0 bottom-0 w-1 bg-emerald-500"></div>
             <div className="w-6 h-6 rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 flex items-center justify-center text-sm font-bold shadow-sm shrink-0">1</div>
             <div className="flex flex-col">
               <span className="text-slate-900 dark:text-slate-100 font-bold text-[15px]">Planning</span>
@@ -169,7 +169,7 @@ export default function HeroSection() {
             <div className="w-[40%] bg-[#16161e] flex flex-col border-l border-white/5">
               {/* Panel Header */}
               <div className="h-10 border-b border-white/5 flex items-center px-4 gap-2 text-[10px] font-bold text-slate-400 bg-[#1a1b26] uppercase tracking-wider">
-                <div className="w-4 h-4 bg-violet-600 rounded-[3px] flex items-center justify-center text-white">
+                <div className="w-4 h-4 bg-emerald-500 rounded-[3px] flex items-center justify-center text-white">
                   <Zap className="w-2.5 h-2.5 fill-current" />
                 </div>
                 AI Assistant
@@ -186,7 +186,7 @@ export default function HeroSection() {
                 </div>
                 
                 <div className="flex justify-end">
-                  <button className="bg-gradient-to-r from-violet-600 to-indigo-600 text-white text-[12px] font-bold px-4 py-2 rounded-md shadow-lg shadow-violet-900/20 hover:brightness-110 transition-all">
+                  <button className="bg-gradient-to-r from-emerald-500 to-teal-600 text-white text-[12px] font-bold px-4 py-2 rounded-md shadow-lg shadow-emerald-900/20 hover:brightness-110 transition-all">
                     Yes, proceed.
                   </button>
                 </div>

@@ -37,7 +37,7 @@ const TEMPLATES = [
     category: 'Marketing & Sales',
     tags: ['Marketing & Sales', 'Operations'],
     icon: BarChart3,
-    color: 'from-blue-500 to-indigo-600',
+    color: 'from-emerald-500 to-teal-600',
     prompt: 'A modern CRM dashboard with contact management, deal pipeline view, activity tracking, and analytics charts. Include sidebar navigation, search functionality, and data tables. Professional dark/light theme with clean typography.',
     uses: 28512,
     author: 'Lucid AI',
@@ -250,7 +250,7 @@ function TemplateCard({ template, onUse }) {
             <span>•</span>
             <span className="flex items-center gap-1">
               <Eye className="w-3 h-3" />
-              {template.uses.toLocaleString()}
+              {template.uses.toLocaleString('en-US')}
             </span>
           </div>
         </div>

@@ -44,18 +44,18 @@ const IDEAS = [
 // Emoji icons for projects (deterministic based on name hash)
 const PROJECT_EMOJIS = ['🔥', '⚡', '🚀', '💎', '🎯', '🌟', '🎨', '🔮', '🌊', '🍀', '🦊', '🎪'];
 const EMOJI_BG_COLORS = [
-  'bg-blue-50 dark:bg-blue-500/10',
-  'bg-amber-50 dark:bg-amber-500/10',
-  'bg-blue-50 dark:bg-blue-500/10',
-  'bg-violet-50 dark:bg-violet-500/10',
   'bg-emerald-50 dark:bg-emerald-500/10',
-  'bg-rose-50 dark:bg-rose-500/10',
-  'bg-cyan-50 dark:bg-cyan-500/10',
-  'bg-indigo-50 dark:bg-indigo-500/10',
+  'bg-amber-50 dark:bg-amber-500/10',
   'bg-teal-50 dark:bg-teal-500/10',
+  'bg-emerald-50 dark:bg-emerald-500/10',
+  'bg-teal-50 dark:bg-teal-500/10',
+  'bg-rose-50 dark:bg-rose-500/10',
+  'bg-emerald-50 dark:bg-emerald-500/10',
+  'bg-teal-50 dark:bg-teal-500/10',
+  'bg-emerald-50 dark:bg-emerald-500/10',
   'bg-pink-50 dark:bg-pink-500/10',
   'bg-lime-50 dark:bg-lime-500/10',
-  'bg-fuchsia-50 dark:bg-fuchsia-500/10',
+  'bg-teal-50 dark:bg-teal-500/10',
 ];
 
 function getProjectHash(name) {
@@ -142,12 +142,12 @@ function GhostCard({ onClick }) {
   return (
     <button
       onClick={onClick}
-      className="group rounded-2xl border-2 border-dashed border-slate-200 dark:border-[#2d333b] hover:border-blue-300 dark:hover:border-blue-500/30 hover:bg-slate-50/50 dark:hover:bg-[#161b22]/50 transition-all duration-200 flex flex-col items-center justify-center min-h-[160px] p-5"
+      className="group rounded-2xl border-2 border-dashed border-slate-200 dark:border-[#2d333b] hover:border-emerald-300 dark:hover:border-emerald-500/30 hover:bg-slate-50/50 dark:hover:bg-[#161b22]/50 transition-all duration-200 flex flex-col items-center justify-center min-h-[160px] p-5"
     >
-      <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-[#21262d] flex items-center justify-center mb-2 group-hover:bg-blue-100 dark:group-hover:bg-blue-500/20 transition-colors">
-        <Plus className="w-5 h-5 text-slate-400 group-hover:text-blue-500 transition-colors" />
+      <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-[#21262d] flex items-center justify-center mb-2 group-hover:bg-emerald-100 dark:group-hover:bg-emerald-500/20 transition-colors">
+        <Plus className="w-5 h-5 text-slate-400 group-hover:text-emerald-500 transition-colors" />
       </div>
-      <span className="text-[13px] font-semibold text-slate-500 dark:text-slate-400 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+      <span className="text-[13px] font-semibold text-slate-500 dark:text-slate-400 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
         New Project
       </span>
     </button>
@@ -160,7 +160,7 @@ function GhostCard({ onClick }) {
 function ActivityRow({ conversation, onClick }) {
   return (
     <button onClick={onClick} className="w-full flex items-center gap-3.5 px-4 py-3.5 hover:bg-slate-50 dark:hover:bg-white/[0.015] transition-colors group text-left">
-      <div className={cn("w-2 h-2 rounded-full shrink-0", conversation.status === 'active' ? 'bg-blue-500' : conversation.status === 'completed' ? 'bg-emerald-500' : 'bg-slate-400')} />
+      <div className={cn("w-2 h-2 rounded-full shrink-0", conversation.status === 'active' ? 'bg-emerald-500' : conversation.status === 'completed' ? 'bg-teal-500' : 'bg-slate-400')} />
       <div className="flex-1 min-w-0">
       <p className="text-[13px] font-semibold text-slate-700 dark:text-slate-200 truncate group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
           {conversation.title || conversation.repo_name || 'Conversation'}
@@ -182,8 +182,8 @@ function ActivityRow({ conversation, onClick }) {
    ════════════════════════════════════════════════════════ */
 function HowItWorks() {
   const steps = [
-    { n: '01', label: 'Describe your idea', desc: 'Type what you want in plain English', icon: Lightbulb, color: 'from-violet-500 to-indigo-500' },
-    { n: '02', label: 'AI generates it', desc: 'Full-stack app built in minutes', icon: Sparkles, color: 'from-blue-500 to-cyan-500' },
+    { n: '01', label: 'Describe your idea', desc: 'Type what you want in plain English', icon: Lightbulb, color: 'from-emerald-400 to-teal-500' },
+    { n: '02', label: 'AI generates it', desc: 'Full-stack app built in minutes', icon: Sparkles, color: 'from-teal-500 to-emerald-600' },
     { n: '03', label: 'Deploy live', desc: 'Ship to production in one click', icon: Rocket, color: 'from-emerald-500 to-teal-500' },
   ];
   return (
@@ -304,12 +304,19 @@ export default function EngineerDashboardPage() {
               </h1>
               <p className="text-[16px] text-slate-500 dark:text-slate-400 mt-4 max-w-lg mx-auto">
                 Describe your app idea below or get inspired by our{' '}
-                <button onClick={() => router.push('/dashboard/engineer/templates')} className="text-blue-600 dark:text-blue-400 underline underline-offset-2 hover:text-blue-700 transition-colors">templates</button>.
+                <button onClick={() => router.push('/dashboard/engineer/templates')} className="text-emerald-600 dark:text-emerald-400 underline underline-offset-2 hover:text-emerald-700 transition-colors">templates</button>.
               </p>
             </div>
 
             {/* ── Big Prompt Box (Base44 style) ── */}
-            <div className="relative bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200 dark:border-[#2d333b] shadow-[0_2px_20px_rgba(0,0,0,0.04)] dark:shadow-[0_2px_20px_rgba(0,0,0,0.3)] focus-within:border-blue-300 dark:focus-within:border-blue-500/40 focus-within:shadow-[0_2px_24px_rgba(59,130,246,0.06)] transition-all duration-200 z-10">
+            <div className="relative">
+            {/* Ambient green glow orbs behind the input */}
+            <div className="absolute -inset-6 pointer-events-none" style={{zIndex: 0}}>
+              <div className="absolute top-1/2 left-1/4 -translate-y-1/2 w-72 h-40 bg-emerald-400/20 dark:bg-emerald-500/15 rounded-full blur-3xl animate-pulse" style={{animationDuration: '3.5s'}} />
+              <div className="absolute top-1/2 right-1/4 -translate-y-1/2 w-56 h-36 bg-teal-400/15 dark:bg-teal-500/12 rounded-full blur-3xl animate-pulse" style={{animationDuration: '4.2s', animationDelay: '0.8s'}} />
+              <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-48 h-24 bg-emerald-300/12 dark:bg-emerald-600/10 rounded-full blur-2xl animate-pulse" style={{animationDuration: '5s', animationDelay: '1.5s'}} />
+            </div>
+            <div className="relative bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200 dark:border-[#2d333b] shadow-[0_2px_20px_rgba(0,0,0,0.04)] dark:shadow-[0_2px_20px_rgba(0,0,0,0.3)] focus-within:border-emerald-300 dark:focus-within:border-emerald-500/40 focus-within:shadow-[0_4px_32px_rgba(16,185,129,0.15)] transition-all duration-200 z-10">
               <textarea
                 ref={promptRef}
                 value={promptText}
@@ -390,7 +397,7 @@ export default function EngineerDashboardPage() {
                     className={cn(
                       "flex items-center justify-center w-9 h-9 rounded-full transition-all duration-200 relative z-20",
                       promptText.trim() && !isLaunching
-                        ? "bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-slate-100 shadow-md active:scale-[0.95]"
+                        ? "bg-gradient-to-br from-emerald-500 to-teal-600 text-white hover:opacity-90 shadow-md shadow-emerald-500/30 active:scale-[0.95]"
                         : "bg-slate-200 dark:bg-[#21262d] text-slate-400 dark:text-slate-600 cursor-not-allowed"
                     )}
                   >
@@ -439,12 +446,13 @@ export default function EngineerDashboardPage() {
                       <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 block">Figma URL</label>
                       <input type="url" value={advancedOpts.figmaUrl} onChange={(e) => setAdvancedOpts(p => ({ ...p, figmaUrl: e.target.value }))}
                         placeholder="Optional..."
-                        className="w-full px-3 py-2 text-[12px] bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-lg text-slate-700 dark:text-slate-300 placeholder:text-slate-400 outline-none focus:border-blue-400" />
+                        className="w-full px-3 py-2 text-[12px] bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-lg text-slate-700 dark:text-slate-300 placeholder:text-slate-400 outline-none focus:border-emerald-400" />
                     </div>
                   </div>
                 </div>
               )}
             </div>
+            </div>{/* end relative glow wrapper */}
 
             {/* Chips — Base44 style "What would you like to create?" */}
             <div className="mt-5">
@@ -477,9 +485,9 @@ export default function EngineerDashboardPage() {
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mb-10 stagger-children">
                 {IDEAS.map((chip) => (
                   <button key={chip.label} type="button" onClick={() => { setPromptText(chip.prompt); promptRef.current?.focus(); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-                    className="group p-5 rounded-xl bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] hover:border-blue-300 dark:hover:border-blue-500/30 hover:shadow-lg transition-all text-center">
+                    className="group p-5 rounded-xl bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] hover:border-emerald-300 dark:hover:border-emerald-500/30 hover:shadow-lg transition-all text-center">
                     <span className="text-2xl mb-2 block">{chip.emoji}</span>
-                    <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">{chip.label}</span>
+                    <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">{chip.label}</span>
                   </button>
                 ))}
               </div>
@@ -490,9 +498,9 @@ export default function EngineerDashboardPage() {
               {/* Stats — inline */}
               <div className="flex items-center gap-8 mb-8 px-1">
                 {[
-                  { label: 'Projects', value: totalProjects, icon: Layers, color: 'text-indigo-500' },
-                  { label: 'Active', value: activeCount, icon: Activity, color: 'text-emerald-500' },
-                  { label: 'Deployed', value: deployedCount, icon: Globe, color: 'text-violet-500' },
+                  { label: 'Projects', value: totalProjects, icon: Layers, color: 'text-emerald-500' },
+                  { label: 'Active', value: activeCount, icon: Activity, color: 'text-teal-500' },
+                  { label: 'Deployed', value: deployedCount, icon: Globe, color: 'text-emerald-600' },
                   { label: 'This Month', value: thisMonthCount, icon: BarChart3, color: 'text-amber-500' },
                 ].map((s) => (
                   <div key={s.label} className="flex items-center gap-2.5">
@@ -508,7 +516,7 @@ export default function EngineerDashboardPage() {
                 <div className="flex items-center justify-between mb-5">
                   <h2 className="text-[18px] font-extrabold text-slate-800 dark:text-white tracking-tight">Your Projects</h2>
                   {platformRepos.length > 8 && (
-                    <button onClick={() => router.push('/dashboard/engineer/projects')} className="text-[12px] font-bold text-blue-500 hover:text-blue-700 dark:hover:text-blue-400 transition-colors">View all →</button>
+                    <button onClick={() => router.push('/dashboard/engineer/projects')} className="text-[12px] font-bold text-emerald-500 hover:text-emerald-700 dark:hover:text-emerald-400 transition-colors">View all →</button>
                   )}
                 </div>
 
@@ -542,13 +550,13 @@ export default function EngineerDashboardPage() {
               <div className="mb-8">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-[18px] font-extrabold text-slate-800 dark:text-white tracking-tight">Recent Activity</h2>
-                  <button onClick={() => router.push('/dashboard/engineer/conversations')} className="text-[12px] font-bold text-blue-500 hover:text-blue-700 dark:hover:text-blue-400 transition-colors">
+                  <button onClick={() => router.push('/dashboard/engineer/conversations')} className="text-[12px] font-bold text-emerald-500 hover:text-emerald-700 dark:hover:text-emerald-400 transition-colors">
                     All conversations →
                   </button>
                 </div>
                 <div className="bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200 dark:border-[#2d333b] overflow-hidden">
                   {convoLoading ? (
-                    <div className="flex items-center justify-center py-10"><Loader2 className="w-5 h-5 text-indigo-500 animate-spin" /></div>
+                    <div className="flex items-center justify-center py-10"><Loader2 className="w-5 h-5 text-emerald-500 animate-spin" /></div>
                   ) : conversations.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-10 text-center">
                       <MessageSquare className="w-8 h-8 text-slate-200 dark:text-slate-700 mb-2" />
