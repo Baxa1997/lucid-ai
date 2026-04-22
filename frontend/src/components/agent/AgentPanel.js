@@ -84,7 +84,6 @@ export default function AgentPanel({
         </div>
       )}
 
-      {/* ── Tab Content ─────────────────────────────────── */}
       {activeTab === "chat" && (
         <ChatTab
           state={state}
