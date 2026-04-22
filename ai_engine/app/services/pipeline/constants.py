@@ -20,10 +20,7 @@ GEMINI_BLUEPRINT_MODEL = "gemini-2.5-flash"   # blueprint → plan.json (gemini_
 
 # ── Fallback Gemini API Key ──────────────────────────────────
 # Used when the user doesn't have their own key in Settings.
-_FALLBACK_GEMINI_KEY = os.environ.get(
-    "GOOGLE_API_KEY",
-    "AIzaSyDwMFS1PUpONEyTEz_nVgCF30-lvXb3gbY"
-).strip()
+_FALLBACK_GEMINI_KEY = os.environ.get("GOOGLE_API_KEY", "").strip()
 
 # ── PLATFORM_GITHUB_TOKEN — loaded ONCE at module startup ────────────────────
 # Load from environment first; fall back to the nearest .env file on disk.

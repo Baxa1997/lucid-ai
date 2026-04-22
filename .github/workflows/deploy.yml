@@ -1,0 +1,27 @@
+name: Deploy to Contabo
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            if [ ! -d /opt/lucid-ai ]; then
+              git clone https://github.com/${{ secrets.DEPLOY_REPO }}.git /opt/lucid-ai
+            fi
+            cd /opt/lucid-ai
+            git pull origin main
+            mkdir -p workspaces
+            docker compose up -d --build ai_engine
+            docker image prune -f
