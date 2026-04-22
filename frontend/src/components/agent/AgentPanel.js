@@ -1,11 +1,5 @@
 "use client";
 
-// ─────────────────────────────────────────────────────────
-//  Lucid AI — AgentPanel (Production)
-//  Tab switcher: Chat ↔ Terminal
-//  All heavy rendering delegated to panel/ sub-components.
-// ─────────────────────────────────────────────────────────
-
 import {useState} from "react";
 import {cn} from "@/lib/utils";
 import {MessageSquare, Terminal, Circle, StopCircle} from "lucide-react";
