@@ -1295,8 +1295,10 @@ _DISTILL_SECTIONS: tuple[tuple[str, int], ...] = (
     ("TYPOGRAPHY", 400),
     # Director blocks — always keep. BRAND_MARK guarantees the logo is built.
     # RADIUS_TOKENS locks border-radius consistency across elements.
+    # IMAGE_COMPOSITION prevents low-contrast text-over-image + glass forms.
     ("BRAND_MARK", 400),
     ("RADIUS_TOKENS", 300),
+    ("IMAGE_COMPOSITION", 700),
     ("COPY_TONE", 500),
     # Vision-grounded DNA from actual screenshots of reference sites.
     # Placed BEFORE LAYOUT_BLUEPRINT so if the model truncates, the concrete
@@ -2861,7 +2863,7 @@ color_application, typography_system, card_language, spacing_rhythm,
 motion_language. Use the distinctive_moves list as must-have touches.
 
 ───────────────────────────────────────────────────────────────
-BRAND_MARK, RADIUS_TOKENS, ADMIN_UI_LANGUAGE — DIRECTOR BLOCKS
+BRAND_MARK, RADIUS_TOKENS, IMAGE_COMPOSITION, ADMIN_UI_LANGUAGE — DIRECTOR BLOCKS
 ───────────────────────────────────────────────────────────────
 If a ===BRAND_MARK=== block is present: every Header/Navbar/Sidebar you
 generate MUST render that wordmark/monogram with the exact font, weight,
@@ -2872,6 +2874,57 @@ one of those exact radii. Buttons use radius_tokens.button, inputs use
 radius_tokens.input, cards use radius_tokens.card, badges use
 radius_tokens.badge. Never mix ad-hoc values like rounded-xl on one card
 and rounded-md on another — pick one language and apply it.
+
+If a ===IMAGE_COMPOSITION=== block is present (it is — this is UNIVERSAL):
+EVERY section that mixes copy with photography (hero, testimonial,
+quote, reservation, contact, booking, feature banners, admin hero
+banners, ecommerce product shots) MUST obey the exact values in that block:
+  • overlay_pattern (dark_scrim | light_scrim | split_solid | card_lift |
+    side_caption) decides the composition. Do NOT invent your own.
+  • overlay_scrim_classes is the literal Tailwind gradient to place as
+    `absolute inset-0` BETWEEN the image and the text when the pattern
+    is a scrim variant. Without the scrim, overlaid text has no contrast.
+  • overlay_text_color is the text-color class used on any copy sitting
+    over the image. Never use default `text-foreground` on a raw photo.
+  • image_container_mode (full_bleed | centered | split_half | split_third):
+    images are NEVER half-width next to raw whitespace. That reads as a
+    broken layout — the primary failure mode we are fixing.
+  • form_treatment (card_lift_solid | split_solid | standalone_section):
+    reservation / contact / booking / signup / newsletter forms ALWAYS
+    sit in an OPAQUE bg-card or bg-background container. NEVER
+    glassmorphism (`backdrop-blur`) over photography — inputs become
+    unreadable, labels vanish, placeholders disappear. If form_treatment
+    is `standalone_section`, the form has its OWN section (bg-muted/30 or
+    bg-background) — no image underneath.
+  • Quote/testimonial blocks over imagery: require `dark_scrim` or
+    `card_lift`. Bare italic serif floating on a light photograph is
+    BANNED — reads as unreadable and broken.
+
+Concrete code pattern for a scrim section (applies to every hero-with-image,
+testimonial-with-image, cta-with-image section you build):
+
+  <section className="relative ...">
+    <div className="absolute inset-0">
+      <img src="..." alt="..." className="w-full h-full object-cover" />
+      <div className="absolute inset-0 {overlay_scrim_classes}" />
+    </div>
+    <div className="relative z-10 ...">
+      <h2 className="{overlay_text_color} ...">Headline</h2>
+    </div>
+  </section>
+
+Concrete code pattern for a form-over-image section (reservation / contact):
+
+  <section className="relative ...">
+    <img className="absolute inset-0 w-full h-full object-cover" src="..." />
+    <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-black/20" />
+    <div className="relative z-10 container">
+      <div className="bg-card text-card-foreground rounded-{radius} shadow-xl p-8 ...">
+        {/* form fields here — input bg-background, never transparent */}
+      </div>
+    </div>
+  </section>
+
 
 If a ===ADMIN_UI_LANGUAGE=== block is present (admin/CRM/TMS/SaaS
 dashboard/ecommerce projects only): every DataTable, form, sidebar,

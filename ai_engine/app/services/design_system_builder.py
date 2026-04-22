@@ -130,6 +130,31 @@ HARD RULES:
      badges/fills.
    - Section padding is 32-64px (NOT 96px+). Cards pack dense info.
 
+8. IMAGE + TEXT COMPOSITION — NEVER place text directly on a photograph
+   without explicit contrast protection. Every section that overlays copy
+   on an image MUST pick ONE of these patterns, specified in
+   image_overlay_pattern + overlay_scrim + overlay_text_color:
+     A. 'dark_scrim'    — full-bleed image with
+        bg-gradient-to-t from-black/70 via-black/30 to-transparent
+        + text-white/90 body, text-white display.
+     B. 'light_scrim'   — same gradient using background/90 tokens
+        + text-foreground. For light-palette brands.
+     C. 'split_solid'   — 50/50 grid, image on one side, text on the
+        other in bg-background or bg-card. No overlay.
+     D. 'card_lift'     — solid bg-card OR bg-background/95 card
+        floating over the image with shadow-xl. Card itself is opaque.
+     E. 'side_caption'  — text sits ADJACENT to the image (not on top),
+        both in their own solid containers.
+   - FORMS (reservation, contact, signup, booking): always 'card_lift' or
+     'split_solid' with bg-card or bg-background. NEVER glassmorphism
+     (backdrop-blur) over busy photography — inputs become unreadable.
+   - Quote/testimonial blocks over imagery: require dark_scrim or
+     card_lift. Bare italic serif on a light photograph is banned.
+   - Image sizing: every image is either full-bleed (w-full), within a
+     centered container (max-w-5xl mx-auto), or half of a split grid.
+     NEVER a half-width image next to raw whitespace — that reads as
+     a broken layout. Specify image_container_mode.
+
 Output ONLY via the provided tool. No prose.
 """
 
@@ -290,6 +315,33 @@ _DESIGN_TOOL = {
                 "description": "Per-section background/treatment pattern. Keys are section names that appear on the page.",
                 "additionalProperties": {"type": "string"},
             },
+            "image_composition": {
+                "type": "object",
+                "description": "Rules for every section that mixes text and photography. UNIVERSAL — applies to landing, CRM, TMS, admin hero banners, ecommerce product shots. Prevents low-contrast text-over-image, glassmorphic forms over busy imagery, and half-width-image-with-empty-whitespace layouts.",
+                "properties": {
+                    "overlay_pattern": {
+                        "type": "string",
+                        "description": "ONE of: 'dark_scrim' | 'light_scrim' | 'split_solid' | 'card_lift' | 'side_caption'. Pick based on palette mood — dark_scrim for cinematic, light_scrim for soft, split_solid for editorial, card_lift for form-heavy pages, side_caption for magazine.",
+                    },
+                    "overlay_scrim_classes": {
+                        "type": "string",
+                        "description": "Exact Tailwind gradient classes used for the scrim when overlay_pattern is dark_scrim or light_scrim. E.g. 'bg-gradient-to-t from-black/70 via-black/30 to-transparent'. Empty string for split_solid / card_lift / side_caption.",
+                    },
+                    "overlay_text_color": {
+                        "type": "string",
+                        "description": "Tailwind text-color class the overlaid copy MUST use. 'text-white' for dark_scrim; 'text-foreground' for split_solid / card_lift / side_caption / light_scrim on light palettes.",
+                    },
+                    "image_container_mode": {
+                        "type": "string",
+                        "description": "ONE of: 'full_bleed' | 'centered' | 'split_half' | 'split_third'. No other layouts. Prevents half-width-image + empty-whitespace gaps.",
+                    },
+                    "form_treatment": {
+                        "type": "string",
+                        "description": "How reservation/contact/booking/signup forms sit against imagery. ONE of: 'card_lift_solid' (opaque bg-card card with shadow-xl over hero image) | 'split_solid' (50/50 grid, form side in bg-background) | 'standalone_section' (form in its own section with bg-muted/30, no image underneath). NEVER 'glass' — backdrop-blur over photography kills input legibility.",
+                    },
+                },
+                "required": ["overlay_pattern", "overlay_text_color", "image_container_mode", "form_treatment"],
+            },
             "hero_archetype":           {"type": "string", "description": "split / bento / diagonal / magazine / layered / cinematic / editorial_offset / full_bleed_dark / typographic / invented"},
             "features_archetype":       {"type": "string", "description": "bento_mixed / zigzag / vertical_tabs / horizontal_scroll / masonry / tilt_stack / showcase / timeline / numbered_editorial"},
             "signature_motif":          {"type": "string", "description": "One recurring decorative element used 2-3x (e.g. 'hairline divider with offset dot', 'hand-drawn squiggle', 'topographic contour line', 'grain texture overlay')"},
@@ -406,6 +458,7 @@ _DESIGN_TOOL = {
             "section_rhythm", "hero_archetype", "features_archetype",
             "signature_motif", "decorative_pattern", "border_radius_language",
             "color_application_strategy", "hover_interaction_style",
+            "image_composition",
             "chart_colors", "banned_patterns", "distinctive_moves",
         ],
     },
@@ -664,6 +717,36 @@ def validate_design_system(design: dict, layout_archetype: str = "") -> list[str
         violations.append(
             "radius_tokens missing button or card radius. Every element needs an "
             "explicit radius so the border-radius language is applied consistently."
+        )
+
+    # Image composition — universal contrast protection for text-over-image
+    ic = design.get("image_composition") or {}
+    valid_overlays = {"dark_scrim", "light_scrim", "split_solid", "card_lift", "side_caption"}
+    valid_containers = {"full_bleed", "centered", "split_half", "split_third"}
+    valid_forms = {"card_lift_solid", "split_solid", "standalone_section"}
+    ovp = (ic.get("overlay_pattern") or "").strip().lower()
+    icm = (ic.get("image_container_mode") or "").strip().lower()
+    ft = (ic.get("form_treatment") or "").strip().lower()
+    if not ovp or ovp not in valid_overlays:
+        violations.append(
+            f"image_composition.overlay_pattern '{ovp}' must be one of "
+            f"{sorted(valid_overlays)}."
+        )
+    if not icm or icm not in valid_containers:
+        violations.append(
+            f"image_composition.image_container_mode '{icm}' must be one of "
+            f"{sorted(valid_containers)}. No half-width-image-with-whitespace layouts."
+        )
+    if not ft or ft not in valid_forms:
+        violations.append(
+            f"image_composition.form_treatment '{ft}' must be one of {sorted(valid_forms)}. "
+            "Glassmorphism over photography is banned — inputs become unreadable."
+        )
+    # If overlay_pattern is a scrim variant, scrim classes must be present
+    if ovp in ("dark_scrim", "light_scrim") and not ic.get("overlay_scrim_classes"):
+        violations.append(
+            f"image_composition.overlay_pattern='{ovp}' requires overlay_scrim_classes "
+            "(e.g. 'bg-gradient-to-t from-black/70 via-black/30 to-transparent')."
         )
 
     # Admin-only: required admin blocks + status palette contrast
@@ -1076,6 +1159,40 @@ def _render_layout_blueprint(design: dict) -> str:
     )
 
 
+def _render_image_composition(design: dict) -> str:
+    ic = design.get("image_composition") or {}
+    overlay = ic.get("overlay_pattern", "").strip() or "dark_scrim"
+    scrim = ic.get("overlay_scrim_classes", "").strip()
+    text_color = ic.get("overlay_text_color", "").strip() or "text-foreground"
+    container = ic.get("image_container_mode", "").strip() or "full_bleed"
+    form = ic.get("form_treatment", "").strip() or "card_lift_solid"
+    lines = [
+        f"overlay_pattern: {overlay}",
+        f"overlay_scrim_classes: {scrim}",
+        f"overlay_text_color: {text_color}",
+        f"image_container_mode: {container}",
+        f"form_treatment: {form}",
+        "",
+        "INSTRUCTION — UNIVERSAL image+text rules for EVERY section that "
+        "mixes copy with photography (hero, testimonial, reservation, "
+        "contact, booking, feature banners, admin hero banners, ecommerce "
+        "product shots):",
+        f"  1. Apply overlay_pattern='{overlay}' exactly. If scrim variant, "
+        f"     use the scrim classes '{scrim}' as an absolute inset-0 div "
+        f"     BETWEEN the image and the text.",
+        f"  2. Text over imagery MUST use '{text_color}'. Never the default "
+        f"     text-foreground on an unmediated photograph.",
+        f"  3. Image container must be '{container}'. Never a half-width "
+        f"     image next to raw whitespace — read as a broken layout.",
+        f"  4. Forms (reservation, contact, signup, booking, newsletter) "
+        f"     use form_treatment='{form}'. NEVER glassmorphism over busy "
+        f"     photography — inputs become unreadable.",
+        "  5. Quote/testimonial blocks over imagery: require dark_scrim or "
+        "     card_lift. Bare italic serif on a light photograph is BANNED.",
+    ]
+    return "\n".join(lines)
+
+
 def inject_design_blocks(research: str, design: dict) -> str:
     """Replace (or inject) the design-related headers in research with the Design Director output.
 
@@ -1087,6 +1204,7 @@ def inject_design_blocks(research: str, design: dict) -> str:
       ===FONTS===
       ===BRAND_MARK===        (NEW — logo/wordmark spec)
       ===RADIUS_TOKENS===     (NEW — per-element radii)
+      ===IMAGE_COMPOSITION=== (NEW — overlay/scrim/form-card rules)
       ===LAYOUT_BLUEPRINT===
       ===ADMIN_UI_LANGUAGE=== (admin/CRM/TMS archetypes only)
 
@@ -1106,6 +1224,7 @@ def inject_design_blocks(research: str, design: dict) -> str:
         "===FONTS===",
         "===BRAND_MARK===",
         "===RADIUS_TOKENS===",
+        "===IMAGE_COMPOSITION===",
         "===LAYOUT_BLUEPRINT===",
         "===ADMIN_UI_LANGUAGE===",
     ]
@@ -1127,6 +1246,7 @@ def inject_design_blocks(research: str, design: dict) -> str:
         f"===FONTS===\n{_render_fonts(design)}",
         f"===BRAND_MARK===\n{_render_brand_mark(design)}",
         f"===RADIUS_TOKENS===\n{_render_radius_tokens(design)}",
+        f"===IMAGE_COMPOSITION===\n{_render_image_composition(design)}",
         f"===PALETTE===\n{_render_palette_notes(design)}",
         f"===TYPOGRAPHY===\n{_render_typography_notes(design)}",
         f"===LAYOUT_BLUEPRINT===\n{_render_layout_blueprint(design)}",
