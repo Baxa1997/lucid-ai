@@ -5,7 +5,8 @@
   Call 2: Content (all sections OR all CRUD features)
   Call 3: Additional pages + completeness check
 
-Uses Gemini 2.5 Flash for ultra-deep research and Claude Opus 4.6 for
+Uses Gemini 2.5 Pro (default, configurable via GEMINI_RESEARCH_MODEL) for
+ultra-deep research and Claude Opus 4.6 for
 code generation via the direct Messages API (no SDK).
 """
 
@@ -1292,8 +1293,20 @@ _DISTILL_SECTIONS: tuple[tuple[str, int], ...] = (
     ("VIBE", 300),
     ("PALETTE", 700),
     ("TYPOGRAPHY", 400),
+    # Director blocks — always keep. BRAND_MARK guarantees the logo is built.
+    # RADIUS_TOKENS locks border-radius consistency across elements.
+    ("BRAND_MARK", 400),
+    ("RADIUS_TOKENS", 300),
     ("COPY_TONE", 500),
+    # Vision-grounded DNA from actual screenshots of reference sites.
+    # Placed BEFORE LAYOUT_BLUEPRINT so if the model truncates, the concrete
+    # visual observations survive — Claude leans on them heavily for hero
+    # composition, card language, and motion cues.
+    ("VISUAL_DNA", 1800),
     ("LAYOUT_BLUEPRINT", 3500),  # Design DNA: 20 creative variables per project (hero/features/rhythm/motif/mood/cards/type/motion/pattern/radius/color/hover/spacing)
+    # Admin/CRM/TMS visual language — table/form/sidebar/status/density recipe.
+    # Only present when layout_archetype is admin-family.
+    ("ADMIN_UI_LANGUAGE", 2200),
     ("PAGES", 1400),
     ("SECTIONS", 1400),
     ("ENTITIES", 1200),
@@ -1415,8 +1428,10 @@ def _extract_layout_archetype(research: str, fallback_classification: dict) -> d
 # ╚══════════════════════════════════════════════════════════════╝
 
 # Limit concurrent Gemini research calls to avoid rate-limit 429s.
-# Google's default quota for Gemini 2.5 Flash is ~5 RPM for paid tiers.
-_gemini_semaphore = asyncio.Semaphore(5)
+# Gemini 2.5 Pro paid-tier quotas are tighter than Flash (typically 2-5 RPM
+# depending on billing plan). Keep the semaphore at 2 to be safe; existing
+# retry/backoff logic below handles occasional 429s gracefully.
+_gemini_semaphore = asyncio.Semaphore(2)
 
 async def gemini_deep_research(
     description: str,
@@ -1487,15 +1502,79 @@ reasoning: [confirm or explain any correction in 1 sentence]
 {"⚠️ LOCKED: The user explicitly requested this layout type. Output layout_archetype EXACTLY as shown above — do NOT change it." if is_locked else "(Correct the layout_archetype line above ONLY if clearly wrong — keep others matching)"}
 
 ═══════════════════════════════════════════════════════════════
-STEP 2 — INTERNET RESEARCH
+STEP 2 — INTERNET RESEARCH (MUST use google_search grounding)
 ═══════════════════════════════════════════════════════════════
-Search for TOP 3-5 real products/sites most similar to "{description}".
+
+YOU HAVE google_search AVAILABLE. USE IT. Do NOT rely on training memory —
+training data is 2023-era and will produce dated design. The goal of this step
+is to anchor the design in ACTUAL 2024-2025 reality.
+
+Run AT LEAST these searches before answering:
+  1. "awwwards {domain} site of the year 2024"
+  2. "awwwards {domain} site of the year 2025"
+  3. "best {domain} website design 2025"
+  4. "{domain} landing page inspiration godly.website"
+  5. "{domain} landing page inspiration siteinspire.com"
+  6. "2025 web design trends"
+  7. (if "{description}" names a specific brand) "{description}" official site
+
+For EACH site you discover, note: URL, what makes its design distinctive in 2025
+(not generic praise), and 2-3 concrete patterns you will borrow (layout,
+typography, motion, color, decoration).
+
 If "{description}" names a REAL brand → study THAT site FIRST as primary reference.
 
 ===SITES_ANALYZED===
-1. [Name] ([URL]) — [what makes their design/UX excellent and relevant]
-2. [Name] ([URL]) — [what they do well]
-3. [Name] ([URL]) — [what they do well]
+1. [Name] ([URL]) — [specific 2025-distinctive design moves: layout + typography + motion]
+2. [Name] ([URL]) — [specific 2025-distinctive design moves]
+3. [Name] ([URL]) — [specific 2025-distinctive design moves]
+4. [Name] ([URL]) — [specific 2025-distinctive design moves]
+5. [Name] ([URL]) — [specific 2025-distinctive design moves]
+
+═══════════════════════════════════════════════════════════════
+STEP 2b — DESIGN ERA CALIBRATION (forbidden vs. required patterns)
+═══════════════════════════════════════════════════════════════
+
+The user has explicitly rejected "generic template" output. To avoid it, you
+MUST reject dated 2020-2022 patterns AND include at least THREE 2024-2025
+moves in your blueprint.
+
+FORBIDDEN 2020-2022 patterns (produce dated / template output — never output these):
+  ✗ Flat pastel gradient hero with centered text stack
+  ✗ Symmetric 3-column feature grid with icon-over-title-over-description
+  ✗ Generic rounded-xl cards with small shadow and nothing else distinctive
+  ✗ "From $X/month" pricing cards all identical shape
+  ✗ Stock photos of smiling office workers / diverse-team-around-laptop
+  ✗ Hero H1 with two dead-centered CTAs and no imagery breaking the grid
+  ✗ Hero with bg-background/95 washing out a photo (use dark gradient overlays)
+  ✗ Nav with "About / Features / Pricing / Sign In / Get Started" on a non-SaaS site
+  ✗ Map sections showing only a giant MapPin icon (use real photos or iframe)
+
+REQUIRED 2024-2025 moves (blueprint MUST include at least 3 of these):
+  ✓ Bento grid somewhere (hero or features) — inspired by Apple iOS/iPadOS
+  ✓ Typographic statement: oversized H1 (text-[clamp(3rem,10vw,9rem)]) or
+    variable-weight / italic serif (Fraunces, Editorial New, Migra, PP Editorial)
+  ✓ At least one asymmetric section (offset grid, editorial magazine layout)
+  ✓ Signature motif (dot-grid, grain, hand-drawn squiggle, floating orbs, topographic)
+  ✓ Depth via contrast — at least one dramatically inverted section
+    (bg-foreground text-background, or full-bleed dark with cinematic photo)
+  ✓ Intentional motion — stagger-fade-up on scroll, spring tilts on hover,
+    OR minimal-no-scroll with premium lift + shadow (not random random animations)
+  ✓ Organic / asymmetric border-radius somewhere (or commit to sharp brutalist —
+    but NOT "rounded-xl for everything")
+  ✓ Duotone or filtered photography (not raw stock), cinematic crop ratios
+  ✓ Kinetic / scroll-driven reveals (CSS animation-timeline or Framer useScroll)
+  ✓ Micro-interactions: magnetic CTAs, revealing secondary content on hover,
+    morph-shape on hover
+
+In your LAYOUT_BLUEPRINT output later, the Design DNA variables
+(hero_archetype, features_archetype, card_language, motion_language,
+decorative_pattern, border_radius_language, color_application_strategy) MUST
+reflect the 2024-2025 moves above — not defaults pulled from memory.
+
+===ERA_CALIBRATION===
+moves_borrowed: [List the 3+ 2024-2025 moves you will use and WHY — 1 line each]
+patterns_avoided: [List the 2-3 dated patterns you could have used but rejected]
 
 ═══════════════════════════════════════════════════════════════
 STEP 3 — DESIGN SYSTEM (always from research — no generic defaults)
@@ -2016,23 +2095,36 @@ CRITICAL: Every value from REAL internet research. Original copy. Domain-specifi
     # Call Gemini via direct REST API (deprecated SDK removed)
     import httpx
 
-    await _ws_send(websocket, "progress", "🔬 Calling Gemini 2.5 Flash with search...")
+    # Research model is configurable via GEMINI_RESEARCH_MODEL env var.
+    # Default is gemini-2.5-pro for superior design/trend reasoning (research runs
+    # once per project so the ~5x cost delta is acceptable for the quality lift).
+    # Set GEMINI_RESEARCH_MODEL=gemini-2.5-flash to trade quality for speed/cost.
+    _research_model = os.environ.get("GEMINI_RESEARCH_MODEL", "gemini-2.5-pro")
+    await _ws_send(websocket, "progress", f"🔬 Calling {_research_model} with search...")
 
     gemini_url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.5-flash:generateContent?key={gemini_key}"
+        f"{_research_model}:generateContent?key={gemini_key}"
     )
 
-    # Thinking mode disabled — gemini-2.5-flash enables it by default (thinkingBudget > 0),
-    # which causes ALL output to appear as thought parts (filtered out by our parser → empty text).
-    # Structured blueprint prompts don't benefit from thinking; disable to get plain text output.
+    # Thinking budget is model-dependent:
+    # - Flash allows thinkingBudget: 0 (plain text output, faster)
+    # - Pro REQUIRES thinking mode (API rejects budget=0 with 400)
+    # Our parser (knowledge.loader.safe_gemini_text) already filters out thought
+    # parts, so enabling thinking on Pro is safe — we just ignore the scratchpad.
+    _is_pro = "pro" in _research_model.lower()
+    _thinking_config = (
+        {"thinkingBudget": 2048}  # modest budget; Pro can't accept 0
+        if _is_pro
+        else {"thinkingBudget": 0}  # Flash: skip thinking for plain text
+    )
     def _build_gemini_payload() -> dict:
         return {
             "contents": [{"parts": [{"text": research_prompt}]}],
             "generationConfig": {
                 "maxOutputTokens": 16000,  # raised from 8K — prevents entity spec truncation
                 "temperature": 0.3,
-                "thinkingConfig": {"thinkingBudget": 0},  # disable thinking → output as plain text
+                "thinkingConfig": _thinking_config,
             },
             "tools": [{"google_search": {}}],
             "systemInstruction": {
@@ -2085,10 +2177,27 @@ CRITICAL: Every value from REAL internet research. Original copy. Domain-specifi
         status = response.status_code if response is not None else 0
         error_snippet = response.text[:300] if response is not None else "no response"
         logger.error("Gemini research API error %d: %s", status, error_snippet)
-        if status in (400, 403):
-            await _ws_send(websocket, "error", "❌ Google API key invalid. Check GOOGLE_API_KEY in .env.")
+
+        # Parse the API's error message so the user sees the real reason
+        # (e.g. model access denied vs. malformed request vs. expired key).
+        _api_msg = ""
+        try:
+            if response is not None:
+                _api_msg = (response.json().get("error") or {}).get("message", "")
+        except Exception:
+            pass
+
+        if status == 403:
+            await _ws_send(websocket, "error", "❌ Google API key rejected (403). Check GOOGLE_API_KEY in .env.")
+        elif status == 400:
+            _reason = _api_msg or "bad request"
+            await _ws_send(websocket, "error", f"❌ Gemini rejected the request (400): {_reason}")
+        elif status == 404:
+            await _ws_send(websocket, "error", f"❌ Gemini model not found: {_research_model}. Set GEMINI_RESEARCH_MODEL to a valid model.")
         elif status == 429:
             await _ws_send(websocket, "error", "⚠️ Gemini rate limit hit after retries. Try again in a minute.")
+        else:
+            await _ws_send(websocket, "error", f"❌ Gemini API error {status}: {_api_msg or 'unknown'}")
         raise RuntimeError(f"Gemini research API error: {status}")
     
     try:
@@ -2740,7 +2849,45 @@ menu, testimonials, pricing, locations, CTA). Violating any of them produces a
 ------------------------------------------------------------
 The DESIGN SYSTEM FROM RESEARCH section contains a ===LAYOUT_BLUEPRINT=== block
 written by the creative director (Gemini research). It describes — in plain
-language — the exact visual design you must implement. Fields you will see:
+language — the exact visual design you must implement.
+
+If a ===VISUAL_DNA=== block is ALSO present, it contains direct visual
+observations from screenshots of real reference sites (hero composition,
+color ratios, card language, spacing rhythm, motion cues). The VISUAL_DNA
+values override the verbal LAYOUT_BLUEPRINT wherever the two conflict — the
+visual analysis is grounded in actual pixels, the verbal blueprint is
+inference. Treat VISUAL_DNA as the authoritative source for: hero_composition,
+color_application, typography_system, card_language, spacing_rhythm,
+motion_language. Use the distinctive_moves list as must-have touches.
+
+───────────────────────────────────────────────────────────────
+BRAND_MARK, RADIUS_TOKENS, ADMIN_UI_LANGUAGE — DIRECTOR BLOCKS
+───────────────────────────────────────────────────────────────
+If a ===BRAND_MARK=== block is present: every Header/Navbar/Sidebar you
+generate MUST render that wordmark/monogram with the exact font, weight,
+case, tracking, and size specified. A navbar without a logo is a failure.
+
+If a ===RADIUS_TOKENS=== block is present: every rounded element MUST use
+one of those exact radii. Buttons use radius_tokens.button, inputs use
+radius_tokens.input, cards use radius_tokens.card, badges use
+radius_tokens.badge. Never mix ad-hoc values like rounded-xl on one card
+and rounded-md on another — pick one language and apply it.
+
+If a ===ADMIN_UI_LANGUAGE=== block is present (admin/CRM/TMS/SaaS
+dashboard/ecommerce projects only): every DataTable, form, sidebar,
+toolbar, empty state, and chart MUST follow the recipe there. Values in
+that block WIN over any generic admin defaults in the phase-1/phase-2
+prompts below. In particular:
+  - Table row_height, border_style, header_weight come from the block.
+  - Form label_position, input_style, focus_style come from the block.
+  - Sidebar width, variant, active_treatment come from the block.
+  - Toolbar search_chrome, filter_style, bulk_action_style come from the block.
+  - Empty-state illustration_style, copy_tone, cta_placement come from the block.
+  - Chart line_weight, axis_style, tooltip_style come from the block.
+  - Status colors (success/warning/info/neutral/error) come from status_palette
+    in the block, NEVER from the brand primary/accent.
+
+Fields you will see in LAYOUT_BLUEPRINT:
 
   hero_description              → 2-4 sentences describing hero layout/imagery/accents
   features_description          → how the primary content section is laid out
@@ -3498,6 +3645,7 @@ async def _generate_new_project_inner(
     _cache_max_age = 3600  # 1 hour
 
     research = None
+    _design: dict | None = None  # Set by Design Director (below) on cache-miss.
     try:
         import os as _os_cache
         _os_cache.makedirs(_cache_dir, exist_ok=True)
@@ -3524,7 +3672,66 @@ async def _generate_new_project_inner(
                 logger.warning("Research returned minimal content (%d chars)", len(research))
                 await _ws_send(websocket, "warning", "⚠️ Research returned limited results — generation will use basic patterns")
             else:
-                # Save to cache for next time
+                # ── Vision-grounded enrichment ──
+                # Fetch screenshots of the reference sites Gemini just named,
+                # then ask Gemini Pro to critique them visually. The resulting
+                # ===VISUAL_DNA=== block gets appended to the research text so
+                # Claude sees concrete visual patterns, not just verbal ones.
+                # FAIL-SOFT: empty string on any error, pipeline proceeds unchanged.
+                try:
+                    from app.services.vision_research import vision_enrich_research
+                    _visual_dna = await vision_enrich_research(
+                        research_text=research,
+                        description=description,
+                        domain=_domain,
+                        gemini_key=gemini_key,
+                        websocket=websocket,
+                    )
+                    if _visual_dna:
+                        research = research + _visual_dna
+                        logger.info("Research enriched with VISUAL_DNA (+%d chars)", len(_visual_dna))
+                except Exception as _vision_exc:
+                    logger.warning("Vision enrichment failed (non-fatal): %s", _vision_exc)
+
+                # ── Design Director (Option: Design System First) ──
+                # One dedicated Claude call that designs a bespoke, validated
+                # design system BEFORE code generation. Replaces the weak verbal
+                # design hints from Gemini research with enforced tokens
+                # (contrast-validated palette, musical type scale, grid-aligned
+                # spacing, locked card + motion language). Downstream code-gen
+                # phases read the same ===CSS_VARIABLES===/===FONTS===/===LAYOUT_BLUEPRINT===
+                # blocks — no consumer changes needed.
+                # FAIL-SOFT: returns None on failure, pipeline uses original research.
+                try:
+                    from app.services.design_system_builder import (
+                        build_design_system,
+                        inject_design_blocks,
+                    )
+                    _vibe_from_research = _extract_research_section(research, "===VIBE===", max_chars=400)
+                    _copy_tone_from_research = _extract_research_section(research, "===COPY_TONE===", max_chars=400)
+                    # Brand name: Claude can infer it from description inside the call;
+                    # passing description as-is avoids brittle regex extraction here.
+                    _design = await build_design_system(
+                        description=description,
+                        domain=_domain,
+                        brand_name="",  # inferred from description
+                        copy_tone=_copy_tone_from_research,
+                        layout_archetype=_layout_archetype,
+                        vibe=_vibe_from_research,
+                        api_key=api_key,
+                        websocket=websocket,
+                    )
+                    if _design:
+                        research = inject_design_blocks(research, _design)
+                        logger.info(
+                            "Design Director injected — name=%s archetype=%s",
+                            _design.get("design_system_name"),
+                            _design.get("archetype"),
+                        )
+                except Exception as _dd_exc:
+                    logger.warning("Design Director failed (non-fatal): %s", _dd_exc)
+
+                # Save to cache for next time (includes VISUAL_DNA + DESIGN_DIRECTOR if present)
                 try:
                     with open(_cache_path, "w", encoding="utf-8") as _cf:
                         _cf.write(research)
@@ -3627,7 +3834,70 @@ async def _generate_new_project_inner(
             logger.info("Wrote db.json (%d bytes)", len(mock_db_json))
         except Exception as e:
             logger.warning("Failed to write db.json: %s", e)
-    
+
+    # ── Step 3d: Deterministic MarketingHeader.jsx write ──
+    # The LLM occasionally preserves the cloned template's default navbar
+    # (Sign In / Get Started, no logo) despite explicit Phase 1 instructions
+    # to rewrite it. Emitting the file directly from brand_mark + navigation
+    # removes that entire failure mode. Only runs when:
+    #   - Stack is Next.js (MarketingHeader.jsx path convention)
+    #   - The file already exists (template has it; admin-only templates won't)
+    #   - We have a brand_mark (from Design Director dict or parsed from research)
+    # FAIL-SOFT on any exception — LLM still handles it in Phase 1.
+    _det_header_written = False
+    _marketing_header_rel = "src/components/layout/MarketingHeader.jsx"
+    _stack_lower = (stack or "").lower()
+    if ("next" in _stack_lower or "nextjs" in _stack_lower):
+        _header_abs = os.path.join(workspace_path, _marketing_header_rel)
+        if os.path.isfile(_header_abs):
+            try:
+                from app.services.marketing_header_builder import (
+                    build_marketing_header_jsx,
+                    parse_brand_mark_from_research,
+                )
+                _brand_mark = (_design or {}).get("brand_mark") if _design else {}
+                if not _brand_mark:
+                    _brand_mark = parse_brand_mark_from_research(research or "")
+                _nav_groups = project_schema.get("navigation", []) or []
+                _schema_brand_name = (
+                    project_schema.get("brand", {}).get("name")
+                    or description[:40].strip()
+                    or "Brand"
+                )
+                if _brand_mark and _nav_groups:
+                    _header_jsx = build_marketing_header_jsx(
+                        brand_name=_schema_brand_name,
+                        brand_mark=_brand_mark,
+                        navigation=_nav_groups,
+                        domain=_domain,
+                        archetype=_layout_archetype,
+                    )
+                    with open(_header_abs, "w", encoding="utf-8") as _hf:
+                        _hf.write(_header_jsx)
+                    _det_header_written = True
+                    logger.info(
+                        "Deterministic MarketingHeader written: brand=%s domain=%s treatment=%s (%d chars)",
+                        _schema_brand_name,
+                        _domain,
+                        _brand_mark.get("treatment"),
+                        len(_header_jsx),
+                    )
+                    await _ws_send(
+                        websocket,
+                        "progress",
+                        f"🎯 Wrote MarketingHeader (brand: {_schema_brand_name})",
+                    )
+                else:
+                    logger.info(
+                        "Deterministic MarketingHeader skipped — brand_mark=%s nav_groups=%d",
+                        bool(_brand_mark), len(_nav_groups),
+                    )
+            except Exception as _hdr_exc:
+                logger.warning(
+                    "Deterministic MarketingHeader write failed (non-fatal): %s",
+                    _hdr_exc,
+                )
+
     total_files = []
 
     # Safe defaults for variables extracted inside the plan try block.
@@ -4300,6 +4570,7 @@ Generate ONLY these foundation files (Phases 2 and 3 will handle sections/featur
    - Blog/content sites: sticky top nav with logo, nav links, search icon, CTA button; rich footer with columns
    - Admin panels: sidebar (w-64, brand logo, nav groups, user profile area) + top header with search+notifications
    - DO NOT copy template defaults — create a UNIQUE layout matching the research
+{"   - ⚠️ MarketingHeader.jsx HAS ALREADY BEEN WRITTEN deterministically. DO NOT regenerate src/components/layout/MarketingHeader.jsx. Skip it entirely — do NOT include it in write_project_files. The Footer and Sidebar (if admin) are still yours to build." if _det_header_written else ""}
 
 5. MAIN PAGE:
    - Landing page: page.js that imports section components (sections come in Phase 2)

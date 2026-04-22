@@ -1377,15 +1377,40 @@ _TAILWIND_PREAMBLE = (
 _ATTR_ENTITY_QUOT_RE = re.compile(r'(\b[a-zA-Z_][\w:-]*)=&quot;(.*?)&quot;', re.DOTALL)
 _ATTR_ENTITY_APOS_RE = re.compile(r"(\b[a-zA-Z_][\w:-]*)=&apos;(.*?)&apos;", re.DOTALL)
 
+# Tag-aware fallback. Matches a single JSX opening tag `<Elem ... >` or `<Elem ... />`.
+# Inside such a tag, every &quot;/&apos; is an attribute delimiter (text-node entities
+# live between > and <, never inside). This catches unpaired cases the regexes above
+# cannot: `className=&quot;foo"`, `className="foo&quot;`, or a bare `className=&quot;foo`
+# with a missing closer — any of which leave an unterminated string the SWC parser
+# reports as "Unexpected eof". The character class excludes `<` and `>` so the match
+# stops at the first closing `>` instead of spanning nested JSX.
+_JSX_OPENING_TAG_RE = re.compile(r'<[A-Za-z][\w.:-]*[^<>]*?/?>', re.DOTALL)
+
+
+def _unescape_jsx_tag_entities(source: str) -> str:
+    """Replace &quot;/&apos; with literal quotes inside every JSX opening tag.
+
+    Text between tags is left untouched. Returns the transformed source.
+    """
+    def _sub(match: "re.Match[str]") -> str:
+        tag = match.group(0)
+        if "&quot;" not in tag and "&apos;" not in tag:
+            return tag
+        return tag.replace("&quot;", '"').replace("&apos;", "'")
+
+    return _JSX_OPENING_TAG_RE.sub(_sub, source)
+
 
 def fix_html_entities_in_attributes(workspace_path: str) -> list[str]:
     """Unescape &quot; / &apos; that appear as JSX attribute-value delimiters.
 
     Claude occasionally writes `className=&quot;flex gap-2&quot;` instead of
     `className="flex gap-2"`, which the JSX/SWC parser rejects with
-    "Expression expected". This fixer detects the pattern and rewrites the
-    attribute delimiters back to literal quotes. Text-node entities (between
-    > and <) are left untouched because they are a legitimate JSX escape.
+    "Expression expected". Balanced pairs are fixed by a direct regex; unpaired
+    / mixed delimiter cases are caught by a second tag-aware pass that
+    unescapes every entity inside `<Elem ... >` opening tags. Text-node
+    entities (between > and <) are left untouched because they are a
+    legitimate JSX escape.
 
     Returns the list of file paths that were patched.
     """
@@ -1406,11 +1431,17 @@ def fix_html_entities_in_attributes(workspace_path: str) -> list[str]:
             except Exception:
                 continue
 
-            if "=&quot;" not in original and "=&apos;" not in original:
+            if "&quot;" not in original and "&apos;" not in original:
                 continue
 
+            # Pass 1 — balanced pairs (fast, precise, preserves the attr name in group 1).
             fixed = _ATTR_ENTITY_QUOT_RE.sub(r'\1="\2"', original)
             fixed = _ATTR_ENTITY_APOS_RE.sub(r"\1='\2'", fixed)
+
+            # Pass 2 — tag-aware sweep for any stragglers (unpaired or mixed
+            # delimiters). Only touches content inside JSX opening tags, so
+            # `<p>Don&apos;t</p>` text-node entities are preserved.
+            fixed = _unescape_jsx_tag_entities(fixed)
 
             if fixed != original:
                 try:

@@ -82,6 +82,16 @@ services:
       # Build with: e2b template build --name lucid-node20 (uses e2b.Dockerfile)
       # Leave empty to use the default base image (Node.js will be installed at runtime).
       - E2B_TEMPLATE_ID=${E2B_TEMPLATE_ID:-}
+      # Vision-grounded research (Option B).
+      # Screenshot service for fetching reference site images.
+      # Leave SCREENSHOT_API_KEY empty to disable — pipeline falls back to text-only research.
+      # Supported SCREENSHOT_SERVICE values: apiflash (default), screenshotone.
+      - SCREENSHOT_API_KEY=${SCREENSHOT_API_KEY:-}
+      - SCREENSHOT_SERVICE=${SCREENSHOT_SERVICE:-apiflash}
+      # Gemini model used for vision analysis of the screenshots.
+      - VISION_RESEARCH_MODEL=${VISION_RESEARCH_MODEL:-gemini-2.5-pro}
+      # Max reference screenshots per generation (2-4 recommended).
+      - VISION_MAX_REFS=${VISION_MAX_REFS:-3}
 
 volumes:
   frontend_node_modules:
