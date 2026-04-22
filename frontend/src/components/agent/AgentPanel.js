@@ -1,4 +1,4 @@
-'use client';
+"use client";
 
 // ─────────────────────────────────────────────────────────
 //  Lucid AI — AgentPanel (Production)
@@ -6,13 +6,13 @@
 //  All heavy rendering delegated to panel/ sub-components.
 // ─────────────────────────────────────────────────────────
 
-import { useState } from 'react';
-import { cn } from '@/lib/utils';
-import { MessageSquare, Terminal, Circle, StopCircle } from 'lucide-react';
-import StatusBadge from './panel/StatusBadge';
-import ChatTab from './panel/ChatTab';
-import TerminalTab from './panel/TerminalTab';
-import TabBar from '@/components/ui/TabBar';
+import {useState} from "react";
+import {cn} from "@/lib/utils";
+import {MessageSquare, Terminal, Circle, StopCircle} from "lucide-react";
+import StatusBadge from "./panel/StatusBadge";
+import ChatTab from "./panel/ChatTab";
+import TerminalTab from "./panel/TerminalTab";
+import TabBar from "@/components/ui/TabBar";
 
 /**
  * AgentPanel — Right-side panel with Chat and Terminal tabs.
@@ -29,7 +29,7 @@ import TabBar from '@/components/ui/TabBar';
  * @param {string}   error          - Error message if any
  */
 export default function AgentPanel({
-  state = 'idle',
+  state = "idle",
   chatMessages = [],
   logs = [],
   phases = [],
@@ -39,34 +39,36 @@ export default function AgentPanel({
   onClearLogs,
   error,
 }) {
-  const [activeTab, setActiveTab] = useState('chat');
-  const isRunning = state === 'running' || state === 'working';
+  const [activeTab, setActiveTab] = useState("chat");
+  const isRunning = state === "running" || state === "working";
 
   const tabs = [
-    { id: 'chat',     label: 'Chat',     icon: MessageSquare, badge: chatMessages.length },
-    { id: 'terminal', label: 'Terminal', icon: Terminal,      badge: logs.length },
+    {
+      id: "chat",
+      label: "Chat",
+      icon: MessageSquare,
+      badge: chatMessages.length,
+    },
+    {id: "terminal", label: "Terminal", icon: Terminal, badge: logs.length},
   ];
 
   return (
     <div className="h-full flex flex-col bg-white border-l border-slate-200">
-
-      {/* ── Header ──────────────────────────────────────── */}
       <div className="shrink-0 flex items-center justify-between px-3 py-2 border-b border-slate-200 bg-slate-50/80">
         <TabBar
           tabs={tabs}
           activeTab={activeTab}
           onTabChange={setActiveTab}
-          activeColor={activeTab === 'terminal' ? 'emerald' : 'blue'}
+          activeColor={activeTab === "terminal" ? "emerald" : "blue"}
         />
 
         <div className="flex items-center gap-2">
           <StatusBadge state={state} />
-          {(state === 'connected' || state === 'ready' || isRunning) && (
+          {(state === "connected" || state === "ready" || isRunning) && (
             <button
               onClick={onStop}
               className="p-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition-colors"
-              title="Stop session"
-            >
+              title="Stop session">
               <StopCircle className="w-3.5 h-3.5" />
             </button>
           )}
@@ -77,12 +79,14 @@ export default function AgentPanel({
       {error && (
         <div className="shrink-0 flex items-center gap-2 px-4 py-2 bg-red-50 border-b border-red-200">
           <Circle className="w-2 h-2 text-red-500 fill-red-500" />
-          <p className="text-[11px] text-red-600 font-medium flex-1 truncate">{error}</p>
+          <p className="text-[11px] text-red-600 font-medium flex-1 truncate">
+            {error}
+          </p>
         </div>
       )}
 
       {/* ── Tab Content ─────────────────────────────────── */}
-      {activeTab === 'chat' && (
+      {activeTab === "chat" && (
         <ChatTab
           state={state}
           chatMessages={chatMessages}
@@ -91,7 +95,7 @@ export default function AgentPanel({
           isRunning={isRunning}
         />
       )}
-      {activeTab === 'terminal' && (
+      {activeTab === "terminal" && (
         <TerminalTab
           state={state}
           logs={logs}
