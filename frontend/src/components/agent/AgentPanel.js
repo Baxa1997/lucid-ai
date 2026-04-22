@@ -75,7 +75,6 @@ export default function AgentPanel({
         </div>
       </div>
 
-      {/* ── Error Banner ─────────────────────────────────── */}
       {error && (
         <div className="shrink-0 flex items-center gap-2 px-4 py-2 bg-red-50 border-b border-red-200">
           <Circle className="w-2 h-2 text-red-500 fill-red-500" />
