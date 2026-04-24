@@ -56,6 +56,29 @@ async def gitlab_list_repos(token: str, *, gitlab_url: str = "https://gitlab.com
     return repos
 
 
+async def gitlab_list_branches(token: str, project_id: str, *, gitlab_url: str = "https://gitlab.com") -> list[dict]:
+    """List branches for a GitLab project."""
+    branches: list[dict] = []
+    page = 1
+    async with httpx.AsyncClient() as client:
+        while True:
+            resp = await client.get(
+                f"{gitlab_url}/api/v4/projects/{project_id}/repository/branches",
+                params={"per_page": 100, "page": page},
+                headers={"PRIVATE-TOKEN": token},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+            if not batch:
+                break
+            branches.extend({"name": b["name"]} for b in batch)
+            if len(batch) < 100:
+                break
+            page += 1
+    return branches
+
+
 async def gitlab_create_mr(
     *,
     token: str,

@@ -26,6 +26,7 @@ import logging
 
 from fastapi import WebSocket
 
+from app.paths import conversation_workspace_path
 from app.services.vcs.git import clone_repo, pull_latest
 
 logger = logging.getLogger(__name__)
@@ -152,7 +153,7 @@ class WorkspaceManager:
             async with self._lock:
                 self._workspaces.pop(conversation_id, None)
 
-        workspace_path = f"/tmp/lucid_conv_{conversation_id}"
+        workspace_path = conversation_workspace_path(conversation_id)
 
         # If the folder already exists and is NOT empty (orphaned from a
         # cancelled task that cloned but never registered), reuse it

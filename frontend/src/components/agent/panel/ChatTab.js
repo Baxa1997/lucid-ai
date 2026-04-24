@@ -82,7 +82,7 @@ export default function ChatTab({ state, chatMessages, phases, onSendMessage, is
 
                 {/* Message bubble */}
                 <div className={cn(
-                  'max-w-[85%] rounded-2xl overflow-hidden',
+                  'max-w-[85%] min-w-0 rounded-2xl overflow-hidden',
                   msg.role === 'user'
                     ? 'bg-blue-600 text-white rounded-br-md shadow-sm shadow-blue-600/20 px-3.5 py-2.5'
                     : msg.role === 'agent'
@@ -108,7 +108,12 @@ export default function ChatTab({ state, chatMessages, phases, onSendMessage, is
                   {msg.role === 'agent' ? (
                     <MessageRenderer content={msg.content} toolCalls={msg.toolCalls || []} />
                   ) : (
-                    <span className="text-sm leading-relaxed">{msg.content}</span>
+                    <span
+                      className="text-sm leading-relaxed break-words whitespace-pre-wrap block"
+                      style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+                    >
+                      {msg.content}
+                    </span>
                   )}
                 </div>
 

@@ -451,9 +451,12 @@ export default function MessageBubble({ msg, isLatest }) {
 
     return (
       <div className="flex items-start gap-2.5 px-3 py-2 w-full justify-end">
-        <div className="max-w-[88%] flex flex-col items-end">
-          <div className="bg-[#f1f2f6] dark:bg-slate-700/80 rounded-xl px-3 py-2.5 relative group">
-            <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-[#1f2937] dark:text-slate-100">
+        <div className="max-w-[88%] min-w-0 flex flex-col items-end">
+          <div className="bg-[#f1f2f6] dark:bg-slate-700/80 rounded-xl px-3 py-2.5 relative group max-w-full">
+            <p
+              className="text-[13px] leading-relaxed whitespace-pre-wrap break-words text-[#1f2937] dark:text-slate-100"
+              style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+            >
               {cleanContent}
             </p>
             <div className="mt-2 flex items-center gap-1.5 text-[10px] text-slate-400 dark:text-slate-500">

@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import logger, settings
 from app.sdk import OPENHANDS_AVAILABLE, import_error
@@ -14,7 +16,37 @@ from app.services.sessions import store, destroy_session, reap_expired_sessions
 from app.services.sandbox import docker_runner_manager
 from app.services.workspace_manager import workspace_manager
 from app.services.redis_client import connect_redis, disconnect_redis
-from app.routers import health, sessions, ws, chat, files, integrations
+from app.routers import health, sessions, ws, chat, files, integrations, preview
+
+
+# Hard cap on incoming request body size for HTTP endpoints.
+# WebSockets are not affected — they use their own handshake/message paths.
+# 2 MB is well above any legitimate PAT/JSON payload (largest is repo list
+# pagination response at ~200 KB) and under the point where an attacker can
+# flood the process with a single request.
+_MAX_BODY_BYTES = 2 * 1024 * 1024
+
+
+class _BodySizeLimitMiddleware(BaseHTTPMiddleware):
+    """Reject HTTP requests whose declared body exceeds ``_MAX_BODY_BYTES``.
+
+    We check ``Content-Length`` up-front so large uploads are rejected
+    without being streamed into memory. Requests without a Content-Length
+    header (chunked encoding) fall through — FastAPI/Starlette apply their
+    own per-read limits via ``request.body()`` and the downstream handlers
+    still operate on the parsed payload.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path.startswith("/api/v1/ws"):
+            return await call_next(request)
+        cl = request.headers.get("content-length")
+        if cl and cl.isdigit() and int(cl) > _MAX_BODY_BYTES:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": f"Request body too large (max {_MAX_BODY_BYTES} bytes)."},
+            )
+        return await call_next(request)
 
 
 @asynccontextmanager
@@ -99,6 +131,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    application.add_middleware(_BodySizeLimitMiddleware)
 
     application.include_router(health.router)
     application.include_router(sessions.router)
@@ -106,6 +139,7 @@ def create_app() -> FastAPI:
     application.include_router(chat.router)
     application.include_router(files.router)
     application.include_router(integrations.router)
+    application.include_router(preview.router)
 
     return application
 

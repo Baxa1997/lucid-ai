@@ -67,7 +67,14 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   const [resolvingProgress, setResolvingProgress] = useState({ message: '', pct: 0 });
 
   // ── Preview state (noVNC / E2B legacy) ───────────────────
-  const [previewUrl, setPreviewUrl] = useState(null);
+  // previewUrl is persisted to sessionStorage so page refresh restores the
+  // iframe instead of showing a blank panel — the backend only emits
+  // `preview_ready` once per sandbox boot and does not re-emit on WS reconnect.
+  const _previewStorageKey = projectId ? `ws_preview_${projectId}` : null;
+  const [previewUrl, setPreviewUrl] = useState(() => {
+    if (typeof window === 'undefined' || !_previewStorageKey) return null;
+    try { return sessionStorage.getItem(_previewStorageKey) || null; } catch { return null; }
+  });
   const [previewTaskId, setPreviewTaskId] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewStatusMsg, setPreviewStatusMsg] = useState('');
@@ -94,6 +101,15 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   const [errorStage, setErrorStage] = useState(null);
   const [previewError, setPreviewError] = useState(null);
   const [retryCount, setRetryCount] = useState(0);
+
+  // ── Structured error surface ─────────────────────────────
+  // errorCode: machine-readable error from the backend
+  //   AUTH_EXPIRED   → prompt re-auth (sign in again)
+  //   PAT_INVALID    → prompt user to reconnect GitHub/GitLab
+  //   SANDBOX_DEAD   → container gone, recovery is reconnect
+  //   PHASE_TIMEOUT  → a generation phase hit its hard cap
+  //   RECONNECT_FAILED → 3 reconnects failed, manual retry required
+  const [errorCode, setErrorCode] = useState(null);
 
   // ── Live agent status — shown in chat panel during generation ───────────────
   // { label: string, subtext: string } | null
@@ -150,6 +166,12 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   const stepsRef = useRef([]);
   const flushedRef = useRef(false);
   const phasesRef = useRef([]);
+
+  // When user clicks Stop, backend takes up to ~75s to fully unwind.
+  // During that window, events already emitted by the pipeline (chat messages,
+  // step events, progress) are still in-flight. Suppress them so the UI stays
+  // clean after Stop. Cleared when status=ready arrives or user sends a new message.
+  const stopRequestedRef = useRef(false);
 
   // Keep refs in sync with state
   useEffect(() => { stepsRef.current = steps; }, [steps]);
@@ -208,6 +230,25 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   // ── Handle incoming messages ─────────────────────────────
   const handleMessage = useCallback(
     (msg) => {
+      // ─── Stop suppression ─────────────────────────────────
+      // If user clicked Stop, drop residual pipeline events that are still
+      // in-flight (agent_event, step, file_write_event, chat messages, etc.)
+      // Only state/connection/error events pass through so the UI can
+      // correctly transition back to 'ready' when backend finishes unwinding.
+      if (stopRequestedRef.current) {
+        const alwaysAllow = new Set([
+          '_internal',        // connection events
+          'workspace_state',  // canonical state transitions
+          'status',           // ready/error status
+          'stopped',          // explicit stopped event
+          'stop_ack',         // stop confirmation
+          'error',            // critical errors
+          'pong',
+          'ack',
+        ]);
+        if (!alwaysAllow.has(msg.type)) return;
+      }
+
       // ─── Canonical workspace state — single source of truth ──────
       // The backend emits this on EVERY state transition so the frontend
       // never has to infer state from other message types.
@@ -238,6 +279,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         }
         if (msg.state === 'ready') {
           reconnectCount.current = 0;
+          stopRequestedRef.current = false;  // backend is idle — residual events safe to show again
         }
         if (msg.state === 'error') {
           setError(msg.message || 'Workspace error');
@@ -288,11 +330,23 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
           setState('preparing');
           setErrorStage(null);
           setPreviewError(null);
+          setErrorCode(null);
           pushLog('Connected — preparing workspace…', 'system');
         } else if (msg.event === 'error') {
-          pushLog('WebSocket error', 'error');
+          // ws.onerror is always followed by ws.onclose — the close handler
+          // below owns the retry/fail logic so it sees the close code. We
+          // just surface the error in the log here.
+          pushLog(`WebSocket error${msg.reason ? ' — ' + msg.reason : ''}`, 'error');
         } else if (msg.event === 'closed') {
-          if ([1000, 4001, 4010].includes(msg.code)) {
+          // 4010 = server rejected with "authentication required" — JWT
+          // expired or was invalid. Don't silently retry (the retry would
+          // also fail). Surface as AUTH_EXPIRED so the UI can prompt re-auth.
+          if (msg.code === 4010) {
+            setState('error');
+            setErrorCode('AUTH_EXPIRED');
+            setError('Your session has expired. Please sign in again.');
+            pushLog('Session expired — please sign in again', 'error');
+          } else if ([1000, 4001].includes(msg.code)) {
             setState('stopped');
             pushLog(`Session ended (${msg.reason || msg.code})`, 'system');
           } else if (msg.code === 4100) {
@@ -316,8 +370,9 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
               }, 2000);
             } else {
               setState('error');
-              setError('Connection lost after multiple attempts.');
-              pushLog('Connection lost', 'error');
+              setErrorCode('RECONNECT_FAILED');
+              setError('Connection lost after multiple attempts. Click Retry to try again.');
+              pushLog('Connection lost — manual retry required', 'error');
             }
           }
         }
@@ -368,6 +423,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
           if (msg.message) pushLog(msg.message, 'system');
         } else if (st === 'ready' || st === 'mock_mode') {
           setState('ready');
+          stopRequestedRef.current = false;  // backend finished unwinding after Stop
           if (msg.sessionId) {
             setSessionId(msg.sessionId);
             try { sessionStorage.setItem(`ws_session_${projectIdRef.current}`, msg.sessionId); } catch (_) {}
@@ -380,6 +436,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
           reconnectCount.current = 0;
         } else if (st === 'completed') {
           setState('ready');
+          stopRequestedRef.current = false;
         } else {
           if (msg.message) pushLog(`[${st}] ${msg.message}`, 'system');
         }
@@ -608,6 +665,9 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       // ─── Preview Ready ────────────────────────────
       if (msg.type === 'preview_ready') {
         setPreviewUrl(msg.preview_url);
+        if (_previewStorageKey && typeof window !== 'undefined' && msg.preview_url) {
+          try { sessionStorage.setItem(_previewStorageKey, msg.preview_url); } catch {}
+        }
         setPreviewTaskId(msg.task_id);
         setPreviewError(null);
         setPreviewLoading(false);
@@ -622,6 +682,10 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         const stage = msg.error_stage || 'start';
         const message = msg.message || 'Preview unavailable — click Restart Preview to retry.';
         setPreviewError({ stage, message });
+        setPreviewUrl(null);
+        if (_previewStorageKey && typeof window !== 'undefined') {
+          try { sessionStorage.removeItem(_previewStorageKey); } catch {}
+        }
         setPreviewLoading(false);
         setPreviewStatusMsg('');
         pushLog(`[Preview Error] ${message}`, 'error');
@@ -680,10 +744,24 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       // ─── Error ──────────────────────────────────
       if (msg.type === 'error') {
         const errMsg = msg.message || 'Unknown error';
+        const code = msg.code || null;
         setAgentStatus(null);
+        setErrorCode(code);
         pushChat('system', `⚠️ ${errMsg}`);
         pushLog(errMsg, 'error');
-        if (errMsg.includes('Authentication') || errMsg.includes('Timeout waiting')) {
+        // Fatal codes force the session into error state; the UI reads
+        // errorCode to render the right recovery prompt (re-auth /
+        // reconnect-pat / reload). Legacy string checks remain as a
+        // fallback for older backends that don't send `code`.
+        const fatalCodes = new Set([
+          'AUTH_EXPIRED', 'HANDSHAKE_TIMEOUT', 'HANDSHAKE_INVALID',
+          'PAT_INVALID', 'SANDBOX_DEAD', 'RATE_LIMITED',
+        ]);
+        if (
+          (code && fatalCodes.has(code))
+          || errMsg.includes('Authentication')
+          || errMsg.includes('Timeout waiting')
+        ) {
           setError(errMsg);
           setState('error');
         } else {
@@ -817,7 +895,14 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       if (msg.type === 'warning') {
         const text = msg.message || '';
         pushLog(text, 'warning');
-        pushChat('system', `⚠️ ${text}`);
+        // Multi-tab collision: keep the chat clean (no wall-of-text bubble)
+        // and surface it as a log entry + a dedicated code on the error
+        // channel so a page-level toast can render it separately.
+        if (msg.code === 'MULTI_TAB') {
+          setErrorCode('MULTI_TAB');
+        } else {
+          pushChat('system', `⚠️ ${text}`);
+        }
         return;
       }
 
@@ -992,6 +1077,10 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       manager.send(payload);
       pushChat('user', text, { images: images.length > 0 ? images : undefined });
       pushLog(`→ ${text}`, 'user');
+      // Clear stop suppression — user is starting a new task, any residual
+      // events from a prior wind-down should be discarded; from here on the
+      // new task's events should flow through normally.
+      stopRequestedRef.current = false;
       // Show thinking indicator immediately; clear stale phases from previous task
       // so the buildLabel logic starts fresh (no stale currentPhaseNum).
       setPhases([]);
@@ -1041,6 +1130,10 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   }, [pushLog]);
 
   const stopSession = useCallback(() => {
+    // Start suppressing residual in-flight events immediately — backend takes
+    // up to ~75s to fully unwind (cancellation + sandbox force-kill). Cleared
+    // when status=ready arrives or the user sends a new message.
+    stopRequestedRef.current = true;
     if (manager) {
       try {
         manager.send({ type: 'stop_task', task_id: sessionId });
@@ -1076,9 +1169,13 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         pushLog('Restarting preview server…', 'system');
       }
     } else {
-      // Fatal workspace error (e.g. clone failed) — close & reconnect
+      // Fatal workspace error (e.g. clone failed) — close & reconnect.
+      // Reset the internal reconnect counter so MAX_RECONNECTS fires
+      // only on *automatic* reconnects, not after a manual retry.
+      reconnectCount.current = 0;
       setError(null);
       setErrorStage(null);
+      setErrorCode(null);
       setState('connecting');
       pushLog('Retrying connection…', 'system');
       if (manager) {
@@ -1224,6 +1321,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
 
     // Phase 8: error recovery
     errorStage,      // 'clone' | null — which init stage caused the workspace error
+    errorCode,       // 'AUTH_EXPIRED' | 'PAT_INVALID' | 'SANDBOX_DEAD' | 'RECONNECT_FAILED' | ...
     previewError,    // { stage, message } | null — non-fatal preview failure
     retryCount,      // number — how many retries the user has attempted
     retry,           // (hint?: 'preview') => void — trigger recovery

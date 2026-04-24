@@ -133,26 +133,33 @@ function ConversationPageInner({params}) {
   // (which shifts all indices but doesn't change the tail).
   const prevLastMsgIdRef = useRef(null);
 
-  // Repo info from chat_sessions (platform vs user repos)
+  // Repo info from chat_sessions (platform vs user repos).
+  //
+  // ``vercelUrl`` is what the iframe shows — populated exclusively by the
+  // LIVE local dev server (via the WS ``preview_ready`` event). The deployed
+  // Vercel URL from the DB is kept in ``deployedUrl`` and exposed only via
+  // an explicit "Open deployed site" button, so the in-app preview always
+  // reflects the current source rather than a possibly stale deployment.
   const [repoInfo, setRepoInfo] = useState({
     platformRepoUrl: null,
     userRepoUrl: null,
     userRepoProvider: null,
     vercelUrl: null,
+    deployedUrl: null,
   });
 
   // Clear wizard sessionStorage once the project is confirmed complete in DB.
-  // Trigger on either platformRepoUrl OR vercelUrl — both indicate the project
-  // was successfully created. Without this, the wizard prompt stays in sessionStorage
-  // and re-triggers generation on every subsequent visit.
+  // Trigger on any of the "project exists" signals — platform repo URL,
+  // local preview, or published deploy URL. Without this, the wizard prompt
+  // stays in sessionStorage and re-triggers generation on every visit.
   useEffect(() => {
-    if (!repoInfo.platformRepoUrl && !repoInfo.vercelUrl) return;
+    if (!repoInfo.platformRepoUrl && !repoInfo.vercelUrl && !repoInfo.deployedUrl) return;
     try {
       sessionStorage.removeItem(`wizard_prompt_${conversationId}`);
       sessionStorage.removeItem(`wizard_meta_${conversationId}`);
       sessionStorage.removeItem(`wizard_desc_${conversationId}`);
     } catch (_) {}
-  }, [repoInfo.platformRepoUrl, repoInfo.vercelUrl, conversationId]);
+  }, [repoInfo.platformRepoUrl, repoInfo.vercelUrl, repoInfo.deployedUrl, conversationId]);
 
   // Load conversation and messages on mount (with timeout)
   // For wizard mode, use a much shorter timeout since we don't need this data to connect.
@@ -192,24 +199,53 @@ function ConversationPageInner({params}) {
             .limit(1);
           if (!cancelled && sessions?.[0]) {
             const storedUrl = sessions[0].vercel_url || null;
-            // Don't load temporary URLs — they don't survive between sessions.
-            // E2B sandbox URLs (.e2b.dev) expire after 30 min → treat as temporary.
-            // Only Vercel (.vercel.app) URLs are truly persistent.
-            // A fresh E2B preview will be created when the WS connects.
-            // Exclude only true ephemeral tunnel/sandbox URLs that expire quickly.
-            // localhost URLs from the local dev server ARE valid — keep them.
+            // Ephemeral tunnel/sandbox URLs don't survive between sessions,
+            // so never expose them as a "deployed site". localhost URLs are
+            // also not something to offer as a public deployment.
             const isTemporaryUrl =
               storedUrl &&
               (storedUrl.includes(".e2b.dev") ||
                 storedUrl.includes(".e2b.app") ||
                 storedUrl.includes(".loca.lt") ||
                 storedUrl.includes(".ngrok") ||
-                storedUrl.includes(".trycloudflare.com"));
+                storedUrl.includes(".trycloudflare.com") ||
+                storedUrl.startsWith("http://localhost"));
+            // Liveness probe (server-side — sees real HTTP status) so we
+            // don't surface a dead Vercel deployment as "Open deployed
+            // site". A fail-open strategy keeps the button when the probe
+            // itself errors, because a flaky probe shouldn't hide a
+            // working URL the user may want.
+            let deployedUrl = null;
+            if (storedUrl && !isTemporaryUrl) {
+              try {
+                const controller = new AbortController();
+                const abortTimer = setTimeout(() => controller.abort(), 7000);
+                const res = await fetch(
+                  `/api/preview-probe?url=${encodeURIComponent(storedUrl)}`,
+                  {signal: controller.signal, cache: "no-store"},
+                );
+                clearTimeout(abortTimer);
+                const data = await res.json().catch(() => ({}));
+                deployedUrl = data?.alive ? storedUrl : null;
+                if (!data?.alive) {
+                  console.warn(
+                    "[Workspace] Stored deploy URL not alive — hiding 'Open deployed site' button:",
+                    storedUrl, data,
+                  );
+                }
+              } catch (probeErr) {
+                console.warn("[Workspace] preview probe failed, keeping stored URL:", probeErr);
+                deployedUrl = storedUrl;
+              }
+            }
             setRepoInfo({
               platformRepoUrl: sessions[0].platform_repo_url || null,
               userRepoUrl: sessions[0].user_repo_url || null,
               userRepoProvider: sessions[0].user_repo_provider || null,
-              vercelUrl: isTemporaryUrl ? null : storedUrl,
+              // iframe shows ONLY the live local preview (populated by the
+              // WS preview_ready event). A stale deploy is never rendered.
+              vercelUrl: null,
+              deployedUrl,
             });
           }
         } catch (e) {
@@ -375,15 +411,19 @@ function ConversationPageInner({params}) {
   // Code tab is always visible — it shows an empty state until files are available.
   const codeTabVisible = true;
 
-  // ── Sync deployUrl / previewUrl from WebSocket to repoInfo (live update) ──
+  // ── Sync URLs from WebSocket to repoInfo ───────────────────────────
+  // Split into TWO channels:
+  //   • previewUrl  → goes into ``vercelUrl``  (iframe src — live dev server)
+  //   • deployUrl   → goes into ``deployedUrl`` (button target — Vercel)
+  // A stored deploy URL must never hijack the iframe; the preview always
+  // reflects the current source-of-truth, and publishing is an explicit
+  // action the user takes via the "Open deployed site" button.
   useEffect(() => {
     if (deployUrl) {
-      setRepoInfo((prev) => ({...prev, vercelUrl: deployUrl}));
+      setRepoInfo((prev) => ({...prev, deployedUrl: deployUrl}));
     }
   }, [deployUrl]);
 
-  // Live Preview URL from dev server tunnel — always show it when it arrives.
-  // deployUrl (Vercel) overrides it if it arrives later via its own effect above.
   useEffect(() => {
     if (previewUrl) {
       setRepoInfo((prev) => ({...prev, vercelUrl: previewUrl}));
@@ -402,10 +442,12 @@ function ConversationPageInner({params}) {
   const [publishConfirmed, setPublishConfirmed] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(false);
 
-  // A "real" deployment URL is any non-localhost URL — e.g. .vercel.app, custom domain.
-  // localhost / 127.0.0.1 is the local dev preview only, not a Vercel deployment.
+  // A "real" deployment URL — used by the Publish modal to show status and
+  // copy/open buttons. The iframe's ``vercelUrl`` is now always the local
+  // dev server, so the deploy URL lives in ``deployedUrl`` (populated from
+  // the DB on load and from WS ``deployUrl`` events after a push/publish).
   const vercelDeployUrl = (() => {
-    const u = repoInfo.vercelUrl;
+    const u = repoInfo.deployedUrl;
     if (!u) return null;
     try {
       const parsed = new URL(u);

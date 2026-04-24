@@ -196,6 +196,29 @@ async def github_list_repos(token: str) -> list[dict]:
     return repos
 
 
+async def github_list_branches(token: str, owner: str, repo: str) -> list[dict]:
+    """List branches for a GitHub repo."""
+    branches: list[dict] = []
+    page = 1
+    async with httpx.AsyncClient() as client:
+        while True:
+            resp = await client.get(
+                f"https://api.github.com/repos/{owner}/{repo}/branches",
+                params={"per_page": 100, "page": page},
+                headers={"Authorization": f"Bearer {token}", **_GH_HEADERS},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+            if not batch:
+                break
+            branches.extend({"name": b["name"]} for b in batch)
+            if len(batch) < 100:
+                break
+            page += 1
+    return branches
+
+
 async def github_create_pr(
     *,
     token: str,

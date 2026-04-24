@@ -251,12 +251,19 @@ class DockerRunner(SandboxRunner):
         timeout: float | None = None,
         env: dict[str, str] | None = None,
     ) -> CommandResult:
-        """Run *cmd* inside the container via ``exec_run``."""
+        """Run *cmd* inside the container via ``exec_run``.
+
+        Detects container-gone conditions (force-kill, OOM, daemon restart,
+        manual ``docker rm``) and marks the runner dead so callers see a clear
+        error instead of retrying against a ghost container. No extra Docker
+        API call on the happy path — we rely on the NotFound raised by
+        ``exec_run`` itself.
+        """
         if not self._container_id:
             return CommandResult(
                 returncode=1,
                 stdout="",
-                stderr="DockerRunner: container not started (call setup() first)",
+                stderr="SANDBOX_DEAD: container is not available — session needs to restart",
             )
         effective_cwd = cwd or settings.WORKSPACE_MOUNT_PATH
 
@@ -269,6 +276,21 @@ class DockerRunner(SandboxRunner):
                 timeout,
             )
             return result
+        except NotFound:
+            # Container was removed externally (force-kill from stop-timeout,
+            # OOM, or daemon restart). Mark the runner dead so subsequent
+            # calls hit the fast-fail guard above instead of retrying.
+            logger.warning(
+                "DockerRunner: container for session %s is gone — marking runner dead",
+                self._session_id,
+            )
+            docker_runner_manager.unregister(self._session_id)
+            self._container_id = None
+            return CommandResult(
+                returncode=1,
+                stdout="",
+                stderr="SANDBOX_DEAD: container was terminated during execution",
+            )
         except Exception as exc:
             logger.error(
                 "DockerRunner exec_command failed [session=%s cmd=%s]: %s",

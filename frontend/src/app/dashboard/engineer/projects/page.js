@@ -245,7 +245,7 @@ export default function ProjectsPage() {
   const draftCount = projects.filter(p => !p.deployUrl).length;
 
   return (
-    <div className="h-full bg-slate-50/50 dark:bg-[#0d1117] overflow-y-auto">
+    <div className="h-full bg-[#fefcfa] dark:bg-[#0d1117] overflow-y-auto">
       <div className="px-8 lg:px-10 py-10">
 
         {/* Delete Confirm Modal */}

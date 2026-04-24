@@ -38,13 +38,14 @@ from .step4b_images import analyze_images
 from .step5_execute import execute_with_claude, execute_project_in_batches
 from .step5b_build_verify import verify_build
 from .step6_verify import verify_changes, push_with_openhands
+from app.paths import NODE_MODULES_CACHE_ROOT, new_project_workspace_path
 
 logger = logging.getLogger(__name__)
 
 # ── node_modules cache ────────────────────────────────────────────────────────
 # Keyed by package-manager + package.json hash so the same template reuses a
 # pre-built node_modules on every subsequent run (~2s symlink vs 60-120s install).
-_NM_CACHE_ROOT = "/tmp/lucid_nm_cache"
+_NM_CACHE_ROOT = NODE_MODULES_CACHE_ROOT
 
 
 async def _cached_install(
@@ -194,7 +195,7 @@ async def run_pipeline(
         # Repo creation happens in Phase 7 AFTER code is generated and committed.
         if validated.get("scratch_mode"):
             from uuid import uuid4
-            workspace_path = f"/tmp/lucid_new_{task_id}_{str(uuid4())[:6]}"
+            workspace_path = new_project_workspace_path(task_id, suffix=str(uuid4())[:6])
             os.makedirs(workspace_path, exist_ok=True)
             os.chmod(workspace_path, 0o777)
 
@@ -356,7 +357,7 @@ async def run_pipeline(
             git_token = validated.get("git_token", "")
 
             from uuid import uuid4
-            workspace_path = f"/tmp/lucid_new_{task_id}_{str(uuid4())[:6]}"
+            workspace_path = new_project_workspace_path(task_id, suffix=str(uuid4())[:6])
             os.makedirs(workspace_path, exist_ok=True)
             os.chmod(workspace_path, 0o777)
 
@@ -445,7 +446,7 @@ async def run_pipeline(
                     ),
                 })
 
-                workspace_path = workspace_path or f"/tmp/lucid_new_{task_id}_fb"
+                workspace_path = workspace_path or new_project_workspace_path(task_id, suffix="fb")
                 os.makedirs(workspace_path, exist_ok=True)
                 os.chmod(workspace_path, 0o777)
 

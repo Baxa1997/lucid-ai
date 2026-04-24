@@ -562,12 +562,13 @@ async def destroy_session(session_id: str) -> None:
 
     # Clean up local workspace directory.
     # Only delete session-specific workspaces (under the storage root).
-    # Shared preview workspaces (/tmp/lucid_ws_*) are managed by
+    # Shared preview workspaces (`/tmp/lucid_ws_*`) are managed by
     # local_preview.py and must NOT be deleted here — the dev server
     # process is still running and uses those files.
     if session.workspace_dir and os.path.isdir(session.workspace_dir):
+        from app.paths import is_preview_workspace
         _wd = session.workspace_dir
-        if not _wd.startswith("/tmp/lucid_ws_"):
+        if not is_preview_workspace(_wd):
             shutil.rmtree(_wd, ignore_errors=True)
 
 

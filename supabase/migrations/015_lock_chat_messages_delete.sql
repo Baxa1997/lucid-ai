@@ -1,0 +1,23 @@
+-- ───────────────────────────────────────────────────────────
+--  015_lock_chat_messages_delete.sql
+--
+--  Prevent users from directly deleting individual chat messages.
+--
+--  Background
+--  ----------
+--  The agent relies on chat_messages as its context / memory for a session.
+--  If a user could delete arbitrary messages, they could corrupt the
+--  agent's view of history (gaps, desync between UI and DB replay).
+--
+--  What changes
+--  ------------
+--  Dropping the `messages_delete` RLS policy blocks row-level DELETE for
+--  authenticated users. The admin/service-role client (used by the
+--  ai_engine for internal cleanup) still bypasses RLS and can delete.
+--
+--  CASCADE deletes from `chat_sessions` continue to work: PostgreSQL
+--  CASCADE is a system-level operation that is not subject to RLS.
+--  Deleting a chat_session still removes its messages.
+-- ───────────────────────────────────────────────────────────
+
+DROP POLICY IF EXISTS "messages_delete" ON chat_messages;

@@ -99,13 +99,13 @@ const NavItem = memo(function NavItem({ item, active, collapsed, wizardActive, o
             ? "justify-center px-2 py-2.5"
             : "gap-3 px-3 py-[10px]",
           active
-            ? "bg-slate-100 dark:bg-white/[0.06] text-slate-900 dark:text-white font-medium"
-            : "text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-white/[0.03] hover:text-slate-900 dark:hover:text-white font-normal"
+            ? "bg-orange-50 dark:bg-orange-900/20 text-[#dc5426] dark:text-orange-400 font-semibold"
+            : "text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.05] hover:text-slate-900 dark:hover:text-white font-medium"
         )}
       >
         <Icon className={cn(
           "w-[20px] h-[20px] shrink-0 transition-colors",
-          active ? "text-slate-700 dark:text-white" : "text-slate-400 dark:text-slate-500"
+          active ? "text-[#dc5426] dark:text-orange-400" : "text-slate-500 dark:text-slate-400"
         )} strokeWidth={1.75} />
         {!collapsed && (
           <span className="flex-1 text-left truncate">{item.label}</span>
@@ -299,7 +299,7 @@ export default function EngineerLayout({ children }) {
 
   return (
     <WizardContext.Provider value={{ showWizard, setShowWizard }}>
-      <div className="h-screen flex bg-[#f0f4f9] dark:bg-[#0d1117] overflow-hidden transition-colors duration-200">
+      <div className="h-screen flex bg-[#fefcfa] dark:bg-[#0d1117] overflow-hidden transition-colors duration-200">
 
         {toast && (
           <Toast
@@ -327,14 +327,14 @@ export default function EngineerLayout({ children }) {
         >
 
           <div className={cn(
-            "flex items-center h-[56px] shrink-0",
+            "flex items-center h-[56px] shrink-0 border-b border-slate-100 dark:border-slate-800/40",
             collapsed ? "px-0 justify-center" : "px-5 justify-between"
           )}>
             {collapsed ? (
               <Tooltip label="Expand sidebar" show={true}>
                 <button
                   onClick={toggleCollapsed}
-                  className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center hover:opacity-90 transition-all shadow-sm shadow-emerald-500/30"
+                  className="w-10 h-10 rounded-xl bg-[#dc5426] flex items-center justify-center hover:bg-[#b8421e] transition-all shadow-sm shadow-[#dc5426]/20"
                 >
                   <Zap className="w-4 h-4 text-white fill-current" />
                 </button>
@@ -352,17 +352,17 @@ export default function EngineerLayout({ children }) {
                   }}
                   className="flex items-center gap-2.5 hover:opacity-80 transition-opacity"
                 >
-                  <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-lg flex items-center justify-center shrink-0 shadow-sm shadow-emerald-500/30">
+                  <div className="w-8 h-8 bg-[#dc5426] rounded-lg flex items-center justify-center shrink-0 shadow-sm shadow-[#dc5426]/20">
                     <Zap className="w-4 h-4 text-white fill-current" />
                   </div>
                   <span className="font-bold text-slate-900 dark:text-white text-[17px] tracking-tight">Lucid AI</span>
                 </Link>
                 <button
                   onClick={toggleCollapsed}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.04] transition-colors"
+                  className="flex items-center justify-center w-7 h-7 rounded-[6px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-[#fefcfa] dark:hover:bg-white/[0.04] transition-all"
                   title="Collapse sidebar"
                 >
-                  <PanelLeftClose className="w-[18px] h-[18px]" />
+                  <PanelLeft className="w-[22px] h-[22px]" />
                 </button>
               </>
             )}
@@ -382,7 +382,7 @@ export default function EngineerLayout({ children }) {
                 className={cn(
                   "w-full flex items-center justify-center rounded-xl text-[13px] font-semibold transition-all duration-150 active:scale-[0.97]",
                   collapsed ? "p-2.5" : "gap-2 px-3 py-2.5",
-                  "bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:opacity-90 shadow-sm shadow-emerald-500/25"
+                  "bg-[#dc5426] text-white hover:bg-[#b8421e] shadow-sm shadow-[#dc5426]/20"
                 )}
               >
                 <Plus className="w-4 h-4 shrink-0" strokeWidth={2.5} />
@@ -395,14 +395,14 @@ export default function EngineerLayout({ children }) {
           {wizardIsActive && (
             <div className={cn("px-4 pb-0.5 pt-2", collapsed && "px-2")}>
               <div className={cn(
-                "w-full flex items-center rounded-xl text-[13px] font-medium bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-200/60 dark:border-emerald-500/15",
+                "w-full flex items-center rounded-xl text-[13px] font-medium bg-orange-50 dark:bg-orange-500/10 text-[#dc5426] dark:text-orange-400 border border-orange-200/60 dark:border-orange-500/15",
                 collapsed ? "justify-center p-2.5" : "gap-3 px-3 py-2"
               )}>
-                <Sparkles className="w-4 h-4 shrink-0 text-emerald-500 dark:text-emerald-400" strokeWidth={2} />
+                <Sparkles className="w-4 h-4 shrink-0 text-[#dc5426] dark:text-orange-400" strokeWidth={2} />
                 {!collapsed && (
                   <>
                     <span className="flex-1 text-left">New Project</span>
-                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400 animate-pulse shrink-0" />
+                    <div className="w-1.5 h-1.5 rounded-full bg-[#dc5426] dark:bg-orange-400 animate-pulse shrink-0" />
                   </>
                 )}
               </div>
@@ -411,7 +411,7 @@ export default function EngineerLayout({ children }) {
 
           {/* ── Navigation ── */}
           <nav className={cn("flex-1 pt-2", collapsed ? "px-2" : "px-4")}>
-            <div className="space-y-1">
+            <div className="flex flex-col gap-px">
               {navItems.map((item) => (
                 <NavItem
                   key={item.href}
@@ -430,19 +430,24 @@ export default function EngineerLayout({ children }) {
 
             {/* Upgrade Card (expanded only) */}
             {!collapsed && (
-              <div className="mb-3 px-0.5">
-                <button
-                  onClick={() => router.push('/pricing')}
-                  className="w-full flex items-center justify-between rounded-xl p-3.5 bg-slate-50 dark:bg-white/[0.03] border border-slate-200/80 dark:border-slate-700/40 hover:bg-slate-100 dark:hover:bg-white/[0.05] transition-colors text-left group"
-                >
-                  <div>
-                    <p className="text-[13px] font-semibold text-slate-800 dark:text-white leading-tight">Upgrade your plan</p>
-                    <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-0.5">Get more out of your apps</p>
+              <div className="mb-3 mx-0.5">
+                <div className="rounded-xl p-3.5 bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-700/30">
+                  <div className="flex items-start gap-2.5 mb-2.5">
+                    <div className="w-7 h-7 rounded-lg bg-orange-500 flex items-center justify-center shrink-0">
+                      <Sparkles className="w-3.5 h-3.5 text-white" />
+                    </div>
+                    <div>
+                      <p className="text-[12.5px] font-bold text-amber-900 dark:text-amber-200 leading-tight">Upgrade your plan</p>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-snug">Get more out of your apps</p>
+                    </div>
                   </div>
-                  <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shrink-0 shadow-sm">
-                    <Sparkles className="w-4 h-4 text-white" />
-                  </div>
-                </button>
+                  <button
+                    onClick={() => router.push('/pricing')}
+                    className="w-full flex items-center justify-center gap-1.5 py-1.5 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-[12px] font-semibold transition-colors"
+                  >
+                    Subscribe
+                  </button>
+                </div>
               </div>
             )}
 

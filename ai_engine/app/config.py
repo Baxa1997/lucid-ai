@@ -112,6 +112,31 @@ class Settings(BaseSettings):
             raise ValueError("SUPABASE_URL must start with https://")
         return v
 
+    @field_validator("INTERNAL_API_KEY")
+    @classmethod
+    def internal_api_key_required(cls, v: str) -> str:
+        """Fail startup if INTERNAL_API_KEY is empty.
+
+        When empty, the X-User-ID header is trusted without verification —
+        any client could impersonate any user for server-to-server calls.
+        Opt out for local dev by setting LUCID_ALLOW_NO_INTERNAL_KEY=1.
+        """
+        import os as _os
+        if v:
+            return v
+        if _os.environ.get("LUCID_ALLOW_NO_INTERNAL_KEY") == "1":
+            logger.warning(
+                "INTERNAL_API_KEY is empty and LUCID_ALLOW_NO_INTERNAL_KEY=1 — "
+                "X-User-ID will be accepted without verification (DEV ONLY)"
+            )
+            return v
+        raise ValueError(
+            "INTERNAL_API_KEY is required. Without it, any client sending "
+            "X-User-ID can impersonate any user. Set INTERNAL_API_KEY to a "
+            "shared secret matching frontend config, or set "
+            "LUCID_ALLOW_NO_INTERNAL_KEY=1 to bypass for local dev only."
+        )
+
 
 
 # ── Resolve NEXT_PUBLIC_ aliases before Settings() ──────────

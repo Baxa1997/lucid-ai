@@ -111,7 +111,8 @@ export default function ChatInput({ state, onSendMessage, isRunning }) {
                 : 'Waiting for connection...'
             }
             rows={1}
-            className="flex-1 px-3 py-2 text-sm bg-transparent outline-none text-slate-800 placeholder:text-slate-400 resize-none min-h-[36px] max-h-[120px]"
+            className="flex-1 min-w-0 px-3 py-2 text-sm bg-transparent outline-none text-slate-800 placeholder:text-slate-400 resize-none min-h-[36px] max-h-[120px]"
+            style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
           />
           <button
             type="submit"

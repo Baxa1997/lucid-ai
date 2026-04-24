@@ -33,6 +33,7 @@ from .github import (
     derive_repo_name,
     github_get_user,
     github_list_repos,
+    github_list_branches,
     github_create_pr,
     _create_github_repo,
     create_github_repo,
@@ -41,6 +42,7 @@ from .github import (
 from .gitlab import (
     gitlab_get_user,
     gitlab_list_repos,
+    gitlab_list_branches,
     gitlab_create_mr,
 )
 

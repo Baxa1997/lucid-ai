@@ -290,7 +290,7 @@ export default function TemplatesPage() {
   });
 
   return (
-    <div className="h-full bg-white dark:bg-[#0d1117] overflow-y-auto">
+    <div className="h-full bg-[#fefcfa] dark:bg-[#0d1117] overflow-y-auto">
       <div className="px-8 lg:px-10 py-10">
         {/* Header */}
         <div className="mb-8">

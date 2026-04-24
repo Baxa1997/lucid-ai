@@ -321,16 +321,20 @@ export default function ChatPanel() {
             </div>
           ))}
 
-          {/* Unified status line — waiting for first agent reply */}
+          {/* Unified status line — shows whenever the agent is working and
+              we are waiting on the next agent message (covers the FIRST reply
+              AND every follow-up reply during a running session). */}
           {(() => {
             const ALL_ACTIVE = ['connecting', 'preparing', 'cloning', 'installing', 'starting', 'health_check', 'running'];
             if (!ALL_ACTIVE.includes(status)) return null;
             const liveMessages = messages.filter((m) => !m.fromHistory);
             const lastLive = liveMessages.slice(-1)[0];
-            const waitingForFirstReply = !lastLive || lastLive.role === 'user' || lastLive.role === 'system';
-            const hasAgentReplied = liveMessages.some((m) => m.role === 'agent');
-            const waitingForAgent = waitingForFirstReply && (status !== 'running' || !hasAgentReplied);
-            if (!waitingForAgent) return null;
+            // Show the indicator whenever we're not currently displaying an
+            // agent reply in the live stream. The previous implementation
+            // suppressed the indicator once ANY agent reply had landed, which
+            // meant follow-up user messages never showed a thinking state.
+            const shouldShow = !lastLive || lastLive.role === 'user' || lastLive.role === 'system';
+            if (!shouldShow) return null;
             // For 'running': mirror the BuildingScreen phase label so both
             // panels always show the same status rather than conflicting text.
             const activePhase = (phases || []).find((p) => p.status === 'active');
@@ -339,7 +343,7 @@ export default function ChatPanel() {
               .reduce((max, p) => Math.max(max, p.phase || 0), 0);
             const currentPhaseNum = activePhase?.phase || maxDonePhase || 0;
             const PHASE_LABELS = {
-              0: 'Building app...',
+              0: 'Thinking…',
               1: 'Building app...',
               2: 'Preparing workspace...',
               3: 'Researching your idea...',
@@ -350,11 +354,14 @@ export default function ChatPanel() {
               6: 'Verifying build...',
               7: 'Publishing project...',
             };
-            const runningLabel = currentPhaseNum > 0
+            const phaseLabel = currentPhaseNum > 0
               ? (PHASE_LABELS[currentPhaseNum] || PHASE_LABELS[currentPhaseNum >= 8 ? 7 : 0])
               : (wizardDesc
                   ? `Designing your ${wizardDesc.length > 28 ? wizardDesc.slice(0, 28) + '…' : wizardDesc.toLowerCase()}...`
-                  : 'Working on your project...');
+                  : 'Thinking…');
+            // Prefer the granular agentStatus.label when the backend has set
+            // one (e.g. "✍️ Writing code — Phase 5/3…"). Fall back to the
+            // phase-based label, then to the status-based labels.
             const LABELS = {
               connecting: 'Connecting to workspace...',
               preparing: resolvingProgress?.message || 'Preparing workspace...',
@@ -362,24 +369,38 @@ export default function ChatPanel() {
               installing: 'Installing dependencies...',
               starting: 'Starting dev server...',
               health_check: 'Connecting live preview...',
-              running: runningLabel,
+              running: phaseLabel,
             };
+            const primary =
+              (status === 'running' && agentStatus?.label) ||
+              LABELS[status] ||
+              'Thinking…';
+            const secondary = status === 'running' ? (agentStatus?.subtext || '') : '';
             return (
-              <div className="flex items-center gap-2.5 px-4 py-2.5 animate-in fade-in duration-500">
-                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shrink-0 shadow-sm shadow-emerald-500/15">
+              <div className="flex items-start gap-2.5 px-4 py-2.5 animate-in fade-in duration-500">
+                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shrink-0 shadow-sm shadow-emerald-500/15 mt-0.5">
                   <Sparkles className="w-3 h-3 text-white" />
                 </div>
-                <span className="text-[13px] text-slate-500 dark:text-slate-400">
-                  {LABELS[status] || 'Preparing...'}
-                </span>
-                <div className="flex items-center gap-[3px]">
-                  {[0, 200, 400].map((delay) => (
-                    <span
-                      key={delay}
-                      className="w-1 h-1 rounded-full bg-emerald-400/70 animate-bounce"
-                      style={{ animationDelay: `${delay}ms`, animationDuration: '1s' }}
-                    />
-                  ))}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[13px] text-slate-500 dark:text-slate-400 truncate">
+                      {primary}
+                    </span>
+                    <div className="flex items-center gap-[3px] shrink-0">
+                      {[0, 200, 400].map((delay) => (
+                        <span
+                          key={delay}
+                          className="w-1 h-1 rounded-full bg-emerald-400/70 animate-bounce"
+                          style={{ animationDelay: `${delay}ms`, animationDuration: '1s' }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  {secondary && (
+                    <span className="block text-[11px] text-slate-400 dark:text-slate-500 mt-0.5 truncate">
+                      {secondary}
+                    </span>
+                  )}
                 </div>
               </div>
             );

@@ -33,6 +33,7 @@ from app.services.workspace_manager import workspace_manager
 from app.services.dev_server import stop_dev_preview
 
 from app.services.local_preview import start_local_preview
+from app.paths import preview_workspace_path
 from app.supabase_client import db_client
 from app.workspace_states import WorkspaceState, transition as ws_transition
 from app.services.workspace_resolver import resolve_workspace_path, ResolvePath
@@ -45,6 +46,53 @@ from app.services.agent_orchestrator import (
 )
 
 router = APIRouter()
+
+
+async def _validate_git_pat(token: str, repo_url: str) -> tuple[bool, str]:
+    """Validate a git provider PAT against the relevant API (single call).
+
+    Returns ``(valid, error_message)``. On success ``error_message`` is empty.
+    A short timeout is used so an unreachable provider fails fast rather than
+    blocking the pipeline. Uses the repo URL to pick the right provider so
+    we do not make two API calls.
+    """
+    if not token:
+        return True, ""   # nothing to validate — server-side fallback token may apply
+    try:
+        import httpx
+        _url = (repo_url or "").lower()
+        if "gitlab" in _url and "github.com" not in _url:
+            # GitLab — hit /api/v4/user on the repo's host (or gitlab.com)
+            try:
+                from urllib.parse import urlparse
+                _host = urlparse(repo_url).netloc or "gitlab.com"
+            except Exception:
+                _host = "gitlab.com"
+            async with httpx.AsyncClient(timeout=10.0) as _c:
+                resp = await _c.get(
+                    f"https://{_host}/api/v4/user",
+                    headers={"PRIVATE-TOKEN": token},
+                )
+            if resp.status_code == 200:
+                return True, ""
+            if resp.status_code in (401, 403):
+                return False, "GitLab token is invalid or expired. Please reconnect GitLab in Integrations."
+            return False, f"GitLab token check failed (HTTP {resp.status_code})."
+        # Default to GitHub
+        async with httpx.AsyncClient(timeout=10.0) as _c:
+            resp = await _c.get(
+                "https://api.github.com/user",
+                headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
+            )
+        if resp.status_code == 200:
+            return True, ""
+        if resp.status_code in (401, 403):
+            return False, "GitHub token is invalid or expired. Please reconnect GitHub in Integrations."
+        return False, f"GitHub token check failed (HTTP {resp.status_code})."
+    except Exception as exc:
+        # Network / DNS / timeout — treat as transient, don't block the user
+        logger.warning("PAT validation network error: %s — skipping", exc)
+        return True, ""
 
 
 @router.websocket("/api/v1/ws")
@@ -86,6 +134,7 @@ async def websocket_agent(websocket: WebSocket):
             logger.warning("WebSocket rejected — handshake is not a JSON object")
             await websocket.send_json({
                 "type": "error",
+                "code": "HANDSHAKE_INVALID",
                 "message": "Invalid handshake: expected a JSON object.",
             })
             await websocket.close(code=4400, reason="Invalid handshake")
@@ -99,6 +148,7 @@ async def websocket_agent(websocket: WebSocket):
                 logger.warning("WebSocket rejected — field %s has wrong type", _field)
                 await websocket.send_json({
                     "type": "error",
+                    "code": "HANDSHAKE_INVALID",
                     "message": f"Invalid handshake: field '{_field}' must be a string.",
                 })
                 await websocket.close(code=4400, reason="Invalid handshake")
@@ -113,7 +163,8 @@ async def websocket_agent(websocket: WebSocket):
             logger.warning("WebSocket rejected — no valid authentication")
             await websocket.send_json({
                 "type": "error",
-                "message": "Authentication required. Provide a valid JWT token.",
+                "code": "AUTH_EXPIRED",
+                "message": "Authentication required. Your session may have expired — please sign in again.",
             })
             await websocket.close(code=4010, reason="Authentication required")
             return
@@ -208,6 +259,11 @@ async def websocket_agent(websocket: WebSocket):
             # we only replay events the client hasn't seen yet.
             last_event_id = raw.get("lastEventId") or "0-0"
             if session.ws_proxy is not None:
+                # Multi-tab collision: another WS is still attached when we
+                # reconnect. Detaching it below means the other tab goes dark,
+                # so tell this tab what happened — the frontend renders a
+                # toast so the user can close the stale tab.
+                _prior_attached = session.ws_proxy.is_attached()
                 replayed = await session.ws_proxy.replay(websocket, last_id=last_event_id)
                 session.ws_proxy.attach(websocket)
                 if replayed:
@@ -215,6 +271,23 @@ async def websocket_agent(websocket: WebSocket):
                         "Replayed %d buffered events for session %s",
                         replayed, session.session_id,
                     )
+                if _prior_attached:
+                    logger.info(
+                        "Multi-tab takeover detected for session %s — warning new tab",
+                        session.session_id,
+                    )
+                    try:
+                        await websocket.send_json({
+                            "type": "warning",
+                            "code": "MULTI_TAB",
+                            "message": (
+                                "This workspace was also open in another tab. "
+                                "Events will flow here from now on — close the "
+                                "other tab to avoid confusion."
+                            ),
+                        })
+                    except Exception:
+                        pass
 
             # ── Look up chat session early so we can replay history ────────────
             reconnect_chat_session_id = None
@@ -294,8 +367,7 @@ async def websocket_agent(websocket: WebSocket):
             # to session.workspace_dir when the preview path doesn't exist yet.
             _reconnect_ft_path = None
             if project_id:
-                _rc_short = project_id.replace("-", "")[:12]
-                _rc_preview_tmp = f"/tmp/lucid_ws_{_rc_short}"
+                _rc_preview_tmp = preview_workspace_path(project_id)
                 if os.path.isdir(_rc_preview_tmp):
                     _reconnect_ft_path = _rc_preview_tmp
                     # Keep session workspace_dir in sync
@@ -355,8 +427,10 @@ async def websocket_agent(websocket: WebSocket):
             except HTTPException as rate_err:
                 # Rate limit or other HTTP error from create_session
                 logger.warning("Session creation rejected: %s", rate_err.detail)
+                _err_code = "RATE_LIMITED" if rate_err.status_code == 429 else "SESSION_CREATE_FAILED"
                 await websocket.send_json({
                     "type": "error",
+                    "code": _err_code,
                     "message": rate_err.detail,
                 })
                 await websocket.close(code=4029, reason="Rate limited")
@@ -547,8 +621,7 @@ async def websocket_agent(websocket: WebSocket):
                 # original generation — if so, we can restart the dev server without
                 # re-cloning even if we have no repo URL (e.g. push failed mid-way).
                 _bg_conv_id_early = project_id or conversation_id
-                _short_early = _bg_conv_id_early.replace("-", "")[:12]
-                _cached_tmp = f"/tmp/lucid_ws_{_short_early}"
+                _cached_tmp = preview_workspace_path(_bg_conv_id_early)
                 _has_cached_ws = (
                     os.path.isdir(_cached_tmp)
                     and os.path.isdir(os.path.join(_cached_tmp, "node_modules"))
@@ -587,8 +660,7 @@ async def websocket_agent(websocket: WebSocket):
 
                             # ── Stable path — computed first so the early-return path
                             # can also send the file tree and update workspace_dir. ──
-                            _short_id = _bg_conv_id.replace("-", "")[:12]
-                            _tmp = f"/tmp/lucid_ws_{_short_id}"
+                            _tmp = preview_workspace_path(_bg_conv_id)
 
                             # ── Re-use an already-running dev server for this session ──
                             _existing_url = get_active_preview_url(conversation_id=_bg_conv_id)
@@ -779,8 +851,7 @@ async def websocket_agent(websocket: WebSocket):
                     # Dev server died — try to restart from cached workspace
                     _recon_ws = None
                     if project_id:
-                        _rc_short = project_id.replace("-", "")[:12]
-                        _recon_tmp = f"/tmp/lucid_ws_{_rc_short}"
+                        _recon_tmp = preview_workspace_path(project_id)
                         if os.path.isdir(_recon_tmp) and os.path.isdir(os.path.join(_recon_tmp, "node_modules")):
                             _recon_ws = _recon_tmp
                             if session is not None:
@@ -1118,6 +1189,24 @@ async def websocket_agent(websocket: WebSocket):
         # ── If task was included in handshake, run it immediately ─
         # Skip if clone_fatal — workspace is in ERROR state, no point running the task.
         if task and not existing and not clone_fatal:
+            # ── Pre-flight: validate user-provided PAT once per session ───
+            # Fails fast with a structured error instead of wasting minutes on
+            # clone/push attempts against a revoked or expired token.
+            _pat_to_check = session.git_token if session else ""
+            if _pat_to_check and session and session.repo_url:
+                _pat_ok, _pat_err = await _validate_git_pat(_pat_to_check, session.repo_url)
+                if not _pat_ok:
+                    logger.warning("PAT validation failed for user %s: %s", user_id, _pat_err)
+                    try:
+                        await websocket.send_json({
+                            "type": "error",
+                            "code": "PAT_INVALID",
+                            "message": _pat_err,
+                        })
+                    except Exception:
+                        pass
+                    return
+
             # ── Step 1: Save user task to DB ──────────────────
             if chat_session_id:
                 try:
@@ -1195,11 +1284,19 @@ async def websocket_agent(websocket: WebSocket):
             # because stop messages typically have no content field
             if msg_type in ("stop", "stop_task"):
                 explicit_stop = True
-                await websocket.send_json({
-                    "type": "status",
-                    "status": "stopping",
-                    "message": "Stopping agent...",
-                })
+                # Always ACK so the frontend knows the message was received
+                try:
+                    await websocket.send_json({"type": "stop_ack"})
+                except Exception:
+                    pass
+                try:
+                    await websocket.send_json({
+                        "type": "status",
+                        "status": "stopping",
+                        "message": "Stopping agent...",
+                    })
+                except Exception:
+                    pass
                 break
 
             # ── Plan confirmation — user approves or rejects the plan ───
@@ -1408,6 +1505,7 @@ async def websocket_agent(websocket: WebSocket):
         try:
             await websocket.send_json({
                 "type": "error",
+                "code": "HANDSHAKE_TIMEOUT",
                 "message": "Timeout waiting for initial configuration.",
             })
         except Exception:
@@ -1422,6 +1520,7 @@ async def websocket_agent(websocket: WebSocket):
                 )
             await websocket.send_json({
                 "type": "error",
+                "code": "INTERNAL_ERROR",
                 "message": "An internal error occurred. Please try again.",
             })
         except Exception:

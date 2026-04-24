@@ -353,7 +353,7 @@ class AgentOrchestrator:
         session.pipeline_task = pipeline_task
 
         # ── 4. Listen for stop messages ────────────────────────────
-        stopped = await self._listen_for_stop(pipeline_task, websocket)
+        stopped = await self._listen_for_stop(pipeline_task, websocket, session)
 
         # ── 5. Stopped path ────────────────────────────────────────
         if stopped:
@@ -445,11 +445,19 @@ class AgentOrchestrator:
         self,
         pipeline_task: asyncio.Task,
         websocket: Any,
+        session: AgentSession,
     ) -> bool:
         """Listen for WS messages while the pipeline runs.
 
         Handles ping/pong heartbeats inline.  Returns True if the user sent
         a stop message (pipeline is already cancelled on return).
+
+        Stop handling is:
+          1. Always ACK receipt (``stop_ack``) — frontend can clear "stopping" UI.
+          2. Idempotent — if pipeline is already done, ACK and return without re-cancel.
+          3. Hard timeout (10s) on ``await pipeline_task`` — if the pipeline
+             does not respect ``CancelledError`` (e.g. blocked in a Docker exec),
+             force-kill the sandbox so the next ``exec_command`` fails fast.
         """
         while not pipeline_task.done():
             msg_coro = None
@@ -469,6 +477,17 @@ class AgentOrchestrator:
                         except Exception:
                             pass
                     elif msg_type in ("stop", "stop_task"):
+                        # P0 #1 — always ACK the stop message on receipt
+                        try:
+                            await websocket.send_json({"type": "stop_ack"})
+                        except Exception:
+                            pass
+
+                        # P0 #4 — idempotent: if pipeline finished during the
+                        # race with receive_json, don't try to cancel a done task
+                        if pipeline_task.done():
+                            return True
+
                         pipeline_task.cancel()
                         try:
                             await websocket.send_json({
@@ -478,8 +497,33 @@ class AgentOrchestrator:
                             })
                         except Exception:
                             pass
+
+                        # P0 #2 — hard timeout on cancel-wait
                         try:
-                            await pipeline_task
+                            await asyncio.wait_for(pipeline_task, timeout=10.0)
+                        except asyncio.TimeoutError:
+                            # P0 #3 — pipeline didn't respect CancelledError
+                            # (likely blocked in a Docker exec). Force-kill the
+                            # sandbox; any in-flight exec_command will return
+                            # an error and the pipeline can unwind.
+                            logger.warning(
+                                "Pipeline did not cancel within 10s — "
+                                "force-killing sandbox for session %s",
+                                getattr(session, "session_id", "?"),
+                            )
+                            try:
+                                if session.sandbox_runner is not None:
+                                    await session.sandbox_runner.teardown()
+                            except Exception as exc:
+                                logger.error(
+                                    "Force-kill sandbox failed: %s", exc
+                                )
+                            # Short grace period for the pipeline to unwind
+                            # after the container is gone.
+                            try:
+                                await asyncio.wait_for(pipeline_task, timeout=5.0)
+                            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                                pass
                         except (asyncio.CancelledError, Exception):
                             pass
                         return True

@@ -905,7 +905,9 @@ async def build_project_schema(
         text_parts: list[str] = []
         _last_heartbeat = _time.monotonic()
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0)) as client:
+        # read=60s — Anthropic streaming chunks arrive sub-second; a 60s gap is
+        # a stall. Keeps cancellation responsive when user presses Stop.
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=60.0)) as client:
             async with client.stream(
                 "POST",
                 "https://api.anthropic.com/v1/messages",

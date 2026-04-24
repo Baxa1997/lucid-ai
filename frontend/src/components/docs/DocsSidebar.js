@@ -57,15 +57,15 @@ export default function DocsSidebar() {
                     href={item.href}
                     className={cn(
                       "group flex items-center gap-2.5 px-2.5 py-[7px] text-[13.5px] rounded-lg transition-all",
-                      isActive 
-                        ? "bg-violet-50 dark:bg-violet-500/10 text-violet-700 dark:text-violet-400 font-semibold" 
+                      isActive
+                        ? "bg-orange-50 dark:bg-orange-900/20 text-[#dc5426] dark:text-orange-400 font-semibold"
                         : "text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-200 font-medium"
                     )}
                   >
                     <item.icon className={cn(
                       "w-4 h-4 flex-shrink-0",
-                      isActive 
-                        ? "text-violet-600 dark:text-violet-400" 
+                      isActive
+                        ? "text-[#dc5426] dark:text-orange-400"
                         : "text-slate-400 dark:text-slate-500 group-hover:text-slate-500 dark:group-hover:text-slate-400"
                     )} />
                     <span className="truncate">{item.name}</span>

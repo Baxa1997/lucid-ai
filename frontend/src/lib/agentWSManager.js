@@ -130,9 +130,21 @@ class AgentWSManager {
       if (this._connecting) {
         console.warn('[WS] Connection timeout — cleaning up');
         this._connecting = false;
+        // Detach the stale socket's handlers first so it can't also fire
+        // a late `onclose` with a different code and race us.
+        try { ws.onopen = null; ws.onerror = null; ws.onclose = null; ws.onmessage = null; } catch (_) {}
         try { ws.close(); } catch (_) {}
         this.ws = null;
-        this._emit({ type: '_internal', event: 'error', reason: 'Connection timeout' });
+        // Emit a synthetic `closed` (not `error`) so the hook's existing
+        // close-handler drives the retry/fail loop. A prior bug emitted
+        // only `error` here, leaving the UI stuck on "Reconnecting…"
+        // forever whenever the server was unreachable.
+        this._emit({
+          type: '_internal',
+          event: 'closed',
+          code: 1006,
+          reason: 'Connection timeout',
+        });
       }
     }, CONNECT_TIMEOUT_MS);
 

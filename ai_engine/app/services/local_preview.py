@@ -88,15 +88,6 @@ async def start_local_preview(
         await _kill_server(existing)
         _active_servers.pop(conversation_id, None)
 
-    # ── Find a free port ──────────────────────────────────
-    port = _find_free_port(_PORT_START, _PORT_END)
-    if port is None:
-        logger.error("local_preview: no free port in %d-%d", _PORT_START, _PORT_END)
-        await _emit(websocket, "preview_error",
-                    error_stage="port",
-                    message="No preview ports available — please wait and retry.")
-        return None
-
     # ── Pre-flight: restore template UI files from git (fixes corrupted ui/ files) ─
     try:
         from app.services.post_generation_fixer import restore_template_ui_files
@@ -185,98 +176,139 @@ async def start_local_preview(
     except Exception as _esl_err:
         logger.debug("local_preview: eslint --fix skipped: %s", _esl_err)
 
-    # ── Build the start command ───────────────────────────
-    cmd = _build_start_cmd(workspace_path, package_manager, port)
-    logger.info("local_preview: starting [%s] on port %d for %s", cmd, port, conversation_id)
-
-    await _emit(websocket, "preview_status", status="starting",
-                message="Starting dev server…")
-
-    # Capture output (stdout + stderr) to a temp file for error messages.
-    # concurrently and Next.js both write errors to stdout, so we capture both.
+    # ── Port allocation + spawn + health check — retryable on port race ──
+    # Between _find_free_port releasing the port and the dev server binding
+    # it, another process can grab it (EADDRINUSE). Up to 3 attempts with
+    # a fresh port each time. Retry ONLY for port-in-use; other failures
+    # (code crash, health-check timeout) are non-retryable and surface
+    # the error to the user immediately.
     import tempfile
-    _stderr_file = tempfile.NamedTemporaryFile(
-        mode="w", delete=False, suffix=".log", prefix="lucid_preview_stderr_"
-    )
-    _stderr_path = _stderr_file.name
-    _stderr_file.close()
 
-    try:
-        # Ensure node/pnpm/npm are in PATH regardless of how uvicorn was started.
-        _node_paths = "/usr/local/bin:/usr/bin:/bin"
-        env = {
-            **os.environ,
-            "PORT": str(port),
-            "HOST": "0.0.0.0",
-            # HOSTNAME is the env var Next.js uses for the bind address.
-            # Without it, Next.js binds to 127.0.0.1 which Docker can't forward.
-            "HOSTNAME": "0.0.0.0",
-            "PATH": f"{os.environ.get('PATH', _node_paths)}:{_node_paths}",
-        }
+    _node_paths = "/usr/local/bin:/usr/bin:/bin"
+    tried_ports: set[int] = set()
 
-        with open(_stderr_path, "w") as _stderr_fh:
-            proc = await asyncio.create_subprocess_shell(
-                cmd,
-                cwd=workspace_path,
-                stdout=_stderr_fh,  # capture stdout too — concurrently writes errors there
-                stderr=_stderr_fh,
-                env=env,
-                start_new_session=True,  # new process group → clean kill of next/vite tree
+    for _attempt in range(3):
+        port = _find_free_port(_PORT_START, _PORT_END, exclude=tried_ports)
+        if port is None:
+            logger.error("local_preview: no free port in %d-%d", _PORT_START, _PORT_END)
+            await _emit(websocket, "preview_error",
+                        error_stage="port",
+                        message="No preview ports available — please wait and retry.")
+            return None
+        tried_ports.add(port)
+
+        cmd = _build_start_cmd(workspace_path, package_manager, port)
+        logger.info(
+            "local_preview: starting [%s] on port %d for %s (attempt %d/3)",
+            cmd, port, conversation_id, _attempt + 1,
+        )
+
+        if _attempt == 0:
+            await _emit(websocket, "preview_status", status="starting",
+                        message="Starting dev server…")
+
+        # Fresh stderr file per attempt — previous attempt's file is kept
+        # until that attempt's _stop_by_conversation cleanup runs.
+        _stderr_file = tempfile.NamedTemporaryFile(
+            mode="w", delete=False, suffix=".log", prefix="lucid_preview_stderr_"
+        )
+        _stderr_path = _stderr_file.name
+        _stderr_file.close()
+
+        try:
+            env = {
+                **os.environ,
+                "PORT": str(port),
+                "HOST": "0.0.0.0",
+                "HOSTNAME": "0.0.0.0",
+                "PATH": f"{os.environ.get('PATH', _node_paths)}:{_node_paths}",
+            }
+
+            with open(_stderr_path, "w") as _stderr_fh:
+                proc = await asyncio.create_subprocess_shell(
+                    cmd,
+                    cwd=workspace_path,
+                    stdout=_stderr_fh,
+                    stderr=_stderr_fh,
+                    env=env,
+                    start_new_session=True,
+                )
+
+            _active_servers[conversation_id] = {
+                "port": port,
+                "process": proc,
+                "workspace_path": workspace_path,
+                "stderr_path": _stderr_path,
+                "url": "",
+            }
+
+            if _attempt == 0:
+                await _emit(websocket, "preview_status", status="health_check",
+                            message="Waiting for dev server to start…")
+            await _wait_for_server(port, proc=proc, timeout=90)
+
+            preview_url = _build_url(port)
+            _active_servers[conversation_id]["url"] = preview_url
+            _active_servers[conversation_id]["watcher"] = asyncio.create_task(
+                _watch_process_exit(conversation_id, proc, _stderr_path, websocket)
             )
 
-        _active_servers[conversation_id] = {
-            "port": port,
-            "process": proc,
-            "workspace_path": workspace_path,
-            "stderr_path": _stderr_path,
-            "url": "",  # filled in after health check
-        }
+            logger.info("local_preview: ready at %s", preview_url)
+            await _emit(websocket, "preview_ready",
+                        preview_url=preview_url,
+                        message=f"🖥️ Live preview: {preview_url}")
+            await _save_preview_url(conversation_id, preview_url)
+            return preview_url
 
-        # ── Wait for server to be reachable ──────────────
-        await _emit(websocket, "preview_status", status="health_check",
-                    message="Waiting for dev server to start…")
-        await _wait_for_server(port, proc=proc, timeout=90)
+        except _ProcessExitedError:
+            stderr_snippet = _read_stderr(_stderr_path)
+            if _is_port_in_use_error(stderr_snippet) and _attempt < 2:
+                logger.warning(
+                    "local_preview: port %d already in use (race) — retrying with fresh port",
+                    port,
+                )
+                await _stop_by_conversation(conversation_id)
+                continue
+            logger.error(
+                "local_preview: dev server exited early (port %d): %s",
+                port, stderr_snippet[:300],
+            )
+            await _stop_by_conversation(conversation_id)
+            await _emit(websocket, "preview_error",
+                        error_stage="crashed",
+                        message=f"Dev server crashed on startup: {stderr_snippet[:200] or 'check terminal logs'}")
+            return None
 
-        preview_url = _build_url(port)
-        _active_servers[conversation_id]["url"] = preview_url
+        except asyncio.TimeoutError:
+            stderr_snippet = _read_stderr(_stderr_path)
+            logger.error(
+                "local_preview: timed out waiting for dev server on port %d. stderr: %s",
+                port, stderr_snippet[:300],
+            )
+            await _stop_by_conversation(conversation_id)
+            await _emit(websocket, "preview_error",
+                        error_stage="timeout",
+                        message="Dev server didn't start in time — click Restart Preview to retry.")
+            return None
 
-        logger.info("local_preview: ready at %s", preview_url)
-        await _emit(websocket, "preview_ready",
-                    preview_url=preview_url,
-                    message=f"🖥️ Live preview: {preview_url}")
+        except Exception as exc:
+            stderr_snippet = _read_stderr(_stderr_path)
+            logger.error(
+                "local_preview: start failed: %s | stderr: %s",
+                exc, stderr_snippet[:300], exc_info=True,
+            )
+            await _stop_by_conversation(conversation_id)
+            await _emit(websocket, "preview_error",
+                        error_stage="start",
+                        message=f"Preview failed to start: {str(exc)[:200]}")
+            return None
 
-        # Persist URL to DB
-        await _save_preview_url(conversation_id, preview_url)
-
-        return preview_url
-
-    except _ProcessExitedError as pe:
-        stderr_snippet = _read_stderr(_stderr_path)
-        logger.error("local_preview: dev server exited early (port %d): %s", port, stderr_snippet[:300])
-        await _stop_by_conversation(conversation_id)
-        await _emit(websocket, "preview_error",
-                    error_stage="crashed",
-                    message=f"Dev server crashed on startup: {stderr_snippet[:200] or 'check terminal logs'}")
-        return None
-
-    except asyncio.TimeoutError:
-        stderr_snippet = _read_stderr(_stderr_path)
-        logger.error("local_preview: timed out waiting for dev server on port %d. stderr: %s",
-                     port, stderr_snippet[:300])
-        await _stop_by_conversation(conversation_id)
-        await _emit(websocket, "preview_error",
-                    error_stage="timeout",
-                    message="Dev server didn't start in time — click Restart Preview to retry.")
-        return None
-
-    except Exception as exc:
-        stderr_snippet = _read_stderr(_stderr_path)
-        logger.error("local_preview: start failed: %s | stderr: %s", exc, stderr_snippet[:300], exc_info=True)
-        await _stop_by_conversation(conversation_id)
-        await _emit(websocket, "preview_error",
-                    error_stage="start",
-                    message=f"Preview failed to start: {str(exc)[:200]}")
-        return None
+    # All 3 attempts hit EADDRINUSE — extremely rare, surface to user
+    logger.error("local_preview: all %d attempts hit port-in-use races", len(tried_ports))
+    await _emit(websocket, "preview_error",
+                error_stage="port",
+                message="Preview ports are busy — please wait a moment and retry.")
+    return None
 
 
 def get_active_preview_url(conversation_id: str = "", workspace_path: str = "") -> Optional[str]:
@@ -330,8 +362,13 @@ async def stop_all_previews() -> None:
 #  Internal helpers
 # ══════════════════════════════════════════════════════════
 
-def _find_free_port(start: int, end: int) -> Optional[int]:
+def _find_free_port(
+    start: int, end: int, exclude: Optional[set[int]] = None
+) -> Optional[int]:
+    _excl = exclude or set()
     for port in range(start, end):
+        if port in _excl:
+            continue
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -340,6 +377,20 @@ def _find_free_port(start: int, end: int) -> Optional[int]:
         except OSError:
             continue
     return None
+
+
+def _is_port_in_use_error(stderr: str) -> bool:
+    """True if *stderr* indicates another process grabbed the port first.
+
+    Covers Node (EADDRINUSE), Next.js ("port is already in use"), Vite,
+    and generic POSIX ("address already in use").
+    """
+    s = (stderr or "").lower()
+    return (
+        "eaddrinuse" in s
+        or "address already in use" in s
+        or "port is already in use" in s
+    )
 
 
 def _build_url(port: int) -> str:
@@ -477,6 +528,16 @@ async def _wait_for_server(port: int, proc=None, timeout: int = 90) -> None:
 
 
 async def _kill_server(entry: dict) -> None:
+    # Cancel the exit watcher first so it doesn't fire a spurious
+    # "preview crashed" event when we intentionally kill the process.
+    watcher = entry.get("watcher")
+    if watcher is not None and not watcher.done():
+        watcher.cancel()
+        try:
+            await watcher
+        except (asyncio.CancelledError, Exception):
+            pass
+
     proc = entry.get("process")
     if not proc:
         return
@@ -498,6 +559,49 @@ async def _kill_server(entry: dict) -> None:
             await proc.wait()
     except Exception as exc:
         logger.debug("local_preview: kill error (ok): %s", exc)
+
+
+async def _watch_process_exit(
+    conversation_id: str,
+    proc,
+    stderr_path: str,
+    websocket,
+) -> None:
+    """Fires exactly once when the dev server process exits.
+
+    Event-driven — blocks on ``proc.wait()`` with zero CPU until the process
+    dies, then notifies the client if the exit was unexpected.
+
+    A stop via ``stop_local_preview`` cancels this task before sending SIGTERM,
+    so intentional kills don't emit a spurious crash event.
+    """
+    try:
+        await proc.wait()
+    except asyncio.CancelledError:
+        return
+    except Exception as exc:
+        logger.debug("local_preview: watcher error for %s: %s", conversation_id, exc)
+        return
+
+    # Confirm the entry is still registered under this proc — if not, the
+    # kill was intentional (entry popped by _kill_server's caller) and we
+    # have nothing to report.
+    entry = _active_servers.get(conversation_id)
+    if not entry or entry.get("process") is not proc:
+        return
+
+    stderr_snippet = _read_stderr(stderr_path)
+    logger.warning(
+        "local_preview: dev server for %s exited unexpectedly (code=%s): %s",
+        conversation_id, proc.returncode, stderr_snippet[:300],
+    )
+    _active_servers.pop(conversation_id, None)
+
+    await _emit(
+        websocket, "preview_error",
+        error_stage="crashed",
+        message=f"Dev server crashed: {stderr_snippet[:200] or 'check terminal logs'}",
+    )
 
 
 async def _stop_by_conversation(conversation_id: str) -> None:

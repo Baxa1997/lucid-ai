@@ -30,6 +30,7 @@ import {
   Check,
   ArrowRight,
   X,
+  ExternalLink,
 } from "lucide-react";
 import {useWorkspace} from "@/contexts/WorkspaceContext";
 import FileViewer from "@/components/workspace/FileViewer";
@@ -431,8 +432,14 @@ export default function RightPanel() {
                   : "Preview"}
               </div>
               <button
-                className="text-[#9ca3af] hover:text-[#6b7280] transition-colors"
-                title="Open in new tab"
+                className={cn(
+                  "transition-colors",
+                  repoInfo.vercelUrl
+                    ? "text-[#9ca3af] hover:text-[#6b7280]"
+                    : "text-[#d1d5db] dark:text-slate-600 cursor-not-allowed",
+                )}
+                title="Open live preview in new tab"
+                disabled={!repoInfo.vercelUrl}
                 onClick={() =>
                   repoInfo.vercelUrl &&
                   window.open(repoInfo.vercelUrl, "_blank")
@@ -442,6 +449,21 @@ export default function RightPanel() {
             </div>
           </div>
           <div className="flex items-center justify-end flex-1 gap-0.5">
+            {/* Open deployed site — shown only when a live deployment exists.
+                The iframe always mirrors local source; this is the explicit
+                escape hatch to view the published Vercel/custom-domain URL. */}
+            {repoInfo.deployedUrl && (
+              <>
+                <button
+                  onClick={() => window.open(repoInfo.deployedUrl, "_blank")}
+                  title={`Open deployed site (${repoInfo.deployedUrl})`}
+                  className="flex items-center gap-1 h-7 px-2 rounded-md text-[#6b7280] dark:text-slate-400 hover:bg-black/5 dark:hover:bg-white/[0.06] text-[12px] font-medium transition-colors">
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  Deployed
+                </button>
+                <div className="h-4 w-px bg-[#d1d5db] dark:bg-[#2d333b] mx-0.5" />
+              </>
+            )}
             {previewLoading && (
               <>
                 <button

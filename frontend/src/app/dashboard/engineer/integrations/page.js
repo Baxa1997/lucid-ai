@@ -87,12 +87,48 @@ function IntegrationModal({ isOpen, onClose, type, integration, onRefresh, onToa
   }, [integration, isGitHub, isGitLab]);
 
   const handleSave = async () => {
-    if (!token.trim()) return;
+    const trimmedToken = token.trim();
+    // Client-side sanity checks — reject obviously malformed tokens before
+    // calling the provider API so the user gets an actionable error instantly.
+    if (!trimmedToken) {
+      setError('Please paste a personal access token.');
+      return;
+    }
+    if (/\s/.test(trimmedToken)) {
+      setError('Token contains whitespace — check that you copied only the token value.');
+      return;
+    }
+    if (trimmedToken.length < 20) {
+      setError('That token looks too short. Generate a new one and paste the full value.');
+      return;
+    }
+    if (isGitHub) {
+      const okPrefix = (
+        trimmedToken.startsWith('ghp_')
+        || trimmedToken.startsWith('github_pat_')
+        || trimmedToken.startsWith('gho_')
+        || trimmedToken.startsWith('ghs_')
+      );
+      if (!okPrefix) {
+        setError("That doesn't look like a GitHub PAT (expected to start with 'ghp_' or 'github_pat_').");
+        return;
+      }
+    } else {
+      const trimmedHost = host.trim();
+      if (!trimmedHost || !/^https?:\/\//i.test(trimmedHost)) {
+        setError('GitLab host must be a full URL (e.g. https://gitlab.com).');
+        return;
+      }
+      if (!trimmedToken.startsWith('glpat-')) {
+        setError("That doesn't look like a GitLab PAT (expected to start with 'glpat-').");
+        return;
+      }
+    }
     setSaving(true);
     setError('');
     const result = isGitHub
-      ? await saveGitHubIntegration(token.trim())
-      : await saveGitLabIntegration(token.trim(), host.trim());
+      ? await saveGitHubIntegration(trimmedToken)
+      : await saveGitLabIntegration(trimmedToken, host.trim());
     if (result.ok) {
       setToken('');
       onRefresh();
@@ -795,7 +831,7 @@ export default function IntegrationsPage() {
 
   if (loading) {
     return (
-      <div className="min-h-full bg-white dark:bg-[#0d1117] flex items-center justify-center">
+      <div className="min-h-full bg-[#fefcfa] dark:bg-[#0d1117] flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
           <div className="w-10 h-10 rounded-full border-[3px] border-slate-200 dark:border-indigo-500/20 border-t-indigo-500 animate-spin" />
           <p className="text-xs font-bold text-slate-400 dark:text-white/20 uppercase tracking-[0.25em]">Loading</p>
@@ -805,7 +841,7 @@ export default function IntegrationsPage() {
   }
 
   return (
-    <div className="h-full bg-white dark:bg-[#0d1117] overflow-y-auto">
+    <div className="h-full bg-[#fefcfa] dark:bg-[#0d1117] overflow-y-auto">
       {toast && <Toast message={toast.message} type={toast.type} onDone={() => setToast(null)} />}
 
       <IntegrationModal

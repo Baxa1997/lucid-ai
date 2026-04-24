@@ -58,40 +58,37 @@ FALLBACK_MODEL = "claude-opus-4-7"    # fallback for edge cases
 MAX_TOKENS_PER_CALL = 64000                # claude-sonnet-4-6 native max output
 MAX_FIX_ATTEMPTS = 1
 
-# Files that must NEVER be overwritten by the generator
-# NOTE: Layout files (Sidebar, Header, Footer) are NOT protected —
-# Claude can fully rewrite them to create unique project-specific layouts.
-PROTECTED_FILES = {
-    "TEMPLATE_MANIFEST.md",
-    "package.json",
-    "package-lock.json",
-    "pnpm-lock.yaml",
-    "yarn.lock",
-    "node_modules",
-    ".gitignore",
-    # tailwind.config.js/ts MUST stay protected — no plugins needed.
-    # Animation is provided by tw-animate-css (CSS @import, not a Tailwind plugin).
-    # Color customization happens in globals.css via CSS variables (:root HSL values),
-    # NOT in tailwind.config. That is the correct shadcn/ui pattern.
-    "tailwind.config.js",
-    "tailwind.config.ts",
-    "postcss.config.js",
-    "postcss.config.mjs",
-    "vite.config.js",
-    "vite.config.ts",
-    "next.config.mjs",
-    "next.config.js",
-    "jsconfig.json",
-    "tsconfig.json",
-    "components.json",
-}
+# Files that must NEVER be overwritten by the generator.
+# Source of truth lives in ``project_writer`` — re-exported here so legacy
+# imports (``from project_generator import PROTECTED_FILES``) keep working.
+from app.services.project_writer import (
+    PROTECTED_FILES,
+    PROTECTED_DIRS,
+    PROTECTED_UI_DIR,
+    write_files_from_json,
+    structural_sanity_check as _structural_sanity_check,
+)
 
-PROTECTED_DIRS = {"node_modules", ".git", ".next", "dist", ".vite"}
+# Prompt input caps — anything a user (or the wizard header) can supply must
+# be trimmed before it reaches a prompt, so a pasted 200KB README can't
+# consume the entire context window and starve the instruction blocks.
+_MAX_DESCRIPTION_CHARS = 10_000
 
-# src/components/ui/ contains pre-built shadcn/ui components from the GitHub template.
-# Claude must NEVER overwrite these — they are already installed and tested.
-# Generating replacements causes broken imports (@base-ui, @radix-ui not in template).
-PROTECTED_UI_DIR = "src/components/ui"
+
+def _normalize_prompt_input(value: Optional[str], *, max_chars: int) -> str:
+    """Safe normalization for user-controlled prompt variables.
+
+    - ``None`` → ``""``
+    - strips leading / trailing whitespace
+    - caps length at ``max_chars`` with a clear ``[...truncated]`` marker so
+      downstream logs / debugging show where the snip happened
+    """
+    if not value:
+        return ""
+    s = str(value).strip()
+    if len(s) <= max_chars:
+        return s
+    return s[:max_chars].rstrip() + "\n[...truncated]"
 
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -106,6 +103,33 @@ async def _ws_send(websocket, msg_type: str, message: str) -> None:
         await websocket.send_json({"type": msg_type, "message": message})
     except Exception:
         pass
+
+
+async def _emit_file_writes(
+    websocket,
+    paths: list[str],
+    *,
+    action: str = "write",
+) -> None:
+    """Emit one ``file_write_event`` per written path.
+
+    The frontend already consumes this message type to surface generated
+    files in the chat bubble and the Code tab. Firing per-file instead of
+    a single "N files" summary gives the user a live sense of progress
+    during the 30–60s that each phase takes to complete.
+    """
+    if not websocket or not paths:
+        return
+    for p in paths:
+        try:
+            await websocket.send_json({
+                "type": "file_write_event",
+                "filename": p,
+                "action": action,
+            })
+        except Exception:
+            # Disconnection during a big batch shouldn't abort the pipeline
+            return
 
 
 def _generate_design_system_name(
@@ -332,6 +356,30 @@ def _read_manifest(workspace_path: str) -> str:
         except Exception:
             pass
     return ""
+
+
+# A legitimate manifest lists components, import paths, and conventions —
+# always at least a couple of KB. Below this threshold something is wrong
+# (wrong template cloned, empty placeholder, read error silently swallowed).
+_MIN_MANIFEST_CHARS = 500
+
+
+def _validate_manifest(manifest: str, workspace_path: str) -> Optional[str]:
+    """Return an error string if the manifest looks missing/stubbed, else ``None``.
+
+    Generation can still proceed without a manifest, but the output quality
+    takes a measurable hit (broken imports, missing shadcn/ui usage). Surface
+    the issue early so a botched template clone doesn't masquerade as a
+    generator bug three phases later.
+    """
+    if not manifest:
+        return f"TEMPLATE_MANIFEST.md missing at {workspace_path}"
+    if len(manifest) < _MIN_MANIFEST_CHARS:
+        return (
+            f"TEMPLATE_MANIFEST.md is only {len(manifest)} chars — "
+            f"expected ≥ {_MIN_MANIFEST_CHARS}. Template may be incomplete."
+        )
+    return None
 
 
 # Keyword sets for scoring markdown sections by archetype relevance.
@@ -911,7 +959,11 @@ async def call_claude_for_json(
             last_heartbeat = 0.0
             import time as _time
 
-            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=600.0)) as client:
+            # read=60s — Anthropic streaming sends chunks sub-second during normal
+            # generation; a 60s no-data gap indicates a stall. This also ensures
+            # pipeline_task.cancel() lands within at most ~60s even if the socket
+            # hangs with no bytes arriving (see agent_orchestrator._listen_for_stop).
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=60.0)) as client:
                 async with client.stream(
                     "POST", CLAUDE_API_URL, headers=headers, json=stream_payload
                 ) as response:
@@ -1072,92 +1124,9 @@ async def call_claude_for_json(
 # ║  Write generated files to disk, respecting PROTECTED_FILES   ║
 # ╚══════════════════════════════════════════════════════════════╝
 
-def write_files_from_json(
-    json_response: dict,
-    workspace_path: str,
-) -> list[str]:
-    """Write files from Claude's JSON response to the workspace.
-    
-    Expected format: {"files": [{"path": "relative/path", "content": "..."}]}
-    
-    Returns list of file paths that were successfully written.
-    Skips PROTECTED_FILES and paths outside the workspace.
-    """
-    files = json_response.get("files", [])
-    if not files:
-        logger.warning("No files in JSON response")
-        return []
-
-    if not isinstance(files, list):
-        logger.warning("write_files_from_json: 'files' is %s not a list, skipping", type(files).__name__)
-        return []
-
-    written = []
-
-    for entry in files:
-        if not isinstance(entry, dict):
-            continue
-        rel_path = entry.get("path", "")
-        if not isinstance(rel_path, str):
-            continue
-        rel_path = rel_path.strip()
-
-        content = entry.get("content", "")
-        # Claude almost always returns content as a string, but occasionally
-        # emits a dict/list (e.g. JSON-object content for config files) or a
-        # number. Coerce to a string rather than crashing .write(content).
-        if not isinstance(content, str):
-            if isinstance(content, (dict, list)):
-                try:
-                    content = json.dumps(content, indent=2, ensure_ascii=False)
-                except (TypeError, ValueError):
-                    logger.warning("Unserializable non-string content for %s — skipping", rel_path)
-                    continue
-            elif content is None:
-                continue
-            else:
-                content = str(content)
-
-        if not rel_path or not content:
-            continue
-
-        # Security: prevent path traversal
-        if ".." in rel_path or rel_path.startswith("/"):
-            logger.warning("Skipping suspicious path: %s", rel_path)
-            continue
-
-        # Check protection
-        basename = os.path.basename(rel_path)
-        if basename in PROTECTED_FILES:
-            logger.info("Skipping protected file: %s", rel_path)
-            continue
-
-        # Check if path starts with a protected directory
-        first_dir = rel_path.split("/")[0] if "/" in rel_path else ""
-        if first_dir in PROTECTED_DIRS:
-            logger.info("Skipping file in protected dir: %s", rel_path)
-            continue
-
-        # Protect pre-built shadcn/ui components — never let Claude overwrite them
-        norm = rel_path.replace("\\", "/")
-        if norm.startswith("./"):
-            norm = norm[2:]
-        if norm.startswith(PROTECTED_UI_DIR + "/") or norm == PROTECTED_UI_DIR:
-            logger.info("Skipping protected UI component: %s", rel_path)
-            continue
-
-        # Write file
-        abs_path = os.path.join(workspace_path, rel_path)
-        try:
-            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-            with open(abs_path, "w", encoding="utf-8") as f:
-                f.write(content)
-            written.append(rel_path)
-        except Exception as exc:
-            logger.error("Failed to write %s: %s", rel_path, exc)
-
-    logger.info("Wrote %d / %d files to %s", len(written), len(files), workspace_path)
-    return written
+# write_files_from_json() + _structural_sanity_check() live in
+# ``project_writer``; they are re-exported at the top of this module so the
+# existing imports elsewhere in the codebase keep working.
 
 
 # Per-domain research hints for consumer websites (module-level so both
@@ -1296,9 +1265,12 @@ _DISTILL_SECTIONS: tuple[tuple[str, int], ...] = (
     # Director blocks — always keep. BRAND_MARK guarantees the logo is built.
     # RADIUS_TOKENS locks border-radius consistency across elements.
     # IMAGE_COMPOSITION prevents low-contrast text-over-image + glass forms.
+    # COPY_DECK provides every hero/section/feature/microcopy string so
+    # Phase 1-3 don't fall back to generic "Learn More / Our Services" filler.
     ("BRAND_MARK", 400),
     ("RADIUS_TOKENS", 300),
     ("IMAGE_COMPOSITION", 700),
+    ("COPY_DECK", 3000),
     ("COPY_TONE", 500),
     # Vision-grounded DNA from actual screenshots of reference sites.
     # Placed BEFORE LAYOUT_BLUEPRINT so if the model truncates, the concrete
@@ -2355,6 +2327,7 @@ Return JSON: {{"files": [{{"path": "...", "content": "..."}}]}}
 
         if fix_result:
             written = write_files_from_json(fix_result, workspace_path)
+            await _emit_file_writes(websocket, written, action="fix")
             await _ws_send(websocket, "progress", f"🔧 Fixed {len(written)} files, rebuilding...")
         else:
             await _ws_send(websocket, "progress", "⚠️ Could not generate fix")
@@ -2861,6 +2834,44 @@ visual analysis is grounded in actual pixels, the verbal blueprint is
 inference. Treat VISUAL_DNA as the authoritative source for: hero_composition,
 color_application, typography_system, card_language, spacing_rhythm,
 motion_language. Use the distinctive_moves list as must-have touches.
+
+───────────────────────────────────────────────────────────────
+COPY_DECK — BRAND-SPECIFIC COPY (CONSUMER / LANDING ARCHETYPES)
+───────────────────────────────────────────────────────────────
+If a ===COPY_DECK=== block is present (landing/consumer projects only):
+EVERY hero headline, section headline/subheadline, feature title/
+description, CTA, microcopy string, footer tagline, and SEO meta
+is FIXED by this deck. You MUST use the EXACT strings from the deck
+wherever they apply:
+
+  - Hero component  → use hero.eyebrow / hero.headline / hero.subheadline
+                      / hero.primary_cta / hero.secondary_cta
+  - Each section    → match by section_id (story → story section,
+                      menu → menu section, etc.) and use that entry's
+                      eyebrow / headline / subheadline / cta_primary
+  - Feature cards   → use features[].title + features[].description
+                      verbatim. The icon hint is a lucide-react name.
+  - Forms           → use microcopy.form_submit_primary as the submit
+                      button text, microcopy.form_submitting as the
+                      loading state
+  - Newsletter      → use microcopy.newsletter_cta for the button,
+                      microcopy.newsletter_placeholder for the input
+  - Empty states    → use microcopy.empty_state_headline
+  - Footer          → use footer.tagline, footer.newsletter_pitch,
+                      footer.copyright_suffix
+  - <head>          → use seo.meta_title + seo.meta_description
+
+ABSOLUTELY BANNED — never emit any of these strings (the deck gives
+you a specific, brand-voiced replacement for each):
+  "Learn More"  "Get Started" (unless B2B SaaS)  "Our Services"
+  "Our Features"  "Why Choose Us"  "Welcome to [anything]"
+  "Premium Quality"  "Best in class"  "Cutting-edge"  "World-class"
+  "One-stop shop"  "Click here"  "Read more →"  "Subscribe to our newsletter"
+  "Lorem ipsum"  "Your content here"  "Subtitle"  "Placeholder"
+
+If the deck doesn't cover a string you need (e.g. individual FAQ
+questions, testimonial quotes), write new copy in the SAME voice
+and specificity as the deck — never fall back to generic filler.
 
 ───────────────────────────────────────────────────────────────
 BRAND_MARK, RADIUS_TOKENS, IMAGE_COMPOSITION, ADMIN_UI_LANGUAGE — DIRECTOR BLOCKS
@@ -3559,6 +3570,14 @@ async def generate_new_project(
     Between each call, the file tree is rebuilt so imports resolve correctly.
     The template is ALREADY cloned into workspace_path by Phase 2.
     """
+    # Normalize user-controlled inputs before they flow into prompts.
+    # An oversized description can blow past the context window; None or
+    # whitespace-only input leaves the downstream prompts with "" which
+    # trivially degrades classification and research quality.
+    description = _normalize_prompt_input(description, max_chars=_MAX_DESCRIPTION_CHARS)
+    if not description:
+        await _ws_send(websocket, "error", "❌ Project description is empty.")
+        return False
     try:
         return await _generate_new_project_inner(
             description, workspace_path, validated, websocket,
@@ -3575,52 +3594,22 @@ def _phase_token_budget(
     phase: int,
     archetype: str,
 ) -> tuple[int, bool]:
-    """Calculate max_tokens and whether extended output beta is needed.
+    """Return (max_tokens, extended_output) for a generation phase.
 
-    Purely complexity-driven — based on page/entity/feature count from the
-    Gemini schema, NOT on archetype labels. A simple 3-page admin gets the
-    same small budget as a simple consumer site; a 15-entity CRM gets more.
-
-    Complexity score = n_pages + (n_entities × 2) + n_features
-    Entities weighted ×2 because each needs a list page + form component.
-
-    Returns (max_tokens, extended_output).
-    extended_output=True adds anthropic-beta: output-128k-2025-02-19,
-    enabling up to 128K output for very large projects.
+    claude-sonnet-4-6 has a 64K native output cap and every phase generates
+    multiple full React files, so we run at the ceiling except for the
+    narrower single-page-landing archetype where phase 1 (shell) and
+    phase 3 (polish) can afford smaller caps for a snappier response.
+    The ``schema`` argument is retained for API stability in case future
+    phases re-introduce complexity-driven sizing.
     """
-    n_pages    = len(schema.get("pages", []))
-    n_entities = len(schema.get("entities", []))
-    n_features = len(schema.get("features", []))
-    complexity = n_pages + (n_entities * 2) + n_features
-
-    # Claude Sonnet's default output cap is 8 192 tokens.
-    # The output-128k-2025-02-19 beta unlocks up to 128 K tokens.
-    # Every phase generates multiple full React/Vue files — always well above
-    # 8 192 tokens — so the beta header is ALWAYS required.
-    # Complexity still drives the actual max_tokens ceiling: smaller projects
-    # get a smaller ceiling (faster response), larger ones get more room.
-
-    # claude-sonnet-4-6 native output cap is 64K tokens.
-    # All phases use the full 64K for Phase 2 (heaviest) and 64K for Phase 1/3
-    # so complex consumer sites / magazines / admin apps never get truncated.
-
-    # Landing pages: one scrollable page but still needs full sections.
+    del schema  # reserved for future complexity-driven sizing
     if archetype == "single_page_landing":
         if phase == 1: return (32000, True)   # theme + shell + nav
         if phase == 2: return (64000, True)   # all sections — needs full budget
         return (48000, True)                  # phase 3 polish
-
-    if phase == 1:
-        # Foundation: theme, layout, nav, main page, router — 5-10 files
-        return (64000, True)
-
-    elif phase == 2:
-        # Content: sections / CRUD modules — always the heaviest phase
-        # Always use full native 64K — a rich magazine/CRM needs every token
-        return (64000, True)
-
-    else:  # phase 3 — extra pages, 404, polish
-        return (64000, True)
+    # All other archetypes use the full 64K output window every phase.
+    return (64000, True)
 
 
 async def _generate_new_project_inner(
@@ -3666,6 +3655,14 @@ async def _generate_new_project_inner(
     
     # ── Step 2: Read template context ──
     manifest = _read_manifest(workspace_path)
+    _manifest_issue = _validate_manifest(manifest, workspace_path)
+    if _manifest_issue:
+        logger.warning("Template manifest validation: %s", _manifest_issue)
+        await _ws_send(
+            websocket,
+            "warning",
+            f"⚠️ {_manifest_issue} — generation will proceed but output quality may be degraded.",
+        )
     file_tree = _build_file_tree(workspace_path)
     template_context = _read_key_template_files(workspace_path, stack)
     
@@ -3690,7 +3687,7 @@ async def _generate_new_project_inner(
     # by OS.  Cache entries expire after 1 hour via mtime check.
     import hashlib as _hashlib
     import time as _time_cache
-    _cache_dir = "/tmp/lucid_research_cache"
+    from app.paths import RESEARCH_CACHE_DIR as _cache_dir
     _cache_key = _hashlib.md5(
         f"{description.strip().lower()}|{stack}|{_layout_archetype}".encode()
     ).hexdigest()[:14]
@@ -3764,15 +3761,21 @@ async def _generate_new_project_inner(
                     _copy_tone_from_research = _extract_research_section(research, "===COPY_TONE===", max_chars=400)
                     # Brand name: Claude can infer it from description inside the call;
                     # passing description as-is avoids brittle regex extraction here.
-                    _design = await build_design_system(
-                        description=description,
-                        domain=_domain,
-                        brand_name="",  # inferred from description
-                        copy_tone=_copy_tone_from_research,
-                        layout_archetype=_layout_archetype,
-                        vibe=_vibe_from_research,
-                        api_key=api_key,
-                        websocket=websocket,
+                    # Outer cap (220s): two Claude attempts × ~90s httpx timeout +
+                    # network latency. If Anthropic stalls, we bail and use the
+                    # original research rather than holding up the pipeline.
+                    _design = await asyncio.wait_for(
+                        build_design_system(
+                            description=description,
+                            domain=_domain,
+                            brand_name="",  # inferred from description
+                            copy_tone=_copy_tone_from_research,
+                            layout_archetype=_layout_archetype,
+                            vibe=_vibe_from_research,
+                            api_key=api_key,
+                            websocket=websocket,
+                        ),
+                        timeout=220.0,
                     )
                     if _design:
                         research = inject_design_blocks(research, _design)
@@ -3781,6 +3784,8 @@ async def _generate_new_project_inner(
                             _design.get("design_system_name"),
                             _design.get("archetype"),
                         )
+                except asyncio.TimeoutError:
+                    logger.warning("Design Director timed out after 220s — falling back to research-only design")
                 except Exception as _dd_exc:
                     logger.warning("Design Director failed (non-fatal): %s", _dd_exc)
 
@@ -3830,13 +3835,6 @@ async def _generate_new_project_inner(
     # Gemini returns 10–20K of raw research with multiple ===SECTIONS===.
     # Dumping that raw into every phase prompt eats tokens and dilutes signal.
     # Distill once into a compact bullet plan capped at ~8K, structured by
-    # known section headers so the model sees the most important bits first.
-    research_distilled = _distill_research(research)
-    logger.info(
-        "Research distilled: %d → %d chars",
-        len(research), len(research_distilled),
-    )
-
     # ── Step 3b: Build structured project schema ──
     # This is the SINGLE SOURCE OF TRUTH for all 3 generation phases.
     # It eliminates consistency bugs (entities ↔ nav ↔ routes ↔ forms).
@@ -3861,6 +3859,64 @@ async def _generate_new_project_inner(
         app_type=app_type,
         api_key=api_key,
         websocket=websocket,
+    )
+
+    # ── Step 3b2: Copy Director (landing-family archetypes only) ──
+    # Writes a brand-specific copy deck (hero/sections/features/microcopy/
+    # footer/seo) so Phase 1-3 prompts have non-generic copy to use. Kills
+    # "Learn More / Our Services / Welcome to" filler at its source.
+    # Only runs for non-admin archetypes — admin copy comes from entity names
+    # and doesn't have the same generic-filler problem.
+    # FAIL-SOFT: returns None on failure, phase prompts still generate copy.
+    _copy_deck = None
+    if _layout_archetype and "admin" not in _layout_archetype.lower() and "crm" not in _layout_archetype.lower() and "tms" not in _layout_archetype.lower():
+        try:
+            from app.services.copy_director import build_copy_deck, inject_copy_deck
+            _schema_sections = project_schema.get("sections", []) or []
+            _section_ids = []
+            for s in _schema_sections[:10]:
+                sid = (s.get("type") or s.get("id") or "").strip()
+                if sid and sid not in _section_ids:
+                    _section_ids.append(sid)
+            _brand_name_for_copy = (
+                project_schema.get("brand", {}).get("name")
+                or (description[:60].strip() if description else "")
+            )
+            # Outer cap (220s): mirrors Design Director — two attempts × 90s
+            # httpx timeout. Phase prompts still generate copy on fallback.
+            _copy_deck = await asyncio.wait_for(
+                build_copy_deck(
+                    description=description,
+                    domain=_domain,
+                    brand_name=_brand_name_for_copy,
+                    copy_tone=_extract_research_section(research, "===COPY_TONE===", max_chars=400),
+                    layout_archetype=_layout_archetype,
+                    section_ids=_section_ids,
+                    api_key=api_key,
+                    vibe=_extract_research_section(research, "===VIBE===", max_chars=400),
+                    websocket=websocket,
+                ),
+                timeout=220.0,
+            )
+            if _copy_deck:
+                research = inject_copy_deck(research, _copy_deck)
+                logger.info(
+                    "Copy Director injected — hero='%s', %d sections, %d features",
+                    (_copy_deck.get("hero") or {}).get("headline", "")[:60],
+                    len(_copy_deck.get("sections") or []),
+                    len(_copy_deck.get("features") or []),
+                )
+                await _ws_send(websocket, "progress", "✍️  Copy deck written")
+        except asyncio.TimeoutError:
+            logger.warning("Copy Director timed out after 220s — phase prompts will generate copy")
+        except Exception as _cd_exc:
+            logger.warning("Copy Director failed (non-fatal): %s", _cd_exc)
+
+    # Now distill the (possibly enriched) research so Phase 1-3 see COPY_DECK.
+    research_distilled = _distill_research(research)
+    logger.info(
+        "Research distilled: %d → %d chars",
+        len(research), len(research_distilled),
     )
 
     # Build schema-derived prompt sections (used in all 3 phases)
@@ -4669,17 +4725,29 @@ Call the write_project_files tool with ALL files.
     PHASE1_MAX_TOKENS, PHASE1_EXTENDED = _phase_token_budget(project_schema, 1, _layout_archetype)
     logger.info("Phase 1 budget: max_tokens=%d extended=%s (archetype=%s, complexity score derived from schema)",
                 PHASE1_MAX_TOKENS, PHASE1_EXTENDED, _layout_archetype)
-    result1 = await call_claude_for_json(
-        system_prompt=_system_prompt_for_phase(1),
-        user_prompt=_phase_rules_prefix(1) + "\n" + phase1_prompt,
-        api_key=api_key,
-        websocket=websocket,
-        max_tokens=PHASE1_MAX_TOKENS,
-        model=MODEL,
-        extended_output=PHASE1_EXTENDED,
-    )
+    # 4-min hard cap — Phase 1 is the critical path, cancel and fail fast if hung.
+    # Inner httpx read=60s handles mid-stream stalls; this covers any local hang
+    # (JSON parse, retry loop, etc.) so the pipeline can never be stuck here.
+    try:
+        result1 = await asyncio.wait_for(
+            call_claude_for_json(
+                system_prompt=_system_prompt_for_phase(1),
+                user_prompt=_phase_rules_prefix(1) + "\n" + phase1_prompt,
+                api_key=api_key,
+                websocket=websocket,
+                max_tokens=PHASE1_MAX_TOKENS,
+                model=MODEL,
+                extended_output=PHASE1_EXTENDED,
+            ),
+            timeout=240.0,
+        )
+    except asyncio.TimeoutError:
+        logger.error("Phase 1 (foundation) hit 4-min hard timeout — aborting pipeline")
+        await _ws_send(websocket, "error", "❌ Phase 1 timed out — please retry")
+        return False
     if result1:
         written = write_files_from_json(result1, workspace_path)
+        await _emit_file_writes(websocket, written)
         total_files += written
         await _ws_send(websocket, "progress", f"✅ Foundation: {len(written)} files")
     else:
@@ -5000,10 +5068,56 @@ Call the write_project_files tool with ALL files for THIS batch only.
                 extended_output=True,
             )
 
-        batch_results = await asyncio.gather(
-            *[_run_admin_batch(i, b) for i, b in enumerate(batches)],
-            return_exceptions=True,
-        )
+        # 10-min hard cap across all parallel batches. Each batch has its own
+        # 60s httpx read timeout, so a total-elapsed cap of 600s is generous
+        # for typical admin apps (3-5 batches × ~2min each). On timeout, we
+        # take what batches completed and fall through to Phase 3 to fill gaps.
+        def _batch_failed(res) -> bool:
+            return (
+                isinstance(res, Exception)
+                or not isinstance(res, dict)
+                or not res.get("files")
+            )
+
+        try:
+            batch_results = await asyncio.wait_for(
+                asyncio.gather(
+                    *[_run_admin_batch(i, b) for i, b in enumerate(batches)],
+                    return_exceptions=True,
+                ),
+                timeout=600.0,
+            )
+        except asyncio.TimeoutError:
+            logger.error("Phase 2 (batched) hit 10-min hard timeout — proceeding to Phase 3")
+            batch_results = []
+
+        # ── Per-batch retry pass ──────────────────────────────────────────
+        # Transient failures (rate-limit bursts, stream stalls, one-off
+        # truncation) are common in admin projects with many parallel
+        # batches. Re-run just the failed batches once before giving up.
+        # Successful batches are preserved; the retry is bounded at 300s so
+        # Phase 3 still runs in time.
+        batch_results = list(batch_results)
+        retry_indices = [i for i, r in enumerate(batch_results) if _batch_failed(r)]
+        if retry_indices and len(retry_indices) < len(batches):
+            logger.info("Phase 2 retrying %d failed batch(es): %s", len(retry_indices), retry_indices)
+            await _ws_send(
+                websocket,
+                "progress",
+                f"🔁 Retrying {len(retry_indices)} failed batch(es)...",
+            )
+            try:
+                retry_results = await asyncio.wait_for(
+                    asyncio.gather(
+                        *[_run_admin_batch(i, batches[i]) for i in retry_indices],
+                        return_exceptions=True,
+                    ),
+                    timeout=300.0,
+                )
+                for pos, idx in enumerate(retry_indices):
+                    batch_results[idx] = retry_results[pos]
+            except asyncio.TimeoutError:
+                logger.warning("Phase 2 retry hit 5-min cap — proceeding with partial results")
 
         merged_files: list[dict] = []
         seen_paths: set[str] = set()
@@ -5027,6 +5141,7 @@ Call the write_project_files tool with ALL files for THIS batch only.
 
         if merged_files:
             written = write_files_from_json({"files": merged_files}, workspace_path)
+            await _emit_file_writes(websocket, written)
             total_files += written
             status_msg = f"✅ Content: {len(written)} files across {len(batches)} parallel batches"
             if failed_batches:
@@ -5043,17 +5158,27 @@ Call the write_project_files tool with ALL files for THIS batch only.
                 "content": "⚠️ Phase 2 generated no files across all batches. Phase 3 will attempt to fill the gap.",
             })
     else:
-        result2 = await call_claude_for_json(
-            system_prompt=_system_prompt_for_phase(2),
-            user_prompt=_phase_rules_prefix(2) + "\n" + phase2_prompt,
-            api_key=api_key,
-            websocket=websocket,
-            max_tokens=PHASE2_MAX_TOKENS,
-            model=MODEL,
-            extended_output=PHASE2_EXTENDED,
-        )
+        # 8-min hard cap — single Phase 2 call with ~64K max_tokens should
+        # never legitimately take longer. Fall through to Phase 3 on timeout.
+        try:
+            result2 = await asyncio.wait_for(
+                call_claude_for_json(
+                    system_prompt=_system_prompt_for_phase(2),
+                    user_prompt=_phase_rules_prefix(2) + "\n" + phase2_prompt,
+                    api_key=api_key,
+                    websocket=websocket,
+                    max_tokens=PHASE2_MAX_TOKENS,
+                    model=MODEL,
+                    extended_output=PHASE2_EXTENDED,
+                ),
+                timeout=480.0,
+            )
+        except asyncio.TimeoutError:
+            logger.error("Phase 2 (content) hit 8-min hard timeout — proceeding to Phase 3")
+            result2 = None
         if result2:
             written = write_files_from_json(result2, workspace_path)
+            await _emit_file_writes(websocket, written)
             total_files += written
             await _ws_send(websocket, "progress", f"✅ Content: {len(written)} files")
         else:
@@ -5220,17 +5345,26 @@ Call the write_project_files tool with ALL files.
         # on exactly the pages (404, About, Contact, gallery detail) that
         # users hit most often on a public site.
         PHASE3_MODEL = MODEL
-        result3 = await call_claude_for_json(
-            system_prompt=_system_prompt_for_phase(3),
-            user_prompt=_phase_rules_prefix(3) + "\n" + phase3_prompt,
-            api_key=api_key,
-            websocket=websocket,
-            max_tokens=PHASE3_MAX_TOKENS,
-            model=PHASE3_MODEL,
-            extended_output=PHASE3_EXTENDED,
-        )
+        # 4-min hard cap — Phase 3 is polish, timeout is non-fatal, we just skip.
+        try:
+            result3 = await asyncio.wait_for(
+                call_claude_for_json(
+                    system_prompt=_system_prompt_for_phase(3),
+                    user_prompt=_phase_rules_prefix(3) + "\n" + phase3_prompt,
+                    api_key=api_key,
+                    websocket=websocket,
+                    max_tokens=PHASE3_MAX_TOKENS,
+                    model=PHASE3_MODEL,
+                    extended_output=PHASE3_EXTENDED,
+                ),
+                timeout=240.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Phase 3 (polish) hit 4-min hard timeout — skipping to build")
+            result3 = None
         if result3:
             written = write_files_from_json(result3, workspace_path)
+            await _emit_file_writes(websocket, written)
             total_files += written
             await _ws_send(websocket, "progress", f"✅ Pages: {len(written)} files")
         else:
