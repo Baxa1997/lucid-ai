@@ -17,8 +17,8 @@ export default function ConnectionStatus({ status, error }) {
     health_check: { color: 'text-violet-600 dark:text-violet-400', label: 'Checking preview...' },
     preparing:    { color: 'text-amber-600 dark:text-amber-400',   label: 'Preparing workspace...' },
     running:      { color: 'text-blue-600 dark:text-blue-400',     label: 'Agent working…' },
-    ready:        { color: 'text-emerald-600 dark:text-emerald-400', label: 'Ready' },
-    connected:    { color: 'text-emerald-600 dark:text-emerald-400', label: 'Connected' },
+    ready:        { color: 'text-[#dc5426] dark:text-orange-400', label: 'Ready' },
+    connected:    { color: 'text-[#dc5426] dark:text-orange-400', label: 'Connected' },
     error:        { color: 'text-red-600 dark:text-red-400',       label: 'Error' },
     stopped:      { color: 'text-slate-400 dark:text-slate-500',   label: 'Stopped' },
   };
@@ -30,7 +30,7 @@ export default function ConnectionStatus({ status, error }) {
         className={cn(
           'w-2 h-2 rounded-full',
           status === 'ready' || status === 'connected'
-            ? 'bg-emerald-500'
+            ? 'bg-[#dc5426]'
             : status === 'preparing'
               ? 'bg-amber-500 animate-pulse'
               : status === 'cloning' || status === 'installing' || status === 'starting' || status === 'health_check'

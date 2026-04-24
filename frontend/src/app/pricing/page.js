@@ -34,7 +34,7 @@ const plans = [
     monthly: 15,
     yearly: 12,
     icon: Sparkles,
-    accent: 'teal',
+    accent: 'orange',
     credits: [
       { label: 'generation credits', value: '200', unit: '/mo' },
       { label: 'project slots', value: '5', unit: '' },
@@ -55,7 +55,7 @@ const plans = [
     monthly: 30,
     yearly: 24,
     icon: Rocket,
-    accent: 'emerald',
+    accent: 'brand',
     credits: [
       { label: 'generation credits', value: '500', unit: '/mo' },
       { label: 'project slots', value: '15', unit: '' },
@@ -118,8 +118,8 @@ export default function PricingPage() {
 
   const accentClasses = {
     slate:  { bg: 'bg-slate-100 dark:bg-slate-800', text: 'text-slate-600 dark:text-slate-300', btn: 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-slate-100' },
-    teal:    { bg: 'bg-teal-50 dark:bg-teal-500/10', text: 'text-teal-600 dark:text-teal-400', btn: 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-slate-100' },
-    emerald: { bg: 'bg-emerald-50 dark:bg-emerald-500/10', text: 'text-emerald-600 dark:text-emerald-400', btn: 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white hover:opacity-90 shadow-sm shadow-emerald-600/20' },
+    orange:  { bg: 'bg-orange-50 dark:bg-orange-500/10', text: 'text-[#dc5426] dark:text-orange-400', btn: 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-slate-100' },
+    brand:   { bg: 'bg-orange-50 dark:bg-orange-500/10', text: 'text-[#dc5426] dark:text-orange-400', btn: 'bg-gradient-to-r from-[#dc5426] to-orange-500 text-white hover:opacity-90 shadow-sm shadow-orange-600/20' },
     amber:  { bg: 'bg-amber-50 dark:bg-amber-500/10', text: 'text-amber-600 dark:text-amber-400', btn: 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-slate-100' },
   };
 
@@ -149,7 +149,7 @@ export default function PricingPage() {
                   : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
               )}
             >
-              Yearly <span className="text-emerald-600 dark:text-emerald-400 text-xs font-bold ml-1">(save 20%)</span>
+              Yearly <span className="text-[#dc5426] dark:text-orange-400 text-xs font-bold ml-1">(save 20%)</span>
             </button>
             <button
               onClick={() => setBilling('monthly')}
@@ -182,7 +182,7 @@ export default function PricingPage() {
                   )}
                 >
                   {plan.featured && (
-                    <div className="absolute -top-px left-1/2 -translate-x-1/2 px-3 py-1 bg-gradient-to-r from-emerald-500 to-teal-600 text-white text-[10px] font-bold rounded-b-lg uppercase tracking-wider">
+                    <div className="absolute -top-px left-1/2 -translate-x-1/2 px-3 py-1 bg-gradient-to-r from-[#dc5426] to-orange-500 text-white text-[10px] font-bold rounded-b-lg uppercase tracking-wider">
                       Most Popular
                     </div>
                   )}
@@ -259,7 +259,7 @@ export default function PricingPage() {
             <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-x-12 gap-y-4">
               {allPlanFeatures.map((f) => (
                 <div key={f} className="flex items-center gap-3">
-                  <Check className="w-4 h-4 text-emerald-400 shrink-0" strokeWidth={2.5} />
+                  <Check className="w-4 h-4 text-[#dc5426] shrink-0" strokeWidth={2.5} />
                   <span className="text-[14px] text-slate-300">{f}</span>
                 </div>
               ))}

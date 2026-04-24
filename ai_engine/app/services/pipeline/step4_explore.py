@@ -31,10 +31,14 @@ async def explore_with_gemini(
     classification: dict,
     gemini_key: str,
     websocket: WebSocket,
-) -> str:
+) -> tuple[str, list[str]]:
     """Read specific codebase files and generate implementation plan.
 
-    NEVER raises — always returns a string.
+    Returns ``(plan_text, relevant_file_paths)``. The router picks the
+    direct-API edit path when the relevant-files list is short enough,
+    since that list is exactly what the single-call edit would operate on.
+
+    NEVER raises — on failure, returns ``("", [])``.
     """
     try:
         await websocket.send_json({
@@ -260,7 +264,10 @@ EXACT CHANGES:
     except Exception:
         pass
 
-    return plan
+    # Only return file paths that actually resolved and were read successfully.
+    # Gemini's filter list is advisory; we hand the router the real set.
+    read_paths = list(all_files.keys())
+    return plan, read_paths
 
 
 # ═══════════════════════════════════════════════════════════════

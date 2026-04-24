@@ -54,7 +54,7 @@ function EngineerMockup({ isVisible }) {
     { num: 2, content: <><span className="pl-4 text-violet-400">const</span> <span className="text-slate-200">branch</span> = <span className="text-violet-400">await</span> <span className="text-slate-200">git.createBranch</span>();</> },
     { num: 3, content: <><span className="pl-4 text-violet-400">const</span> <span className="text-slate-200">changes</span> = <span className="text-violet-400">await</span> <span className="text-slate-200">ai.implement</span>(config);</> },
     { num: 4, content: <span className="pl-4 text-slate-500 italic">// Running 24 test suites...</span> },
-    { num: 5, content: <><span className="pl-4 text-violet-400">await</span> <span className="text-slate-200">git.commit</span>(<span className="text-emerald-400">'feat: add auth flow'</span>);</> },
+    { num: 5, content: <><span className="pl-4 text-violet-400">await</span> <span className="text-slate-200">git.commit</span>(<span className="text-orange-400">'feat: add auth flow'</span>);</> },
     { num: 6, content: <><span className="pl-4 text-violet-400">await</span> <span className="text-slate-200">git.pushAndCreatePR</span>();</> },
     { num: 7, content: <>{'}'}</> },
   ];
@@ -93,11 +93,11 @@ function EngineerMockup({ isVisible }) {
           transition={{ delay: 1.4, duration: 0.5 }}
           className="mt-4 pt-3 border-t border-white/5"
         >
-          <div className="flex items-center gap-2 text-emerald-400 text-[11px] font-medium">
+          <div className="flex items-center gap-2 text-orange-400 text-[11px] font-medium">
             <Check className="w-3.5 h-3.5" />
             <span>PR #247 created → feature/auth-flow → main</span>
           </div>
-          <div className="flex items-center gap-2 text-emerald-400 text-[11px] font-medium mt-1">
+          <div className="flex items-center gap-2 text-orange-400 text-[11px] font-medium mt-1">
             <Check className="w-3.5 h-3.5" />
             <span>All 24 tests passing · 0 lint errors</span>
           </div>
@@ -167,7 +167,7 @@ function DocsMockup({ isVisible }) {
                 <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 mt-2">{item.title}</div>
               )}
               {item.type === 'code' && (
-                <div className="bg-slate-900 dark:bg-slate-800 text-emerald-400 text-[10px] px-2.5 py-1.5 rounded-md font-mono">
+                <div className="bg-slate-900 dark:bg-slate-800 text-orange-400 text-[10px] px-2.5 py-1.5 rounded-md font-mono">
                   $ {item.title}
                 </div>
               )}

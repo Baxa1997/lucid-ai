@@ -713,11 +713,21 @@ async def websocket_agent(websocket: WebSocket):
                                         logger.warning("bg_preview: could not clear stale dir %s: %s", _tmp, _rm_err)
 
                                 os.makedirs(_tmp, exist_ok=True)
-                                _gh_token = (
-                                    os.environ.get("PLATFORM_GITHUB_TOKEN", "")
-                                    or (session.git_token if session else "")
-                                    or ""
-                                )
+                                # Token priority matters:
+                                # - Platform repos (wizard-generated): use
+                                #   PLATFORM_GITHUB_TOKEN — it owns those repos.
+                                # - User-imported repos: the user's token is the
+                                #   only one with access; PLATFORM_GITHUB_TOKEN
+                                #   would 404 against a private user repo.
+                                _user_repo_only = bool(_user_repo) and not bool(_platform_repo)
+                                if _user_repo_only:
+                                    _gh_token = (session.git_token if session else "") or ""
+                                else:
+                                    _gh_token = (
+                                        os.environ.get("PLATFORM_GITHUB_TOKEN", "")
+                                        or (session.git_token if session else "")
+                                        or ""
+                                    )
                                 _auth_url = (
                                     _repo_to_clone.replace("https://", f"https://x-access-token:{_gh_token}@")
                                     if _gh_token else _repo_to_clone

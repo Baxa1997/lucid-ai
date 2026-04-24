@@ -52,7 +52,7 @@ export default function Footer() {
           {/* Brand column */}
           <div className="lg:w-[260px] shrink-0">
             <Link href="/" className="flex items-center gap-2 mb-4">
-              <div className="w-7 h-7 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-lg flex items-center justify-center">
+              <div className="w-7 h-7 bg-gradient-to-br from-[#dc5426] to-orange-500 rounded-lg flex items-center justify-center">
                 <Box className="w-4 h-4 text-white stroke-[2.5]" />
               </div>
               <span className="text-[15px] font-bold text-slate-900 dark:text-white tracking-tight">Lucid AI</span>

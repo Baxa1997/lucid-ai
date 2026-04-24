@@ -78,8 +78,8 @@ function PlanReviewPanel({planData, onConfirm, onReject}) {
   if (confirmed) {
     return (
       <div className="flex flex-col items-center justify-center h-full bg-white dark:bg-[#0d1117] gap-4">
-        <div className="w-14 h-14 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center">
-          <Check className="w-7 h-7 text-emerald-500" />
+        <div className="w-14 h-14 rounded-full bg-orange-100 dark:bg-orange-900/30 flex items-center justify-center">
+          <Check className="w-7 h-7 text-[#dc5426]" />
         </div>
         <p className="text-[15px] font-semibold text-slate-800 dark:text-slate-100">
           Plan confirmed — building your project...
@@ -94,8 +94,8 @@ function PlanReviewPanel({planData, onConfirm, onReject}) {
   if (rejected) {
     return (
       <div className="flex flex-col items-center justify-center h-full bg-white dark:bg-[#0d1117] gap-4">
-        <div className="w-14 h-14 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center">
-          <Sparkles className="w-7 h-7 text-emerald-500" />
+        <div className="w-14 h-14 rounded-full bg-orange-100 dark:bg-orange-900/30 flex items-center justify-center">
+          <Sparkles className="w-7 h-7 text-[#dc5426]" />
         </div>
         <p className="text-[15px] font-semibold text-slate-800 dark:text-slate-100">
           Re-researching with your direction...
@@ -109,7 +109,7 @@ function PlanReviewPanel({planData, onConfirm, onReject}) {
       {/* Header */}
       <div className="shrink-0 px-8 pt-10 pb-6 border-b border-slate-100 dark:border-[#1c2128]">
         <div className="flex items-center gap-3 mb-2">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-sm shadow-emerald-500/20">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#dc5426] to-orange-600 flex items-center justify-center shadow-sm shadow-orange-500/20">
             <Sparkles className="w-4.5 h-4.5 text-white" />
           </div>
           <span className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">
@@ -156,7 +156,7 @@ function PlanReviewPanel({planData, onConfirm, onReject}) {
                 <div
                   key={i}
                   className="flex items-start gap-2.5 px-3 py-2 rounded-lg bg-slate-50 dark:bg-[#161b22] border border-slate-100 dark:border-[#2d333b]">
-                  <ArrowRight className="w-3.5 h-3.5 text-emerald-400 dark:text-emerald-500 shrink-0 mt-0.5" />
+                  <ArrowRight className="w-3.5 h-3.5 text-orange-400 dark:text-[#dc5426] shrink-0 mt-0.5" />
                   <span className="text-[13px] leading-snug">
                     <span className="font-medium text-slate-800 dark:text-slate-100">
                       {typeof p === "string" ? p : p.name}
@@ -222,7 +222,7 @@ function PlanReviewPanel({planData, onConfirm, onReject}) {
           <div className="flex items-center gap-3">
             <button
               onClick={handleConfirm}
-              className="flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-[14px] font-semibold transition-all shadow-sm shadow-emerald-500/20 hover:shadow-emerald-500/30">
+              className="flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-[#dc5426] hover:bg-[#b8421e] text-white text-[14px] font-semibold transition-all shadow-sm shadow-orange-500/20 hover:shadow-orange-500/30">
               <Check className="w-4 h-4" />
               Confirm
             </button>
@@ -242,7 +242,7 @@ function PlanReviewPanel({planData, onConfirm, onReject}) {
               onChange={(e) => setCorrectionText(e.target.value)}
               autoFocus
               placeholder="e.g. Make it a professional accounting body website like acca.org, not an online course platform..."
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] text-[13px] text-slate-700 dark:text-slate-200 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:border-emerald-400 dark:focus:border-emerald-500 resize-none min-h-[72px]"
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] text-[13px] text-slate-700 dark:text-slate-200 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none focus:border-[#dc5426] dark:focus:border-[#dc5426] resize-none min-h-[72px]"
               rows={3}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
@@ -258,7 +258,7 @@ function PlanReviewPanel({planData, onConfirm, onReject}) {
                 className={cn(
                   "flex-1 px-5 py-2.5 rounded-xl text-[13px] font-semibold transition-all",
                   correctionText.trim()
-                    ? "bg-emerald-500 hover:bg-emerald-600 text-white shadow-sm shadow-emerald-500/20"
+                    ? "bg-[#dc5426] hover:bg-[#b8421e] text-white shadow-sm shadow-orange-500/20"
                     : "bg-slate-100 dark:bg-[#21262d] text-slate-400 dark:text-slate-500 cursor-not-allowed",
                 )}>
                 Re-research with this direction
@@ -515,7 +515,7 @@ export default function RightPanel() {
               <div className="h-full overflow-y-auto bg-white dark:bg-[#0d1117] p-6 lg:p-10 custom-scrollbar">
                 <div className="max-w-4xl mx-auto space-y-8">
                   <div className="flex items-center gap-4 border-b border-slate-100 dark:border-[#1c2128] pb-6">
-                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shrink-0">
+                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#dc5426] to-orange-600 flex items-center justify-center shrink-0">
                       <Sparkles className="w-6 h-6 text-white" />
                     </div>
                     <div>
@@ -577,7 +577,7 @@ export default function RightPanel() {
                         )}
                         <a
                           href="mailto:support@lucid.ai"
-                          className="text-[13px] text-emerald-600 dark:text-emerald-400 hover:underline">
+                          className="text-[13px] text-[#dc5426] dark:text-orange-400 hover:underline">
                           Contact support
                         </a>
                       </div>
@@ -628,7 +628,7 @@ export default function RightPanel() {
                   <div className="relative flex-1 min-h-0 flex flex-col bg-[#f1f2f6] dark:bg-[#161b22]">
                     {status === "running" && (
                       <div className="absolute top-0 left-0 right-0 h-[2px] overflow-hidden pointer-events-none z-20">
-                        <div className="absolute inset-y-0 w-1/2 bg-gradient-to-r from-transparent via-emerald-400 to-transparent animate-hmr-slide" />
+                        <div className="absolute inset-y-0 w-1/2 bg-gradient-to-r from-transparent via-orange-400 to-transparent animate-hmr-slide" />
                       </div>
                     )}
                     <div className="relative flex-1 flex flex-col overflow-hidden">

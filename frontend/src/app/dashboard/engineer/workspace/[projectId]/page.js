@@ -936,9 +936,9 @@ function ConversationPageInner({params}) {
               <div className="flex items-center justify-between px-6 pt-6 pb-4">
                 <div className="flex items-center gap-3">
                   {publishConfirmed ? (
-                    <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center">
+                    <div className="w-10 h-10 rounded-xl bg-orange-100 dark:bg-orange-900/30 flex items-center justify-center">
                       <svg
-                        className="w-5 h-5 text-emerald-500"
+                        className="w-5 h-5 text-[#dc5426]"
                         fill="none"
                         viewBox="0 0 24 24"
                         stroke="currentColor"
@@ -1001,7 +1001,7 @@ function ConversationPageInner({params}) {
               <div className="px-6 pb-4">
                 {vercelDeployUrl ? (
                   <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-[#0d1117] border border-slate-200 dark:border-[#2d333b]">
-                    <div className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+                    <div className="w-2 h-2 rounded-full bg-[#dc5426] shrink-0" />
                     <span className="flex-1 text-[13px] font-medium text-slate-700 dark:text-slate-200 truncate">
                       {vercelDeployUrl}
                     </span>
@@ -1017,7 +1017,7 @@ function ConversationPageInner({params}) {
                       {copiedUrl ? (
                         <>
                           <svg
-                            className="w-3.5 h-3.5 text-emerald-500"
+                            className="w-3.5 h-3.5 text-[#dc5426]"
                             fill="none"
                             viewBox="0 0 24 24"
                             stroke="currentColor"
@@ -1106,7 +1106,7 @@ function ConversationPageInner({params}) {
                         vercelDeployUrl &&
                         window.open(vercelDeployUrl, "_blank")
                       }
-                      className="flex-1 h-9 flex items-center justify-center gap-2 rounded-xl text-[13px] font-semibold bg-emerald-500 hover:bg-emerald-600 text-white transition-all shadow-sm shadow-emerald-500/20">
+                      className="flex-1 h-9 flex items-center justify-center gap-2 rounded-xl text-[13px] font-semibold bg-[#dc5426] hover:bg-[#b8421e] text-white transition-all shadow-sm shadow-orange-500/20">
                       <svg
                         className="w-3.5 h-3.5"
                         fill="none"
@@ -1148,7 +1148,7 @@ function ConversationPageInner({params}) {
                   setShowProfileDropdown((v) => !v);
                   setShowAppDropdown(false);
                 }}
-                className="w-8 h-8 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shrink-0 hover:opacity-90 transition-opacity">
+                className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#dc5426] to-orange-600 flex items-center justify-center shrink-0 hover:opacity-90 transition-opacity">
                 <svg width="16" height="14" viewBox="0 0 16 14" fill="none">
                   <rect y="0" width="16" height="2" rx="1" fill="white" />
                   <rect y="6" width="16" height="2" rx="1" fill="white" />
@@ -1161,7 +1161,7 @@ function ConversationPageInner({params}) {
                 <div className="absolute top-full left-0 mt-1.5 w-[272px] bg-white dark:bg-[#1c1c1e] border border-[#e5e7eb] dark:border-[#2d333b] rounded-xl shadow-lg z-50 overflow-hidden">
                   {/* User info header */}
                   <div className="flex items-center gap-3 px-4 py-3 border-b border-[#f0f0f0] dark:border-[#2d333b]">
-                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shrink-0 text-white font-bold text-[15px]">
+                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#dc5426] to-orange-600 flex items-center justify-center shrink-0 text-white font-bold text-[15px]">
                       {userName ? userName.charAt(0).toUpperCase() : "U"}
                     </div>
                     <div className="min-w-0">
@@ -1195,9 +1195,9 @@ function ConversationPageInner({params}) {
                         Message credits
                       </p>
                       <div className="flex items-center gap-3">
-                        <div className="flex-1 h-[8px] bg-emerald-100 dark:bg-slate-700 rounded-full overflow-hidden">
+                        <div className="flex-1 h-[8px] bg-orange-100 dark:bg-slate-700 rounded-full overflow-hidden">
                           <div
-                            className="h-full bg-emerald-500 rounded-full"
+                            className="h-full bg-[#dc5426] rounded-full"
                             style={{width: "0%"}}
                           />
                         </div>
@@ -1231,7 +1231,7 @@ function ConversationPageInner({params}) {
                       <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-2">
                         Renews monthly
                       </p>
-                      <button className="text-[13px] font-semibold text-emerald-600 hover:text-emerald-700 mt-1 transition-colors block">
+                      <button className="text-[13px] font-semibold text-[#dc5426] hover:text-[#b8421e] mt-1 transition-colors block">
                         Upgrade your plan
                       </button>
                     </div>
@@ -1289,7 +1289,7 @@ function ConversationPageInner({params}) {
                     : "hover:bg-slate-100 dark:hover:bg-white/[0.06]",
                 )}>
                 {/* App icon — rounded square like Base44 */}
-                <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shrink-0 overflow-hidden">
+                <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#dc5426] to-orange-600 flex items-center justify-center shrink-0 overflow-hidden">
                   <Sparkles className="w-3.5 h-3.5 text-white" />
                 </div>
                 <div className="flex flex-col justify-center min-w-0 text-left">
@@ -1416,9 +1416,9 @@ function ConversationPageInner({params}) {
               className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-[13px] font-semibold transition-all ml-1"
               style={{
                 background:
-                  "linear-gradient(85deg, rgba(5,150,105,0.18) -70.38%, rgba(13,148,136,0.12) 98.95%)",
-                border: "1px solid rgba(5,150,105,0.35)",
-                color: "#059669",
+                  "linear-gradient(85deg, rgba(220,84,38,0.15) -70.38%, rgba(234,88,12,0.10) 98.95%)",
+                border: "1px solid rgba(220,84,38,0.35)",
+                color: "#dc5426",
               }}>
               <Diamond className="w-3.5 h-3.5 fill-current" />
               Upgrade
@@ -1503,7 +1503,7 @@ function ConversationPageInner({params}) {
                   className={cn(
                     "w-[3px] h-12 rounded-full transition-all duration-150",
                     chatDragging
-                      ? "bg-gradient-to-br from-emerald-500 to-teal-600 opacity-100 scale-y-110"
+                      ? "bg-gradient-to-br from-[#dc5426] to-orange-600 opacity-100 scale-y-110"
                       : "bg-slate-300 dark:bg-slate-600 opacity-0 group-hover:opacity-100",
                   )}
                 />

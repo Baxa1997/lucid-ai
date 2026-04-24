@@ -47,7 +47,7 @@ export async function listConversations() {
 
   const { data, error } = await supabase
     .from('chat_sessions')
-    .select('project_id, user_repo_url, user_repo_provider, title, created_at, updated_at')
+    .select('project_id, user_repo_url, user_repo_provider, title, created_at, updated_at, is_active')
     .eq('user_id', user.id)
     .order('updated_at', { ascending: false });
 
@@ -58,6 +58,7 @@ export async function listConversations() {
   return (data || [])
     .filter(row => {
       if (!row.project_id) return false;
+      if (row.is_active === false) return false;
       if (seen.has(row.project_id)) return false;
       seen.add(row.project_id);
       return true;
@@ -128,29 +129,30 @@ export async function updateConversation(conversationId, updates) {
 }
 
 /**
- * Delete a conversation — removes all chat_sessions (and cascaded messages)
- * for the given project_id.
+ * Hide a conversation from the conversations list without deleting the project.
+ * Sets is_active = false so it no longer appears in listConversations,
+ * but the chat_sessions row (and its project data) remains intact.
  */
 export async function deleteConversation(conversationId) {
   const supabase = getSupabaseBrowserClient();
 
   const { error } = await supabase
     .from('chat_sessions')
-    .delete()
+    .update({ is_active: false })
     .eq('project_id', conversationId);
 
   return !error;
 }
 
 /**
- * Delete multiple conversations at once.
+ * Hide multiple conversations at once without deleting the projects.
  */
 export async function deleteConversations(conversationIds) {
   const supabase = getSupabaseBrowserClient();
 
   const { error } = await supabase
     .from('chat_sessions')
-    .delete()
+    .update({ is_active: false })
     .in('project_id', conversationIds);
 
   return !error;

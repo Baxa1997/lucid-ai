@@ -48,10 +48,10 @@ const models = [
     provider: 'OpenAI',
     specialty: 'Versatility & Creativity',
     description: 'The gold standard for general-purpose AI. Excels at understanding developer intent, generating clean readable code, and creative problem-solving across any language.',
-    color: 'from-emerald-500 to-teal-600',
-    bgAccent: 'bg-emerald-500/10 dark:bg-emerald-500/5',
-    borderAccent: 'border-emerald-200 dark:border-emerald-500/20',
-    textAccent: 'text-emerald-600 dark:text-emerald-400',
+    color: 'from-[#dc5426] to-orange-500',
+    bgAccent: 'bg-orange-500/10 dark:bg-orange-500/5',
+    borderAccent: 'border-orange-200 dark:border-orange-500/20',
+    textAccent: 'text-[#dc5426] dark:text-orange-400',
     icon: Cpu,
     subModels: ['GPT-4.1', 'GPT-4o', 'GPT-4o mini', 'o3-mini'],
     strengths: [
@@ -86,7 +86,7 @@ const agents = [
     title: 'Test Agent',
     description: 'Generates comprehensive unit and integration tests',
     icon: Shield,
-    gradient: 'from-emerald-500 to-teal-600',
+    gradient: 'from-[#dc5426] to-orange-500',
   },
 ];
 
@@ -287,7 +287,7 @@ export default function AIPowerSection() {
       >
         <div className="flex items-center gap-4">
           <div className="flex -space-x-2">
-            {['from-violet-500 to-indigo-600', 'from-blue-500 to-cyan-500', 'from-amber-500 to-orange-600', 'from-emerald-500 to-teal-600'].map((g, i) => (
+            {['from-violet-500 to-indigo-600', 'from-blue-500 to-cyan-500', 'from-amber-500 to-orange-600', 'from-[#dc5426] to-orange-500'].map((g, i) => (
               <div key={i} className={cn("w-8 h-8 rounded-full bg-gradient-to-br border-2 border-white dark:border-slate-950 flex items-center justify-center text-white text-[10px] font-bold", g)}>
                 {['AI', 'ML', 'LM', 'AG'][i]}
               </div>

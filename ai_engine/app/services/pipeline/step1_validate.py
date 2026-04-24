@@ -160,6 +160,10 @@ async def validate_inputs(
         token = None
         repo_url = None
         scratch_mode = False
+        # Tracks whether the repo we will operate on was created by our
+        # platform (wizard flow). Used by the edit-mode router to pick the
+        # direct-API single-call path vs the agentic SDK path.
+        platform_repo_url: str = ""
 
         if git_provider == "github":
             repo = user.get("github_repo")
@@ -223,6 +227,7 @@ async def validate_inputs(
                     scratch_mode = True
                 elif _db_result and _db_result.data and _db_result.data.get("platform_repo_url"):
                     existing_repo_url = _db_result.data["platform_repo_url"]
+                    platform_repo_url = existing_repo_url
                     # Use module-level PLATFORM_GITHUB_TOKEN (loaded at startup)
                     platform_token = PLATFORM_GITHUB_TOKEN
                     if platform_token:
@@ -328,6 +333,10 @@ async def validate_inputs(
             "package_manager": user.get("package_manager", "npm"),
             "template_clone_url": "",
             "template_repo_html_url": "",
+            # Set only when the follow-up task targets a wizard-created
+            # repo we generated ourselves. Edit-mode router uses this to
+            # decide direct-API vs SDK — external repos never set it.
+            "platform_repo_url": platform_repo_url,
         }
 
         mode_label = " (scratch mode)" if scratch_mode else ""

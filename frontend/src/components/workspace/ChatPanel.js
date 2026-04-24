@@ -277,13 +277,13 @@ export default function ChatPanel() {
       {/* Full-page drag-and-drop overlay (fixed, covers whole viewport) */}
       {isDragging && (
         <div
-          className="fixed inset-0 z-[100] bg-emerald-500/10 dark:bg-emerald-500/15 backdrop-blur-[2px] border-2 border-dashed border-emerald-400 dark:border-emerald-500 flex items-center justify-center"
+          className="fixed inset-0 z-[100] bg-orange-500/10 dark:bg-orange-500/15 backdrop-blur-[2px] border-2 border-dashed border-orange-400 dark:border-orange-500 flex items-center justify-center"
           onDragLeave={handleDragLeave}
           onDragOver={handleDragOver}
           onDrop={handleDrop}>
-          <div className="flex flex-col items-center gap-3 bg-white/90 dark:bg-slate-900/90 rounded-2xl px-8 py-6 shadow-xl border border-emerald-200 dark:border-emerald-800">
-            <div className="w-14 h-14 rounded-2xl bg-emerald-50 dark:bg-emerald-500/15 border border-emerald-200 dark:border-emerald-700 flex items-center justify-center">
-              <FileImage className="w-6 h-6 text-emerald-500" />
+          <div className="flex flex-col items-center gap-3 bg-white/90 dark:bg-slate-900/90 rounded-2xl px-8 py-6 shadow-xl border border-orange-200 dark:border-orange-800">
+            <div className="w-14 h-14 rounded-2xl bg-orange-50 dark:bg-orange-500/15 border border-orange-200 dark:border-orange-700 flex items-center justify-center">
+              <FileImage className="w-6 h-6 text-[#dc5426]" />
             </div>
             <p className="text-sm font-bold text-slate-800 dark:text-slate-200">Drop images here</p>
             <p className="text-xs text-slate-400 dark:text-slate-500">PNG, JPG, GIF up to 5 files</p>
@@ -306,7 +306,7 @@ export default function ChatPanel() {
 
           {!convLoading && messages.length === 0 && status === 'ready' && !isWizardMode && (
             <div className="flex flex-col items-center justify-center py-20 text-center px-6">
-              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center mb-4 shadow-sm shadow-emerald-500/20">
+              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-[#dc5426] to-orange-600 flex items-center justify-center mb-4 shadow-sm shadow-orange-500/20">
                 <Sparkles className="w-5 h-5 text-white" />
               </div>
               <p className="text-[14px] font-medium text-slate-500 dark:text-slate-400">
@@ -378,7 +378,7 @@ export default function ChatPanel() {
             const secondary = status === 'running' ? (agentStatus?.subtext || '') : '';
             return (
               <div className="flex items-start gap-2.5 px-4 py-2.5 animate-in fade-in duration-500">
-                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shrink-0 shadow-sm shadow-emerald-500/15 mt-0.5">
+                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-[#dc5426] to-orange-600 flex items-center justify-center shrink-0 shadow-sm shadow-orange-500/15 mt-0.5">
                   <Sparkles className="w-3 h-3 text-white" />
                 </div>
                 <div className="flex-1 min-w-0">
@@ -390,7 +390,7 @@ export default function ChatPanel() {
                       {[0, 200, 400].map((delay) => (
                         <span
                           key={delay}
-                          className="w-1 h-1 rounded-full bg-emerald-400/70 animate-bounce"
+                          className="w-1 h-1 rounded-full bg-orange-400/70 animate-bounce"
                           style={{ animationDelay: `${delay}ms`, animationDuration: '1s' }}
                         />
                       ))}
@@ -514,11 +514,11 @@ export default function ChatPanel() {
                     <div className="border-t border-slate-100 dark:border-[#2d333b]" />
                     <div className="py-1">
                       <button type="button" onClick={() => setWebSearchEnabled(!webSearchEnabled)} className="w-full flex items-center gap-3 px-3 py-2.5 text-[13px] text-left hover:bg-slate-50 dark:hover:bg-white/[0.04]">
-                        <Globe className={cn('w-4 h-4', webSearchEnabled ? 'text-emerald-500' : 'text-slate-400')} />
-                        <span className={cn('flex-1 font-medium', webSearchEnabled ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-700 dark:text-slate-300')}>
+                        <Globe className={cn('w-4 h-4', webSearchEnabled ? 'text-[#dc5426]' : 'text-slate-400')} />
+                        <span className={cn('flex-1 font-medium', webSearchEnabled ? 'text-[#dc5426] dark:text-orange-400' : 'text-slate-700 dark:text-slate-300')}>
                           Web search
                         </span>
-                        {webSearchEnabled && <Check className="w-4 h-4 text-emerald-500" />}
+                        {webSearchEnabled && <Check className="w-4 h-4 text-[#dc5426]" />}
                       </button>
                     </div>
                     {showFigmaInput && (
@@ -528,13 +528,13 @@ export default function ChatPanel() {
                           value={figmaUrl}
                           onChange={(e) => setFigmaUrl(e.target.value)}
                           placeholder="https://figma.com/file/..."
-                          className="w-full text-[12px] px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] text-slate-700 dark:text-slate-300 outline-none focus:border-emerald-400"
+                          className="w-full text-[12px] px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] text-slate-700 dark:text-slate-300 outline-none focus:border-[#dc5426]"
                           onKeyDown={(e) => e.key === 'Enter' && handleFigmaSubmit()}
                         />
                         <button
                           type="button"
                           onClick={handleFigmaSubmit}
-                          className="mt-1.5 w-full text-[12px] font-semibold bg-emerald-500 text-white rounded-lg py-1.5 hover:bg-emerald-600 transition-colors">
+                          className="mt-1.5 w-full text-[12px] font-semibold bg-[#dc5426] text-white rounded-lg py-1.5 hover:bg-[#b8421e] transition-colors">
                           Add Figma link
                         </button>
                       </div>

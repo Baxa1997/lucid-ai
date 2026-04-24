@@ -514,11 +514,22 @@ Stop when fully done.
     except Exception as e:
         logger.error("chmod failed: %s", e)
 
+    # Tighten max_turns: Gemini's files_estimate is a better predictor of
+    # how many turns the agent actually needs than the old blanket
+    # developer-tier floor. Each turn is a Read/Edit/Write iteration, so
+    # ~3 turns per file plus 2 slack turns covers the happy path. We clamp
+    # to [4, 20] so small edits can't spin up 25-turn sessions and huge
+    # tasks still get a reasonable ceiling.
+    files_estimate = max(1, int(classification.get("files_estimate", 2)))
+    classifier_max = int(classification.get("max_turns", 10))
+    dynamic_cap = min(20, max(4, files_estimate * 3 + 2))
+    effective_max_turns = min(classifier_max, dynamic_cap)
+
     options = ClaudeCodeOptions(
         cwd=str(workspace_path),
         env=env,
         model=str(classification["model_id"]),
-        max_turns=int(classification.get("max_turns", 10)),
+        max_turns=effective_max_turns,
         permission_mode="bypassPermissions",
         allowed_tools=["Read", "Write", "Edit", "MultiEdit", "Bash", "Glob", "Grep", "LS"],
         disallowed_tools=[
@@ -527,8 +538,12 @@ Stop when fully done.
         ],
         append_system_prompt=system + anti_loop,
     )
+    logger.info(
+        "execute_with_claude: effective_max_turns=%d (classifier=%d, files_estimate=%d)",
+        effective_max_turns, classifier_max, files_estimate,
+    )
 
-    max_turns = int(classification.get("max_turns", 10))
+    max_turns = effective_max_turns
     timeout_seconds = max(120, max_turns * 30)
     max_retries = 2
     last_error = None

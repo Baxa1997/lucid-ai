@@ -45,7 +45,7 @@ export default function FileViewer({ path, content, loading, onContentChange }) 
             title="Copy content"
           >
             {copied ? (
-              <Check className="w-4 h-4 text-emerald-500" />
+              <Check className="w-4 h-4 text-[#dc5426]" />
             ) : (
               <Copy className="w-4 h-4" />
             )}

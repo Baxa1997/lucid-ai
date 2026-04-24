@@ -75,7 +75,7 @@ export default function LoginPage() {
 
       {/* Logo — back to landing page */}
       <Link href="/" className="absolute top-5 left-5 z-20 flex items-center gap-2 hover:opacity-80 transition-opacity">
-        <div className="w-8 h-8 bg-gradient-to-br from-blue-600 to-blue-700 rounded-lg flex items-center justify-center">
+        <div className="w-8 h-8 bg-gradient-to-br from-[#dc5426] to-orange-500 rounded-lg flex items-center justify-center">
           <Zap className="w-4 h-4 text-white fill-current" />
         </div>
         <span className="text-[15px] font-bold text-slate-900 dark:text-slate-100 hidden sm:inline">Lucid AI</span>
@@ -92,7 +92,7 @@ export default function LoginPage() {
         {/* Logo */}
         <div className="mb-8 flex flex-col items-center text-center">
           <div className="relative mb-4">
-            <div className="w-14 h-14 bg-gradient-to-br from-blue-600 to-blue-700 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-600/20">
+            <div className="w-14 h-14 bg-gradient-to-br from-[#dc5426] to-orange-500 rounded-2xl flex items-center justify-center shadow-lg shadow-orange-500/20">
               <Zap className="w-7 h-7 text-white fill-current" />
             </div>
           </div>

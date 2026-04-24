@@ -190,7 +190,7 @@ function PlanBubble({ msg }) {
                 <div className="flex items-center gap-2">
                   <button
                     onClick={handleConfirm}
-                    className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-[13px] font-semibold transition-all shadow-sm shadow-emerald-500/20 hover:shadow-emerald-500/30"
+                    className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-[#dc5426] hover:bg-[#b8421e] text-white text-[13px] font-semibold transition-all shadow-sm shadow-orange-500/20 hover:shadow-orange-500/30"
                   >
                     <Check className="w-3.5 h-3.5" />
                     Confirm
@@ -247,9 +247,9 @@ function PlanBubble({ msg }) {
 
           {/* Confirmed state */}
           {requiresConfirmation && isConfirmed && (
-            <div className="px-4 py-2.5 bg-emerald-50 dark:bg-emerald-950/20 border-t border-emerald-100 dark:border-emerald-900/30 flex items-center gap-2">
-              <Check className="w-3.5 h-3.5 text-emerald-500" />
-              <span className="text-[12px] font-medium text-emerald-600 dark:text-emerald-400">Plan confirmed — building your project...</span>
+            <div className="px-4 py-2.5 bg-orange-50 dark:bg-orange-950/20 border-t border-orange-100 dark:border-orange-900/30 flex items-center gap-2">
+              <Check className="w-3.5 h-3.5 text-[#dc5426]" />
+              <span className="text-[12px] font-medium text-[#dc5426] dark:text-orange-400">Plan confirmed — building your project...</span>
             </div>
           )}
 
@@ -270,7 +270,7 @@ function PlanBubble({ msg }) {
           <div className="space-y-1 mb-1">
             {fileWrites.map((fw, i) => (
               <div key={i} className="flex items-center gap-2 text-[12px] text-slate-500 dark:text-slate-400 animate-in fade-in duration-200">
-                <FileCheck2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                <FileCheck2 className="w-3.5 h-3.5 text-[#dc5426] shrink-0" />
                 <span>Wrote <span className="font-mono text-slate-600 dark:text-slate-300">{fw.filename}</span></span>
               </div>
             ))}
@@ -336,7 +336,7 @@ function renderAgentContent(text) {
     if (inChangedFiles && line.trim()) {
       const trimmed = line.trim();
       let color = 'text-slate-500'; let icon = '•';
-      if (trimmed.startsWith('+') || trimmed.includes('(new)'))      { color = 'text-emerald-500'; icon = '+'; }
+      if (trimmed.startsWith('+') || trimmed.includes('(new)'))      { color = 'text-[#dc5426]'; icon = '+'; }
       else if (trimmed.startsWith('~') || trimmed.includes('(modified)')) { color = 'text-amber-500';  icon = '~'; }
       else if (trimmed.startsWith('-') || trimmed.includes('(deleted)'))  { color = 'text-red-400';    icon = '−'; }
       const fileName = trimmed.replace(/^[+~-]\s*/, '').replace(/\(new\)|\(modified\)|\(deleted\)/, '').trim();
@@ -463,7 +463,7 @@ export default function MessageBubble({ msg, isLatest }) {
               <span>{relativeTime(msg.ts)}</span>
               <div className="flex items-center gap-0.5 ml-auto">
                 <button onClick={handleCopy} className="p-0.5 hover:text-slate-600 dark:hover:text-slate-300 transition-colors" title="Copy">
-                  {copied ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
+                  {copied ? <Check className="w-3 h-3 text-[#dc5426]" /> : <Copy className="w-3 h-3" />}
                 </button>
                 <button className="p-0.5 hover:text-slate-600 dark:hover:text-slate-300 transition-colors" title="Edit">
                   <Pencil className="w-3 h-3" />
@@ -483,7 +483,7 @@ export default function MessageBubble({ msg, isLatest }) {
   if (msg.role === 'push_result') {
     return (
       <div className="flex items-start gap-3 px-4 py-2 animate-in fade-in duration-300">
-        <div className="mt-0.5 text-emerald-500 shrink-0">
+        <div className="mt-0.5 text-[#dc5426] shrink-0">
           <Check className="w-5 h-5" />
         </div>
         <div className="flex-1 space-y-1.5">
