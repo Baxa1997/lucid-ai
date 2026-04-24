@@ -23,6 +23,7 @@ import {
   HelpCircle,
   Gift,
   Share2,
+  CreditCard,
 } from "lucide-react";
 import Link from "next/link";
 import {useRouter, usePathname} from "next/navigation";
@@ -73,6 +74,7 @@ const navItems = [
     href: "/dashboard/engineer/conversations",
   },
   {label: "Settings", icon: Settings, href: "/dashboard/engineer/settings"},
+  {label: "Billing", icon: CreditCard, href: "/dashboard/engineer/billing"},
 ];
 
 function Tooltip({children, label, show}) {
@@ -524,7 +526,7 @@ export default function EngineerLayout({children}) {
                     <button
                       onClick={() => router.push("/pricing")}
                       className="w-full flex items-center justify-center gap-1.5 py-1.5 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-[12px] font-semibold transition-colors">
-                      Subscribe
+                      Upgrade
                     </button>
                   </div>
                 </div>

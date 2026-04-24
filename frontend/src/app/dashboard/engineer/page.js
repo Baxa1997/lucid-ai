@@ -34,6 +34,8 @@ import {
   Download,
   GitBranch,
   Gitlab,
+  X,
+  CreditCard,
 } from "lucide-react";
 import {useRouter} from "next/navigation";
 import {useState, useEffect, useRef} from "react";
@@ -372,6 +374,9 @@ export default function EngineerDashboardPage() {
   // shows a spinner without affecting the wizard's launch state.
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState("");
+  const [subscription, setSubscription] = useState(null);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [pendingAction, setPendingAction] = useState(null); // 'build' | 'import'
   const [platformRepos, setPlatformRepos] = useState([]);
   const [platformLoading, setPlatformLoading] = useState(true);
   const [conversations, setConversations] = useState([]);
@@ -404,6 +409,10 @@ export default function EngineerDashboardPage() {
       .then((data) => setConversations(data || []))
       .catch(() => setConversations([]))
       .finally(() => setConvoLoading(false));
+    fetch("/api/stripe/subscription")
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => { if (data) setSubscription(data); })
+      .catch(() => {});
     // Check for pre-filled template prompt
     try {
       const templatePrompt = sessionStorage.getItem("lucid_template_prompt");
@@ -495,9 +504,25 @@ export default function EngineerDashboardPage() {
   })();
 
   /* ── Build from prompt ── */
-  const handleBuildFromPrompt = async () => {
+  const isAtProjectLimit = () => {
+    if (!subscription) return false;
+    if (subscription.isPaid) return false;
+    const limit = subscription.limits?.maxProjects ?? 1;
+    return (subscription.usage?.projectsCreated ?? 0) >= limit;
+  };
+
+  const handleSkipUpgrade = () => {
+    const action = pendingAction;
+    setPendingAction(null);
+    setShowUpgradeModal(false);
+    if (action === 'build') handleBuildFromPrompt(true);
+    else if (action === 'import') handleImportExistingRepo(true);
+  };
+
+  const handleBuildFromPrompt = async (force = false) => {
     const text = promptText.trim();
     if (!text) return;
+    if (!force && isAtProjectLimit()) { setPendingAction('build'); setShowUpgradeModal(true); return; }
     setIsLaunching(true);
     try {
       // Resolve stack synchronously from user selection (no API call)
@@ -546,8 +571,9 @@ export default function EngineerDashboardPage() {
      sees `user_repo_url`, and fires _background_preview to clone + install
      + start the dev server automatically (package manager is auto-detected
      from the lockfile — pnpm-lock.yaml > yarn.lock > package-lock.json). */
-  const handleImportExistingRepo = async () => {
+  const handleImportExistingRepo = async (force = false) => {
     if (!selectedRepo || !selectedBranch) return;
+    if (!force && isAtProjectLimit()) { setPendingAction('import'); setShowUpgradeModal(true); return; }
     setIsImporting(true);
     setImportError("");
     try {
@@ -594,6 +620,50 @@ export default function EngineerDashboardPage() {
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   return (
     <div className="h-full bg-[#fefcfa] dark:bg-[#0d1117] flex flex-col">
+      {/* ── Upgrade Modal ── */}
+      {showUpgradeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="relative w-full max-w-md bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200 dark:border-[#2d333b] shadow-2xl p-8">
+            <button
+              onClick={() => setShowUpgradeModal(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06]"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <div className="w-12 h-12 rounded-2xl bg-orange-50 dark:bg-orange-500/10 flex items-center justify-center mb-5">
+              <Rocket className="w-6 h-6 text-[#dc5426]" />
+            </div>
+            <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-2">
+              Upgrade to Pro
+            </h2>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
+              You&apos;ve used your 1 free project. Upgrade to Pro for unlimited projects, code export, and more.
+            </p>
+            <div className="space-y-2 mb-6">
+              {["Unlimited projects", "Code export to GitHub & GitLab", "CI/CD automation", "Advanced AI templates"].map((f) => (
+                <div key={f} className="flex items-center gap-2.5 text-sm text-slate-600 dark:text-slate-300">
+                  <div className="w-4 h-4 rounded-full bg-emerald-100 dark:bg-emerald-500/20 flex items-center justify-center shrink-0">
+                    <svg viewBox="0 0 10 10" className="w-2.5 h-2.5 text-emerald-600 dark:text-emerald-400"><path d="M2 5l2 2 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/></svg>
+                  </div>
+                  {f}
+                </div>
+              ))}
+            </div>
+            <a
+              href="/dashboard/engineer/billing"
+              className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 bg-gradient-to-r from-[#dc5426] to-orange-500 text-white hover:opacity-90 shadow-sm shadow-orange-600/20 transition-all active:scale-[0.98]"
+            >
+              <CreditCard className="w-4 h-4" /> View Plans — from $24/mo
+            </a>
+            <button
+              onClick={handleSkipUpgrade}
+              className="w-full mt-3 py-2.5 rounded-xl text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-all"
+            >
+              Skip for now
+            </button>
+          </div>
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto">
         {/* ── HOME HERO ── */}
         <div className="max-w-[800px] mx-auto px-8 pt-[52px] pb-10 text-center">

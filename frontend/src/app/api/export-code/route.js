@@ -6,6 +6,7 @@ import { generateNginxConf } from '@/lib/templates/nginx';
 import { generateGitlabCI } from '@/lib/templates/cicd';
 import { generateMakefile } from '@/lib/templates/makefile';
 import { generateOpsFolder } from '@/lib/templates/ops';
+import { canExportCode } from '@/lib/subscription';
 
 // ─────────────────────────────────────────────────────────
 //  POST /api/export-code
@@ -31,6 +32,15 @@ export async function POST(req) {
   }
 
   const { projectId, provider, repoName, isPrivate = true, includeCICD = false, gitlabInviteUser, godaddyAccountId } = body;
+
+  // ── Pro gate: export is a paid feature ─────────────────
+  const exportCheck = await canExportCode(ctx.userId);
+  if (!exportCheck.allowed) {
+    return NextResponse.json(
+      { error: exportCheck.reason, upgradeRequired: true },
+      { status: 403 }
+    );
+  }
 
   if (!projectId || !provider || !repoName?.trim()) {
     return NextResponse.json(

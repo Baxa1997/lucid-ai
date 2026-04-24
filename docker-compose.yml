@@ -21,6 +21,16 @@ services:
       - AUTH_SECRET=${AUTH_SECRET}
       - AUTH_URL=http://localhost:3000
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      # ── Stripe ─────────────────────────────────────────
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
+      - NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      - STRIPE_PRO_MONTHLY_PRICE_ID=${STRIPE_PRO_MONTHLY_PRICE_ID}
+      - STRIPE_PRO_YEARLY_PRICE_ID=${STRIPE_PRO_YEARLY_PRICE_ID}
+      # ── App URL (for Stripe redirect) ──────────────────
+      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      # ── Admin access ───────────────────────────────────
+      - ADMIN_EMAILS=${ADMIN_EMAILS}
     depends_on:
       - ai_engine
     ulimits:
