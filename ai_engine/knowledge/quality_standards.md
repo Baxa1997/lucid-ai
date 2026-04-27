@@ -133,11 +133,12 @@ Use these via Tailwind classes:
 | Section component | `HeroSection.jsx` | `HeroSection.vue` |
 | Shared component | `Button.jsx` | `BaseButton.vue` |
 | Layout | `Layout.jsx` | `AppLayout.vue` |
-| Hook | `useAuth.js` | `useAuth.ts` |
-| Store | `authStore.js` | `auth.ts` |
-| Utility | `formatDate.js` | `formatDate.ts` |
-| Constants | `constants.js` | `constants.ts` |
-| Types | `types.ts` | `types.ts` |
+| Hook | `useAuth.js` | `useAuth.js` |
+| Store | `authStore.js` | `auth.js` |
+| Utility | `formatDate.js` | `formatDate.js` |
+| Constants | `constants.js` | `constants.js` |
+
+**No `.ts` / `.tsx` files** — this project uses plain JavaScript (.js / .jsx) throughout.
 
 ---
 

@@ -1,6 +1,11 @@
 # Skill: Forms (react-hook-form + zod, shadcn/ui)
 
-All admin/CRM/SaaS forms use this exact pattern. Never use uncontrolled inputs.
+ALL forms — admin panels, landing pages, consumer websites, contact/registration forms — use this exact pattern. Never use uncontrolled inputs.
+
+## CRITICAL: NEVER USE NATIVE HTML `<select>`
+Native `<select>` is **FORBIDDEN**. It is un-styled, looks broken compared to shadcn inputs, and produces inconsistent UI.
+ALWAYS use the shadcn/ui `Select` component with `SelectTrigger`, `SelectContent`, `SelectItem`, `SelectValue`.
+This rule applies to EVERY form on every page type — admin, landing, contact, registration, booking, filter, etc.
 
 ## Install (already in skeleton)
 ```
@@ -31,8 +36,6 @@ const schema = z.object({
   price:    z.coerce.number().min(0, 'Price must be positive'),
 })
 
-type FormValues = z.infer<typeof schema>
-
 // 2. Form component
 export default function EntityForm({ initialData, onSubmit: onSuccess }) {
   const {
@@ -41,7 +44,7 @@ export default function EntityForm({ initialData, onSubmit: onSuccess }) {
     setValue,
     watch,
     formState: { errors, isSubmitting },
-  } = useForm<FormValues>({
+  } = useForm({
     resolver: zodResolver(schema),
     defaultValues: initialData ?? {
       name: '', email: '', status: 'active', notes: '', price: 0,
@@ -86,7 +89,7 @@ export default function EntityForm({ initialData, onSubmit: onSuccess }) {
         <Label>Status <span className="text-destructive">*</span></Label>
         <Select
           defaultValue={watch('status')}
-          onValueChange={(val) => setValue('status', val as any, { shouldValidate: true })}
+          onValueChange={(val) => setValue('status', val, { shouldValidate: true })}
         >
           <SelectTrigger>
             <SelectValue placeholder="Select status" />

@@ -208,8 +208,7 @@ EXECUTE:
 2. Find the exact bug location
 3. Understand why it is wrong
 4. Use Write tool to fix it precisely
-5. Run: npx tsc --noEmit if TypeScript
-6. Fix any TypeScript errors found
+5. Check for obvious syntax errors in your fix (missing brackets, bad JSX, etc.)
 
 CONSTRAINTS TO CHECK BEFORE EDITING:
 - Read the FULL component file first
@@ -1300,8 +1299,8 @@ def _simplified_prompt(batch_files: list, spec_snippet: str, stack: str = "") ->
     if stack and ("nextjs" in stack.lower() or "next" in stack.lower()):
         framework_hint = (
             "FRAMEWORK: Next.js 14 App Router.\n"
-            "- Files go in src/app/ (e.g. src/app/page.tsx, src/app/layout.tsx)\n"
-            "- DO NOT create src/App.jsx or src/App.tsx — those do not exist in Next.js\n"
+            "- Files go in src/app/ (e.g. src/app/page.jsx, src/app/layout.js)\n"
+            "- DO NOT create src/App.jsx — that does not exist in Next.js\n"
             "- Use 'use client' directive for interactive components\n"
             "- Import from Next.js: import Link from 'next/link', import { useRouter } from 'next/navigation'\n"
         )

@@ -42,7 +42,7 @@ ANTI_LOOP = (
     "These will cause 'Unsupported Server Component type: undefined' on build.\n"
     "For social icons, create inline SVG components instead.\n\n"
     "RULE 7 — 'use client' (Next.js App Router):\n"
-    "EVERY .jsx/.tsx file that uses React hooks (useState, useEffect, useRef, useCallback),\n"
+    "EVERY .jsx file that uses React hooks (useState, useEffect, useRef, useCallback),\n"
     "event handlers (onClick, onChange), browser APIs (window, document), or client libraries\n"
     "(framer-motion) MUST have 'use client' as the VERY FIRST line. Missing it crashes the build.\n"
     "When in doubt, ADD IT. It never hurts.\n"
@@ -168,15 +168,8 @@ EXECUTE:
 2. Find the exact bug location
 3. Understand why it is wrong
 4. Use Write tool to fix it precisely
-5. Run: npx tsc --noEmit if TypeScript
-6. Fix any TypeScript errors found
-
-CONSTRAINTS TO CHECK BEFORE EDITING:
-- Read the FULL component file first
-- Check all input field types
-- Never break existing validation
-
-7. STOP
+5. Check for obvious syntax errors in your fix (missing brackets, bad JSX, etc.)
+6. STOP
 
 Fix only the bug. Nothing else.
 """

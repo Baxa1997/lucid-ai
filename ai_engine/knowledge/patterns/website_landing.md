@@ -328,3 +328,108 @@ export default function FeaturesSection() {
 8. **Avatars** must use `https://i.pravatar.cc/150?u=uniquestring`
 9. **Social icons** — NEVER import from lucide-react, use inline SVG
 
+---
+
+## 2025 Live-Feel Patterns (mandatory for all landing pages)
+
+### Pattern 1 — Cascading Hero Entry (replace static hero immediately)
+```jsx
+// Badge: delay 0.1s
+<motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.55 }}>
+  <Badge>Announcement text</Badge>
+</motion.div>
+
+// H1: clip-path slide-up, delay 0.25s
+<div className="overflow-hidden">
+  <motion.h1 initial={{ y: '100%' }} animate={{ y: '0%' }} transition={{ delay: 0.25, duration: 0.75, ease: [0.33, 1, 0.68, 1] }}>
+    Headline here
+  </motion.h1>
+</div>
+
+// Subtitle: delay 0.5s
+<motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5, duration: 0.7 }}>
+
+// CTAs: delay 0.65s
+<motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.65, duration: 0.6 }}>
+```
+
+### Pattern 2 — Stagger Grid Reveal (replace all static card grids)
+```jsx
+const C = { hidden: {}, visible: { transition: { staggerChildren: 0.08, delayChildren: 0.1 } } }
+const I = { hidden: { opacity: 0, y: 32, scale: 0.97 }, visible: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] } } }
+
+<motion.div variants={C} initial="hidden" whileInView="visible" viewport={{ once: true, amount: 0.15 }} className="grid ...">
+  {items.map((item, i) => <motion.div key={i} variants={I}>...</motion.div>)}
+</motion.div>
+```
+
+### Pattern 3 — H2 Clip Reveal (use on 2-3 key section headings)
+```jsx
+<div className="overflow-hidden">
+  <motion.h2 initial={{ y: '100%' }} whileInView={{ y: '0%' }} viewport={{ once: true }}
+    transition={{ duration: 0.65, ease: [0.33, 1, 0.68, 1] }} className="text-4xl font-bold">
+    Section Headline
+  </motion.h2>
+</div>
+```
+
+### Pattern 4 — Ambient Orbs (drop inside any hero section)
+```jsx
+<div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden>
+  <div className="absolute top-1/4 -left-20 w-96 h-96 bg-primary/20 rounded-full blur-3xl"
+       style={{ animation: 'orb1 14s ease-in-out infinite alternate' }} />
+  <div className="absolute bottom-0 right-0 w-80 h-80 bg-accent/15 rounded-full blur-3xl"
+       style={{ animation: 'orb2 18s ease-in-out infinite alternate-reverse' }} />
+  <style>{`
+    @keyframes orb1{from{transform:translate(0,0)scale(1)}to{transform:translate(50px,30px)scale(1.12)}}
+    @keyframes orb2{from{transform:translate(0,0)scale(1)}to{transform:translate(-40px,-25px)scale(1.08)}}
+  `}</style>
+</div>
+```
+
+### Pattern 5 — Animated Counter (for any stat number)
+```jsx
+function Counter({ target, suffix='', duration=1800 }) {
+  const ref = useRef(null)
+  const inView = useInView(ref, { once: true, margin: '-10% 0px' })
+  const [v, setV] = useState(0)
+  useEffect(() => {
+    if (!inView) return
+    let s = null, n = 0
+    const step = (ts) => {
+      if (!s) s = ts
+      const p = Math.min((ts - s) / duration, 1)
+      setV(Math.round((1 - Math.pow(1 - p, 3)) * target))
+      if (p < 1) n = requestAnimationFrame(step)
+    }
+    n = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(n)
+  }, [inView])
+  return <span ref={ref}>{v.toLocaleString()}{suffix}</span>
+}
+```
+
+### Pattern 6 — Marquee Logo Strip (for trust/partner rows)
+```jsx
+<div className="overflow-hidden [mask-image:linear-gradient(to_right,transparent,white_8%,white_92%,transparent)]">
+  <div className="flex gap-10 w-max" style={{ animation: 'marquee 28s linear infinite' }}>
+    {[...logos, ...logos].map((l, i) => <img key={i} src={l} className="h-8 opacity-50 hover:opacity-100 grayscale hover:grayscale-0 transition-all shrink-0" />)}
+  </div>
+  <style>{`@keyframes marquee{from{transform:translateX(0)}to{transform:translateX(-50%)}}`}</style>
+</div>
+```
+
+### Pattern 7 — Scroll Transition Header
+```jsx
+const [scrolled, setScrolled] = useState(false)
+useEffect(() => {
+  const fn = () => setScrolled(window.scrollY > 20)
+  window.addEventListener('scroll', fn, { passive: true })
+  return () => window.removeEventListener('scroll', fn)
+}, [])
+
+<header className={`fixed inset-x-0 top-0 z-50 transition-all duration-500 ${
+  scrolled ? 'bg-background/90 backdrop-blur-md border-b border-border shadow-sm' : 'bg-transparent'
+}`}>
+```
+

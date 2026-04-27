@@ -63,7 +63,7 @@ Run these commands in order:
 2. cd {workspace_path}
 3. Detect package manager and install:
    - If yarn.lock exists: yarn install
-   - If pnpm-lock.yaml exists: pnpm install
+   - If pnpm-lock.yaml exists: pnpm install --no-frozen-lockfile
    - If bun.lockb exists: bun install
    - Otherwise if package.json exists: npm install
 4. If requirements.txt exists: pip install -r requirements.txt

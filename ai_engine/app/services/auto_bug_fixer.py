@@ -45,7 +45,6 @@ _FIX_TIMEOUT = 180
 # ── Bug Categories ─────────────────────────────────────────────────────────────
 
 BUG_CATEGORIES = {
-    "typescript": "TypeScript / type errors",
     "missing_client": "Missing 'use client' directives",
     "broken_imports": "Broken or missing imports",
     "banned_icons": "Banned lucide-react brand icons",
@@ -58,7 +57,7 @@ BUG_CATEGORIES = {
 # ── Scanner system prompt ──────────────────────────────────────────────────────
 
 _SCAN_SYSTEM = """\
-You are a senior code quality auditor specialising in Next.js, React, and TypeScript.
+You are a senior code quality auditor specialising in Next.js and React (JavaScript, no TypeScript).
 You scan codebases for bugs, errors, and anti-patterns in a fast, systematic way.
 
 YOUR TASK — produce a structured bug report in this EXACT JSON format:
@@ -68,9 +67,9 @@ YOUR TASK — produce a structured bug report in this EXACT JSON format:
   "health_score": 85,
   "findings": [
     {
-      "category": "typescript|missing_client|broken_imports|banned_icons|accessibility|security|performance",
+      "category": "missing_client|broken_imports|banned_icons|accessibility|security|performance",
       "severity": "error|warning|info",
-      "file": "src/components/Button.tsx",
+      "file": "src/components/Button.jsx",
       "line": 12,
       "description": "Clear description of the issue",
       "fix": "Exact fix to apply (or null if complex)",
@@ -82,9 +81,8 @@ YOUR TASK — produce a structured bug report in this EXACT JSON format:
 }
 
 SCANNING RULES:
-1. Read at most 5 files — prioritise: package.json, tsconfig.json, src/app/*, src/components/*
+1. Read at most 5 files — prioritise: package.json, src/app/*, src/components/*
 2. Look ONLY for these issue types:
-   - TypeScript errors (any, implicit any, type assertion abuse)
    - Missing 'use client' (file has useState/useEffect but no 'use client' at top)
    - Broken imports (importing a file that doesn't exist)
    - Banned lucide-react icons (Facebook, Instagram, Twitter, Linkedin, Youtube, Tiktok, Github brand icon)

@@ -1323,7 +1323,8 @@ _DISTILL_SECTIONS: tuple[tuple[str, int], ...] = (
     # visual observations survive — Claude leans on them heavily for hero
     # composition, card language, and motion cues.
     ("VISUAL_DNA", 1800),
-    ("LAYOUT_BLUEPRINT", 3500),  # Design DNA: 20 creative variables per project (hero/features/rhythm/motif/mood/cards/type/motion/pattern/radius/color/hover/spacing)
+    ("LIVE_UI_RESEARCH", 1200),  # scroll effects, counters, marquee, hover depth, ambient — from actual 2025 site research
+    ("LAYOUT_BLUEPRINT", 5500),  # Design DNA: 25 creative variables per project (hero/features/rhythm/motif/mood/cards/type/motion/pattern/radius/color/hover/spacing + live_ui_recipe/scroll_reveal/counter/marquee/ambient)
     # Admin/CRM/TMS visual language — table/form/sidebar/status/density recipe.
     # Only present when layout_archetype is admin-family.
     ("ADMIN_UI_LANGUAGE", 2200),
@@ -1549,6 +1550,105 @@ async def _expand_short_prompt(
 # retry/backoff logic below handles occasional 429s gracefully.
 _gemini_semaphore = asyncio.Semaphore(2)
 
+
+async def _call_gemini_single(
+    prompt: str,
+    gemini_url: str,
+    is_pro: bool,
+    websocket,
+    label: str,
+    max_tokens: int = 10000,
+) -> str:
+    """Single Gemini REST call with retry+backoff. Returns response text.
+
+    Each call acquires its own _gemini_semaphore slot so two parallel calls
+    from the same project both proceed concurrently (semaphore value=2) while
+    a third concurrent project waits, keeping us inside Gemini rate limits.
+    """
+    import httpx
+    _thinking_config = (
+        {"thinkingBudget": 2048} if is_pro else {"thinkingBudget": 0}
+    )
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "maxOutputTokens": max_tokens,
+            "temperature": 0.3,
+            "thinkingConfig": _thinking_config,
+        },
+        "tools": [{"google_search": {}}],
+        "systemInstruction": {
+            "parts": [{
+                "text": (
+                    "You are a senior product researcher and UX strategist. "
+                    "Return precise, factual, structured output only. "
+                    "Use real-world product references and industry-standard design patterns. "
+                    "Prioritize specificity over generality — name actual colors (HSL values), "
+                    "real font pairings, and concrete UI patterns used by top products in the domain. "
+                    "Never hallucinate — if unsure about a specific value, use the most common industry default."
+                )
+            }]
+        },
+    }
+
+    response = None
+    _max_attempts = 3
+    async with _gemini_semaphore:
+        for _attempt in range(1, _max_attempts + 1):
+            try:
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    response = await asyncio.wait_for(
+                        client.post(gemini_url, json=payload),
+                        timeout=130.0,
+                    )
+            except asyncio.TimeoutError:
+                logger.warning("Gemini %s timed out (attempt %d/%d)", label, _attempt, _max_attempts)
+                if _attempt < _max_attempts:
+                    await asyncio.sleep(5 * _attempt)
+                    continue
+                raise RuntimeError(f"Gemini {label} API timed out after all retry attempts")
+
+            if response.status_code == 429:
+                _backoff = 10 * _attempt
+                logger.warning("Gemini rate limit (429) on %s attempt %d — retrying in %ds", label, _attempt, _backoff)
+                await _ws_send(websocket, "progress", f"⚠️ Gemini rate limit ({label}) — retrying in {_backoff}s...")
+                if _attempt < _max_attempts:
+                    await asyncio.sleep(_backoff)
+                    continue
+            break
+
+    if response is None or response.status_code != 200:
+        status = response.status_code if response is not None else 0
+        _api_msg = ""
+        try:
+            if response is not None:
+                _api_msg = (response.json().get("error") or {}).get("message", "")
+        except Exception:
+            pass
+        if status == 403:
+            await _ws_send(websocket, "error", "❌ Google API key rejected (403). Check GOOGLE_API_KEY in .env.")
+        elif status == 400:
+            await _ws_send(websocket, "error", f"❌ Gemini rejected the request (400): {_api_msg or 'bad request'}")
+        elif status == 404:
+            await _ws_send(websocket, "error", f"❌ Gemini model not found. Set GEMINI_RESEARCH_MODEL to a valid model.")
+        elif status == 429:
+            await _ws_send(websocket, "error", "⚠️ Gemini rate limit hit after retries. Try again in a minute.")
+        else:
+            await _ws_send(websocket, "error", f"❌ Gemini API error {status}: {_api_msg or 'unknown'}")
+        raise RuntimeError(f"Gemini {label} API error: {status}")
+
+    try:
+        data = response.json()
+    except Exception as exc:
+        raise RuntimeError(f"Gemini {label} returned non-JSON body: {exc}")
+
+    from knowledge.loader import safe_gemini_text
+    text = safe_gemini_text(data)
+    if not text:
+        raise RuntimeError(f"Gemini {label} returned empty text")
+    return text
+
+
 async def gemini_deep_research(
     description: str,
     classification: dict,   # rich dict from classify_project_type_ai
@@ -1626,71 +1726,22 @@ training data is 2023-era and will produce dated design. The goal of this step
 is to anchor the design in ACTUAL 2024-2025 reality.
 
 Run AT LEAST these searches before answering:
-  1. "awwwards {domain} site of the year 2024"
-  2. "awwwards {domain} site of the year 2025"
-  3. "best {domain} website design 2025"
-  4. "{domain} landing page inspiration godly.website"
-  5. "{domain} landing page inspiration siteinspire.com"
-  6. "2025 web design trends"
-  7. (if "{description}" names a specific brand) "{description}" official site
+  1. "{domain} best website navigation structure pages 2025"
+  2. "top {domain} website homepage sections content features"
+  3. "best {domain} website user experience must-haves 2024 2025"
+  4. (if "{description}" names a specific brand) "{description}" official website pages and structure
 
-For EACH site you discover, note: URL, what makes its design distinctive in 2025
-(not generic praise), and 2-3 concrete patterns you will borrow (layout,
-typography, motion, color, decoration).
+Focus on STRUCTURE: what pages exist, what navigation labels are used, what sections appear
+on the homepage, what features every top {domain} site must have. Visual design is handled
+separately — do NOT analyze motion, animations, or visual design here.
 
 If "{description}" names a REAL brand → study THAT site FIRST as primary reference.
 
 ===SITES_ANALYZED===
-1. [Name] ([URL]) — [specific 2025-distinctive design moves: layout + typography + motion]
-2. [Name] ([URL]) — [specific 2025-distinctive design moves]
-3. [Name] ([URL]) — [specific 2025-distinctive design moves]
-4. [Name] ([URL]) — [specific 2025-distinctive design moves]
-5. [Name] ([URL]) — [specific 2025-distinctive design moves]
-
-═══════════════════════════════════════════════════════════════
-STEP 2b — DESIGN ERA CALIBRATION (forbidden vs. required patterns)
-═══════════════════════════════════════════════════════════════
-
-The user has explicitly rejected "generic template" output. To avoid it, you
-MUST reject dated 2020-2022 patterns AND include at least THREE 2024-2025
-moves in your blueprint.
-
-FORBIDDEN 2020-2022 patterns (produce dated / template output — never output these):
-  ✗ Flat pastel gradient hero with centered text stack
-  ✗ Symmetric 3-column feature grid with icon-over-title-over-description
-  ✗ Generic rounded-xl cards with small shadow and nothing else distinctive
-  ✗ "From $X/month" pricing cards all identical shape
-  ✗ Stock photos of smiling office workers / diverse-team-around-laptop
-  ✗ Hero H1 with two dead-centered CTAs and no imagery breaking the grid
-  ✗ Hero with bg-background/95 washing out a photo (use dark gradient overlays)
-  ✗ Nav with "About / Features / Pricing / Sign In / Get Started" on a non-SaaS site
-  ✗ Map sections showing only a giant MapPin icon (use real photos or iframe)
-
-REQUIRED 2024-2025 moves (blueprint MUST include at least 3 of these):
-  ✓ Bento grid somewhere (hero or features) — inspired by Apple iOS/iPadOS
-  ✓ Typographic statement: oversized H1 (text-[clamp(3rem,10vw,9rem)]) or
-    variable-weight / italic serif (Fraunces, Editorial New, Migra, PP Editorial)
-  ✓ At least one asymmetric section (offset grid, editorial magazine layout)
-  ✓ Signature motif (dot-grid, grain, hand-drawn squiggle, floating orbs, topographic)
-  ✓ Depth via contrast — at least one dramatically inverted section
-    (bg-foreground text-background, or full-bleed dark with cinematic photo)
-  ✓ Intentional motion — stagger-fade-up on scroll, spring tilts on hover,
-    OR minimal-no-scroll with premium lift + shadow (not random random animations)
-  ✓ Organic / asymmetric border-radius somewhere (or commit to sharp brutalist —
-    but NOT "rounded-xl for everything")
-  ✓ Duotone or filtered photography (not raw stock), cinematic crop ratios
-  ✓ Kinetic / scroll-driven reveals (CSS animation-timeline or Framer useScroll)
-  ✓ Micro-interactions: magnetic CTAs, revealing secondary content on hover,
-    morph-shape on hover
-
-In your LAYOUT_BLUEPRINT output later, the Design DNA variables
-(hero_archetype, features_archetype, card_language, motion_language,
-decorative_pattern, border_radius_language, color_application_strategy) MUST
-reflect the 2024-2025 moves above — not defaults pulled from memory.
-
-===ERA_CALIBRATION===
-moves_borrowed: [List the 3+ 2024-2025 moves you will use and WHY — 1 line each]
-patterns_avoided: [List the 2-3 dated patterns you could have used but rejected]
+1. [Name] ([URL]) — pages: [...] | nav_items: [...] | homepage_sections: [...] | notable_features: [...]
+2. [Name] ([URL]) — pages: [...] | nav_items: [...] | homepage_sections: [...] | notable_features: [...]
+3. [Name] ([URL]) — pages: [...] | nav_items: [...] | homepage_sections: [...] | notable_features: [...]
+4. [Name] ([URL]) — pages: [...] | nav_items: [...] | homepage_sections: [...] | notable_features: [...]
 
 ═══════════════════════════════════════════════════════════════
 STEP 3 — DESIGN SYSTEM (always from research — no generic defaults)
@@ -1959,29 +2010,23 @@ content_images: https://picsum.photos/seed/[descriptive_seed]/800/600
 avatars: https://i.pravatar.cc/150?u=[unique_string]
 icons: Lucide React
 
-═══════════════════════════════════════════════════════════════
-STEP 6 — LAYOUT BLUEPRINT (landing / consumer-website / portfolio / blog / marketplace / ecommerce ONLY)
-═══════════════════════════════════════════════════════════════
-This block is your CREATIVE DIRECTION for THIS specific project. You are acting
-as the creative director of an award-winning design studio. Your job is to
-DESCRIBE — in your own words — the visual design of this site.
+CRITICAL: Every value from REAL internet research. Original copy. Domain-specific. Production-quality.
+"""
 
-MANDATORY BEHAVIOR:
-  • Describe each field in 2-4 specific sentences — NOT a one-word pick
-  • Name at least ONE real award-winning site you're drawing inspiration from
-    (candidates: linear.app, stripe.com, vercel.com, arc.net, framer.com,
-     apple.com/vision-pro, ramp.com, retool.com, openai.com, pitch.com,
-     notion.so, rauchg.com, brusselsmuseums.be, awwwards.com featured sites,
-     dribbble.com popular, siteinspire.com, or a real brand website in the
-     exact domain of THIS project you found via search)
-  • If the inspiration is generic (e.g. "a coffee shop website"), that's a
-    FAILURE — name a SPECIFIC real site (e.g. bluebottlecoffee.com, verve.coffee,
-    stumptowncoffee.com) and say what about IT you're borrowing.
-  • INVENT new patterns when the domain warrants it — the lists below are
-    examples to spark ideas, NOT a menu you must pick from.
-  • NOVELTY COMMITMENT: imagine 3 other designers each designed this same
-    project. Your output must be visibly different from the "safe default"
-    a tired designer would produce.
+    # ── Design prompt: visual DNA, motion, LAYOUT_BLUEPRINT ──────────────────
+    # Builds ERA_CALIBRATION + LIVE_UI_RESEARCH + LAYOUT_BLUEPRINT sections.
+    # Runs concurrently with the structure prompt above.
+    _is_sidebar_layout = layout_archetype in ("admin_dashboard", "crm", "tms", "saas_dashboard")
+    _layout_bp_block = (
+        "SKIP the ===LAYOUT_BLUEPRINT=== block — this layout_archetype uses a fixed sidebar design."
+        if _is_sidebar_layout else
+        """You are the creative director of an award-winning design studio.
+DESCRIBE the visual design DNA for this site. Every field needs 2-4 specific, concrete sentences.
+
+MANDATORY:
+  • Name at least ONE real award-winning site as inspiration (from your research above — not from memory)
+  • Be specific: "diagonal split with tilted polaroid on warm beige" beats "split-screen with image"
+  • NOVELTY COMMITMENT: your design must be visibly different from a generic version of this site
 
 SKIP this entire ===LAYOUT_BLUEPRINT=== block ONLY if layout_archetype is
 admin_dashboard / crm / tms / saas_dashboard (fixed sidebar layouts).
@@ -1989,376 +2034,252 @@ admin_dashboard / crm / tms / saas_dashboard (fixed sidebar layouts).
 ===LAYOUT_BLUEPRINT===
 
 hero_description:
-  [2-4 sentences describing the hero layout in concrete visual detail.
-   Cover: spatial arrangement (where text sits, where imagery sits, asymmetry),
-   imagery treatment (single photo / collage / video / illustration / product mock),
-   decorative elements (floating cards, badges, scrolling ticker, geometric shapes),
-   and how the eye should travel. Be specific — "a diagonal split with a tilted
-   polaroid of a latte overlapping a warm beige backdrop, a handwritten 'since 2014'
-   label in the upper-right corner, and three tiny circular customer avatars
-   pinned to the lower-left of the image" beats "split-screen with image".]
-  inspiration_site: [real URL Gemini can name, e.g. "bluebottlecoffee.com" or "linear.app"]
-  why_this_fits: [1 sentence linking the choice to the domain + target user]
+  [2-4 sentences: spatial arrangement, imagery treatment, decorative elements, eye travel path.]
+  inspiration_site: [real URL from your research]
+  why_this_fits: [1 sentence]
 
 features_description:
-  [2-4 sentences describing how the key features/benefits/menu/services section
-   is laid out. If bento — say which card is hero and what it contains. If
-   alternating rows — say which images go left, which right. If timeline —
-   say what the steps are. Include any decorative motif used within this section.
-   Must be DIFFERENT spatially from hero_description (no same grid used twice).]
+  [2-4 sentences. Must be spatially DIFFERENT from hero_description — no same grid used twice.]
   inspiration_site: [real URL]
 
 secondary_sections_description:
-  [For EACH remaining section (testimonials, gallery, story, pricing, menu,
-   locations, cta — whatever this project needs): 1-2 sentences on the layout.
-   Include at least one "section that surprises" — e.g. a full-bleed quote
-   with a photo backdrop, a horizontally scrolling marquee of product cards,
-   a playable video testimonial. Format as "section_name: description".]
+  [1-2 sentences per remaining section. Include at least one "surprising" section layout.]
 
 section_rhythm:
-  [List every section in order, mapping each to a background treatment.
-   At most 2 consecutive sections may share the same treatment.
-   Treatments are OPEN-ENDED — describe them in 3-6 words each.
-   Example: "hero=soft cream-to-blush gradient mesh with grain texture,
-   features=crisp bg-background with grid-pattern behind H2, story=full-bleed
-   cafe interior photo with bg-background/80 overlay, testimonials=deep-espresso
-   bg-primary with white text, locations=bg-muted with embedded maps,
-   cta=bg-gradient-to-br primary→accent with noise overlay."]
+  [Every section in order → background treatment. Max 2 consecutive sections same treatment.]
 
 signature_motif:
-  [Describe ONE repeated decorative element that appears 2-3 times across the
-   page and gives it a consistent visual signature. Be specific about shape,
-   color, opacity, and placement. Examples: "Faint 1px grid pattern at 4%
-   opacity behind hero + CTA", "Three blurred amber orbs bottom-right of hero
-   and top-left of testimonials", "Hand-drawn coffee-cup-ring stamps at 15%
-   opacity as section dividers". Invent a motif that fits the domain personality.
-   Say "none" ONLY for brutalist-minimal moods where typography alone carries
-   the design.]
+  [ONE repeated decorative element appearing 2-3× across the page. Specific: shape, color, opacity, placement.]
 
 design_mood:
-  [2-3 sentence description of the overall visual personality. Include: the
-   ONE-WORD adjective that best captures it (editorial / luxe / brutalist /
-   retro / techy / playful / organic / classic / cinematic — or invent your own),
-   how that personality translates to type treatment, card shape, and color
-   use. Must be internally coherent with the palette + fonts picked above.]
-  reasoning: [1 sentence citing a specific research finding or target-user insight]
+  [2-3 sentences: visual personality, ONE-WORD adjective, how it translates to type/cards/color.]
+  reasoning: [1 sentence citing a research finding or target-user insight]
 
 hero_image_url:
-  [ONE exact Unsplash photo URL for the hero, with query string
-   ?auto=format&fit=crop&w=1600&q=80. Pick a photo that PERFECTLY matches the
-   domain and the hero_description (not a generic stock photo). Format:
-   https://images.unsplash.com/photo-PHOTO_ID?auto=format&fit=crop&w=1600&q=80]
+  [ONE Unsplash URL: https://images.unsplash.com/photo-PHOTO_ID?auto=format&fit=crop&w=1600&q=80]
 
 supporting_image_urls:
-  [Provide 3-6 more Unsplash URLs for other sections. Format each as:
-   "section_name: https://images.unsplash.com/photo-PHOTO_ID?auto=format&fit=crop&w=1200&q=80"
-   e.g. "menu_item_1: ..., menu_item_2: ..., about_story: ..., location_exterior: ..."]
+  [3-6 Unsplash URLs: "section_name: https://images.unsplash.com/photo-PHOTO_ID?auto=format&fit=crop&w=1200&q=80"]
 
 accent_detail:
-  [Describe ONE signature micro-detail that makes this page feel hand-crafted.
-   Something a tired designer would skip. Examples:
-     - "A tiny pulsing green dot + 'Open now — closes 9 PM' pill in the top-right
-        of the hero, positioned over the image corner with z-20."
-     - "Three overlapping customer avatars with a 4.9★ rating and
-        '2,400+ morning regulars' caption, floating bottom-left of hero image."
-     - "A rotating word under the main H1 that cycles through three synonyms
-        every 3 seconds with a fade transition."
-     - "A scribbled hand-drawn arrow (SVG inline) pointing from the H1 to the
-        primary CTA button, slight rotation, accent color."
-   Invent a detail that specifically fits THIS domain. Generic details = failure.]
-  placement: [exact placement — "absolute -bottom-4 -left-4 z-20" style]
-
-# ═══════════════════════════════════════════════════════════════
-# DESIGN DNA — 10 variables that control this project's unique visual language.
-# These force Claude away from its defaults. Every variable must be specific,
-# concrete, and DIFFERENT from what a generic site would ship.
-# ═══════════════════════════════════════════════════════════════
+  [ONE signature micro-detail a tired designer would skip. Specific to THIS domain.]
+  placement: [exact Tailwind position — e.g. "absolute -bottom-4 -left-4 z-20"]
 
 hero_archetype:
-  [Pick ONE and describe. Do NOT default to "split-screen":
-     - split                 → text left, image right (classic, overused — only pick if domain demands)
-     - bento                 → grid of 4-6 tiles, one hero tile dominant, text occupies 1-2 tiles
-     - diagonal              → diagonal split line between text half and image half (use clip-path or skew)
-     - magazine              → giant oversized H1 as editorial headline, tiny image column offset
-     - layered-scroll        → three stacked layers with parallax scroll offsets
-     - cinematic-parallax    → full-bleed video or image with slow pan, text emerges on scroll
-     - editorial-offset      → asymmetric: H1 anchored top-left, image floats bottom-right with margin bleed
-     - full-bleed-dark       → dark cinematic image fills viewport, text overlays with cinematic gradient
-     - product-showcase      → product/device mockup centerpiece, text as supporting caption
-     - typographic-hero      → massive text-only hero with kinetic type, no photo (only for fashion/editorial)
-     - INVENT one if domain calls for it (e.g. "stacked-polaroids" for photography portfolio)]
-  reasoning: [1 sentence why THIS archetype fits the domain mood]
+  [ONE of: split / bento / diagonal / magazine / layered-scroll / cinematic-parallax /
+   editorial-offset / full-bleed-dark / product-showcase / typographic-hero / INVENT one]
+  reasoning: [1 sentence why this fits the domain mood]
 
 features_archetype:
-  [Pick ONE — must be DIFFERENT from hero spatial pattern:
-     - bento-mixed          → 2x3 grid of mixed sizes, hero tile 2x-width with image
-     - zigzag-split         → alternating image-left / image-right rows (3-4 rows)
-     - vertical-tabs        → sticky tab list left, content panel right, click to switch
-     - horizontal-scroll    → horizontal marquee or snap-scroll cards
-     - masonry              → pinterest-style staggered columns, variable heights
-     - tilt-stack           → stacked cards each rotated slightly, offset, on scroll they straighten
-     - interactive-showcase → big primary feature visualization + 4 clickable thumbnails below
-     - timeline             → vertical timeline with alternating sides, connecting line
-     - comparison-grid      → 3-column comparison (not pricing — feature tiers)
-     - numbered-editorial   → giant numbered steps (01, 02, 03) with editorial typography
-     - INVENT if domain calls for it]
+  [ONE of: bento-mixed / zigzag-split / vertical-tabs / horizontal-scroll / masonry /
+   tilt-stack / interactive-showcase / timeline / comparison-grid / numbered-editorial / INVENT]
   reasoning: [1 sentence]
 
 card_language:
-  [Describe this project's unique card visual treatment in 1-2 sentences.
-   Go BEYOND generic "rounded-xl shadow-md". Examples:
-     - "Thick 2px charcoal borders with no shadow, 90° corners — brutalist editorial."
-     - "Soft cream cards with a single hairline inner border and wax-seal corner emblem."
-     - "Glassmorphic cards with 20px backdrop-blur, white/8 border, soft primary glow ring."
-     - "Paper-folded cards — subtle inner fold crease via linear-gradient, slight shadow offset up."
-     - "Organic blob-shaped cards with asymmetric border-radius (30% 70% 40% 60%), no shadow."
-     - "Card + image sit in a shared torn-paper container with a deckle-edge SVG mask."
-   MUST include: radius style, border style, shadow/glow treatment, any decorative micro-element.]
+  [1-2 sentences beyond "rounded-xl shadow-md". Include: radius style, border, shadow/glow, micro-element.]
 
 typography_pairing:
-  [Specify the heading font + body font (different from each other) AND their mixing rules.
-   Must be real Google Fonts. Examples:
-     - "Heading: Fraunces (serif, weight 600-900, tight -0.03 tracking, can be set in italic).
-        Body: Inter (400-500, 0 tracking). H1 in oversized 80px+, all-caps variant on section labels
-        with widely-spaced 0.3em tracking."
-     - "Heading: Space Grotesk (500-700). Body: IBM Plex Mono for captions, Inter for paragraphs.
-        Use mono for stat labels and handwriting-style decorative accents."
-     - "Heading: Playfair Display in italic for all H1s only, Manrope 700 for other headings.
-        Body: Manrope 400. Contrast is built from italic-serif vs geometric-sans."
-   Include: heading font name, body font name, weight usage, tracking rules, italic/caps treatment.]
+  [Heading font + body font (real Google Fonts, different from each other). Weight/tracking/italic rules.]
 
 motion_language:
-  [Describe how content enters and reacts. Pick 2-3 complementary behaviors:
-     - "Stagger-fade-up: each child in a section fades up 20px with 80ms stagger on scroll-into-view.
-        Cards tilt 2° on hover with smooth spring. Primary CTA has a subtle breathing scale animation."
-     - "Scroll-triggered reveals using Intersection Observer: H2s slide in from left, body text fades.
-        Hover state lifts card up 4px with ring-2 ring-primary/20 glow."
-     - "Aggressive: sections use full scroll-linked parallax. Hero H1 letters animate in one at a time.
-        Hover rotates cards 3° and shifts background color."
-     - "Minimal: no scroll animations, only hover — cards lift 2px + shadow deepens. Focus states
-        use ring-offset rings. Page feels stable and premium."
-   MUST specify: enter animation, hover state, any scroll-linked behavior, and emotional register.]
+  [2-3 complementary behaviors. MUST specify: enter animation, hover state, scroll-linked behavior, emotional register.]
 
 decorative_pattern:
-  [Describe ONE pattern or texture that shows up across multiple sections at low opacity.
-   This is the background "noise" that makes the page feel designed rather than assembled.
-   Examples:
-     - "1px dot grid at 4% opacity on bg-background sections, hidden on bg-card sections."
-     - "Subtle diagonal line pattern (Tailwind repeating-linear-gradient) behind H2 elements."
-     - "SVG hand-drawn squiggle underlines under key brand words, in primary/30 color."
-     - "Grainy film-noise PNG overlay at 8% opacity globally via fixed::before pseudo-element."
-     - "Topographic-map contour lines SVG behind the footer, off-canvas extending beyond viewport."
-     - "Floating ambient orbs — 3 blurred (blur-3xl) colored circles, parallax-scrolled at different speeds."
-   Say "none" ONLY for ultra-minimal brutalist brands. Include how it's applied in Tailwind/CSS.]
+  [ONE pattern/texture across multiple sections at low opacity. Include how it's applied in Tailwind/CSS.]
 
 border_radius_language:
-  [Specify the corner rounding philosophy for THIS project. Options:
-     - sharp          → 0px all corners (brutalist, editorial, fashion)
-     - crisp          → 4-6px (technical, clean, B2B)
-     - standard       → 12-16px (mainstream SaaS, friendly)
-     - soft           → 20-28px (premium consumer, wellness)
-     - pill           → rounded-full on CTAs, rounded-3xl on cards (playful, consumer)
-     - organic        → irregular asymmetric blob-radius (wellness, beauty, nature brands)
-     - mixed          → CTAs pill-shaped, cards sharp, images soft — intentional contrast
-   Include the EXACT Tailwind radius values to use for: buttons, cards, images, inputs.
-   Example: "soft — cards rounded-3xl, images rounded-2xl, buttons rounded-full, inputs rounded-xl".]
+  [Philosophy + EXACT Tailwind values for: buttons, cards, images, inputs.]
 
 color_application_strategy:
-  [How color is distributed across the page. Pick ONE:
-     - mono-accent         → 85% neutral, one primary accent color used sparingly for CTAs + highlights
-     - duotone-photos      → all photos filtered to 2-color duotone matching brand palette
-     - gradient-mesh       → soft gradient meshes as section backgrounds (from-primary/5 via-background to-accent/5)
-     - inverted-dark       → one major section is inverted (dark bg, light text) for dramatic contrast
-     - polychrome          → 3-4 accent colors each "owning" a different section
-     - photographic-neutral → color comes only from imagery, UI is near-monochrome neutral
-     - brand-flood         → brand color as background on hero AND final CTA, everything else neutral
-   Include WHICH sections get which treatment. Example:
-     "inverted-dark: hero neutral, testimonials full bg-foreground text-background, locations neutral, CTA brand-flood."]
+  [ONE of: mono-accent / duotone-photos / gradient-mesh / inverted-dark / polychrome /
+   photographic-neutral / brand-flood. Specify which sections get which treatment.]
 
 hover_interaction_style:
-  [How cards, buttons, and images respond to hover. Pick 1-2 consistent behaviors:
-     - lift-and-shadow     → translateY(-4px) + shadow deepens (default, safe)
-     - tilt-3d             → rotateX/Y 2-3deg on mouse move (requires small JS, use Framer or CSS transforms)
-     - reveal-content      → secondary info (read-more, icon) slides in from bottom on hover
-     - glow-ring           → ring-2 ring-primary/40 with offset appears, no movement
-     - morph-shape         → border-radius animates between two values on hover
-     - invert-colors       → card inverts: bg-card hover → bg-foreground text-background
-     - magnetic-cursor     → button slightly follows cursor within its bounds (small translate)
-   Specify for: primary cards, CTAs, image cards, nav links. Keep consistent within a category.]
+  [1-2 consistent behaviors for: primary cards, CTAs, image cards, nav links.]
 
 spacing_rhythm:
-  [Pick the page's vertical rhythm personality:
-     - tight-editorial   → py-12 md:py-16 between sections, dense packed feel
-     - standard-modern   → py-20 md:py-28 (most common)
-     - airy-luxury       → py-28 md:py-40, generous whitespace, premium feel
-     - asymmetric        → varies per section: hero py-32, next py-16, next py-40 — intentional rhythm
-     - dense-information → py-10 md:py-14, info-heavy, dashboard-adjacent
-   Also specify gutter tightness: "container max-w-5xl gap-6" (tight) vs "max-w-7xl gap-12" (airy).]
+  [ONE of: tight-editorial / standard-modern / airy-luxury / asymmetric / dense-information.
+   Container max-width + gap values.]
 
-# ═══════════════════════════════════════════════════════════════
+live_ui_recipe:
+  [4-6 sentences: what is the ONE signature motion moment that makes visitors stop?
+   Plus supporting micro-interactions throughout the page. Domain-specific — not generic.]
+
+scroll_reveal_style:
+  [Exact framer-motion values: y-distance, duration, easing, stagger interval, viewport amount trigger.]
+
+counter_animation:
+  [Which stats animate as counters, which section they're in, end value + format, animation duration.
+   Pattern: framer-motion useMotionValue + useTransform + animate on inView.]
+
+marquee_strip:
+  [logo-strip / quote-ticker / stat-ticker / none. Which section, exact content, CSS keyframe approach.
+   Preferred: two identical UL sets side by side, overflow-hidden parent, translate-left 50% animation.]
+
+ambient_motion:
+  [gradient-mesh / floating-orbs / grain-noise / subtle-scan / none.
+   Include CSS keyframe snippet and JSX element placement.]
 
 novelty_check:
-  [One sentence: if another designer made a {domain} landing page tomorrow,
-   what about YOUR design would be visibly different from theirs? If you can't
-   answer this, your blueprint is too safe — redo it.]
+  [One sentence: what makes YOUR design visibly different from any other designer's version of this site?]
 
 design_dna_summary:
-  [ONE sentence in 15-25 words describing the DESIGN DNA as a unique recipe.
-   Example: "Editorial-luxe Fraunces-italic headlines over cinematic full-bleed photography,
-   paper-fold cards with wax-seal emblems, airy 40vh spacing, brand-flood CTA finale."
-   This is the one-liner Claude should keep in mind while implementing every section.]
+  [ONE sentence, 15-25 words: the unique design recipe. Example: "Editorial-luxe Fraunces-italic headlines
+   over cinematic full-bleed photography, paper-fold cards, airy 40vh spacing, brand-flood CTA finale."]
 
-CRITICAL for LAYOUT_BLUEPRINT:
-  - Your output gets passed to Claude who MUST implement what you describe.
-  - Describe in code-translatable language — "grid-cols-2 gap-12 with an
-    aspect-[4/5] image on the right" is better than "two-column with an image".
-  - NO one-word answers. NO generic phrases like "modern clean design",
-    "beautiful gradient", "engaging hero" — these are meaningless.
-  - Every DNA variable must be CONCRETE and DIFFERENT across projects.
-    Two coffee-shop projects should get different hero_archetype, different
-    card_language, different motion_language — even if palette is similar.
-  - Your success = Claude produces something that looks bespoke, not templated.
+CRITICAL: Concrete, code-translatable language. No one-word answers. No generic phrases like "modern clean design"."""
+    )
 
-CRITICAL: Every value from REAL internet research. Original copy. Domain-specific. Production-quality.
+    _design_prompt = f"""You are an AWARD-WINNING VISUAL DESIGN DIRECTOR with full internet search access.
+Your sole task: research 2025 visual design trends for the project below, then output ONLY these three
+sections: ERA_CALIBRATION, LIVE_UI_RESEARCH, LAYOUT_BLUEPRINT.
+Do NOT output CLASSIFICATION, CSS_VARIABLES, FONTS, PAGES, ENTITIES, or any structural blocks.
+
+PROJECT: "{description}"
+DOMAIN: {domain}
+LAYOUT TYPE: {_archetype_label}
+CLASSIFICATION (locked — do NOT change):
+  layout_archetype: {layout_archetype}
+  is_single_page: {"yes" if is_single_page else "no"}
+
+════════════════════════════════════════════════════════════
+DESIGN RESEARCH — MUST use google_search (do NOT rely on training memory)
+════════════════════════════════════════════════════════════
+
+Training data is 2023-era and will produce dated design. USE google_search.
+
+Run AT LEAST these searches:
+  1. "awwwards {domain} site of the year 2024"
+  2. "awwwards {domain} site of the year 2025"
+  3. "best {domain} website visual design typography 2025"
+  4. "2025 web design trends scroll animations {domain} framer motion"
+  5. "{domain} website hover interactions micro-animations 2025"
+  6. (if "{description}" names a specific brand) "{description}" official site visual design
+
+For EACH site discovered, note:
+  a) Layout: H1 position, split/bento/full-bleed, asymmetry, grid structure
+  b) Typography: font names, weight contrast, italic/caps, oversized type treatment
+  c) Motion: scroll animations, hover effects, stagger reveals, parallax depth
+  d) "Live" feel: counters, marquees, ambient animations, video, looping elements
+
+════════════════════════════════════════════════════════════
+DESIGN ERA CALIBRATION
+════════════════════════════════════════════════════════════
+
+FORBIDDEN 2020-2022 patterns (produce dated / template output — never use these):
+  ✗ Flat pastel gradient hero with centered text stack and no motion
+  ✗ Symmetric 3-column feature grid with icon-over-title-over-description, no hover effect
+  ✗ Generic rounded-xl cards with small shadow and nothing else distinctive
+  ✗ "From $X/month" pricing cards all identical shape
+  ✗ Stock photos of smiling office workers / diverse-team-around-laptop
+  ✗ Hero H1 with two dead-centered CTAs and no imagery breaking the grid
+  ✗ Hero with bg-background/95 washing out a photo (use dark gradient overlays)
+  ✗ Nav with "About / Features / Pricing / Sign In / Get Started" on a non-SaaS site
+  ✗ Static stat counters that don't animate when scrolled into view
+  ✗ Logo rows with no scroll or motion
+  ✗ Hero that has zero motion — everything must have at least an entry animation
+
+REQUIRED 2024-2025 moves (blueprint MUST include at least 4):
+  ✓ Bento grid somewhere (hero or features) — inspired by Apple iOS/iPadOS
+  ✓ Typographic statement: oversized H1 (text-[clamp(3rem,10vw,9rem)]) or
+    variable-weight / italic serif (Fraunces, Editorial New, Migra, PP Editorial)
+  ✓ At least one asymmetric section (offset grid, editorial magazine layout)
+  ✓ Signature motif (dot-grid, grain, hand-drawn squiggle, floating orbs, topographic)
+  ✓ Depth via contrast — at least one dramatically inverted section
+    (bg-foreground text-background, or full-bleed dark with cinematic photo)
+  ✓ Animated stat counters — numbers count up from 0 when scrolled into view
+  ✓ Horizontal marquee strip — logos, testimonials, or product photos scroll infinitely
+  ✓ Scroll-linked stagger reveals — each card enters 80ms after the previous
+  ✓ Hover 3D tilt on feature cards (2-4deg on mouse move with framer-motion)
+  ✓ Sticky header that transitions from transparent to frosted-glass bg on scroll
+  ✓ Ambient motion: slowly drifting gradient mesh or floating orbs in hero background
+
+===ERA_CALIBRATION===
+moves_borrowed: [List the 4+ 2024-2025 moves you will use and WHY — 1 line each]
+patterns_avoided: [List the 2-3 dated patterns you rejected and why]
+
+════════════════════════════════════════════════════════════
+LIVE UI RESEARCH
+════════════════════════════════════════════════════════════
+
+Based on your research above, answer: what makes top {domain} websites feel "live" and
+premium in 2025?
+
+===LIVE_UI_RESEARCH===
+scroll_effects: [stagger? parallax? clip-path reveals? opacity wipes? Be specific with values]
+counter_animations: [which stats animate, what section, format: currency/%/number+?]
+ticker_or_marquee: [logo-strip / testimonial-ticker / stat-ticker / none + description]
+hover_depth: [flat-lift / tilt-3D / glow-ring / reveal / morph? Specify per element type]
+video_or_loop: [hero video / looping animation / none?]
+sticky_behavior: [nav color/blur change? any sticky panels?]
+text_animation: [character reveal / word reveal / number odometer / typing effect?]
+ambient_motion: [gradient-mesh shift / floating-orbs / grain-noise / subtle-scan / none?]
+interaction_richness: [1-5 scale]
+
+════════════════════════════════════════════════════════════
+LAYOUT BLUEPRINT
+════════════════════════════════════════════════════════════
+
+{_layout_bp_block}
+
+CRITICAL: Every value from your research above. Concrete, code-translatable language.
+Output ONLY ERA_CALIBRATION, LIVE_UI_RESEARCH, and LAYOUT_BLUEPRINT blocks.
 """
 
-    # Call Gemini via direct REST API (deprecated SDK removed)
+    # ── Parallel Gemini calls ─────────────────────────────────────────────────
     import httpx
 
-    # Research model is configurable via GEMINI_RESEARCH_MODEL env var.
-    # Default is gemini-2.5-pro for superior design/trend reasoning (research runs
-    # once per project so the ~5x cost delta is acceptable for the quality lift).
-    # Set GEMINI_RESEARCH_MODEL=gemini-2.5-flash to trade quality for speed/cost.
     _research_model = os.environ.get("GEMINI_RESEARCH_MODEL", "gemini-2.5-pro")
-    await _ws_send(websocket, "progress", f"🔬 Calling {_research_model} with search...")
+    await _ws_send(websocket, "progress", f"🔬 Calling {_research_model} — structure & design in parallel...")
 
     gemini_url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
         f"{_research_model}:generateContent?key={gemini_key}"
     )
-
-    # Thinking budget is model-dependent:
-    # - Flash allows thinkingBudget: 0 (plain text output, faster)
-    # - Pro REQUIRES thinking mode (API rejects budget=0 with 400)
-    # Our parser (knowledge.loader.safe_gemini_text) already filters out thought
-    # parts, so enabling thinking on Pro is safe — we just ignore the scratchpad.
     _is_pro = "pro" in _research_model.lower()
-    _thinking_config = (
-        {"thinkingBudget": 2048}  # modest budget; Pro can't accept 0
-        if _is_pro
-        else {"thinkingBudget": 0}  # Flash: skip thinking for plain text
+
+    # Run structure research (content/pages/entities) and design research
+    # (LAYOUT_BLUEPRINT/LIVE_UI/ERA_CALIBRATION) concurrently.
+    # _gemini_semaphore(2) lets both slots proceed in parallel for a single project
+    # while a second concurrent project waits, keeping inside Gemini rate limits.
+    _results = await asyncio.gather(
+        _call_gemini_single(research_prompt, gemini_url, _is_pro, websocket, "structure", max_tokens=14000),
+        _call_gemini_single(_design_prompt, gemini_url, _is_pro, websocket, "design", max_tokens=8000),
+        return_exceptions=True,
     )
-    def _build_gemini_payload() -> dict:
-        return {
-            "contents": [{"parts": [{"text": research_prompt}]}],
-            "generationConfig": {
-                "maxOutputTokens": 16000,  # raised from 8K — prevents entity spec truncation
-                "temperature": 0.3,
-                "thinkingConfig": _thinking_config,
-            },
-            "tools": [{"google_search": {}}],
-            "systemInstruction": {
-                "parts": [{
-                    "text": (
-                        "You are a senior product researcher and UX strategist. "
-                        "Return precise, factual, structured output only. "
-                        "Use real-world product references and industry-standard design patterns. "
-                        "Prioritize specificity over generality — name actual colors (HSL values), "
-                        "real font pairings, and concrete UI patterns used by top products in the domain. "
-                        "Never hallucinate — if unsure about a specific value, use the most common industry default."
-                    )
-                }]
-            },
-        }
 
-    gemini_payload = _build_gemini_payload()
+    structure_text = _results[0] if not isinstance(_results[0], Exception) else ""
+    design_text = _results[1] if not isinstance(_results[1], Exception) else ""
 
-    # Retry logic: up to 3 attempts for 429 rate-limits.
-    # Semaphore caps concurrent Gemini calls to avoid quota exhaustion.
-    _max_attempts = 3
-    _thinking_enabled = False
-    response = None
-    async with _gemini_semaphore:
-        for _attempt in range(1, _max_attempts + 1):
-            try:
-                async with httpx.AsyncClient(timeout=120.0) as client:
-                    response = await asyncio.wait_for(
-                        client.post(gemini_url, json=gemini_payload),
-                        timeout=130.0,
-                    )
-            except asyncio.TimeoutError:
-                logger.warning("Gemini research request timed out (attempt %d/%d)", _attempt, _max_attempts)
-                if _attempt < _max_attempts:
-                    await asyncio.sleep(5 * _attempt)
-                    continue
-                raise RuntimeError("Gemini research API timed out after all retry attempts")
+    if not structure_text:
+        # Structure is mandatory — propagate the failure
+        _exc = _results[0] if isinstance(_results[0], Exception) else RuntimeError("Gemini structure returned empty")
+        raise _exc
 
-            if response.status_code == 429:
-                _backoff = 10 * _attempt
-                logger.warning("Gemini rate limit (429) on attempt %d — retrying in %ds", _attempt, _backoff)
-                await _ws_send(websocket, "progress", f"⚠️ Gemini rate limit — retrying in {_backoff}s...")
-                if _attempt < _max_attempts:
-                    await asyncio.sleep(_backoff)
-                    continue
+    if isinstance(_results[1], Exception):
+        logger.warning("Gemini design research failed (non-fatal): %s", _results[1])
+        await _ws_send(websocket, "progress", "⚠️ Design research partial — continuing with structure only...")
 
-            break  # non-retryable response
-
-    if response is None or response.status_code != 200:
-        status = response.status_code if response is not None else 0
-        error_snippet = response.text[:300] if response is not None else "no response"
-        logger.error("Gemini research API error %d: %s", status, error_snippet)
-
-        # Parse the API's error message so the user sees the real reason
-        # (e.g. model access denied vs. malformed request vs. expired key).
-        _api_msg = ""
-        try:
-            if response is not None:
-                _api_msg = (response.json().get("error") or {}).get("message", "")
-        except Exception:
-            pass
-
-        if status == 403:
-            await _ws_send(websocket, "error", "❌ Google API key rejected (403). Check GOOGLE_API_KEY in .env.")
-        elif status == 400:
-            _reason = _api_msg or "bad request"
-            await _ws_send(websocket, "error", f"❌ Gemini rejected the request (400): {_reason}")
-        elif status == 404:
-            await _ws_send(websocket, "error", f"❌ Gemini model not found: {_research_model}. Set GEMINI_RESEARCH_MODEL to a valid model.")
-        elif status == 429:
-            await _ws_send(websocket, "error", "⚠️ Gemini rate limit hit after retries. Try again in a minute.")
-        else:
-            await _ws_send(websocket, "error", f"❌ Gemini API error {status}: {_api_msg or 'unknown'}")
-        raise RuntimeError(f"Gemini research API error: {status}")
-    
-    try:
-        data = response.json()
-    except Exception as exc:
-        logger.error("Gemini response was not valid JSON: %s", exc)
-        raise RuntimeError(f"Gemini returned non-JSON body: {exc}")
-
-    from knowledge.loader import safe_gemini_text
-    text = safe_gemini_text(data)
-
-    if not text:
-        raise RuntimeError("Gemini returned empty research text")
+    # Merge: structure sections come first so _extract_research_section (which
+    # returns the FIRST occurrence) finds structural CLASSIFICATION/PAGES/ENTITIES
+    # correctly; design-only sections (LAYOUT_BLUEPRINT, LIVE_UI_RESEARCH,
+    # ERA_CALIBRATION) appear only in design_text and are appended after.
+    text = structure_text + ("\n\n" + design_text if design_text else "")
 
     await _ws_send(websocket, "progress", "✅ Research complete — building project blueprint...")
 
-    # Send research summary to chat panel so user can see what was analyzed
+    # Send research summary to chat panel
     try:
-        # Check for all known analyzed-sites section headers
         analyzed_section = ""
         for _header in ("===PRODUCTS_ANALYZED===", "===SITES_ANALYZED===", "===PLATFORMS_ANALYZED==="):
             if _header in text:
                 _start = text.index(_header) + len(_header)
-                # Find the next === boundary (skip it if it's immediately after)
                 _rest = text[_start:]
                 _end_match = _rest.find("===")
                 _end = _start + _end_match if _end_match != -1 else _start + 500
                 analyzed_section = text[_start:_end].strip()
                 break
 
-        # Also try to extract APP_CLASSIFICATION block (smart universal branch)
         _classification = ""
         if "===APP_CLASSIFICATION===" in text:
             _cs = text.index("===APP_CLASSIFICATION===") + len("===APP_CLASSIFICATION===")
@@ -2656,6 +2577,243 @@ VISUAL AMBITION (non-negotiable):
 - Generous whitespace: py-24 to py-32 between major sections
 
 ====================================
+LIVE UI — MAKE IT BREATHE (non-negotiable)
+====================================
+A "live" site feels like it's in motion even before the user scrolls. A static site
+feels dead. Every section you write MUST implement the live_ui_recipe, scroll_reveal_style,
+counter_animation, marquee_strip, and ambient_motion from the LAYOUT_BLUEPRINT.
+If those fields aren't present, use the defaults below.
+
+── 1. ANIMATED STAT COUNTERS ─────────────────────────────────────────────
+Any time you display a number (stats, KPIs, years, clients, ratings), animate it
+counting up when the element enters the viewport. Use this exact pattern:
+
+  'use client'
+  import { useEffect, useRef, useState } from 'react'
+  import { useInView } from 'framer-motion'
+
+  function AnimatedCounter({ target, suffix = '', prefix = '', duration = 1800 }) {
+    const ref = useRef(null)
+    const inView = useInView(ref, { once: true, margin: '-20% 0px' })
+    const [display, setDisplay] = useState(0)
+    useEffect(() => {
+      if (!inView) return
+      let start = 0
+      const step = target / (duration / 16)
+      const timer = setInterval(() => {
+        start = Math.min(start + step, target)
+        setDisplay(Math.round(start))
+        if (start >= target) clearInterval(timer)
+      }, 16)
+      return () => clearInterval(timer)
+    }, [inView, target, duration])
+    return <span ref={ref}>{prefix}{display.toLocaleString()}{suffix}</span>
+  }
+
+  Usage: <AnimatedCounter target={500} suffix="+" /> → counts 0→500+
+         <AnimatedCounter target={98} suffix="%" duration={1200} /> → counts 0→98%
+         <AnimatedCounter target={4.9} suffix="★" duration={1000} /> → for decimals, adjust step
+
+── 2. SCROLL REVEAL — STAGGER CHILDREN ───────────────────────────────────
+Every content section (features, testimonials, pricing, team, menu items) uses
+staggered child entry animations. This is the #1 pattern that makes a site feel
+premium vs static. Use this exact framer-motion pattern:
+
+  const containerVariants = {
+    hidden: {},
+    visible: { transition: { staggerChildren: 0.08, delayChildren: 0.1 } }
+  }
+  const itemVariants = {
+    hidden: { opacity: 0, y: 32, scale: 0.97 },
+    visible: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] } }
+  }
+
+  <motion.div
+    variants={containerVariants}
+    initial="hidden"
+    whileInView="visible"
+    viewport={{ once: true, amount: 0.15 }}
+    className="grid grid-cols-1 md:grid-cols-3 gap-6"
+  >
+    {items.map((item, i) => (
+      <motion.div key={i} variants={itemVariants}>
+        {/* card content */}
+      </motion.div>
+    ))}
+  </motion.div>
+
+── 3. HERO ENTRY SEQUENCE ────────────────────────────────────────────────
+The hero must NOT appear all at once. Use a cascading entry:
+  - Badge/eyebrow: delay 0.1s, fade from opacity:0 y:12 → opacity:1 y:0
+  - H1: delay 0.25s, clip-path reveal OR fade-up from y:40
+  - Subtitle: delay 0.45s, fade from opacity:0
+  - CTA buttons: delay 0.6s, fade-up + slight scale from 0.95
+  - Hero image/media: delay 0.3s, fade from opacity:0 scale:1.02 → scale:1
+
+  Implement using motion.div with initial/animate (NOT whileInView — hero is already visible):
+  <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.6 }}>
+
+── 4. HORIZONTAL MARQUEE STRIP ───────────────────────────────────────────
+Logo rows, partner lists, testimonial snippets, or stat tickers must use a
+CSS marquee (infinite scroll) — NOT a static centered row of logos.
+
+  'use client'
+  // Pure CSS marquee — no external library needed
+  export function MarqueeStrip({ items, speed = 40 }) {
+    return (
+      <div className="overflow-hidden [mask-image:linear-gradient(to_right,transparent,white_10%,white_90%,transparent)]">
+        <div
+          className="flex gap-8 w-max"
+          style={{ animation: `marquee ${items.length * speed}s linear infinite` }}
+        >
+          {[...items, ...items].map((item, i) => (
+            <div key={i} className="flex items-center gap-2 shrink-0">
+              {item}
+            </div>
+          ))}
+        </div>
+        <style>{`
+          @keyframes marquee { from { transform: translateX(0) } to { transform: translateX(-50%) } }
+        `}</style>
+      </div>
+    )
+  }
+
+  Use for: logo trust strips, testimonial quotes ticker, stat tickers, product photo strips.
+  Place one between hero and first content section, and optionally before the CTA.
+
+── 5. STICKY HEADER WITH SCROLL TRANSITION ───────────────────────────────
+Headers must transition from transparent to frosted-glass on scroll. This is
+standard on ALL premium sites in 2025 and makes the page feel polished:
+
+  'use client'
+  import { useEffect, useState } from 'react'
+  export default function Header() {
+    const [scrolled, setScrolled] = useState(false)
+    useEffect(() => {
+      const fn = () => setScrolled(window.scrollY > 20)
+      window.addEventListener('scroll', fn, { passive: true })
+      return () => window.removeEventListener('scroll', fn)
+    }, [])
+    return (
+      <header className={`fixed top-0 inset-x-0 z-50 transition-all duration-500 ${
+        scrolled
+          ? 'bg-background/90 backdrop-blur-md border-b border-border/60 shadow-sm'
+          : 'bg-transparent border-b border-transparent'
+      }`}>
+        {/* nav content */}
+      </header>
+    )
+  }
+
+── 6. CARD HOVER — 3D TILT ───────────────────────────────────────────────
+Feature cards and product cards use subtle 3D tilt on mouse hover. This is the
+single biggest differentiator between a 2020 site (flat hover-shadow) and a 2025
+site (spatial, dimensional hover):
+
+  'use client'
+  import { useRef } from 'react'
+  function TiltCard({ children, className }) {
+    const ref = useRef(null)
+    const handleMouseMove = (e) => {
+      const rect = ref.current.getBoundingClientRect()
+      const x = (e.clientX - rect.left) / rect.width  - 0.5
+      const y = (e.clientY - rect.top)  / rect.height - 0.5
+      ref.current.style.transform = `perspective(600px) rotateY(${x * 8}deg) rotateX(${-y * 8}deg) scale3d(1.02,1.02,1.02)`
+    }
+    const handleMouseLeave = () => {
+      ref.current.style.transform = 'perspective(600px) rotateY(0deg) rotateX(0deg) scale3d(1,1,1)'
+    }
+    return (
+      <div ref={ref} onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave}
+        className={`transition-transform duration-200 ease-out will-change-transform ${className}`}>
+        {children}
+      </div>
+    )
+  }
+
+  Use TiltCard wrapper on: feature cards, pricing cards, service cards, product cards.
+  Do NOT use on text paragraphs, nav items, or full-page sections.
+
+── 7. AMBIENT BACKGROUND MOTION ──────────────────────────────────────────
+Hero backgrounds must have gentle, slow movement — never completely static:
+
+  Option A — Gradient orbs (organic, modern):
+  <div className="absolute inset-0 overflow-hidden pointer-events-none">
+    <div className="absolute top-1/4 -left-20 w-96 h-96 bg-primary/20 rounded-full blur-3xl"
+         style={{ animation: 'float1 12s ease-in-out infinite alternate' }} />
+    <div className="absolute bottom-1/4 -right-20 w-80 h-80 bg-accent/15 rounded-full blur-3xl"
+         style={{ animation: 'float2 16s ease-in-out infinite alternate-reverse' }} />
+    <style>{`
+      @keyframes float1 { from { transform: translate(0,0) scale(1) } to { transform: translate(40px,30px) scale(1.1) } }
+      @keyframes float2 { from { transform: translate(0,0) scale(1) } to { transform: translate(-30px,40px) scale(1.08) } }
+    `}</style>
+  </div>
+
+  Option B — Grain noise (tactile, editorial):
+  <div className="fixed inset-0 pointer-events-none z-[1] opacity-[0.04]"
+       style={{ backgroundImage: "url(\"data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E\")", backgroundRepeat: 'repeat', backgroundSize: '128px' }} />
+
+  Option C — Dot grid:
+  <div className="absolute inset-0 pointer-events-none"
+       style={{ backgroundImage: 'radial-gradient(circle, hsl(var(--foreground)/0.08) 1px, transparent 1px)', backgroundSize: '28px 28px' }} />
+
+── 8. TEXT CLIP-PATH REVEAL (for H1 / H2) ────────────────────────────────
+Use this for dramatic section headings — text slides up from behind a clip mask:
+
+  <div className="overflow-hidden">
+    <motion.h2
+      initial={{ y: '100%' }}
+      whileInView={{ y: '0%' }}
+      viewport={{ once: true }}
+      transition={{ duration: 0.65, ease: [0.33, 1, 0.68, 1] }}
+      className="text-4xl font-bold"
+    >
+      Section Headline
+    </motion.h2>
+  </div>
+
+  Use this on H2 headings of 2-3 key sections (not every section — reserve it for high-impact moments).
+
+── 9. CTA BUTTON — ANIMATED GRADIENT BORDER ──────────────────────────────
+Primary CTAs should feel alive with a slow-rotating gradient border or
+a subtle shimmer sweep on hover:
+
+  /* Shimmer sweep on hover */
+  .cta-shimmer {
+    position: relative;
+    overflow: hidden;
+  }
+  .cta-shimmer::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(105deg, transparent 40%, rgba(255,255,255,0.15) 50%, transparent 60%);
+    transform: translateX(-100%);
+    transition: transform 0.5s ease;
+  }
+  .cta-shimmer:hover::after { transform: translateX(100%); }
+
+  In Tailwind, use group-hover animation classes or the inline style above.
+  Apply to the primary "Apply Now", "Book Now", "Get Started" button on each page.
+
+====================================
+DESIGN DNA — READ BEFORE EVERY SECTION
+====================================
+The LAYOUT_BLUEPRINT in the prompt contains these variables that MUST guide your
+implementation:
+  • live_ui_recipe     → your SIGNATURE MOMENT + supporting micro-interactions
+  • scroll_reveal_style → exact enter animation (clip/fade-up/split-word/etc.)
+  • counter_animation   → which numbers to animate and with what timing
+  • marquee_strip       → location and content of horizontal auto-scroll strip
+  • ambient_motion      → what moves in the hero background without user input
+  • motion_language     → hover states, enter animations, scroll behaviors
+  • hover_interaction_style → how cards, CTAs, images respond to hover
+
+These are not optional. Every section must implement the design DNA.
+A section that ignores these variables and uses default fade-in is a failure.
+
+====================================
 COLOR TOKENS — HARD BAN (read twice)
 ====================================
 This project's `src/app/globals.css` is the SINGLE SOURCE OF TRUTH for color.
@@ -2875,6 +3033,54 @@ delimiters — the JSX/SWC parser cannot read entity-delimited attributes.
 
 Rule of thumb: entities (&apos; &quot;) go INSIDE text between tags. Attribute
 values always use literal " or ' as the delimiter — never an HTML entity.
+
+====================================
+SELECT INPUTS — HARD BAN on native <select> (non-negotiable)
+====================================
+NEVER use a native HTML `<select>` element — it is un-styled and breaks visual
+consistency with the shadcn/ui Input components around it.
+
+✅ ALWAYS use the shadcn/ui Select primitives:
+  import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+
+  <Select value={val} onValueChange={setVal}>
+    <SelectTrigger>
+      <SelectValue placeholder="Choose an option" />
+    </SelectTrigger>
+    <SelectContent>
+      <SelectItem value="a">Option A</SelectItem>
+      <SelectItem value="b">Option B</SelectItem>
+    </SelectContent>
+  </Select>
+
+This rule applies to EVERY form on EVERY page type — admin, landing page, consumer website,
+contact form, registration form, booking form, filter bar. No exceptions.
+
+====================================
+BACKGROUND-IMAGE SECTIONS — min-h required (non-negotiable)
+====================================
+Any section whose background is a photo (pattern: `<img className="absolute inset-0 ...">`)
+MUST declare a minimum height on the `<section>` element itself.
+Without it the section collapses to zero height and the photo disappears.
+
+✅ CORRECT:
+  <section className="relative min-h-[700px] flex items-center overflow-hidden">
+    <img src="..." alt="" className="absolute inset-0 w-full h-full object-cover" />
+    <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-black/20" />
+    <div className="relative z-10 ...">...</div>
+  </section>
+
+❌ WRONG (section collapses — photo invisible):
+  <section className="relative overflow-hidden">
+    <img src="..." alt="" className="absolute inset-0 w-full h-full object-cover" />
+    ...
+  </section>
+
+Minimum height guide:
+  Hero: min-h-screen or min-h-[90vh]
+  Register / contact / form-over-photo: min-h-[700px]
+  Testimonial / quote strip over photo: min-h-[400px]
+  CTA banner over photo: min-h-[350px]
 
 ====================================
 OVERLAYS (non-negotiable)
@@ -3178,12 +3384,13 @@ testimonial-with-image, cta-with-image section you build):
 
 Concrete code pattern for a form-over-image section (reservation / contact):
 
-  <section className="relative ...">
+  <section className="relative min-h-[700px] flex items-center overflow-hidden">
     <img className="absolute inset-0 w-full h-full object-cover" src="..." />
     <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-black/20" />
     <div className="relative z-10 container">
       <div className="bg-card text-card-foreground rounded-{radius} shadow-xl p-8 ...">
         {/* form fields here — input bg-background, never transparent */}
+        {/* NEVER use native <select> — use shadcn Select with SelectTrigger/SelectContent/SelectItem */}
       </div>
     </div>
   </section>
@@ -4418,7 +4625,6 @@ async def _generate_new_project_inner(
     _design_system_picks: dict[str, str] = {}
     _design_system_rel_candidates = (
         "src/lib/design-system.js",
-        "src/lib/design-system.ts",
     )
     try:
         from app.services.design_system_js_builder import build_design_system_js
@@ -5077,7 +5283,7 @@ async def _generate_new_project_inner(
             "   This is HOW each project gets a unique visual identity. Inventing your own card / button / motion classes per file BREAKS that.\n"
         )
     elif schema_design_spec:
-        design_system_instruction = f"""\n7. DESIGN SYSTEM FILE — Generate src/lib/design-system.js (or .ts for Vue):
+        design_system_instruction = f"""\n7. DESIGN SYSTEM FILE — Generate src/lib/design-system.js:
    Export a `ds` object with deterministic Tailwind class tokens:
    - card: exact classes for ALL cards in the project
    - badge variants: status → Tailwind classes mapping

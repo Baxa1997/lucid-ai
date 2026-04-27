@@ -259,3 +259,34 @@ export default function Header() {
 **Fitness / Gym**: Bold orange or red primary. Full-screen hero with dark overlay on gym photo. Class schedule table. Trainer profiles. Pricing tiers.
 
 **Events / Conference**: Dark hero with gradient overlay. Schedule/agenda timeline. Speaker grid. Countdown timer component. Ticket CTA prominent.
+
+---
+
+## 2025 Live-Feel Requirements (all consumer websites)
+
+Every consumer website MUST implement these — they are the difference between a static
+template and a premium $50K+ agency build:
+
+### Mandatory animated elements
+1. **Sticky header scroll transition** — transparent on load, frosted-glass (`bg-background/90 backdrop-blur-md border-b`) after 20px scroll.
+2. **Hero entry sequence** — badge → H1 → subtitle → CTAs animate in cascading with `motion.div initial/animate` (not whileInView), delays 0.1s / 0.25s / 0.5s / 0.65s.
+3. **Animated stat counters** — any numeric stat section uses `AnimatedCounter` component (count from 0 on viewport entry using `useInView`).
+4. **Stagger card reveals** — every card grid / service list uses `containerVariants` + `itemVariants` with `staggerChildren: 0.08` on `whileInView`.
+5. **Logo / trust strip marquee** — if there's a partner or press logo row, use CSS infinite marquee (`@keyframes marquee`, `translateX(-50%)`).
+6. **Ambient hero motion** — hero background has at least ONE slow-moving element: floating orb `(blur-[120px] animated 12-18s)`, dot-grid overlay, or grain noise.
+7. **H2 clip-path reveal** — at least 2 section headings use `overflow-hidden` + inner element `initial:{y:'100%'} whileInView:{y:'0%'}`.
+8. **CTA hover shimmer** — primary button has a CSS shimmer sweep on hover (pseudo-element `translateX(-100% → 100%)` on hover).
+
+### Section background must alternate
+Never two consecutive `bg-background` sections. Rotate: `bg-background` → `bg-muted/40` → `bg-foreground text-background` (for testimonials/CTA) → `bg-background`.
+
+### Typography must be expressive
+- H1: `text-5xl md:text-7xl font-bold` minimum
+- Section H2: `text-3xl md:text-5xl font-bold`
+- Eyebrow labels: `text-xs font-semibold uppercase tracking-widest text-primary`
+- Import at least one expressive heading font (Fraunces, Playfair, DM Serif Display, Space Grotesk)
+
+### Image treatment
+- Hero image always has a gradient scrim over it — NEVER raw photo with light overlay
+- All content images use `object-cover` inside a fixed `aspect-[...]` container
+- No `picsum.photos` — use real Unsplash URLs with `?auto=format&fit=crop&w=1200&q=80`
