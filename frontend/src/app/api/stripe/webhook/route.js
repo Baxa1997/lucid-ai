@@ -4,10 +4,6 @@ import { createClient } from '@supabase/supabase-js';
 
 export const config = { api: { bodyParser: false } };
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: '2024-06-20',
-});
-
 // Service-role admin client — bypasses RLS for webhook updates
 function adminClient() {
   return createClient(
@@ -134,6 +130,7 @@ async function applyCreditPack(supabase, session) {
 // POST /api/stripe/webhook
 // ─────────────────────────────────────────────────────────
 export async function POST(req) {
+  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
   const body = await req.text();
   const sig  = req.headers.get('stripe-signature');
 

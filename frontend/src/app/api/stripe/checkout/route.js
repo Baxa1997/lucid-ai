@@ -4,10 +4,6 @@ import { requireAuth } from '@/lib/gatekeeper';
 import { getSupabaseServerClient } from '@/lib/supabase/server';
 import { CREDIT_PACKS, canBuyCreditPack } from '@/lib/subscription';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: '2024-06-20',
-});
-
 // ── Subscription price catalog (Stripe price IDs from env) ──
 // All plans are monthly-only for now.
 const SUBSCRIPTION_PRICES = {
@@ -36,6 +32,7 @@ const CREDIT_PACK_PRICES = {
  * Backwards compatible: if `mode` is omitted, defaults to subscription.
  */
 export async function POST(req) {
+  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
   const authResult = await requireAuth();
   if (!authResult.ok) return authResult.response;
   const { ctx } = authResult;

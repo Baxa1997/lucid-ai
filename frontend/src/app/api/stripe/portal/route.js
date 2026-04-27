@@ -3,13 +3,10 @@ import Stripe from 'stripe';
 import { requireAuth } from '@/lib/gatekeeper';
 import { getSupabaseServerClient } from '@/lib/supabase/server';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: '2024-06-20',
-});
-
 // POST /api/stripe/portal
 // Opens the Stripe Customer Portal so the user can manage/cancel.
 export async function POST() {
+  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
   const authResult = await requireAuth();
   if (!authResult.ok) return authResult.response;
   const { ctx } = authResult;
