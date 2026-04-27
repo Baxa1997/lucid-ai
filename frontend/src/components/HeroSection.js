@@ -1,75 +1,80 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { ChevronRight, Terminal, Zap } from "lucide-react";
+import {useState, useEffect, useRef} from "react";
+import {ChevronRight, Terminal, Zap} from "lucide-react";
 import Link from "next/link";
-import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import {getSupabaseBrowserClient} from "@/lib/supabase/client";
 
 // ── Timing constants ──────────────────────────────────────────────
-const LINE_DELAY    = 190;   // ms between each line appearing
-const CHAT_DELAY    = 700;   // ms pause after last line before AI reacts
-const THINKING_DUR  = 1100;  // ms of thinking dots
-const BUTTON_DELAY  = 650;   // ms between message → button appear
-const PAUSE_DUR     = 3800;  // ms at final state before reset
-const FADE_DUR      = 550;   // ms fade-out before hard reset
+const LINE_DELAY = 190; // ms between each line appearing
+const CHAT_DELAY = 700; // ms pause after last line before AI reacts
+const THINKING_DUR = 1100; // ms of thinking dots
+const BUTTON_DELAY = 650; // ms between message → button appear
+const PAUSE_DUR = 3800; // ms at final state before reset
+const FADE_DUR = 550; // ms fade-out before hard reset
 
 // ── Code data ─────────────────────────────────────────────────────
 const CODE_LINES = [
   {
     parts: [
-      { t: "async function ", c: "text-violet-400" },
-      { t: "validateSession", c: "text-blue-400" },
-      { t: "(id: ",           c: "text-slate-300" },
-      { t: "string",          c: "text-orange-400" },
-      { t: ") {",             c: "text-slate-300" },
+      {t: "async function ", c: "text-violet-400"},
+      {t: "validateSession", c: "text-blue-400"},
+      {t: "(id: ", c: "text-slate-300"},
+      {t: "string", c: "text-orange-400"},
+      {t: ") {", c: "text-slate-300"},
     ],
   },
   {
     pad: 16,
     parts: [
-      { t: "const ",   c: "text-violet-400" },
-      { t: "user ",    c: "text-slate-200" },
-      { t: "= ",       c: "text-slate-400" },
-      { t: "await ",   c: "text-violet-400" },
-      { t: "db.find",  c: "text-slate-200" },
-      { t: "(id);",    c: "text-slate-400" },
+      {t: "const ", c: "text-violet-400"},
+      {t: "user ", c: "text-slate-200"},
+      {t: "= ", c: "text-slate-400"},
+      {t: "await ", c: "text-violet-400"},
+      {t: "db.find", c: "text-slate-200"},
+      {t: "(id);", c: "text-slate-400"},
     ],
   },
-  { parts: [] },
-  {
-    pad: 16,
-    parts: [{ t: "// Lucid AI is refactoring this block", c: "text-slate-500 italic" }],
-  },
-  {
-    pad: 16, hl: true,
-    parts: [
-      { t: "if ",             c: "text-violet-400" },
-      { t: "(!user.isActive)", c: "text-indigo-300" },
-      { t: " {",              c: "text-slate-300" },
-    ],
-  },
-  {
-    pad: 32, hl: true,
-    parts: [
-      { t: "throw new ",      c: "text-violet-400" },
-      { t: "AuthError",       c: "text-amber-400" },
-      { t: "(",               c: "text-slate-400" },
-      { t: "'Account locked'", c: "text-orange-400" },
-      { t: ");",              c: "text-slate-400" },
-    ],
-  },
-  {
-    pad: 16, hl: true,
-    parts: [{ t: "}", c: "text-slate-300" }],
-  },
+  {parts: []},
   {
     pad: 16,
     parts: [
-      { t: "return ",     c: "text-violet-400" },
-      { t: "user.token;", c: "text-slate-200" },
+      {t: "// Lucid AI is refactoring this block", c: "text-slate-500 italic"},
     ],
   },
-  { parts: [{ t: "}", c: "text-slate-300" }] },
+  {
+    pad: 16,
+    hl: true,
+    parts: [
+      {t: "if ", c: "text-violet-400"},
+      {t: "(!user.isActive)", c: "text-indigo-300"},
+      {t: " {", c: "text-slate-300"},
+    ],
+  },
+  {
+    pad: 32,
+    hl: true,
+    parts: [
+      {t: "throw new ", c: "text-violet-400"},
+      {t: "AuthError", c: "text-amber-400"},
+      {t: "(", c: "text-slate-400"},
+      {t: "'Account locked'", c: "text-orange-400"},
+      {t: ");", c: "text-slate-400"},
+    ],
+  },
+  {
+    pad: 16,
+    hl: true,
+    parts: [{t: "}", c: "text-slate-300"}],
+  },
+  {
+    pad: 16,
+    parts: [
+      {t: "return ", c: "text-violet-400"},
+      {t: "user.token;", c: "text-slate-200"},
+    ],
+  },
+  {parts: [{t: "}", c: "text-slate-300"}]},
 ];
 
 // ── Blinking cursor ───────────────────────────────────────────────
@@ -84,9 +89,9 @@ function useCursor() {
 
 // ── Animated IDE mockup ───────────────────────────────────────────
 function AnimatedIDE() {
-  const [count, setCount]   = useState(0);
+  const [count, setCount] = useState(0);
   // phase: 'coding' | 'thinking' | 'message' | 'button'
-  const [phase, setPhase]   = useState("coding");
+  const [phase, setPhase] = useState("coding");
   const [fading, setFading] = useState(false);
   const cursorOn = useCursor();
   const t = useRef(null);
@@ -121,9 +126,10 @@ function AnimatedIDE() {
   }, [phase, count, fading]);
 
   const coding = phase === "coding";
-  const showBubble = phase === "thinking" || phase === "message" || phase === "button";
-  const showMsg    = phase === "message"  || phase === "button";
-  const showBtn    = phase === "button";
+  const showBubble =
+    phase === "thinking" || phase === "message" || phase === "button";
+  const showMsg = phase === "message" || phase === "button";
+  const showBtn = phase === "button";
 
   return (
     <div className="bg-[#1a1b26] rounded-xl shadow-[0_30px_60px_-12px_rgba(0,0,0,0.3)] border border-slate-800/50 overflow-hidden ring-1 ring-white/10 relative group select-none">
@@ -150,14 +156,17 @@ function AnimatedIDE() {
         className="flex h-[450px]"
         style={{
           opacity: fading ? 0 : 1,
-          transition: fading ? `opacity ${FADE_DUR}ms cubic-bezier(0.4,0,0.2,1)` : "none",
-        }}
-      >
+          transition: fading
+            ? `opacity ${FADE_DUR}ms cubic-bezier(0.4,0,0.2,1)`
+            : "none",
+        }}>
         {/* ── Code pane ── */}
         <div className="flex-1 p-6 font-mono text-[13px] overflow-hidden border-r border-white/5 bg-[#1a1b26]">
           <div className="flex items-center gap-2 mb-6">
             <Terminal className="w-3.5 h-3.5 text-violet-400" />
-            <span className="text-xs text-slate-300 font-medium">AuthMiddleware.ts</span>
+            <span className="text-xs text-slate-300 font-medium">
+              AuthMiddleware.ts
+            </span>
           </div>
 
           <div className="space-y-[7px] leading-[1.55]">
@@ -168,15 +177,20 @@ function AnimatedIDE() {
                   <span className="text-slate-600 w-6 select-none text-right pr-4 text-[11px]">
                     {idx + 1}
                   </span>
-                  <div style={{ paddingLeft: line.pad || 0 }}>
+                  <div style={{paddingLeft: line.pad || 0}}>
                     {line.parts.map((p, i) => (
-                      <span key={i} className={p.c}>{p.t}</span>
+                      <span key={i} className={p.c}>
+                        {p.t}
+                      </span>
                     ))}
                     {/* blinking cursor on active line */}
                     {isActive && (
                       <span
                         className="inline-block w-[2px] h-[13px] bg-slate-300 ml-px align-middle"
-                        style={{ opacity: cursorOn ? 1 : 0, transition: "opacity 0.1s" }}
+                        style={{
+                          opacity: cursorOn ? 1 : 0,
+                          transition: "opacity 0.1s",
+                        }}
                       />
                     )}
                   </div>
@@ -184,12 +198,22 @@ function AnimatedIDE() {
               );
 
               return line.hl ? (
-                <div key={idx} className="relative" style={{ animation: "lineIn 0.28s cubic-bezier(0.4,0,0.2,1) both" }}>
+                <div
+                  key={idx}
+                  className="relative"
+                  style={{
+                    animation: "lineIn 0.28s cubic-bezier(0.4,0,0.2,1) both",
+                  }}>
                   <div className="absolute inset-0 bg-violet-500/10 -ml-12 w-[calc(100%+3rem)] border-l-2 border-violet-500/70" />
                   <div className="relative flex z-10">{inner}</div>
                 </div>
               ) : (
-                <div key={idx} className="flex" style={{ animation: "lineIn 0.28s cubic-bezier(0.4,0,0.2,1) both" }}>
+                <div
+                  key={idx}
+                  className="flex"
+                  style={{
+                    animation: "lineIn 0.28s cubic-bezier(0.4,0,0.2,1) both",
+                  }}>
                   {inner}
                 </div>
               );
@@ -197,13 +221,18 @@ function AnimatedIDE() {
 
             {/* idle cursor after all lines typed */}
             {!coding && (
-              <div className="flex" style={{ animation: "lineIn 0.2s ease both" }}>
+              <div
+                className="flex"
+                style={{animation: "lineIn 0.2s ease both"}}>
                 <span className="text-slate-600 w-6 select-none text-right pr-4 text-[11px]">
                   {CODE_LINES.length + 1}
                 </span>
                 <span
                   className="inline-block w-[2px] h-[13px] bg-slate-300 align-middle"
-                  style={{ opacity: cursorOn ? 1 : 0, transition: "opacity 0.1s" }}
+                  style={{
+                    opacity: cursorOn ? 1 : 0,
+                    transition: "opacity 0.1s",
+                  }}
                 />
               </div>
             )}
@@ -227,8 +256,9 @@ function AnimatedIDE() {
               <div
                 key="bubble"
                 className="bg-[#232433] p-3 rounded-lg border border-white/5 shadow-sm relative"
-                style={{ animation: "fadeUp 0.35s cubic-bezier(0.4,0,0.2,1) both" }}
-              >
+                style={{
+                  animation: "fadeUp 0.35s cubic-bezier(0.4,0,0.2,1) both",
+                }}>
                 <div className="absolute -left-1.5 top-3 w-3 h-3 bg-[#232433] border-l border-b border-white/5 rotate-45" />
 
                 {/* dots layer */}
@@ -238,14 +268,15 @@ function AnimatedIDE() {
                     transition: "opacity 0.25s ease",
                     position: showMsg ? "absolute" : "relative",
                     pointerEvents: "none",
-                  }}
-                >
+                  }}>
                   <div className="flex gap-1.5 items-center py-0.5">
                     {[0, 160, 320].map((d) => (
                       <div
                         key={d}
                         className="w-1.5 h-1.5 rounded-full bg-slate-500"
-                        style={{ animation: `dotBounce 0.9s ${d}ms ease-in-out infinite` }}
+                        style={{
+                          animation: `dotBounce 0.9s ${d}ms ease-in-out infinite`,
+                        }}
                       />
                     ))}
                   </div>
@@ -257,11 +288,10 @@ function AnimatedIDE() {
                     opacity: showMsg ? 1 : 0,
                     transition: "opacity 0.35s ease",
                     transitionDelay: showMsg ? "0.1s" : "0s",
-                  }}
-                >
+                  }}>
                   <p className="text-[12px] text-slate-300 leading-relaxed font-medium">
-                    I&apos;ve identified a potential security flaw in the session
-                    handler. Should I implement the fix?
+                    I&apos;ve identified a potential security flaw in the
+                    session handler. Should I implement the fix?
                   </p>
                 </div>
               </div>
@@ -272,8 +302,9 @@ function AnimatedIDE() {
               <div
                 key="btn"
                 className="flex justify-end"
-                style={{ animation: "fadeUp 0.35s cubic-bezier(0.4,0,0.2,1) both" }}
-              >
+                style={{
+                  animation: "fadeUp 0.35s cubic-bezier(0.4,0,0.2,1) both",
+                }}>
                 <button className="bg-gradient-to-r from-[#dc5426] to-orange-500 text-white text-[12px] font-bold px-4 py-2 rounded-md shadow-lg shadow-orange-900/20">
                   Yes, proceed.
                 </button>
@@ -316,12 +347,11 @@ export default function HeroSection() {
 
   useEffect(() => {
     const sb = getSupabaseBrowserClient();
-    sb.auth.getSession().then(({ data: { session } }) => setIsLoggedIn(!!session));
+    sb.auth.getSession().then(({data: {session}}) => setIsLoggedIn(!!session));
   }, []);
 
   return (
     <section className="flex flex-col lg:flex-row items-center justify-center gap-12 lg:gap-20 px-6 sm:px-10 pt-24 pb-12 lg:pt-32 lg:pb-24 max-w-[1400px] mx-auto w-full">
-
       {/* LEFT */}
       <div className="flex-1 max-w-xl self-center">
         {/* badge */}
@@ -334,10 +364,10 @@ export default function HeroSection() {
         </div>
 
         <h1 className="text-4xl sm:text-5xl lg:text-[3rem] font-bold tracking-tight text-slate-900 dark:text-slate-100 leading-[1.1] mb-6">
-          <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#dc5426] to-orange-500 dark:from-[#dc5426] dark:to-orange-400">
+          {/* <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#dc5426] to-orange-500 dark:from-[#dc5426] dark:to-orange-400">
             LucidAI
-          </span>
-          : The AI Software engineer
+          </span> */}
+          The AI Software engineer
         </h1>
 
         <p className="text-lg text-slate-500 dark:text-slate-400 leading-relaxed mb-8 max-w-lg font-medium">
@@ -348,8 +378,7 @@ export default function HeroSection() {
         <div className="flex items-center gap-4 mb-10">
           <Link
             href={isLoggedIn ? "/dashboard/engineer" : "/login"}
-            className="bg-gradient-to-r from-[#dc5426] to-orange-500 text-white text-[15px] font-semibold px-8 py-3.5 rounded-lg shadow-lg shadow-orange-500/25 hover:shadow-orange-600/40 hover:-translate-y-0.5 transition-all duration-200 inline-block text-center"
-          >
+            className="bg-gradient-to-r from-[#dc5426] to-orange-500 text-white text-[15px] font-semibold px-8 py-3.5 rounded-lg shadow-lg shadow-orange-500/25 hover:shadow-orange-600/40 hover:-translate-y-0.5 transition-all duration-200 inline-block text-center">
             {isLoggedIn ? "Go to Dashboard" : "Get Started"}
           </Link>
           <button className="bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-[15px] font-bold px-8 py-3.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all shadow-sm">
@@ -361,25 +390,45 @@ export default function HeroSection() {
         <div className="flex flex-col gap-2 w-full max-w-lg">
           <div className="flex items-center gap-4 p-4 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-md transform hover:-translate-y-0.5 transition-all cursor-pointer relative overflow-hidden group">
             <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#dc5426]" />
-            <div className="w-6 h-6 rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 flex items-center justify-center text-sm font-bold shadow-sm shrink-0">1</div>
+            <div className="w-6 h-6 rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 flex items-center justify-center text-sm font-bold shadow-sm shrink-0">
+              1
+            </div>
             <div className="flex flex-col">
-              <span className="text-slate-900 dark:text-slate-100 font-bold text-[15px]">Planning</span>
-              <span className="text-slate-500 dark:text-slate-400 text-[13px]">Plan your roadmap and architecture</span>
+              <span className="text-slate-900 dark:text-slate-100 font-bold text-[15px]">
+                Planning
+              </span>
+              <span className="text-slate-500 dark:text-slate-400 text-[13px]">
+                Plan your roadmap and architecture
+              </span>
             </div>
             <ChevronRight className="w-4 h-4 text-slate-300 dark:text-slate-600 ml-auto" />
           </div>
 
           {[
-            { n: 2, title: "Professional Documentation", sub: "Generate enterprise-grade docs" },
-            { n: 3, title: "Integrations", sub: "Connect with GitHub, Linear & Slack" },
-          ].map(({ n, title, sub }) => (
-            <div key={n} className="flex items-center gap-4 p-4 rounded-xl border border-transparent hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-all cursor-pointer group">
+            {
+              n: 2,
+              title: "Professional Documentation",
+              sub: "Generate enterprise-grade docs",
+            },
+            {
+              n: 3,
+              title: "Integrations",
+              sub: "Connect with GitHub, Linear & Slack",
+            },
+          ].map(({n, title, sub}) => (
+            <div
+              key={n}
+              className="flex items-center gap-4 p-4 rounded-xl border border-transparent hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-all cursor-pointer group">
               <div className="w-6 h-6 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 flex items-center justify-center text-sm font-bold shrink-0 group-hover:bg-white dark:group-hover:bg-slate-700 group-hover:shadow-sm transition-all border border-transparent group-hover:border-slate-200 dark:group-hover:border-slate-600">
                 {n}
               </div>
               <div className="flex flex-col">
-                <span className="text-slate-600 dark:text-slate-300 font-bold text-[15px] group-hover:text-slate-900 dark:group-hover:text-white transition-colors">{title}</span>
-                <span className="text-slate-400 dark:text-slate-500 text-[13px] group-hover:text-slate-500 dark:group-hover:text-slate-400 transition-colors">{sub}</span>
+                <span className="text-slate-600 dark:text-slate-300 font-bold text-[15px] group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
+                  {title}
+                </span>
+                <span className="text-slate-400 dark:text-slate-500 text-[13px] group-hover:text-slate-500 dark:group-hover:text-slate-400 transition-colors">
+                  {sub}
+                </span>
               </div>
             </div>
           ))}

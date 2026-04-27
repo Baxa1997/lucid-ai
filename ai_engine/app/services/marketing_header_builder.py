@@ -5,10 +5,14 @@ emits a guaranteed-correct Next.js header using:
   - brand_name + brand_mark spec from Design Director
   - navigation items from project_schema
   - domain-appropriate CTA verb/link derived from a small mapping
+  - one of FOUR visual variants picked deterministically from
+    (description + archetype + vibe), so two consumer projects don't end
+    up with the same sticky-bordered nav
 
 Why deterministic: Claude occasionally keeps the template's default navbar
 (Sign In / Get Started / no logo) even when Phase 1 tells it to rewrite.
-Direct-writing eliminates that failure mode entirely.
+Direct-writing eliminates that failure mode entirely. The variants below
+restore visual variety without giving up that safety.
 
 Pure module — no I/O, no LLM calls, no async. Caller is responsible for
 writing the returned string to disk.
@@ -259,45 +263,118 @@ def _flatten_nav(navigation: list) -> list[dict]:
 
 
 # ───────────────────────────────────────────────────────────────
-#  Main entry.
+#  Variant selection — driven entirely by Design Director output,
+#  no hash, no preset affinity. The Design Director picks values
+#  PER PROJECT (brand_mark.placement, image_composition pattern,
+#  hero_archetype) and we translate those into one of the four
+#  structural header templates.
+#
+#  Templates are STRUCTURAL DOM patterns, not design opinions:
+#    - solid_bordered     → sticky + border-b + opaque bg (default)
+#    - transparent_overlay→ floats over hero, white nav, scroll → solid
+#    - centered_logo      → 3-column grid with brand centered
+#    - minimal            → no border, h-14 slim, text-link CTA
+#
+#  Translation rules (all fields are LLM-chosen per project):
+#    • brand_mark.placement = "navbar_center" / "split_navbar_header"
+#         → centered_logo
+#    • image_composition.overlay_pattern = "dark_scrim" / "light_scrim"
+#         AND a hero archetype that goes full-bleed
+#         → transparent_overlay (header sits over the cinematic hero)
+#    • Admin family archetypes always → solid_bordered (predictability)
+#    • Portfolio + brand_mark.placement = "navbar_left" + tight density
+#         → minimal
+#    • Otherwise → solid_bordered
 # ───────────────────────────────────────────────────────────────
-def build_marketing_header_jsx(
-    brand_name: str,
-    brand_mark: dict | None,
-    navigation: list | None,
-    domain: str,
+_VARIANTS: tuple[str, ...] = (
+    "solid_bordered",
+    "transparent_overlay",
+    "centered_logo",
+    "minimal",
+)
+
+_ADMIN_FAMILY = {
+    "admin_dashboard", "crm", "tms", "saas_dashboard", "ecommerce", "internal_tool", "saas_app",
+}
+
+_FULL_BLEED_HERO_ARCHETYPES = {
+    "full_bleed_dark", "cinematic", "layered", "layered-scroll",
+    "diagonal", "immersive",
+}
+
+
+def pick_header_variant(
     archetype: str,
+    design: dict | None = None,
 ) -> str:
-    """Return the complete MarketingHeader.jsx source.
+    """Translate Design Director's per-project spec into one of the four
+    structural templates. Pure function. No hash, no random.
 
-    Pure function. Caller handles the file write.
+    ``design`` is the Design Director output dict (may be ``None``). When
+    absent the function returns ``solid_bordered`` — the safe default that
+    matches every shadcn-style consumer / admin site.
     """
-    brand_mark = brand_mark or {}
-    navigation = navigation or []
+    a = (archetype or "").lower()
+    if a in _ADMIN_FAMILY:
+        return "solid_bordered"
 
-    nav_items = _flatten_nav(navigation)
-    cta_text, cta_href = _derive_cta(domain, archetype)
-    brand_block = _render_brand(brand_name, brand_mark)
+    design = design or {}
+    placement = ((design.get("brand_mark") or {}).get("placement") or "").lower()
+    image_comp = design.get("image_composition") or {}
+    hero_arch = (design.get("hero_archetype") or "").lower()
+    overlay_pattern = (image_comp.get("overlay_pattern") or "").lower()
+    spacing_rhythm = ((design.get("spacing") or {}).get("rhythm") or "").lower()
 
-    # Build the JSX array literal. json.dumps handles quotes/backslashes safely.
-    nav_list_entries = ",\n  ".join(
+    # Centered placement is the strongest signal — the Design Director
+    # explicitly asked for the brand at the centre of the navbar.
+    if placement in ("navbar_center", "split_navbar_header"):
+        return "centered_logo"
+
+    # Cinematic / full-bleed hero with a scrim → header should float over it.
+    if overlay_pattern in ("dark_scrim", "light_scrim") and (
+        hero_arch in _FULL_BLEED_HERO_ARCHETYPES or "full_bleed" in hero_arch
+    ):
+        return "transparent_overlay"
+
+    # Tight rhythm + portfolio leans minimal.
+    if a == "portfolio" and "tight" in spacing_rhythm:
+        return "minimal"
+
+    return "solid_bordered"
+
+
+# ───────────────────────────────────────────────────────────────
+#  Shared building blocks (used by every variant).
+# ───────────────────────────────────────────────────────────────
+def _nav_array_literal(nav_items: list[dict]) -> str:
+    """JSX array literal of {label, href} objects for navLinks."""
+    if not nav_items:
+        return ""
+    return ",\n  ".join(
         f"{{ label: {json.dumps(it['label'])}, href: {json.dumps(it['href'])} }}"
         for it in nav_items
     )
-    if not nav_list_entries:
-        # Schema produced no usable items — render an empty array rather than crash.
-        # The header still ships with brand mark + CTA, which is still better
-        # than a template-default navbar with no logo.
-        nav_list_entries = ""
 
-    treatment = (brand_mark.get("treatment") or "wordmark").lower()
+
+def _lucide_imports(treatment: str, variant: str) -> str:
     needs_sparkles = treatment in ("icon_plus_wordmark", "icon_only")
-    lucide_imports = "Menu, X" + (", Sparkles" if needs_sparkles else "")
+    base = "Menu, X"
+    if needs_sparkles:
+        base += ", Sparkles"
+    # transparent_overlay variant uses ChevronDown for an optional caret on CTA.
+    return base
 
-    # JSON-escape cta_text/href too — defensive in case future mappings include quotes.
-    cta_text_jsx = json.dumps(cta_text)
-    cta_href_attr = json.dumps(cta_href)  # already produces "\"/signup\"" form
 
+# ───────────────────────────────────────────────────────────────
+#  Variant 1: solid_bordered (the original)
+# ───────────────────────────────────────────────────────────────
+def _render_solid_bordered(
+    brand_block: str,
+    nav_array: str,
+    cta_text_jsx: str,
+    cta_href_attr: str,
+    lucide_imports: str,
+) -> str:
     return f"""'use client';
 
 import Link from 'next/link';
@@ -305,7 +382,7 @@ import {{ useState }} from 'react';
 import {{ {lucide_imports} }} from 'lucide-react';
 
 const navLinks = [
-  {nav_list_entries}
+  {nav_array}
 ];
 
 export default function MarketingHeader() {{
@@ -375,3 +452,357 @@ export default function MarketingHeader() {{
   );
 }}
 """
+
+
+# ───────────────────────────────────────────────────────────────
+#  Variant 2: transparent_overlay
+#  Floats above the hero. White text on first paint; turns into the
+#  solid_bordered look once the user scrolls past the hero.
+# ───────────────────────────────────────────────────────────────
+def _render_transparent_overlay(
+    brand_block: str,
+    nav_array: str,
+    cta_text_jsx: str,
+    cta_href_attr: str,
+    lucide_imports: str,
+) -> str:
+    return f"""'use client';
+
+import Link from 'next/link';
+import {{ useState, useEffect }} from 'react';
+import {{ {lucide_imports} }} from 'lucide-react';
+
+const navLinks = [
+  {nav_array}
+];
+
+export default function MarketingHeader() {{
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {{
+    const onScroll = () => setScrolled(window.scrollY > 16);
+    onScroll();
+    window.addEventListener('scroll', onScroll, {{ passive: true }});
+    return () => window.removeEventListener('scroll', onScroll);
+  }}, []);
+
+  const headerCls = scrolled
+    ? 'border-b border-border bg-background/95 backdrop-blur text-foreground'
+    : 'border-b border-transparent bg-transparent text-white';
+
+  const navLinkCls = scrolled
+    ? 'text-sm font-medium text-foreground/80 transition-colors hover:text-foreground'
+    : 'text-sm font-medium text-white/85 transition-colors hover:text-white';
+
+  const ctaCls = scrolled
+    ? 'inline-flex h-10 items-center rounded-md bg-primary px-5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90'
+    : 'inline-flex h-10 items-center rounded-md border border-white/30 bg-white/10 px-5 text-sm font-medium text-white backdrop-blur-sm transition-colors hover:bg-white/20';
+
+  return (
+    <header className={{`fixed top-0 z-50 w-full transition-colors duration-300 ${{headerCls}}`}}>
+      <div className="mx-auto flex h-20 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+        {brand_block}
+
+        <nav className="hidden items-center gap-8 md:flex" aria-label="Primary">
+          {{navLinks.map((link) => (
+            <Link key={{link.href}} href={{link.href}} className={{navLinkCls}}>
+              {{link.label}}
+            </Link>
+          ))}}
+        </nav>
+
+        <div className="hidden md:flex md:items-center md:gap-3">
+          <Link href={cta_href_attr} className={{ctaCls}}>{{{cta_text_jsx}}}</Link>
+        </div>
+
+        <button
+          type="button"
+          onClick={{() => setMobileOpen(!mobileOpen)}}
+          className="inline-flex h-10 w-10 items-center justify-center rounded-md md:hidden"
+          aria-label={{mobileOpen ? 'Close menu' : 'Open menu'}}
+          aria-expanded={{mobileOpen}}
+        >
+          {{mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}}
+        </button>
+      </div>
+
+      {{mobileOpen && (
+        <nav className="border-t border-border bg-background text-foreground md:hidden" aria-label="Mobile">
+          <div className="mx-auto flex max-w-7xl flex-col gap-1 px-4 py-4 sm:px-6">
+            {{navLinks.map((link) => (
+              <Link
+                key={{link.href}}
+                href={{link.href}}
+                onClick={{() => setMobileOpen(false)}}
+                className="rounded-md px-3 py-2 text-base font-medium text-foreground/80 hover:bg-muted hover:text-foreground"
+              >
+                {{link.label}}
+              </Link>
+            ))}}
+            <Link
+              href={cta_href_attr}
+              onClick={{() => setMobileOpen(false)}}
+              className="mt-2 inline-flex h-11 items-center justify-center rounded-md bg-primary px-5 text-sm font-medium text-primary-foreground shadow-sm"
+            >
+              {{{cta_text_jsx}}}
+            </Link>
+          </div>
+        </nav>
+      )}}
+    </header>
+  );
+}}
+"""
+
+
+# ───────────────────────────────────────────────────────────────
+#  Variant 3: centered_logo
+#  Brand sits at the centre. Nav splits L/R; CTA tucks to far right.
+#  Mobile collapses everything into a sheet under the brand.
+# ───────────────────────────────────────────────────────────────
+def _render_centered_logo(
+    brand_block: str,
+    nav_array: str,
+    cta_text_jsx: str,
+    cta_href_attr: str,
+    lucide_imports: str,
+) -> str:
+    return f"""'use client';
+
+import Link from 'next/link';
+import {{ useState }} from 'react';
+import {{ {lucide_imports} }} from 'lucide-react';
+
+const navLinks = [
+  {nav_array}
+];
+
+export default function MarketingHeader() {{
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const half = Math.ceil(navLinks.length / 2);
+  const navLeft = navLinks.slice(0, half);
+  const navRight = navLinks.slice(half);
+
+  return (
+    <header className="sticky top-0 z-50 w-full border-b border-border bg-background">
+      <div className="mx-auto grid h-20 max-w-7xl grid-cols-[1fr_auto_1fr] items-center gap-6 px-4 sm:px-6 lg:px-8">
+        <nav className="hidden items-center justify-end gap-8 md:flex" aria-label="Primary">
+          {{navLeft.map((link) => (
+            <Link
+              key={{link.href}}
+              href={{link.href}}
+              className="text-xs font-medium uppercase tracking-[0.18em] text-foreground/75 transition-colors hover:text-foreground"
+            >
+              {{link.label}}
+            </Link>
+          ))}}
+        </nav>
+
+        <div className="flex justify-center">{brand_block}</div>
+
+        <div className="hidden items-center justify-start gap-8 md:flex">
+          <nav className="flex items-center gap-8" aria-label="Primary right">
+            {{navRight.map((link) => (
+              <Link
+                key={{link.href}}
+                href={{link.href}}
+                className="text-xs font-medium uppercase tracking-[0.18em] text-foreground/75 transition-colors hover:text-foreground"
+              >
+                {{link.label}}
+              </Link>
+            ))}}
+          </nav>
+          <Link
+            href={cta_href_attr}
+            className="inline-flex h-10 items-center rounded-full bg-primary px-5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
+          >
+            {{{cta_text_jsx}}}
+          </Link>
+        </div>
+
+        <div className="md:hidden col-start-3 justify-self-end">
+          <button
+            type="button"
+            onClick={{() => setMobileOpen(!mobileOpen)}}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-md text-foreground"
+            aria-label={{mobileOpen ? 'Close menu' : 'Open menu'}}
+            aria-expanded={{mobileOpen}}
+          >
+            {{mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}}
+          </button>
+        </div>
+      </div>
+
+      {{mobileOpen && (
+        <nav className="border-t border-border bg-background md:hidden" aria-label="Mobile">
+          <div className="mx-auto flex max-w-7xl flex-col gap-1 px-4 py-4 sm:px-6">
+            {{navLinks.map((link) => (
+              <Link
+                key={{link.href}}
+                href={{link.href}}
+                onClick={{() => setMobileOpen(false)}}
+                className="rounded-md px-3 py-2 text-base font-medium text-foreground/80 hover:bg-muted hover:text-foreground"
+              >
+                {{link.label}}
+              </Link>
+            ))}}
+            <Link
+              href={cta_href_attr}
+              onClick={{() => setMobileOpen(false)}}
+              className="mt-2 inline-flex h-11 items-center justify-center rounded-full bg-primary px-5 text-sm font-medium text-primary-foreground shadow-sm"
+            >
+              {{{cta_text_jsx}}}
+            </Link>
+          </div>
+        </nav>
+      )}}
+    </header>
+  );
+}}
+"""
+
+
+# ───────────────────────────────────────────────────────────────
+#  Variant 4: minimal
+#  No border. Slim h-14. Nav is text-only with small caps. CTA is
+#  a text link with an arrow rather than a filled button.
+# ───────────────────────────────────────────────────────────────
+def _render_minimal(
+    brand_block: str,
+    nav_array: str,
+    cta_text_jsx: str,
+    cta_href_attr: str,
+    lucide_imports: str,
+) -> str:
+    return f"""'use client';
+
+import Link from 'next/link';
+import {{ useState }} from 'react';
+import {{ {lucide_imports} }} from 'lucide-react';
+
+const navLinks = [
+  {nav_array}
+];
+
+export default function MarketingHeader() {{
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  return (
+    <header className="sticky top-0 z-50 w-full bg-background/95 backdrop-blur">
+      <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6 lg:px-8">
+        {brand_block}
+
+        <nav className="hidden items-center gap-7 md:flex" aria-label="Primary">
+          {{navLinks.map((link) => (
+            <Link
+              key={{link.href}}
+              href={{link.href}}
+              className="text-[13px] font-medium text-foreground/65 transition-colors hover:text-foreground"
+            >
+              {{link.label}}
+            </Link>
+          ))}}
+        </nav>
+
+        <div className="hidden md:block">
+          <Link
+            href={cta_href_attr}
+            className="text-[13px] font-semibold text-foreground transition-colors hover:text-primary"
+          >
+            {{{cta_text_jsx}}} →
+          </Link>
+        </div>
+
+        <button
+          type="button"
+          onClick={{() => setMobileOpen(!mobileOpen)}}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md text-foreground md:hidden"
+          aria-label={{mobileOpen ? 'Close menu' : 'Open menu'}}
+          aria-expanded={{mobileOpen}}
+        >
+          {{mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}}
+        </button>
+      </div>
+
+      {{mobileOpen && (
+        <nav className="bg-background md:hidden" aria-label="Mobile">
+          <div className="mx-auto flex max-w-6xl flex-col gap-1 px-4 py-3 sm:px-6">
+            {{navLinks.map((link) => (
+              <Link
+                key={{link.href}}
+                href={{link.href}}
+                onClick={{() => setMobileOpen(false)}}
+                className="rounded-md px-3 py-2 text-base font-medium text-foreground/75 hover:bg-muted hover:text-foreground"
+              >
+                {{link.label}}
+              </Link>
+            ))}}
+            <Link
+              href={cta_href_attr}
+              onClick={{() => setMobileOpen(false)}}
+              className="mt-1 px-3 py-2 text-base font-semibold text-foreground hover:text-primary"
+            >
+              {{{cta_text_jsx}}} →
+            </Link>
+          </div>
+        </nav>
+      )}}
+    </header>
+  );
+}}
+"""
+
+
+_VARIANT_RENDERERS = {
+    "solid_bordered":      _render_solid_bordered,
+    "transparent_overlay": _render_transparent_overlay,
+    "centered_logo":       _render_centered_logo,
+    "minimal":             _render_minimal,
+}
+
+
+# ───────────────────────────────────────────────────────────────
+#  Main entry.
+# ───────────────────────────────────────────────────────────────
+def build_marketing_header_jsx(
+    brand_name: str,
+    brand_mark: dict | None,
+    navigation: list | None,
+    domain: str,
+    archetype: str,
+    design: dict | None = None,
+) -> tuple[str, str]:
+    """Return ``(jsx_source, variant_name)`` for the project's header.
+
+    Pure function. Caller handles the file write. ``variant_name`` is
+    returned so the caller can log + surface the choice in the plan / progress.
+
+    ``design`` is the Design Director's full output dict — the variant is
+    chosen from its ``brand_mark.placement``, ``image_composition``,
+    ``hero_archetype`` and ``spacing.rhythm`` fields. No hash, no random.
+    """
+    brand_mark = brand_mark or {}
+    navigation = navigation or []
+
+    nav_items = _flatten_nav(navigation)
+    cta_text, cta_href = _derive_cta(domain, archetype)
+    brand_block = _render_brand(brand_name, brand_mark)
+    nav_array = _nav_array_literal(nav_items)
+
+    treatment = (brand_mark.get("treatment") or "wordmark").lower()
+    variant = pick_header_variant(archetype, design)
+    lucide = _lucide_imports(treatment, variant)
+
+    cta_text_jsx = json.dumps(cta_text)
+    cta_href_attr = json.dumps(cta_href)
+
+    renderer = _VARIANT_RENDERERS.get(variant, _render_solid_bordered)
+    jsx = renderer(
+        brand_block=brand_block,
+        nav_array=nav_array,
+        cta_text_jsx=cta_text_jsx,
+        cta_href_attr=cta_href_attr,
+        lucide_imports=lucide,
+    )
+    return jsx, variant

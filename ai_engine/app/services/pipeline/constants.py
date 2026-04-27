@@ -4,6 +4,7 @@ pipeline/constants.py — module-level constants shared across all pipeline step
 Extracted verbatim from task_pipeline.py (lines 32–86, 92–96, 293–311).
 Zero logic changes.
 """
+from __future__ import annotations
 
 import os
 import pathlib
@@ -12,11 +13,14 @@ import logging
 logger = logging.getLogger(__name__)
 
 # ── Centralized Gemini Models ─────────────────────────────────
-# gemini-2.0-flash : fast + cheap for classification and codebase explore (8K output)
-# gemini-2.5-flash : for deep research and blueprint generation (65K output, Google Search grounding)
-GEMINI_MODEL           = "gemini-2.0-flash"   # classify, explore, implementation plan
-GEMINI_RESEARCH_MODEL  = "gemini-2.5-flash"   # product research (gemini_research / gemini_deep_research)
-GEMINI_BLUEPRINT_MODEL = "gemini-2.5-flash"   # blueprint → plan.json (gemini_create_plan)
+# All Gemini calls use Pro. Live testing showed Flash 2.5 burning its
+# entire 16k output budget on thinking tokens (15,726 thought / 654 output)
+# and returning a truncated 3.4k-char spec — unrecoverable downstream.
+# Pro is consistent: ~50s research + ~45s blueprint, ~$0.25 per generation
+# vs ~$0.05 on Flash. The reliability gap dwarfs the cost gap for SaaS.
+GEMINI_MODEL           = "gemini-2.5-pro"   # classify, explore, implementation plan
+GEMINI_RESEARCH_MODEL  = "gemini-2.5-pro"   # product research (gemini_research / gemini_deep_research)
+GEMINI_BLUEPRINT_MODEL = "gemini-2.5-pro"   # blueprint → plan.json (gemini_create_plan)
 
 # ── Fallback Gemini API Key ──────────────────────────────────
 # Used when the user doesn't have their own key in Settings.
@@ -86,3 +90,113 @@ _TEMPLATE_REGISTRY: dict[str, str] = {
 }
 
 _PLATFORM_ORG = "LucidSoftware-tech"
+
+
+# ── Available UI components per template ────────────────────────────────
+# Source of truth: the index.js barrel file in each template's
+# src/components/ui/. Telling Claude exactly which component names exist
+# prevents it from inventing imports like `<Carousel />`, `<Command />`,
+# `<Calendar />`, or `<Form />` that aren't shipped — these cause the
+# Next.js build to fail with "Unsupported Server Component type: undefined".
+#
+# When a template adds or removes a component, update the matching block
+# here AND its barrel file. Drift causes confident-but-broken imports.
+_SHADCN_COMPONENTS: dict[str, str] = {
+    "nextjs": (
+        "PRIMITIVES INVENTORY — these are your Lego bricks, not the design.\n\n"
+        "From '@/components/ui':\n"
+        "  Button, Input, Card (CardHeader, CardContent, CardFooter, CardTitle,\n"
+        "    CardDescription), Badge, Avatar (AvatarImage, AvatarFallback),\n"
+        "    Table (TableHeader, TableBody, TableRow, TableHead, TableCell),\n"
+        "    Textarea, Modal, Pagination, EmptyState, Spinner,\n"
+        "    Accordion, AlertDialog, Checkbox, DropdownMenu, Label, ScrollArea,\n"
+        "    Select, Separator, Sheet, Skeleton, Switch, Tabs, Tooltip.\n\n"
+        "HOW TO USE THIS LIST:\n"
+        "1. The list above is the SAFE-IMPORT set. Every section component\n"
+        "   you build (Hero, FeatureGrid, Testimonials, PricingTable, CTA,\n"
+        "   Footer, etc.) should be a NEW custom component file you write\n"
+        "   from scratch in src/components/ — NOT one of the names above.\n"
+        "2. Inside those custom sections, you may use the primitives above\n"
+        "   as building blocks (a CTA might use Button, a TestimonialCard\n"
+        "   might use Card + Avatar). That is how primitives are meant to\n"
+        "   be consumed.\n"
+        "3. ANTI-PATTERN — DO NOT do this: 'I need a feature section, so\n"
+        "   I'll just render <Card> × 6 in a grid'. That is templated. A\n"
+        "   feature section is a UNIQUE composition: alternating image+text\n"
+        "   rows, a numbered process flow, a comparison table, an interactive\n"
+        "   tabbed showcase, etc. Pick a layout that fits THIS project's\n"
+        "   industry — never the same one twice.\n"
+        "4. If you need a UI primitive NOT in the list (Carousel, Command,\n"
+        "   Calendar, DatePicker, Form, Toast, etc.): build it inline. DO\n"
+        "   NOT import unknown names from '@/components/ui' — the import\n"
+        "   resolves to undefined and crashes the build."
+    ),
+    "react": (
+        "PRIMITIVES INVENTORY — these are your Lego bricks, not the design.\n\n"
+        "From '@/components/ui':\n"
+        "  Button, Input, Card (CardHeader, CardContent, CardFooter, CardTitle,\n"
+        "    CardDescription), Badge, Avatar (AvatarImage, AvatarFallback),\n"
+        "    Table (TableHeader, TableBody, TableRow, TableHead, TableCell),\n"
+        "    Pagination, Spinner, EmptyState, DataTable,\n"
+        "    Dialog, AlertDialog, DropdownMenu, Select, Sheet, Tabs, Tooltip,\n"
+        "    Popover, Alert, Checkbox, Switch, Textarea, Label, Separator,\n"
+        "    Skeleton, ScrollArea, Toaster (from 'sonner').\n\n"
+        "HOW TO USE THIS LIST:\n"
+        "1. The list above is the SAFE-IMPORT set. Every page-level component\n"
+        "   you build (Dashboard widgets, KPI cards, charts, sidebars, modals,\n"
+        "   wizards) should be a NEW custom component file in src/components/\n"
+        "   — NOT one of the names above.\n"
+        "2. Use the primitives as building blocks INSIDE your custom\n"
+        "   components (a KpiCard wraps Card + Badge; a UserMenu wraps\n"
+        "   DropdownMenu + Avatar). That is how primitives are meant to\n"
+        "   be consumed.\n"
+        "3. ANTI-PATTERN — DO NOT just render <Card> × 4 in a grid for every\n"
+        "   dashboard. A dashboard is a UNIQUE composition: chart strip on\n"
+        "   top, kanban below; or stat callouts + activity feed; or pivoting\n"
+        "   data table with filter sidebar. Pick what fits THIS admin\n"
+        "   panel's domain.\n"
+        "4. If you need a primitive NOT in the list (Carousel, Command,\n"
+        "   Calendar, DatePicker, Form, etc.): build it inline. DO NOT\n"
+        "   import unknown names from '@/components/ui'."
+    ),
+    "vue": (
+        "PRIMITIVES INVENTORY — Vue 3 SFCs under src/components/ui/.\n\n"
+        "Custom wrappers (PascalCase, default-export): UiAvatar, UiBadge,\n"
+        "  UiButton, UiCard, UiEmptyState, UiInput, UiModal, UiPagination,\n"
+        "  UiSpinner, UiTable.\n"
+        "shadcn-vue primitives (kebab-case folders, import individual parts):\n"
+        "  accordion, alert, avatar, badge, breadcrumb, button, card, checkbox,\n"
+        "  collapsible, command, context-menu, dialog, drawer, dropdown-menu,\n"
+        "  form, hover-card, input, label, menubar, navigation-menu, popover,\n"
+        "  progress, radio-group, resizable, scroll-area, select, separator,\n"
+        "  sheet, skeleton.\n\n"
+        "HOW TO USE THIS LIST:\n"
+        "1. Every page-level section is a NEW Vue SFC you write — the list\n"
+        "   above is just the safe-import set of building blocks.\n"
+        "2. ANTI-PATTERN: rendering <UiCard> × 6 in a grid for every page.\n"
+        "   Compose unique layouts that fit this project's domain.\n"
+        "3. If you need a primitive NOT in the list: build it as a new SFC.\n"
+        "   Do not import unknown names."
+    ),
+}
+
+
+def shadcn_components_block(stack: str | None) -> str:
+    """Return the AVAILABLE UI COMPONENTS block for a given stack identifier.
+
+    Stack matching is loose: we look for substrings ("nextjs", "next",
+    "vue", "react", "vite") so callers can pass whatever ``project_stack``
+    or ``skeleton_stack`` happens to be. Defaults to the nextjs block on
+    unknown input — landing pages are the most common path and over-listing
+    one extra component is cheaper than missing the whole block.
+    """
+    if not stack:
+        return _SHADCN_COMPONENTS["nextjs"]
+    s = str(stack).lower()
+    if "nextjs" in s or "next" in s:
+        return _SHADCN_COMPONENTS["nextjs"]
+    if "vue" in s:
+        return _SHADCN_COMPONENTS["vue"]
+    if "react" in s or "vite" in s:
+        return _SHADCN_COMPONENTS["react"]
+    return _SHADCN_COMPONENTS["nextjs"]

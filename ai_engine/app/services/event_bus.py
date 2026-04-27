@@ -51,6 +51,12 @@ class WebSocketProxy:
         # In-memory fallback queue used when Redis is unavailable.
         # QueueFull events are silently dropped (stream overflow protection).
         self._queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=500)
+        # Chat persistence — when bound, every chat-relevant send_json call
+        # spawns a background task that mirrors the event into chat_messages
+        # so reload/reconnect can replay the full conversation. Unbound proxies
+        # (e.g. reconnects before a chat session row exists) are no-ops.
+        self._chat_session_id: str | None = None
+        self._user_jwt: str | None = None
 
     # ── Lifecycle helpers ─────────────────────────────────────
 
@@ -74,6 +80,18 @@ class WebSocketProxy:
     @property
     def session_id(self) -> str:
         return self._session_id
+
+    def bind_chat(self, chat_session_id: str, user_jwt: str | None) -> None:
+        """Enable DB persistence of chat-bound events for this proxy.
+
+        Called from the WS handler once the chat_sessions row exists. Until
+        bound, send_json never touches the DB. After bind, every chat-relevant
+        event is mirrored into chat_messages via a background task — the
+        pipeline is never blocked on Supabase, and a DB error never affects
+        the live stream.
+        """
+        self._chat_session_id = chat_session_id
+        self._user_jwt = user_jwt
 
     # ── Core interface ────────────────────────────────────────
 
@@ -116,6 +134,101 @@ class WebSocketProxy:
             except Exception:
                 # Send failed — detach silently; pipeline continues
                 self._ws = None
+
+        # ── 3. Mirror chat-relevant events to chat_messages ──
+        # Fire-and-forget — DB writes never block the live event stream.
+        # Only fires when bound (after the chat_sessions row exists).
+        if self._chat_session_id:
+            try:
+                asyncio.create_task(self._persist_chat_event(data))
+            except RuntimeError:
+                # No running loop (shouldn't happen in WS context, but defensive)
+                pass
+
+    # ── Chat persistence ──────────────────────────────────────
+
+    async def _persist_chat_event(self, data: dict) -> None:
+        """Mirror a chat-bound event into chat_messages.
+
+        Skipped for UI-only events (progress, step, phase, file_change,
+        preview_*, agent_event, control signals). When the event IS chat-bound,
+        we map it to a row that the frontend's chat_history loader already
+        knows how to render — plain text bubbles for chat_message/complete/
+        error/warning, and the structured `{messageType: "plan", planData: …}`
+        JSON shape for plans (see useAgentSession.js:907).
+
+        All errors swallowed — chat persistence is best-effort, never fatal.
+        """
+        try:
+            msg_type = data.get("type", "")
+
+            role: str | None = None
+            content: str = ""
+            event_type: str = ""
+
+            if msg_type == "chat_message":
+                role = data.get("role") or "assistant"
+                # Structured plan messages — preserve the JSON envelope so
+                # the history loader can re-hydrate the plan card on reload.
+                if data.get("messageType") == "plan" and data.get("planData"):
+                    content = json.dumps({
+                        "messageType": "plan",
+                        "planData": data.get("planData"),
+                    })
+                    event_type = "Plan"
+                else:
+                    content = data.get("content") or ""
+                    event_type = "ChatMessage"
+
+            elif msg_type in ("plan", "plan_emit"):
+                # Standalone plan emission (not wrapped in chat_message).
+                role = "assistant"
+                plan_data = data.get("planData") or data.get("plan") or {
+                    k: v for k, v in data.items() if k not in ("type",)
+                }
+                content = json.dumps({
+                    "messageType": "plan",
+                    "planData": plan_data,
+                })
+                event_type = "Plan"
+
+            elif msg_type == "complete":
+                role = "assistant"
+                content = data.get("message") or ""
+                event_type = "Complete"
+
+            elif msg_type == "error":
+                role = "assistant"
+                content = "⚠️ " + (data.get("message") or "")
+                event_type = "Error"
+
+            elif msg_type == "warning":
+                role = "assistant"
+                content = "⚠️ " + (data.get("message") or "")
+                event_type = "Warning"
+
+            else:
+                return  # not a chat-bound event
+
+            if role is None or not content.strip():
+                return
+
+            # Late import keeps event_bus dependency-light + dodges any
+            # circular import risk through app.services.chat.
+            from app.services.chat import ChatService
+
+            await ChatService.add_message(
+                session_id=self._chat_session_id,
+                role=role,
+                content=content,
+                event_type=event_type,
+                user_jwt=self._user_jwt,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Chat event persist failed (non-fatal, type=%s): %s",
+                data.get("type"), exc,
+            )
 
     # ── Replay ────────────────────────────────────────────────
 

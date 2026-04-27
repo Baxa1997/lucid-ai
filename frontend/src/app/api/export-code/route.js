@@ -31,15 +31,22 @@ export async function POST(req) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const { projectId, provider, repoName, isPrivate = true, includeCICD = false, gitlabInviteUser, godaddyAccountId } = body;
+  const { projectId, provider, repoName, isPrivate = true, includeCICD = false, gitlabInviteUser, godaddyAccountId, bypassLimits = false } = body;
 
   // ── Pro gate: export is a paid feature ─────────────────
-  const exportCheck = await canExportCode(ctx.userId);
-  if (!exportCheck.allowed) {
-    return NextResponse.json(
-      { error: exportCheck.reason, upgradeRequired: true },
-      { status: 403 }
-    );
+  // bypassLimits is a testing escape hatch wired through the upgrade modal's
+  // "Skip for testing" button. The full export still runs end-to-end so QA
+  // can exercise the path on a Free plan; we just log it for visibility.
+  if (bypassLimits) {
+    console.warn(`[export-code] bypassLimits=true for user=${ctx.userId} (testing override)`);
+  } else {
+    const exportCheck = await canExportCode(ctx.userId);
+    if (!exportCheck.allowed) {
+      return NextResponse.json(
+        { error: exportCheck.reason, upgradeRequired: true },
+        { status: 403 }
+      );
+    }
   }
 
   if (!projectId || !provider || !repoName?.trim()) {

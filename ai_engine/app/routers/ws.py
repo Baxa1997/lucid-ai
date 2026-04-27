@@ -263,7 +263,7 @@ async def websocket_agent(websocket: WebSocket):
                 # reconnect. Detaching it below means the other tab goes dark,
                 # so tell this tab what happened — the frontend renders a
                 # toast so the user can close the stale tab.
-                _prior_attached = session.ws_proxy.is_attached()
+                _prior_attached = session.ws_proxy.is_attached
                 replayed = await session.ws_proxy.replay(websocket, last_id=last_event_id)
                 session.ws_proxy.attach(websocket)
                 if replayed:
@@ -356,6 +356,18 @@ async def websocket_agent(websocket: WebSocket):
                         )
                     # Store for later use
                     chat_session_id = reconnect_chat_session_id
+                    # Re-bind the proxy on reconnect so any new events
+                    # produced after this point are persisted under the
+                    # right chat_sessions row. The proxy itself was
+                    # re-created above with the new websocket.
+                    if session.ws_proxy is not None:
+                        try:
+                            session.ws_proxy.bind_chat(chat_session_id, user_jwt)
+                        except Exception as _bind_err:
+                            logger.warning(
+                                "Could not re-bind chat persistence on reconnect: %s",
+                                _bind_err,
+                            )
                 except Exception as hist_err:
                     logger.warning("Failed to send chat_history on reconnect: %s", hist_err)
 
@@ -382,6 +394,47 @@ async def websocket_agent(websocket: WebSocket):
                                 session.session_id, _reconnect_ft_path)
                 except Exception as ft_err:
                     logger.warning("Failed to send file_tree on reconnect: %s", ft_err)
+
+            # ── Re-emit preview_ready on reconnect ────────────────────
+            # Backend keeps the dev server alive across WS disconnects, but
+            # only emits preview_ready once per sandbox boot. Without this
+            # block, a client that reconnects (refresh, tab switch, network
+            # blip) loses its iframe URL and shows "Preview Not Available"
+            # even though the dev server is still serving on its port.
+            #
+            # If the in-memory registry is empty (e.g. after an ai_engine
+            # restart), we fall through to ``preview_status`` so the frontend
+            # shows the spinner instead of the "Not Available" empty state,
+            # then kick off the bg_preview path the same way a fresh session
+            # would.
+            try:
+                from app.services.local_preview import get_active_preview_url
+                _bg_conv_id = project_id or conversation_id
+                _active_url = get_active_preview_url(conversation_id=_bg_conv_id)
+                if _active_url:
+                    await websocket.send_json({
+                        "type": "preview_ready",
+                        "preview_url": _active_url,
+                        "message": f"🖥️ Live preview: {_active_url}",
+                    })
+                    logger.info(
+                        "Re-emitted preview_ready on reconnect for session %s → %s",
+                        session.session_id, _active_url,
+                    )
+                else:
+                    # No live preview — show spinner so user doesn't see the
+                    # "Not Available" screen while bg_preview spins back up.
+                    await websocket.send_json({
+                        "type": "preview_status",
+                        "status": "starting",
+                        "message": "Restarting preview…",
+                    })
+                    logger.info(
+                        "No active preview for session %s — bg_preview will restart it",
+                        session.session_id,
+                    )
+            except Exception as pv_err:
+                logger.warning("Failed to re-emit preview_ready on reconnect: %s", pv_err)
         else:
             # ── Create new session (no clone — workspace_manager handles it) ──
             try:
@@ -553,6 +606,15 @@ async def websocket_agent(websocket: WebSocket):
                     logger.info("Chat session %s created for user %s", chat_session_id, user_id)
             except Exception as exc:
                 logger.warning("Failed to create/reuse chat session in DB: %s", exc)
+
+            # Bind the proxy so every chat-relevant event from this point on
+            # is mirrored into chat_messages. Safe no-op if proxy is missing
+            # or chat_session_id never got assigned (DB create failure above).
+            if chat_session_id and session.ws_proxy is not None:
+                try:
+                    session.ws_proxy.bind_chat(chat_session_id, user_jwt)
+                except Exception as _bind_err:
+                    logger.warning("Could not bind chat persistence: %s", _bind_err)
 
             # ── Replay history for returning users (server-restart safe) ──
             if _prev_session_data and _prev_session_data["messages"]:
@@ -1311,20 +1373,26 @@ async def websocket_agent(websocket: WebSocket):
 
             # ── Plan confirmation — user approves or rejects the plan ───
             if msg_type == "plan_confirm":
-                from app.services.project_generator import resolve_plan_confirmation
+                from app.services.project_generator import (
+                    resolve_plan_confirmation, _confirmation_key,
+                )
                 logger.info("[%s] Plan confirmed by user", getattr(session, "session_id", "?"))
-                resolve_plan_confirmation(websocket, {"confirmed": True})
+                _key = _confirmation_key(websocket, chat_session_id or "")
+                resolve_plan_confirmation(_key, {"confirmed": True})
                 continue
 
             if msg_type == "plan_reject":
-                from app.services.project_generator import resolve_plan_confirmation
+                from app.services.project_generator import (
+                    resolve_plan_confirmation, _confirmation_key,
+                )
                 correction = data.get("correction", "")
                 logger.info(
                     "[%s] Plan rejected by user — correction: %s",
                     getattr(session, "session_id", "?"),
                     correction[:80],
                 )
-                resolve_plan_confirmation(websocket, {
+                _key = _confirmation_key(websocket, chat_session_id or "")
+                resolve_plan_confirmation(_key, {
                     "confirmed": False,
                     "correction": correction,
                 })
@@ -1680,15 +1748,20 @@ async def websocket_agent(websocket: WebSocket):
             except Exception as exc:
                 logger.error("Failed to destroy workspace for conversation %s: %s", conversation_id, exc)
 
-        # Cancel any pending plan confirmation Future so the generator
-        # doesn't block forever waiting for a user that already disconnected.
-        try:
-            from app.services.project_generator import pending_plan_confirmations
-            fut = pending_plan_confirmations.pop(id(websocket), None)
-            if fut and not fut.done():
-                fut.cancel()
-        except Exception:
-            pass
+            # Cancel any pending plan confirmation Future ONLY when the pipeline
+            # is not running. If the pipeline IS still running (and we kept the
+            # workspace alive above), leave the future intact so a reconnected
+            # websocket can still resolve it via plan_confirm / plan_reject.
+            try:
+                from app.services.project_generator import (
+                    pending_plan_confirmations, _confirmation_key,
+                )
+                _key = _confirmation_key(websocket, chat_session_id or "")
+                fut = pending_plan_confirmations.pop(_key, None)
+                if fut and not fut.done():
+                    fut.cancel()
+            except Exception:
+                pass
 
         logger.info("WebSocket session cleaned up")
 

@@ -503,12 +503,30 @@ export default function EngineerDashboardPage() {
     return conversations.filter((c) => new Date(c.created_at) >= s).length;
   })();
 
-  /* ── Build from prompt ── */
+  /* ── Usage gates ──
+     Two independent caps: monthly project count + monthly token quota.
+     Either one being exhausted opens the upgrade modal. The modal copy
+     adapts to whichever cap was hit. */
   const isAtProjectLimit = () => {
     if (!subscription) return false;
-    if (subscription.isPaid) return false;
-    const limit = subscription.limits?.maxProjects ?? 1;
+    const limit = subscription.limits?.maxProjectsPerMonth;
+    if (limit == null) return false; // null = unlimited
     return (subscription.usage?.projectsCreated ?? 0) >= limit;
+  };
+
+  const isAtTokenLimit = () => {
+    if (!subscription) return false;
+    const used   = subscription.usage?.tokensUsed ?? 0;
+    const quota  = subscription.limits?.monthlyTokenQuota ?? 0;
+    const extra  = subscription.extraTokenBalance ?? 0;
+    return used >= quota && extra <= 0;
+  };
+
+  // Which limit triggered the modal (drives the modal copy).
+  const getActiveLimitType = () => {
+    if (isAtProjectLimit()) return 'project';
+    if (isAtTokenLimit())   return 'token';
+    return null;
   };
 
   const handleSkipUpgrade = () => {
@@ -519,10 +537,13 @@ export default function EngineerDashboardPage() {
     else if (action === 'import') handleImportExistingRepo(true);
   };
 
+  // Block the action when either cap is hit, unless force=true (Skip clicked).
+  const isAtAnyLimit = () => isAtProjectLimit() || isAtTokenLimit();
+
   const handleBuildFromPrompt = async (force = false) => {
     const text = promptText.trim();
     if (!text) return;
-    if (!force && isAtProjectLimit()) { setPendingAction('build'); setShowUpgradeModal(true); return; }
+    if (!force && isAtAnyLimit()) { setPendingAction('build'); setShowUpgradeModal(true); return; }
     setIsLaunching(true);
     try {
       // Resolve stack synchronously from user selection (no API call)
@@ -573,7 +594,7 @@ export default function EngineerDashboardPage() {
      from the lockfile — pnpm-lock.yaml > yarn.lock > package-lock.json). */
   const handleImportExistingRepo = async (force = false) => {
     if (!selectedRepo || !selectedBranch) return;
-    if (!force && isAtProjectLimit()) { setPendingAction('import'); setShowUpgradeModal(true); return; }
+    if (!force && isAtAnyLimit()) { setPendingAction('import'); setShowUpgradeModal(true); return; }
     setIsImporting(true);
     setImportError("");
     try {
@@ -621,49 +642,63 @@ export default function EngineerDashboardPage() {
   return (
     <div className="h-full bg-[#fefcfa] dark:bg-[#0d1117] flex flex-col">
       {/* ── Upgrade Modal ── */}
-      {showUpgradeModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <div className="relative w-full max-w-md bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200 dark:border-[#2d333b] shadow-2xl p-8">
-            <button
-              onClick={() => setShowUpgradeModal(false)}
-              className="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06]"
-            >
-              <X className="w-4 h-4" />
-            </button>
-            <div className="w-12 h-12 rounded-2xl bg-orange-50 dark:bg-orange-500/10 flex items-center justify-center mb-5">
-              <Rocket className="w-6 h-6 text-[#dc5426]" />
-            </div>
-            <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-2">
-              Upgrade to Pro
-            </h2>
-            <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
-              You&apos;ve used your 1 free project. Upgrade to Pro for unlimited projects, code export, and more.
-            </p>
-            <div className="space-y-2 mb-6">
-              {["Unlimited projects", "Code export to GitHub & GitLab", "CI/CD automation", "Advanced AI templates"].map((f) => (
-                <div key={f} className="flex items-center gap-2.5 text-sm text-slate-600 dark:text-slate-300">
-                  <div className="w-4 h-4 rounded-full bg-emerald-100 dark:bg-emerald-500/20 flex items-center justify-center shrink-0">
-                    <svg viewBox="0 0 10 10" className="w-2.5 h-2.5 text-emerald-600 dark:text-emerald-400"><path d="M2 5l2 2 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/></svg>
+      {showUpgradeModal && (() => {
+        const limitType = getActiveLimitType();
+        const isToken = limitType === 'token';
+        const planName = subscription?.plan ? subscription.plan.charAt(0).toUpperCase() + subscription.plan.slice(1) : 'Free';
+
+        const title = isToken ? 'Token quota reached' : 'Project limit reached';
+        const subtitle = isToken
+          ? `You've used all your monthly tokens on the ${planName} plan. Upgrade or buy a credit pack to keep building.`
+          : (subscription?.plan === 'free'
+              ? "You've used your free project. Upgrade to keep building with more projects, tokens, and code export."
+              : `You've hit your monthly project limit on the ${planName} plan. Upgrade for more headroom.`);
+
+        const features = isToken
+          ? ['More monthly tokens (5M on Pro)', 'Or buy a one-time credit pack', 'Code export to GitHub & GitLab', 'Priority build queue']
+          : ['More projects per month', 'Higher monthly token quota', 'Code export to GitHub & GitLab', 'Advanced AI templates'];
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <div className="relative w-full max-w-md bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200 dark:border-[#2d333b] shadow-2xl p-8">
+              <button
+                onClick={() => setShowUpgradeModal(false)}
+                className="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06]"
+              >
+                <X className="w-4 h-4" />
+              </button>
+              <div className="w-12 h-12 rounded-2xl bg-orange-50 dark:bg-orange-500/10 flex items-center justify-center mb-5">
+                <Rocket className="w-6 h-6 text-[#dc5426]" />
+              </div>
+              <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-2">{title}</h2>
+              <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">{subtitle}</p>
+              <div className="space-y-2 mb-6">
+                {features.map((f) => (
+                  <div key={f} className="flex items-center gap-2.5 text-sm text-slate-600 dark:text-slate-300">
+                    <div className="w-4 h-4 rounded-full bg-emerald-100 dark:bg-emerald-500/20 flex items-center justify-center shrink-0">
+                      <svg viewBox="0 0 10 10" className="w-2.5 h-2.5 text-emerald-600 dark:text-emerald-400"><path d="M2 5l2 2 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/></svg>
+                    </div>
+                    {f}
                   </div>
-                  {f}
-                </div>
-              ))}
+                ))}
+              </div>
+              <a
+                href="/dashboard/engineer/billing"
+                className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 bg-gradient-to-r from-[#dc5426] to-orange-500 text-white hover:opacity-90 shadow-sm shadow-orange-600/20 transition-all active:scale-[0.98]"
+              >
+                <CreditCard className="w-4 h-4" />
+                {isToken ? 'View Plans & Credit Packs' : 'View Plans — from $19/mo'}
+              </a>
+              <button
+                onClick={handleSkipUpgrade}
+                className="w-full mt-3 py-2.5 rounded-xl text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-all"
+              >
+                Skip for now
+              </button>
             </div>
-            <a
-              href="/dashboard/engineer/billing"
-              className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 bg-gradient-to-r from-[#dc5426] to-orange-500 text-white hover:opacity-90 shadow-sm shadow-orange-600/20 transition-all active:scale-[0.98]"
-            >
-              <CreditCard className="w-4 h-4" /> View Plans — from $24/mo
-            </a>
-            <button
-              onClick={handleSkipUpgrade}
-              className="w-full mt-3 py-2.5 rounded-xl text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-all"
-            >
-              Skip for now
-            </button>
           </div>
-        </div>
-      )}
+        );
+      })()}
       <div className="flex-1 overflow-y-auto">
         {/* ── HOME HERO ── */}
         <div className="max-w-[800px] mx-auto px-8 pt-[52px] pb-10 text-center">

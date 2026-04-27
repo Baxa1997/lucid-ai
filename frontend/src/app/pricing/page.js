@@ -1,6 +1,5 @@
 'use client';
 
-import { useState } from 'react';
 import { Check, Zap, Sparkles, Rocket, Building2, HelpCircle } from 'lucide-react';
 import Link from 'next/link';
 import Navbar from '@/components/Navbar';
@@ -12,88 +11,73 @@ const plans = [
     name: 'Free',
     description: 'Get started with AI code generation at zero cost. Perfect for exploring.',
     monthly: 0,
-    yearly: 0,
     icon: Zap,
     accent: 'slate',
     credits: [
-      { label: 'generation credits', value: '50', unit: '/mo' },
-      { label: 'project slots', value: '2', unit: '' },
+      { label: 'tokens', value: '100k', unit: '/mo' },
+      { label: 'project', value: '1', unit: '' },
     ],
     highlights: [
       'Core AI code generation',
       'Community templates',
-      'GitHub export',
       'Basic build validation',
     ],
-    note: null,
     featured: false,
   },
   {
     name: 'Starter',
     description: 'For individuals building serious side projects and MVPs.',
-    monthly: 15,
-    yearly: 12,
+    monthly: 19,
     icon: Sparkles,
     accent: 'orange',
     credits: [
-      { label: 'generation credits', value: '200', unit: '/mo' },
-      { label: 'project slots', value: '5', unit: '' },
+      { label: 'tokens', value: '1M', unit: '/mo' },
+      { label: 'projects', value: '5', unit: '/mo' },
     ],
     highlights: [
       'Everything in Free',
-      'Custom domain connect',
-      'GitLab integration',
-      'Priority build queue',
+      'Custom templates',
+      'Standard build queue',
       'Figma import',
     ],
-    note: null,
     featured: false,
   },
   {
     name: 'Pro',
     description: 'Advanced tools for professional developers and small teams.',
-    monthly: 30,
-    yearly: 24,
+    monthly: 59,
     icon: Rocket,
     accent: 'brand',
     credits: [
-      { label: 'generation credits', value: '500', unit: '/mo' },
-      { label: 'project slots', value: '15', unit: '' },
+      { label: 'tokens', value: '5M', unit: '/mo' },
+      { label: 'projects', value: '20', unit: '/mo' },
     ],
     highlights: [
       'Everything in Starter',
+      'Code export to GitHub & GitLab',
       'CI/CD automation',
-      'Team collaboration',
       'Advanced templates',
-      'AI model selection',
-      'GoDaddy DNS setup',
-      'Early access to beta features',
+      'Priority build queue',
     ],
-    note: null,
     featured: true,
   },
   {
     name: 'Enterprise',
     description: 'Scale your engineering with dedicated support and unlimited capacity.',
-    monthly: 120,
-    yearly: 96,
+    monthly: 299,
     icon: Building2,
     accent: 'amber',
     credits: [
-      { label: 'generation credits', value: '2,000', unit: '/mo' },
-      { label: 'project slots', value: 'Unlimited', unit: '' },
+      { label: 'tokens', value: '15M', unit: '/mo' },
+      { label: 'projects', value: 'Unlimited', unit: '' },
     ],
     highlights: [
       'Everything in Pro',
       'Unlimited projects',
-      'Dedicated support',
-      'Custom templates',
+      'Priority support',
       'SLA guarantee',
-      'SSO / SAML',
       'Priority infrastructure',
-      'Premium support',
     ],
-    note: null,
     featured: false,
   },
 ];
@@ -112,9 +96,7 @@ const allPlanFeatures = [
 ];
 
 export default function PricingPage() {
-  const [billing, setBilling] = useState('monthly');
-
-  const getPrice = (plan) => billing === 'yearly' ? plan.yearly : plan.monthly;
+  const getPrice = (plan) => plan.monthly;
 
   const accentClasses = {
     slate:  { bg: 'bg-slate-100 dark:bg-slate-800', text: 'text-slate-600 dark:text-slate-300', btn: 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:bg-slate-800 dark:hover:bg-slate-100' },
@@ -135,34 +117,8 @@ export default function PricingPage() {
             Plans from first idea<br className="hidden sm:block" /> to full scale
           </h1>
           <p className="text-lg text-slate-500 dark:text-slate-400 max-w-xl mx-auto mb-8">
-            Start for free. Upgrade when you&apos;re ready.
+            Start for free. Upgrade when you&apos;re ready. All plans billed monthly.
           </p>
-
-          {/* Billing Toggle */}
-          <div className="inline-flex items-center bg-slate-100 dark:bg-slate-800 rounded-full p-1">
-            <button
-              onClick={() => setBilling('yearly')}
-              className={cn(
-                "px-5 py-2 rounded-full text-sm font-semibold transition-all duration-200",
-                billing === 'yearly'
-                  ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm"
-                  : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
-              )}
-            >
-              Yearly <span className="text-[#dc5426] dark:text-orange-400 text-xs font-bold ml-1">(save 20%)</span>
-            </button>
-            <button
-              onClick={() => setBilling('monthly')}
-              className={cn(
-                "px-5 py-2 rounded-full text-sm font-semibold transition-all duration-200",
-                billing === 'monthly'
-                  ? "bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm"
-                  : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
-              )}
-            >
-              Monthly
-            </button>
-          </div>
         </section>
 
         {/* ── Pricing Cards ── */}
@@ -200,9 +156,6 @@ export default function PricingPage() {
                     </span>
                     {price > 0 && (
                       <span className="text-[13px] text-slate-400 dark:text-slate-500 font-medium">/mo</span>
-                    )}
-                    {billing === 'yearly' && price > 0 && (
-                      <span className="text-[11px] text-slate-400 dark:text-slate-500 ml-2">Billed annually</span>
                     )}
                   </div>
 

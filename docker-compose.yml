@@ -25,12 +25,25 @@ services:
       - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}
       - NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY}
       - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      # Subscription tiers (monthly only)
+      - STRIPE_STARTER_MONTHLY_PRICE_ID=${STRIPE_STARTER_MONTHLY_PRICE_ID}
       - STRIPE_PRO_MONTHLY_PRICE_ID=${STRIPE_PRO_MONTHLY_PRICE_ID}
-      - STRIPE_PRO_YEARLY_PRICE_ID=${STRIPE_PRO_YEARLY_PRICE_ID}
+      - STRIPE_ENTERPRISE_MONTHLY_PRICE_ID=${STRIPE_ENTERPRISE_MONTHLY_PRICE_ID}
+      # One-time credit packs
+      - STRIPE_CREDIT_PACK_SMALL_PRICE_ID=${STRIPE_CREDIT_PACK_SMALL_PRICE_ID}
+      - STRIPE_CREDIT_PACK_MEDIUM_PRICE_ID=${STRIPE_CREDIT_PACK_MEDIUM_PRICE_ID}
+      - STRIPE_CREDIT_PACK_LARGE_PRICE_ID=${STRIPE_CREDIT_PACK_LARGE_PRICE_ID}
       # ── App URL (for Stripe redirect) ──────────────────
       - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
       # ── Admin access ───────────────────────────────────
       - ADMIN_EMAILS=${ADMIN_EMAILS}
+      # ── Platform deployment (Lucid-owned GitHub org + Vercel team) ──
+      # Used by /api/publish — pushes generated repos to our org and
+      # creates Vercel projects so deploys are auto-triggered on main pushes.
+      - PLATFORM_GITHUB_TOKEN=${PLATFORM_GITHUB_TOKEN}
+      - PLATFORM_GITHUB_ORG=${PLATFORM_GITHUB_ORG}
+      - VERCEL_TOKEN=${VERCEL_TOKEN}
+      - VERCEL_TEAM_ID=${VERCEL_TEAM_ID:-}
     depends_on:
       - ai_engine
     ulimits:
@@ -82,6 +95,9 @@ services:
       - SANDBOX_MEMORY_LIMIT=2g
       - SANDBOX_CPU_LIMIT=1.0
       - INTERNAL_API_KEY=${INTERNAL_API_KEY}
+      # Used by billing_meter to call the frontend's /api/internal/usage endpoint
+      # (Docker DNS — service name "frontend" resolves to that container).
+      - LUCID_FRONTEND_URL=${LUCID_FRONTEND_URL:-http://frontend:3000}
       # Must match frontend ENCRYPTION_KEY — used to decrypt stored git tokens
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - ALLOWED_ORIGINS=http://localhost:3000,http://frontend:3000

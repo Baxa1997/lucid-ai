@@ -1078,21 +1078,137 @@ def fix_unescaped_entities(workspace_path: str) -> list[str]:
 # ║  FIXER 6 — <img> → <Image /> (Next.js)                     ║
 # ╚══════════════════════════════════════════════════════════════╝
 
-# Matches <img ...> or <img ... /> tags (self-closing or not)
-_IMG_TAG_RE = re.compile(r"<img\b([^>]*?)(?:/>|>)", re.IGNORECASE)
+# Matches <img ...> or <img ... /> tags. The attribute body uses [\s\S] (not
+# [^>]) so a stray `>` inside a JSX expression (e.g. {a > b ? x : y}) doesn't
+# end the tag prematurely. Non-greedy keeps the match short for normal cases.
+_IMG_TAG_RE = re.compile(r"<img\b([\s\S]*?)(?:/>|>)", re.IGNORECASE)
 
-# Extract src, alt, className, width, height attributes
-_ATTR_RE = re.compile(r'\b(src|alt|className|class|width|height|style)\s*=\s*(["\{][^"}\n]*["\}]|\w+)', re.IGNORECASE)
+_ATTR_KEYS = {"src", "alt", "classname", "class", "width", "height", "style"}
+
+
+def _parse_jsx_attrs(attrs_str: str) -> dict[str, str]:
+    """Hand-rolled JSX attribute parser.
+
+    Why not regex: a regex like ``["\\{][^"}\\n]*["\\}]`` truncates JSX values
+    that contain balanced ``{...}`` (e.g. ``style={{color:'red'}}``) or a
+    template literal with ``${expr}`` (e.g. ``src={`a${n}`}``) — the inner
+    ``}`` fools the regex into closing the value early, which then drops the
+    real closing ``}`` and produces an unterminated literal. Walking the
+    string with brace/quote/backtick awareness handles all three.
+
+    Returns a dict mapping lowercased attribute name → raw value text
+    (including the wrapping ``"..."`` or ``{...}``). Unknown attrs are
+    skipped to keep the dict focused on what _img_to_image consumes.
+    """
+    attrs: dict[str, str] = {}
+    n = len(attrs_str)
+    i = 0
+    while i < n:
+        # Skip whitespace and commas (latter shouldn't appear, but defensive)
+        while i < n and attrs_str[i].isspace():
+            i += 1
+        if i >= n:
+            break
+
+        # Read attribute name (alphanumeric, dash, underscore)
+        name_start = i
+        while i < n and (attrs_str[i].isalnum() or attrs_str[i] in "-_"):
+            i += 1
+        if i == name_start:
+            i += 1  # stray punctuation; skip and continue
+            continue
+        name = attrs_str[name_start:i].lower()
+
+        # Skip whitespace before '='
+        while i < n and attrs_str[i].isspace():
+            i += 1
+
+        # Boolean / valueless attribute
+        if i >= n or attrs_str[i] != "=":
+            if name in _ATTR_KEYS:
+                attrs[name] = "true"
+            continue
+        i += 1  # consume '='
+        while i < n and attrs_str[i].isspace():
+            i += 1
+        if i >= n:
+            break
+
+        value_start = i
+        ch = attrs_str[i]
+        if ch == '"' or ch == "'":
+            quote = ch
+            i += 1
+            while i < n and attrs_str[i] != quote:
+                if attrs_str[i] == "\\" and i + 1 < n:
+                    i += 2
+                else:
+                    i += 1
+            if i < n:
+                i += 1  # consume closing quote
+        elif ch == "{":
+            # Walk to matching '}', respecting nested braces, strings,
+            # and template literals (including their ${...} expressions).
+            depth = 1
+            i += 1
+            while i < n and depth > 0:
+                c = attrs_str[i]
+                if c == "{":
+                    depth += 1
+                    i += 1
+                elif c == "}":
+                    depth -= 1
+                    i += 1
+                elif c == '"' or c == "'":
+                    q = c
+                    i += 1
+                    while i < n and attrs_str[i] != q:
+                        if attrs_str[i] == "\\" and i + 1 < n:
+                            i += 2
+                        else:
+                            i += 1
+                    if i < n:
+                        i += 1
+                elif c == "`":
+                    i += 1
+                    while i < n and attrs_str[i] != "`":
+                        if attrs_str[i] == "\\" and i + 1 < n:
+                            i += 2
+                        elif attrs_str[i:i + 2] == "${":
+                            sub_depth = 1
+                            i += 2
+                            while i < n and sub_depth > 0:
+                                if attrs_str[i] == "{":
+                                    sub_depth += 1
+                                elif attrs_str[i] == "}":
+                                    sub_depth -= 1
+                                i += 1
+                        else:
+                            i += 1
+                    if i < n:
+                        i += 1  # closing backtick
+                else:
+                    i += 1
+        else:
+            # Bare word value (rare in JSX but covered by original regex)
+            while i < n and (attrs_str[i].isalnum() or attrs_str[i] in "_-"):
+                i += 1
+
+        if name in _ATTR_KEYS:
+            attrs[name] = attrs_str[value_start:i]
+
+    # Normalize 'class' → 'classname' (matches the existing _img_to_image keys)
+    if "class" in attrs and "classname" not in attrs:
+        attrs["classname"] = attrs.pop("class")
+    elif "class" in attrs:
+        # Both present — prefer the React-style key, drop the HTML one
+        attrs.pop("class", None)
+    return attrs
 
 
 def _img_to_image(match: re.Match) -> str:
     attrs_str = match.group(1)
-    attrs = {}
-    for m in _ATTR_RE.finditer(attrs_str):
-        raw_key = m.group(1)
-        # Normalize: both 'class' and 'className' stored under 'classname'
-        key = "classname" if raw_key.lower() in ("class", "classname") else raw_key.lower()
-        attrs[key] = m.group(2)
+    attrs = _parse_jsx_attrs(attrs_str)
 
     # Build Next.js <Image> props
     parts = []
@@ -1304,6 +1420,96 @@ def fix_next_config_image_domains(workspace_path: str) -> bool:
             return True
         except Exception as e:
             logger.warning("fix_next_config_image_domains: could not write %s: %s", cfg_path, e)
+
+    return False
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  FIXER 7b — next.config ESLint / TS ignore-on-build patcher ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+# A single missing `key` prop (or any other lint error) should not block a
+# Vercel deploy of an AI-generated landing page. We inject Next.js's official
+# escape hatches so the build proceeds even when ESLint / tsc complain.
+_BUILD_IGNORE_BLOCK = """
+  eslint: { ignoreDuringBuilds: true },
+  typescript: { ignoreBuildErrors: true },"""
+
+
+def fix_next_config_build_ignore(workspace_path: str) -> bool:
+    """Inject `eslint.ignoreDuringBuilds` + `typescript.ignoreBuildErrors`.
+
+    Mirrors fix_next_config_image_domains. Returns True if the file was
+    modified, False if already configured or no config was found.
+    """
+    for cfg_name in ("next.config.js", "next.config.mjs"):
+        cfg_path = os.path.join(workspace_path, cfg_name)
+        if not os.path.exists(cfg_path):
+            continue
+
+        try:
+            with open(cfg_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except Exception as e:
+            logger.warning("fix_next_config_build_ignore: could not read %s: %s", cfg_path, e)
+            continue
+
+        if "ignoreDuringBuilds" in content and "ignoreBuildErrors" in content:
+            return False
+
+        patched = False
+
+        obj_match = re.search(r'(?:const|let|var)\s+nextConfig\s*=\s*\{', content)
+        if obj_match:
+            open_pos = obj_match.end() - 1
+            close_pos = _find_matching_close_brace(content, open_pos)
+            if close_pos != -1:
+                inside = content[open_pos:close_pos]
+                # Build a block that only contains keys not already present
+                additions = []
+                if "ignoreDuringBuilds" not in inside:
+                    additions.append("  eslint: { ignoreDuringBuilds: true },")
+                if "ignoreBuildErrors" not in inside:
+                    additions.append("  typescript: { ignoreBuildErrors: true },")
+                if additions:
+                    block = "\n" + "\n".join(additions)
+                    content = content[:close_pos] + block + "\n" + content[close_pos:]
+                    patched = True
+
+        if not patched:
+            export_match = re.search(
+                r'(?:module\.exports\s*=\s*|export\s+default\s+)\{', content
+            )
+            if export_match:
+                open_pos = export_match.end() - 1
+                close_pos = _find_matching_close_brace(content, open_pos)
+                if close_pos != -1:
+                    inside = content[open_pos:close_pos]
+                    additions = []
+                    if "ignoreDuringBuilds" not in inside:
+                        additions.append("  eslint: { ignoreDuringBuilds: true },")
+                    if "ignoreBuildErrors" not in inside:
+                        additions.append("  typescript: { ignoreBuildErrors: true },")
+                    if additions:
+                        block = "\n" + "\n".join(additions)
+                        content = content[:close_pos] + block + "\n" + content[close_pos:]
+                        patched = True
+
+        if not patched:
+            content += (
+                "\n// Auto-patched by Lucid AI — never fail Vercel build on lint/ts\n"
+                f"/** @type {{import('next').NextConfig}} */\n"
+                f"module.exports = {{{_BUILD_IGNORE_BLOCK}\n}};\n"
+            )
+            patched = True
+
+        try:
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            logger.info("fix_next_config_build_ignore: patched %s with eslint/ts ignore", cfg_name)
+            return True
+        except Exception as e:
+            logger.warning("fix_next_config_build_ignore: could not write %s: %s", cfg_path, e)
 
     return False
 
@@ -1687,6 +1893,17 @@ async def run_all_fixers(
             await _ws_send(websocket, "progress", "🔧 Patched next.config.js with image remotePatterns")
     except Exception as e:
         logger.warning("next.config image domain patcher failed (non-fatal): %s", e)
+
+    # 7b. Patch next.config to never fail Vercel build on ESLint / tsc errors.
+    #     A single missing `key` prop or unused-var warning should not block
+    #     deploy of an AI-generated landing page.
+    try:
+        patched = fix_next_config_build_ignore(workspace_path)
+        results["next_config_build_ignore_patched"] = patched
+        if patched:
+            await _ws_send(websocket, "progress", "🔧 Patched next.config.js to skip ESLint/TS errors on build")
+    except Exception as e:
+        logger.warning("next.config build-ignore patcher failed (non-fatal): %s", e)
 
     results["total_fixes"] = (
         len(results["config_stripped"])

@@ -339,14 +339,44 @@ import copy as _copy_sp
 
 
 def _extract_block(research: str, header: str, max_chars: int = 3000) -> str:
-    """Extract the text content of a ===HEADER=== block."""
-    if header not in research:
+    """Extract the text content of a ===HEADER=== block.
+
+    Strict path first: literal `===HEADER===` match (what the prompt asks for).
+
+    Markdown fallback: when Gemini drops the `===` wrappers and writes
+    `## Sections` / `## Pages` instead, we hand back a wider slice — from
+    the matched heading through the rest of the research, capped at
+    max_chars*3. We can't cleanly bound the inner content (real section
+    headings like `## Hero` sit at the same level as the wrapper itself),
+    so we lean on the parsers (_parse_sections / _parse_pages_block) to
+    filter wrapper names out via a denylist. Returning a wider slice is
+    cheap; silently returning "" is what made the schema thin.
+    """
+    if header in research:
+        start = research.index(header) + len(header)
+        rest = research[start:]
+        end_pos = rest.find("===")
+        end = start + end_pos if end_pos != -1 else start + max_chars
+        return research[start:end].strip()
+
+    # Tolerant fallback — strip the === wrapper, match common markdown forms.
+    bare = header.strip("=").strip()
+    if not bare:
         return ""
-    start = research.index(header) + len(header)
-    rest = research[start:]
-    end_pos = rest.find("===")
-    end = start + end_pos if end_pos != -1 else start + max_chars
-    return research[start:end].strip()
+
+    import re as _re_eb
+    # `## Bare`, `### BARE:`, `**BARE**`, `# Bare` — case-insensitive.
+    pattern = _re_eb.compile(
+        rf"^[ \t]*(?:#{{1,4}}|\*\*)\s*{_re_eb.escape(bare)}\s*\*{{0,2}}\s*:?\s*$",
+        _re_eb.IGNORECASE | _re_eb.MULTILINE,
+    )
+    m = pattern.search(research)
+    if not m:
+        return ""
+
+    start = m.end()
+    # Hand back a generous slice — the parsers know how to ignore wrappers.
+    return research[start:start + max_chars * 3].strip()
 
 
 def _parse_css_variables(block: str) -> dict:
@@ -479,7 +509,13 @@ def _parse_sidebar_nav(block: str) -> list:
 
 
 def _parse_sections(block: str) -> list:
-    """Parse ===SECTIONS=== text → list of section dicts for landing pages."""
+    """Parse ===SECTIONS=== text → list of section dicts for landing pages.
+
+    Strict syntax first: `[section: hero]` followed by `headline: …` lines.
+    When Gemini drifts to markdown (`## Hero`, `### Pricing Section`), the
+    second-pass scan turns each heading into a minimal section dict so the
+    schema still gets populated. Strict + markdown are merged, deduped on type.
+    """
     sections: list = []
     current: dict = {}
     if not block:
@@ -519,6 +555,39 @@ def _parse_sections(block: str) -> list:
             current["content"]["items"] = ls.split(":", 1)[1].strip()
     if current:
         sections.append(current)
+
+    # Markdown fallback: scan for `## Hero`, `### Pricing Section`, etc.
+    # Block-level headings ("Sections", "Pages", "Header", "Footer", etc.)
+    # are NOT real sections — they're labels for whole research blocks. The
+    # denylist filters them. Translate display name → snake_case type so
+    # downstream code can match the same vocabulary.
+    if not sections:
+        _BLOCK_HEADINGS = {
+            "sections", "pages", "header", "footer", "navigation", "nav",
+            "overview", "summary", "introduction", "design", "design system",
+            "design_system", "layout", "layout_blueprint", "css_variables",
+            "css variables", "fonts", "vibe", "copy_tone", "copy tone",
+            "entities", "sidebar", "dashboard_kpis", "dashboard kpis", "kpis",
+            "status_badges", "status badges", "key_components", "key components",
+            "visual_dna", "visual dna", "design_system_name", "design system name",
+        }
+        for hm in _re_sp.finditer(
+            r"^[ \t]*(?:#{2,4}|\*\*)\s*([A-Z][\w \-/&]{1,40}?)\s*\**\s*:?\s*$",
+            block, _re_sp.MULTILINE,
+        ):
+            display = hm.group(1).strip().rstrip(":").strip()
+            slug = _re_sp.sub(r"[^\w]+", "_", display.lower()).strip("_")
+            if not slug or slug in _BLOCK_HEADINGS:
+                continue
+            sections.append({
+                "type": slug,
+                "headline": display,
+                "subheadline": "",
+                "content": {},
+                "animation": "",
+            })
+            if len(sections) >= 12:
+                break
     return sections
 
 
@@ -527,7 +596,8 @@ def _parse_pages_block(block: str) -> list:
 
     Captures path, title, description, AND sections list so Phase 2 gets
     explicit section specs per page instead of having to fish them out of
-    the raw research blob.
+    the raw research blob. Strict `[page: home]` syntax first, markdown
+    `## Home` fallback when Gemini drifts.
     """
     pages: list = []
     current: dict = {}
@@ -563,6 +633,41 @@ def _parse_pages_block(block: str) -> list:
             current["sections"] = [s.strip() for s in raw_sections.split(",") if s.strip()]
     if current:
         pages.append(current)
+
+    # Markdown fallback: `## Home`, `### About Us` → page entries.
+    # Block-level headings ("Pages", "Header", "Footer", …) are NOT real
+    # pages — they're block labels. Same denylist idea as _parse_sections.
+    if not pages:
+        _BLOCK_HEADINGS = {
+            "pages", "sections", "header", "footer", "navigation", "nav",
+            "overview", "summary", "introduction", "site map", "sitemap",
+            "design", "design system", "design_system", "layout",
+            "layout_blueprint", "css_variables", "css variables", "fonts",
+            "vibe", "copy_tone", "copy tone", "entities", "sidebar",
+            "dashboard_kpis", "dashboard kpis", "kpis", "status_badges",
+            "status badges", "key_components", "key components",
+            "visual_dna", "visual dna", "design_system_name", "design system name",
+        }
+        for hm in _re_sp.finditer(
+            r"^[ \t]*(?:#{2,4}|\*\*)\s*([A-Z][\w \-/&]{1,40}?)\s*\**\s*:?\s*$",
+            block, _re_sp.MULTILINE,
+        ):
+            display = hm.group(1).strip().rstrip(":").strip()
+            low = display.lower().strip()
+            if not low or low in _BLOCK_HEADINGS:
+                continue
+            slug = _re_sp.sub(r"[^\w]+", "-", low).strip("-")
+            path = "/" if low in {"home", "homepage", "index", "landing"} else f"/{slug}"
+            pages.append({
+                "title": display,
+                "path": path,
+                "component": display.replace(" ", "") + "Page",
+                "type": "custom",
+                "description": "",
+                "sections": [],
+            })
+            if len(pages) >= 12:
+                break
     return pages
 
 
@@ -684,11 +789,111 @@ def _derive_design_direction(research: str) -> str:
     return f"design consistent with the researched aesthetic: {vibe or 'clean and professional'}"
 
 
+# Phrases that signal a "brand name" candidate is actually prose from a prompt
+# (e.g. "This project is for a landing page for X"). When a candidate matches,
+# we discard it and try the next extraction strategy.
+_BRAND_PROSE_PREFIXES = (
+    "this project", "this website", "this app", "this site",
+    "a landing page", "a website", "an app", "the website",
+    "a modern", "build a", "build an", "create a", "create an",
+    "make a", "make an", "i want", "we want", "design a",
+)
+_BRAND_PROSE_FRAGMENTS = (
+    "page for", "website for", "app for", "site for",
+    "project is for", "project is about",
+)
+# Words that can't legitimately START a brand name (skip them when scanning
+# for the leading capitalised noun phrase).
+_BRAND_SKIP_OPENERS = {
+    "this", "a", "an", "the", "build", "create", "modern",
+    "make", "design", "i", "we", "my", "our",
+}
+
+
+def _looks_like_prose_brand(name: str) -> bool:
+    """Return True if `name` looks like a sentence fragment, not a brand."""
+    low = name.lower().strip()
+    if not low:
+        return True
+    if any(low.startswith(p) for p in _BRAND_PROSE_PREFIXES):
+        return True
+    if any(frag in low for frag in _BRAND_PROSE_FRAGMENTS):
+        return True
+    # Real brand names are short. Anything > 5 words is almost certainly
+    # a description, not a name.
+    if len(low.split()) > 5:
+        return True
+    return False
+
+
+def _extract_brand_from_text(text: str) -> str:
+    """Pull a plausible brand name from arbitrary text.
+
+    Tries multiple strategies in order:
+      1. First quoted phrase (`"Maplewood Grove"`)
+      2. "Brand is a/an…" sentence opener
+      3. Leading 1-3 capitalised words (skipping prose openers like "A", "The")
+
+    Returns "" if nothing reasonable is found — callers should provide
+    a final fallback like "Project".
+    """
+    if not text:
+        return ""
+    import re as _re
+    text = text.strip()
+
+    # 1. First quoted phrase — handles "Maplewood Grove", 'Maplewood Grove',
+    #    and Unicode curly quotes.
+    for pat in (
+        r'["“]([A-Za-z][^"“”\n]{1,40}?)["”]',
+        r"'([A-Z][A-Za-z0-9 &\.\-]{1,40}?)'",
+    ):
+        m = _re.search(pat, text)
+        if m:
+            cand = m.group(1).strip(" .,—-")
+            if cand and not _looks_like_prose_brand(cand):
+                return cand
+
+    # 2. "Brand is a/an…" or "Brand — a…" — common LLM expansion shape.
+    m = _re.match(
+        r"\s*([A-Z][A-Za-z0-9 &\.\-']{1,40}?)\s+(?:is|are|—|–|-)\s+(?:a|an|the)\s+",
+        text,
+    )
+    if m:
+        cand = m.group(1).strip(" .,—-")
+        if cand and not _looks_like_prose_brand(cand):
+            return cand
+
+    # 3. Leading 1-3 capitalised words (skipping prose openers).
+    capitalised: list[str] = []
+    for raw in text.split()[:8]:
+        clean_w = _re.sub(r"[^A-Za-z0-9&\-']", "", raw)
+        if not clean_w:
+            continue
+        if clean_w.lower() in _BRAND_SKIP_OPENERS:
+            if capitalised:
+                break  # opener after a brand word ends the run
+            continue
+        if clean_w[0].isupper():
+            capitalised.append(clean_w)
+            if len(capitalised) >= 3:
+                break
+        elif capitalised:
+            break
+    if capitalised:
+        cand = " ".join(capitalised)
+        if not _looks_like_prose_brand(cand):
+            return cand
+
+    return ""
+
+
 def _parse_schema_from_research(
     research: str,
     description: str,
     classification: dict,
     stack: str,
+    original_description: str = "",
 ) -> dict:
     """Parse Gemini research ===BLOCKS=== into a schema dict — zero LLM cost.
 
@@ -718,11 +923,26 @@ def _parse_schema_from_research(
         schema["design_system"]["overall_vibe"] = parsed_fonts["overall_vibe"]
 
     # ── Brand ─────────────────────────────────────────────────
+    # Resolution order:
+    #   1. Research's ===HEADER=== block (Gemini-extracted brand)
+    #   2. Original (pre-expansion) user prompt — clean short input
+    #   3. Expanded prompt — prose-heavy, last resort
+    # If ===HEADER=== gives prose ("This project is for…"), we discard it
+    # and try the prompts. _extract_brand_from_text rejects prose patterns.
     header_block = _extract_block(research, "===HEADER===", max_chars=600)
     brand_name, nav_items = _parse_header_nav(header_block)
+    if brand_name and _looks_like_prose_brand(brand_name):
+        logger.info("Discarding prose brand_name from research: %r", brand_name[:60])
+        brand_name = ""
     if not brand_name:
-        clean = description.split("\n\n---\n\n")[0].strip()
-        brand_name = clean[:50].split(".")[0].split(",")[0].strip() or "Project"
+        clean_expanded = description.split("\n\n---\n\n")[0].strip()
+        for source in (original_description, clean_expanded):
+            cand = _extract_brand_from_text(source)
+            if cand:
+                brand_name = cand
+                break
+        if not brand_name:
+            brand_name = "Project"
     schema["brand"]["name"] = brand_name
     schema["brand"]["domain"] = domain
     schema["brand"]["description"] = description.split("\n\n---\n\n")[0].strip()[:200]
@@ -782,6 +1002,7 @@ async def build_project_schema(
     app_type: str,
     api_key: str,
     websocket=None,
+    original_description: str = "",
 ) -> dict[str, Any]:
     """Parse Gemini research into a structured project schema.
 
@@ -812,7 +1033,10 @@ async def build_project_schema(
     # Python parser yields enough structure (pages ≥ 2 + theme populated).
     _python_fast_types = {"single_page_landing", "consumer_website", "portfolio", "marketplace", "blog"}
     if app_type in _python_fast_types:
-        py_schema = _parse_schema_from_research(research, description, _classification, stack)
+        py_schema = _parse_schema_from_research(
+            research, description, _classification, stack,
+            original_description=original_description,
+        )
         py_schema = _validate_schema(py_schema, layout_archetype=app_type)
         section_count = len(py_schema.get("sections", []))
         page_count = len(py_schema.get("pages", []))
@@ -834,6 +1058,63 @@ async def build_project_schema(
             ]
             py_schema["sections"] = _default_sections
             section_count = len(_default_sections)
+
+        # Multi-page archetypes: when Gemini's ===PAGES=== block was missing,
+        # mis-formatted, or only emitted 1-2 entries, supplement with the
+        # standard pages a site of this archetype always has. Mirrors the
+        # single_page_landing fallback above so multi-page archetypes don't
+        # silently fall through to Claude (which often has nothing to extract
+        # either, since the underlying research is the same).
+        _PAGE_DEFAULTS_BY_ARCHETYPE = {
+            "consumer_website": [
+                ("Home",      "/",          "Hero, value proposition, primary CTA"),
+                ("About",     "/about",     "Mission, story, leadership"),
+                ("Services",  "/services",  "Core offerings and capabilities"),
+                ("Resources", "/resources", "Articles, guides, and downloadables"),
+                ("Contact",   "/contact",   "Contact form, locations, channels"),
+            ],
+            "marketplace": [
+                ("Home",     "/",                "Featured listings and search entry"),
+                ("Browse",   "/browse",          "Filterable listings grid"),
+                ("Listing",  "/listings/:id",    "Detail view with seller info"),
+                ("Sell",     "/sell",            "Seller onboarding and create-listing flow"),
+                ("Account",  "/account",         "Buyer/seller dashboard"),
+            ],
+            "portfolio": [
+                ("Home",    "/",            "Hero with featured work"),
+                ("Work",    "/work",        "Project gallery"),
+                ("Project", "/work/:slug",  "Case study detail"),
+                ("About",   "/about",       "Bio and skills"),
+                ("Contact", "/contact",     "Contact form and socials"),
+            ],
+            "blog": [
+                ("Home",       "/",                "Latest posts and featured article"),
+                ("Articles",   "/articles",        "Browse all posts with filters"),
+                ("Article",    "/articles/:slug",  "Single post view"),
+                ("Categories", "/categories",      "Browse posts by topic"),
+                ("About",      "/about",           "About the publication and authors"),
+                ("Contact",    "/contact",         "Reach the editorial team"),
+            ],
+        }
+        _multipage_archetypes = set(_PAGE_DEFAULTS_BY_ARCHETYPE.keys())
+        if app_type in _multipage_archetypes and page_count < 3:
+            _existing_paths = {(p.get("path") or "").lower() for p in py_schema.get("pages", [])}
+            _existing_titles = {(p.get("title") or "").lower() for p in py_schema.get("pages", [])}
+            for title, path, desc in _PAGE_DEFAULTS_BY_ARCHETYPE[app_type]:
+                if path.lower() in _existing_paths or title.lower() in _existing_titles:
+                    continue
+                py_schema.setdefault("pages", []).append({
+                    "title": title,
+                    "path": path,
+                    "component": title.replace(" ", "") + "Page",
+                    "type": "custom",
+                    "description": desc,
+                    "sections": [],
+                })
+                if len(py_schema["pages"]) >= 7:
+                    break
+            page_count = len(py_schema["pages"])
+
         _sufficient = section_count >= 2 or (page_count >= 2 and has_theme)
         if _sufficient:
             label = f"{section_count} sections" if section_count else f"{page_count} pages"
@@ -961,7 +1242,10 @@ async def build_project_schema(
         # Claude only saw entity blocks, so theme may be generic; override with
         # Gemini's researched CSS variables and fonts.
         if _is_admin:
-            py_schema = _parse_schema_from_research(research, description, _classification, stack)
+            py_schema = _parse_schema_from_research(
+                research, description, _classification, stack,
+                original_description=original_description,
+            )
             _theme_overrides = (
                 "heading_font", "heading_font_url", "body_font", "body_font_url",
                 "primary", "primary_foreground", "background", "foreground",
@@ -1081,6 +1365,17 @@ def _validate_schema(schema: dict, layout_archetype: str = "") -> dict:
     for k, v in brand_defaults.items():
         if k not in schema.get("brand", {}):
             schema.setdefault("brand", {})[k] = v
+
+    # Defensive: discard prose-shaped brand names (e.g. Claude or fallbacks
+    # that emitted "This project is for…"). Try to recover one from the
+    # brand.description before giving up to a generic placeholder.
+    _brand_name_raw = (schema["brand"].get("name") or "").strip()
+    if _brand_name_raw and _looks_like_prose_brand(_brand_name_raw):
+        logger.info("Sanitizing prose brand_name in validate: %r", _brand_name_raw[:60])
+        recovered = _extract_brand_from_text(_brand_name_raw) or _extract_brand_from_text(
+            schema["brand"].get("description") or ""
+        )
+        schema["brand"]["name"] = recovered or "Project"
 
     # Ensure theme has all fields
     theme_defaults = EMPTY_SCHEMA["theme"]

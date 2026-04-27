@@ -603,11 +603,33 @@ Stop when fully done.
                                         or ""
                                     )
                                     if fpath:
-                                        await websocket.send_json({
+                                        # Inline content read so the frontend
+                                        # diff viewer has the post-write text.
+                                        # Best-effort: never fail the pipeline
+                                        # for an IO hiccup.
+                                        _payload = {
                                             "type": "file_write_event",
                                             "filename": fpath,
                                             "action": str(bname).lower(),
-                                        })
+                                            "phase": "step5_execute",
+                                        }
+                                        try:
+                                            import os as _os_inline
+                                            _full = (
+                                                fpath if _os_inline.path.isabs(fpath)
+                                                else _os_inline.path.join(str(workspace_path), fpath)
+                                            )
+                                            if _os_inline.path.isfile(_full):
+                                                _sz = _os_inline.path.getsize(_full)
+                                                _payload["size"] = _sz
+                                                if _sz <= 256 * 1024:
+                                                    with open(_full, "r", encoding="utf-8", errors="replace") as _fh:
+                                                        _payload["content"] = _fh.read()
+                                                else:
+                                                    _payload["content_truncated"] = True
+                                        except Exception:
+                                            pass
+                                        await websocket.send_json(_payload)
                                 elif btext and len(str(btext).strip()) > 20:
                                     await websocket.send_json({
                                         "type": "chat_message",
@@ -1175,11 +1197,29 @@ USE WRITE TOOL to write {file_path}. Stop when done.
                                     if bname and str(bname).lower() in ("write", "edit", "multiedit"):
                                         fpath = binput.get("file_path") or binput.get("path") or ""
                                         if fpath:
-                                            await websocket.send_json({
+                                            _payload = {
                                                 "type": "file_write_event",
                                                 "filename": fpath,
                                                 "action": str(bname).lower(),
-                                            })
+                                                "phase": "step5_execute_per_file",
+                                            }
+                                            try:
+                                                import os as _os_inline
+                                                _full = (
+                                                    fpath if _os_inline.path.isabs(fpath)
+                                                    else _os_inline.path.join(str(workspace_path), fpath)
+                                                )
+                                                if _os_inline.path.isfile(_full):
+                                                    _sz = _os_inline.path.getsize(_full)
+                                                    _payload["size"] = _sz
+                                                    if _sz <= 256 * 1024:
+                                                        with open(_full, "r", encoding="utf-8", errors="replace") as _fh:
+                                                            _payload["content"] = _fh.read()
+                                                    else:
+                                                        _payload["content_truncated"] = True
+                                            except Exception:
+                                                pass
+                                            await websocket.send_json(_payload)
                         except Exception:
                             pass
                         try:

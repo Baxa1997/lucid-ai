@@ -247,22 +247,28 @@ async def _call_gemini_vision(
         "systemInstruction": {"parts": [{"text": _VISION_SYSTEM}]},
     }
 
-    try:
+    from app.services.llm_retry import (
+        call_with_retry, classify_http_error, LLMPermanentError,
+    )
+
+    async def _do_call() -> dict:
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(url, json=payload)
-    except Exception as exc:
-        logger.warning("Gemini vision call exception: %s", exc)
-        return None
+        if resp.status_code != 200:
+            raise classify_http_error(resp.status_code, resp.text)
+        return resp.json()
 
-    if resp.status_code != 200:
-        logger.warning(
-            "Gemini vision call failed %d: %s", resp.status_code, resp.text[:300]
-        )
+    try:
+        data = await call_with_retry(_do_call, label="gemini_vision")
+    except LLMPermanentError as exc:
+        logger.warning("Gemini vision permanent failure: %s", exc)
+        return None
+    except Exception as exc:
+        logger.warning("Gemini vision failed after retries: %s", exc)
         return None
 
     try:
         from knowledge.loader import safe_gemini_text
-        data = resp.json()
         text = safe_gemini_text(data)
     except Exception as exc:
         logger.warning("Gemini vision response parse failed: %s", exc)

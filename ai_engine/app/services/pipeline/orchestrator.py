@@ -19,6 +19,7 @@ from fastapi import WebSocket
 
 from app.services.openhands_manager import openhands_manager
 from app.services.workspace_manager import workspace_manager
+from app.services.llm_retry import emit_pipeline_failure, failure_code_from_exception
 
 from .constants import PLATFORM_GITHUB_TOKEN, _PLATFORM_ORG
 from .ws_utils import _send_file_tree
@@ -37,6 +38,7 @@ from .step4_explore import explore_with_gemini, gemini_research, gemini_create_p
 from .step4b_images import analyze_images
 from .step5_execute import execute_with_claude, execute_project_in_batches
 from .step5_direct import execute_direct_edit
+from .step5_cli import execute_with_claude_cli
 from .step5b_build_verify import verify_build
 from .step6_verify import verify_changes, push_with_openhands
 from app.paths import NODE_MODULES_CACHE_ROOT, new_project_workspace_path
@@ -332,6 +334,13 @@ async def run_pipeline(
                         "5. Set as PLATFORM_GITHUB_TOKEN in .env"
                     ),
                 })
+                await emit_pipeline_failure(
+                    websocket,
+                    phase="prepare_workspace",
+                    code="auth_error",
+                    message="The platform's GitHub token isn't valid for creating repos. An admin needs to update PLATFORM_GITHUB_TOKEN to a Classic PAT with repo scope.",
+                    retriable=False,
+                )
                 await _send_phase(2, "Preparing workspace", "Invalid GitHub token", "error")
                 return
 
@@ -808,6 +817,12 @@ async def run_pipeline(
                 except Exception:
                     pass
 
+                # Pass user_id so step5_direct can attribute the LLM token
+                # cost back to the user's monthly quota via the billing meter.
+                _user_id_for_billing = (
+                    (session.user_id if session else None)
+                    or (user.get("user_id") if isinstance(user, dict) else None)
+                )
                 success = await execute_direct_edit(
                     task=task,
                     workspace_path=workspace_path,
@@ -817,6 +832,7 @@ async def run_pipeline(
                     relevant_files=relevant_files,
                     websocket=websocket,
                     manifest=_manifest_text,
+                    user_id=_user_id_for_billing,
                 )
                 if not success:
                     logger.info("Direct-edit path declined — falling back to SDK")
@@ -829,18 +845,43 @@ async def run_pipeline(
                         pass
 
             if not success:
-                # SDK path — either chosen by the router, or fallback from
+                # Agentic path — either chosen by the router or fallback from
                 # a failed direct attempt. No partial direct-edit state is
                 # on disk at this point (execute_direct_edit is all-or-none).
+                #
+                # Default: new direct-CLI implementation (token-transparent).
+                # Set LUCID_USE_CLAUDE_SDK=1 to fall back to the legacy SDK
+                # path while we burn in the CLI integration.
                 await _send_phase(5, "Writing code", f"Claude ({model}) is implementing the task…", "active")
-                success = await execute_with_claude(
-                    task,
-                    workspace_path,
-                    validated["anthropic_api_key"],
-                    classification,
-                    plan,
-                    websocket,
+                _user_id_for_billing = (
+                    (session.user_id if session else None)
+                    or (user.get("user_id") if isinstance(user, dict) else None)
                 )
+                _use_legacy_sdk = os.environ.get("LUCID_USE_CLAUDE_SDK", "").lower() in ("1", "true", "yes")
+                if _use_legacy_sdk:
+                    success = await execute_with_claude(
+                        task,
+                        workspace_path,
+                        validated["anthropic_api_key"],
+                        classification,
+                        plan,
+                        websocket,
+                    )
+                else:
+                    success = await execute_with_claude_cli(
+                        task,
+                        workspace_path,
+                        validated["anthropic_api_key"],
+                        classification,
+                        plan,
+                        websocket,
+                        user_id=_user_id_for_billing,
+                        stack=(
+                            validated.get("project_stack")
+                            or validated.get("skeleton_stack")
+                            or ""
+                        ),
+                    )
 
             if not success:
                 await _send_phase(5, "Writing code", "Code execution failed", "error")
@@ -996,6 +1037,13 @@ async def run_pipeline(
                         "Use a Classic Personal Access Token (ghp_...) with repo scope."
                     ),
                 })
+                await emit_pipeline_failure(
+                    websocket,
+                    phase="publish",
+                    code="auth_error",
+                    message="Your GitHub token isn't compatible with creating repos. Reconnect GitHub in Settings using a Classic Personal Access Token.",
+                    retriable=False,
+                )
                 await _send_phase(7, "Publishing project", "Invalid token type", "error")
             else:
                 await websocket.send_json({
@@ -1047,16 +1095,18 @@ async def run_pipeline(
                         cwd=workspace_path,
                         capture_output=True, text=True, timeout=10,
                     )
+                    # Push to staging branch (not main). Vercel watches main →
+                    # only deploys when user explicitly publishes (staging→main merge).
                     await asyncio.to_thread(
                         subprocess.run,
-                        ["git", "branch", "-M", "main"],
+                        ["git", "branch", "-M", "staging"],
                         cwd=workspace_path,
                         capture_output=True, timeout=5,
                     )
 
                     push_result = await asyncio.to_thread(
                         subprocess.run,
-                        ["git", "push", "-u", "origin", "main"],
+                        ["git", "push", "-u", "origin", "staging"],
                         cwd=workspace_path,
                         capture_output=True, text=True, timeout=60,
                     )
@@ -1070,6 +1120,19 @@ async def run_pipeline(
                             "type": "error",
                             "message": f"❌ Push failed: {err_msg[:200]}",
                         })
+                        # Network/auth issues are usually transient — let the user retry.
+                        _push_code = "auth_error" if any(s in err_msg.lower() for s in ("auth", "401", "403", "permission")) else "network"
+                        await emit_pipeline_failure(
+                            websocket,
+                            phase="publish",
+                            code=_push_code,
+                            message=(
+                                "Couldn't push your code to GitHub. Your token may have expired — reconnect in Settings, then try again."
+                                if _push_code == "auth_error" else
+                                "Couldn't push your code to GitHub right now. Please try again in a moment."
+                            ),
+                            retriable=True,
+                        )
                         await _send_phase(7, "Publishing project", "Push failed", "error")
                     else:
                         db_session_id = chat_session_id
@@ -1079,7 +1142,10 @@ async def run_pipeline(
                                 async with db_client(None) as sb:
                                     await (
                                         sb.table("chat_sessions")
-                                        .update({"platform_repo_url": html_url})
+                                        .update({
+                                            "platform_repo_url": html_url,
+                                            "platform_repo_branch": "staging",
+                                        })
                                         .eq("id", db_session_id)
                                         .execute()
                                     )
@@ -1089,10 +1155,10 @@ async def run_pipeline(
 
                         await websocket.send_json({
                             "type": "complete",
-                            "message": f"✅ Done! Code pushed to {html_url}",
+                            "message": f"✅ Done! Code pushed to {html_url} (staging)",
                         })
-                        await _send_phase(7, "Publishing project", "Code pushed successfully", "done")
-                        logger.info("Project published to: %s", html_url)
+                        await _send_phase(7, "Publishing project", "Code pushed to staging", "done")
+                        logger.info("Project pushed to staging: %s", html_url)
 
         elif validated.get("new_project_mode"):
             await _send_phase(7, "Publishing project", "Creating new repository…", "active")
@@ -1139,7 +1205,7 @@ async def run_pipeline(
                 if os.path.exists(_git_dir):
                     shutil.rmtree(_git_dir)
 
-                await asyncio.to_thread(subprocess.run, ["git", "init", "-b", "main"],
+                await asyncio.to_thread(subprocess.run, ["git", "init", "-b", "staging"],
                                cwd=workspace_path, capture_output=True, text=True, timeout=10)
                 await asyncio.to_thread(subprocess.run, ["git", "config", "user.name", "Lucid AI"],
                                cwd=workspace_path, capture_output=True)
@@ -1188,7 +1254,7 @@ async def run_pipeline(
 
                 push_result = await asyncio.to_thread(
                     subprocess.run,
-                    ["git", "push", "-u", "origin", "main"],
+                    ["git", "push", "-u", "origin", "staging"],
                     cwd=workspace_path,
                     capture_output=True,
                     text=True,
@@ -1204,24 +1270,97 @@ async def run_pipeline(
                         "type": "error",
                         "message": f"❌ Push failed: {err_msg[:200]}",
                     })
+                    _push_code2 = "auth_error" if any(s in err_msg.lower() for s in ("auth", "401", "403", "permission")) else "network"
+                    await emit_pipeline_failure(
+                        websocket,
+                        phase="publish",
+                        code=_push_code2,
+                        message=(
+                            "Couldn't save your project to its repository. Please try again."
+                            if _push_code2 != "auth_error" else
+                            "The platform's GitHub access expired or was revoked. An admin needs to refresh PLATFORM_GITHUB_TOKEN."
+                        ),
+                        retriable=True,
+                    )
                     await _send_phase(7, "Publishing project", "Push failed", "error")
                 else:
                     logger.info("new_project_mode: successfully pushed to %s", new_repo_html_url)
 
+                    # ── Auto-publish first generation ─────────────────────
+                    # Push staging → main and create a Vercel project so the
+                    # user gets a live URL on the very first generation.
+                    # Follow-up edits stay on staging only (publish is then
+                    # explicit via the workspace's Publish button).
+                    auto_vercel_url = None
+                    main_push = await asyncio.to_thread(
+                        subprocess.run,
+                        ["git", "push", "origin", "staging:main"],
+                        cwd=workspace_path,
+                        capture_output=True, text=True, timeout=60,
+                    )
+                    if main_push.returncode == 0:
+                        logger.info("Auto-published initial gen to main: %s", new_repo_html_url)
+                        try:
+                            from app.services.vercel import create_vercel_project
+                            auto_vercel_url = await create_vercel_project(
+                                owner=_PLATFORM_ORG, repo=new_repo_name,
+                            )
+                        except Exception as _vc_err:
+                            logger.warning("Vercel auto-create failed (non-fatal): %s", _vc_err)
+                    else:
+                        _err = (main_push.stderr or main_push.stdout or "")[:200]
+                        if git_token:
+                            _err = _err.replace(git_token, "***")
+                        logger.warning("Auto-push to main failed (non-fatal): %s", _err)
+
                     if chat_session_id and new_repo_html_url:
                         try:
                             from app.supabase_client import db_client
+                            _update = {
+                                "platform_repo_url":    new_repo_html_url,
+                                "platform_repo_branch": "staging",
+                            }
+                            if auto_vercel_url:
+                                _update["vercel_url"] = auto_vercel_url
                             async with db_client(None) as sb:
                                 await (
                                     sb.table("chat_sessions")
-                                    .update({
-                                        "platform_repo_url":    new_repo_html_url,
-                                        "platform_repo_branch": "main",
-                                    })
+                                    .update(_update)
                                     .eq("id", chat_session_id)
                                     .execute()
                                 )
                             logger.info("Saved new repo URL to session %s", chat_session_id)
+
+                            # Persist deployment record so the project counts
+                            # against the user's tier limit and shows up in
+                            # any future "my published projects" view.
+                            if auto_vercel_url:
+                                from datetime import datetime as _dt2
+                                user_id_for_dep = (
+                                    user.get("user_id")
+                                    if isinstance(user, dict) else None
+                                )
+                                if user_id_for_dep:
+                                    try:
+                                        async with db_client(None) as sb:
+                                            await (
+                                                sb.table("project_deployments")
+                                                .upsert(
+                                                    {
+                                                        "user_id":       user_id_for_dep,
+                                                        "project_id":    chat_session_id,
+                                                        "repo_url":      new_repo_html_url,
+                                                        "deploy_url":    auto_vercel_url,
+                                                        "deploy_method": "vercel",
+                                                        "status":        "deployed",
+                                                        "deployed_at":   _dt2.utcnow().isoformat(),
+                                                    },
+                                                    on_conflict="user_id,project_id",
+                                                )
+                                                .execute()
+                                            )
+                                    except Exception as _dep_err:
+                                        logger.warning("project_deployments upsert failed: %s", _dep_err)
                         except Exception as _db_err:
                             logger.warning("Failed to save platform_repo_url: %s", _db_err)
 
@@ -1229,22 +1368,41 @@ async def run_pipeline(
                         "type": "repo_created",
                         "repoUrl":    new_repo_html_url,
                         "repoName":   new_repo_name,
-                        "branch":     "main",
-                        "branchUrl":  new_repo_html_url,
+                        "branch":     "staging",
+                        "branchUrl":  f"{new_repo_html_url}/tree/staging",
                         "prUrl":      "",
                         "platformOwned": True,
                     })
-                    await websocket.send_json({
-                        "type": "complete",
-                        "message": (
-                            f"✅ Project created!\n\n"
-                            f"📦 Repository: [{new_repo_name}]({new_repo_html_url})\n"
-                            f"🌿 Branch: `main`"
-                        ),
-                    })
-                    await _send_phase(7, "Publishing project", f"Pushed to {new_repo_name}", "done")
+
+                    if auto_vercel_url:
+                        await websocket.send_json({
+                            "type": "published",
+                            "repoUrl":   new_repo_html_url,
+                            "vercelUrl": auto_vercel_url,
+                            "message":   f"Your project is going live at {auto_vercel_url} (about 30 seconds)",
+                        })
+                        await websocket.send_json({
+                            "type": "complete",
+                            "message": (
+                                f"✅ Your project is live!\n\n"
+                                f"🌐 {auto_vercel_url}\n\n"
+                                f"_Give it about 30 seconds, then open the link._"
+                            ),
+                        })
+                        await _send_phase(7, "Publishing project", "Project is going live", "done")
+                    else:
+                        await websocket.send_json({
+                            "type": "complete",
+                            "message": (
+                                f"✅ Your project is ready!\n\n"
+                                f"_Click Publish in the top bar to make it live on the internet._"
+                            ),
+                        })
+                        await _send_phase(7, "Publishing project", "Ready to publish", "done")
+
                     validated["auto_created_repo"] = new_repo_html_url
                     validated["platform_owned"]   = True
+                    validated["auto_vercel_url"]  = auto_vercel_url
 
             except Exception as _p7_err:
                 logger.error("new_project_mode Phase 7 failed: %s", _p7_err, exc_info=True)
@@ -1252,6 +1410,13 @@ async def run_pipeline(
                     "type": "error",
                     "message": f"❌ Publish failed: {str(_p7_err)[:200]}",
                 })
+                await emit_pipeline_failure(
+                    websocket,
+                    phase="publish",
+                    code=failure_code_from_exception(_p7_err),
+                    message="Something went wrong while saving and publishing your project. Please try again.",
+                    retriable=True,
+                )
                 await _send_phase(7, "Publishing project", "Publish failed", "error")
 
         else:
@@ -1442,6 +1607,19 @@ async def run_pipeline(
                 "type": "error",
                 "message": f"❌ Pipeline failed: {str(e)[:300]}",
             })
+        except Exception:
+            pass
+        # Structured failure event so the frontend can render specific
+        # recovery copy (rate_limit → wait, auth → reconnect, etc.) instead
+        # of just a generic error toast.
+        try:
+            await emit_pipeline_failure(
+                websocket,
+                phase="pipeline",
+                code=failure_code_from_exception(e),
+                message="The generation hit an error and stopped. Please try again — if it keeps happening, share the project ID so we can dig in.",
+                retriable=True,
+            )
         except Exception:
             pass
         return None

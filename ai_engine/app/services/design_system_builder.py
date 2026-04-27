@@ -801,8 +801,19 @@ async def _call_claude(
     system: str,
     user: str,
     api_key: str,
+    user_id: str | None = None,
+    websocket=None,
 ) -> Optional[dict]:
-    """Call Claude with forced tool output. Returns the tool input dict, or None on failure."""
+    """Call Claude with forced tool output. Returns the tool input dict, or None on failure.
+
+    Retries automatically on rate limits / 5xx / network errors via the
+    central llm_retry helper. Permanent errors (400/401/403) bubble up as
+    None after a single attempt.
+    """
+    from app.services.llm_retry import (
+        call_with_retry, classify_http_error, LLMPermanentError,
+    )
+
     headers = {
         "Content-Type": "application/json",
         "x-api-key": api_key,
@@ -818,19 +829,36 @@ async def _call_claude(
         "tool_choice": {"type": "tool", "name": "emit_design_system"},
     }
 
-    try:
+    async def _do_call() -> dict:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.post(_API_URL, headers=headers, json=payload)
-    except Exception as exc:
-        logger.warning("Design Director Claude call exception: %s", exc)
-        return None
-
-    if resp.status_code != 200:
-        logger.warning("Design Director Claude error %d: %s", resp.status_code, resp.text[:300])
-        return None
+        if resp.status_code != 200:
+            raise classify_http_error(resp.status_code, resp.text)
+        return resp.json()
 
     try:
-        data = resp.json()
+        data = await call_with_retry(_do_call, label="design_system_builder", websocket=websocket)
+    except LLMPermanentError as exc:
+        logger.warning("Design Director permanent failure: %s", exc)
+        return None
+    except Exception as exc:
+        logger.warning("Design Director failed after retries: %s", exc)
+        return None
+
+    # Meter token usage (fire-and-forget)
+    try:
+        from app.services.billing_meter import report_token_usage
+        _u = data.get("usage") or {}
+        report_token_usage(
+            user_id,
+            int(_u.get("input_tokens", 0) or 0),
+            int(_u.get("output_tokens", 0) or 0),
+            source="design_system_builder",
+        )
+    except Exception:
+        pass
+
+    try:
         for block in data.get("content") or []:
             if block.get("type") == "tool_use" and block.get("name") == "emit_design_system":
                 return block.get("input") or {}
@@ -880,7 +908,7 @@ async def build_design_system(
         layout_archetype=layout_archetype,
         vibe=vibe,
     )
-    design = await _call_claude(_SYSTEM_PROMPT, prompt, api_key)
+    design = await _call_claude(_SYSTEM_PROMPT, prompt, api_key, websocket=websocket)
     if not design:
         logger.warning("Design Director attempt 1 returned no design")
         return None
@@ -914,7 +942,7 @@ async def build_design_system(
         vibe=vibe,
         retry_feedback=feedback,
     )
-    design2 = await _call_claude(_SYSTEM_PROMPT, prompt_retry, api_key)
+    design2 = await _call_claude(_SYSTEM_PROMPT, prompt_retry, api_key, websocket=websocket)
     if not design2:
         logger.warning("Design Director retry returned no design — using attempt 1 anyway")
         return design  # better than nothing

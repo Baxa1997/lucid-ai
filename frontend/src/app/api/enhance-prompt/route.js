@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/gatekeeper';
 import { extractDesignTokens } from '@/lib/figma';
+import { canConsumeTokens } from '@/lib/subscription';
+import { recordTokenUsage } from '@/lib/usage';
 
 // ─────────────────────────────────────────────────────────
 //  POST /api/enhance-prompt
@@ -19,6 +21,7 @@ export async function POST(req) {
   // ── Auth guard ──────────────────────────────────────────
   const authResult = await requireAuth();
   if (!authResult.ok) return authResult.response;
+  const { ctx } = authResult;
 
   // ── Parse body ──────────────────────────────────────────
   let body;
@@ -26,6 +29,22 @@ export async function POST(req) {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+
+  // ── Token quota gate ────────────────────────────────────
+  // bypassLimits is a testing escape hatch from the upgrade modal's
+  // "Skip for testing" button — full LLM call still runs and tokens are
+  // still recorded post-call, only the pre-call gate is skipped.
+  if (body.bypassLimits) {
+    console.warn(`[enhance-prompt] bypassLimits=true for user=${ctx.userId} (testing override)`);
+  } else {
+    const tokenGate = await canConsumeTokens(ctx.userId);
+    if (!tokenGate.allowed) {
+      return NextResponse.json(
+        { error: tokenGate.reason, upgradeRequired: true, limitType: 'token' },
+        { status: 402 },
+      );
+    }
   }
 
   const { stack, backend, description, figmaUrl } = body;
@@ -106,6 +125,13 @@ export async function POST(req) {
     const data = await response.json();
     let enhancedPrompt =
       data.content?.[0]?.text || 'Failed to parse Claude response';
+
+    // Meter token consumption (fire-and-forget; never blocks the response)
+    recordTokenUsage(
+      ctx.userId,
+      data.usage?.input_tokens ?? 0,
+      data.usage?.output_tokens ?? 0,
+    );
 
     // ── Append Figma design system if available ────────────
     if (designTokens) {

@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/gatekeeper';
+import { canConsumeTokens } from '@/lib/subscription';
+import { recordTokenUsage } from '@/lib/usage';
 
 // ─────────────────────────────────────────────────────────
 //  POST /api/recommend-stack
@@ -31,12 +33,28 @@ No markdown, no extra text.`;
 export async function POST(req) {
   const authResult = await requireAuth();
   if (!authResult.ok) return authResult.response;
+  const { ctx } = authResult;
 
   let body;
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+
+  // bypassLimits is a testing escape hatch from the upgrade modal's
+  // "Skip for testing" button — full LLM call still runs and tokens are
+  // still recorded post-call, only the pre-call gate is skipped.
+  if (body.bypassLimits) {
+    console.warn(`[recommend-stack] bypassLimits=true for user=${ctx.userId} (testing override)`);
+  } else {
+    const tokenGate = await canConsumeTokens(ctx.userId);
+    if (!tokenGate.allowed) {
+      return NextResponse.json(
+        { error: tokenGate.reason, upgradeRequired: true, limitType: 'token' },
+        { status: 402 },
+      );
+    }
   }
 
   const { description } = body;
@@ -82,6 +100,13 @@ export async function POST(req) {
 
     const data = await response.json();
     const raw = data.content?.[0]?.text || '';
+
+    // Meter token consumption (fire-and-forget; never blocks the response)
+    recordTokenUsage(
+      ctx.userId,
+      data.usage?.input_tokens ?? 0,
+      data.usage?.output_tokens ?? 0,
+    );
 
     // Parse the JSON response
     try {

@@ -181,12 +181,27 @@ export default function EngineerLayout({children}) {
   const pathname = usePathname();
   const supabase = getSupabaseBrowserClient();
 
-  // null = not yet hydrated; renders nothing until localStorage is read.
-  // This prevents the open→close flash on mount.
-  const [collapsed, setCollapsed] = useState(null);
+  // Sidebar collapsed state.
+  //
+  // The visible width is driven by a CSS variable (--lucid-sidebar-w) that
+  // an inline script in app/layout.js sets on <html> *before* React renders,
+  // reading from localStorage. This eliminates the SSR/CSR "open then
+  // close" flicker on refresh — the first paint already has the correct
+  // width.
+  //
+  // React state still tracks `collapsed` for icon swaps and label
+  // visibility. The lazy initialiser reads from the same data attribute
+  // the script set, so SSR (returns false) → client first render (reads
+  // dataset) won't introduce a *visual* mismatch because width is
+  // CSS-driven. The transition is disabled until after first mount so
+  // even the className swap can never animate.
+  const [collapsed, setCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return document.documentElement.dataset.sidebarCollapsed === "true";
+  });
+  const [mounted, setMounted] = useState(false);
   useEffect(() => {
-    const stored = localStorage.getItem("lucid-sidebar-collapsed") === "true";
-    setCollapsed(stored);
+    setMounted(true);
   }, []);
   const [showWizard, setShowWizard] = useState(false);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
@@ -228,7 +243,16 @@ export default function EngineerLayout({children}) {
   const toggleCollapsed = useCallback(() => {
     setCollapsed((prev) => {
       const next = !prev;
-      localStorage.setItem("lucid-sidebar-collapsed", String(next));
+      try {
+        localStorage.setItem("lucid-sidebar-collapsed", String(next));
+        // Keep the CSS variable in sync so the next refresh paints with
+        // the correct width before React hydrates.
+        document.documentElement.style.setProperty(
+          "--lucid-sidebar-w",
+          next ? "60px" : "260px",
+        );
+        document.documentElement.dataset.sidebarCollapsed = next ? "true" : "false";
+      } catch (_) {}
       return next;
     });
   }, []);
@@ -395,13 +419,45 @@ export default function EngineerLayout({children}) {
           />
         )}
 
-        {!isWorkspace && collapsed !== null && (
+        {!isWorkspace && (
           <aside
             className={cn(
               "h-full bg-white dark:bg-[#0d1117] border-r border-slate-200/60 dark:border-slate-800/40 flex flex-col shrink-0",
-              collapsed ? "w-[60px]" : "w-[260px]",
             )}
-            style={{transition: "width 250ms cubic-bezier(0.4, 0, 0.2, 1)"}}>
+            style={{
+              // Width is driven by the inline-script-set CSS variable so the
+              // first paint already matches the user's stored preference.
+              // Falls back to 260px if the script never ran (script blocked).
+              width: "var(--lucid-sidebar-w, 260px)",
+              transition: mounted ? "width 250ms cubic-bezier(0.4, 0, 0.2, 1)" : "none",
+            }}>
+            {/* Inner content gates on `mounted`. Before mount we show a
+                neutral skeleton (animated gray pills) instead of a blank
+                shell — same column structure works at both 60px and 260px
+                widths, so it never looks "broken" or "missing." Once
+                hydrated, the real content swaps in with the correct
+                collapsed state read from the html dataset. */}
+            {!mounted && (
+              <div className="flex flex-col h-full animate-pulse" aria-hidden="true">
+                <div className="h-[56px] shrink-0 border-b border-slate-100 dark:border-slate-800/40 flex items-center justify-center px-3">
+                  <div className="w-8 h-8 rounded-lg bg-slate-200 dark:bg-slate-800/60" />
+                </div>
+                <div className="px-3 pt-3 pb-2">
+                  <div className="h-9 rounded-xl bg-slate-200 dark:bg-slate-800/60" />
+                </div>
+                <div className="px-3 pt-2 flex flex-col gap-1.5">
+                  <div className="h-9 rounded-lg bg-slate-200/70 dark:bg-slate-800/40" />
+                  <div className="h-9 rounded-lg bg-slate-200/70 dark:bg-slate-800/40" />
+                  <div className="h-9 rounded-lg bg-slate-200/70 dark:bg-slate-800/40" />
+                  <div className="h-9 rounded-lg bg-slate-200/70 dark:bg-slate-800/40" />
+                  <div className="h-9 rounded-lg bg-slate-200/70 dark:bg-slate-800/40" />
+                </div>
+                <div className="mt-auto p-3 border-t border-slate-100 dark:border-slate-800/40">
+                  <div className="h-10 rounded-xl bg-slate-200 dark:bg-slate-800/60" />
+                </div>
+              </div>
+            )}
+            {mounted && (<>
             <div
               className={cn(
                 "flex items-center h-[56px] shrink-0 border-b border-slate-100 dark:border-slate-800/40",
@@ -697,6 +753,7 @@ export default function EngineerLayout({children}) {
                 </button>
               </div>
             </div>
+            </>)}
           </aside>
         )}
 

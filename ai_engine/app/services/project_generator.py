@@ -24,26 +24,32 @@ logger = logging.getLogger("lucid.project_generator")
 
 # ── Plan confirmation system ─────────────────────────────────
 # When a plan is emitted, we store an asyncio.Future here keyed by
-# the websocket's id(). The ws.py handler resolves it when the user
-# clicks "Looks Good" or "Change Direction".
+# a STABLE string (chat_session_id when available, else f"ws-{id()}").
+# A stable key survives websocket reconnects: the pipeline runs in the
+# background while the user's tab refreshes, then a new ws connection
+# can resolve the same future.
 #   Future result: {"confirmed": True} or {"confirmed": False, "correction": "..."}
-pending_plan_confirmations: dict[int, asyncio.Future] = {}
+pending_plan_confirmations: dict[str, asyncio.Future] = {}
 
 PLAN_CONFIRM_TIMEOUT_SECONDS = 300  # 5 minutes — auto-proceed after this
 
 
-def register_plan_confirmation(websocket) -> asyncio.Future:
-    """Register a pending plan confirmation for the given websocket."""
+def _confirmation_key(websocket, chat_session_id: str = "") -> str:
+    """Build the stable confirmation-future key. Prefers chat_session_id."""
+    return chat_session_id or f"ws-{id(websocket)}"
+
+
+def register_plan_confirmation(key: str) -> asyncio.Future:
+    """Register a pending plan confirmation under the given stable key."""
     loop = asyncio.get_event_loop()
     fut = loop.create_future()
-    pending_plan_confirmations[id(websocket)] = fut
+    pending_plan_confirmations[key] = fut
     return fut
 
 
-def resolve_plan_confirmation(websocket, result: dict):
+def resolve_plan_confirmation(key: str, result: dict):
     """Called by ws.py when user confirms or rejects the plan."""
-    ws_id = id(websocket)
-    fut = pending_plan_confirmations.pop(ws_id, None)
+    fut = pending_plan_confirmations.pop(key, None)
     if fut and not fut.done():
         fut.set_result(result)
 
@@ -110,23 +116,52 @@ async def _emit_file_writes(
     paths: list[str],
     *,
     action: str = "write",
+    workspace_dir: str | None = None,
+    phase: str | None = None,
+    phase_elapsed_ms: int | None = None,
 ) -> None:
     """Emit one ``file_write_event`` per written path.
 
-    The frontend already consumes this message type to surface generated
-    files in the chat bubble and the Code tab. Firing per-file instead of
-    a single "N files" summary gives the user a live sense of progress
-    during the 30–60s that each phase takes to complete.
+    The frontend consumes this message to surface generated files in the
+    Code tab and to render inline Git-style diffs. We include:
+      • ``content`` — the file's post-write text (skipped for binary or
+        files >256KB to avoid bloating the WS stream)
+      • ``phase`` / ``phase_elapsed_ms`` — provenance + timing so the UI
+        can show "this file took N ms (part of step5)"
+      • ``size`` — byte count even when content is omitted
     """
     if not websocket or not paths:
         return
+    import os as _os
+    _MAX_INLINE_BYTES = 256 * 1024  # 256 KB cap on per-file payload
     for p in paths:
+        payload: dict = {
+            "type": "file_write_event",
+            "filename": p,
+            "action": action,
+        }
+        if phase is not None:
+            payload["phase"] = phase
+        if phase_elapsed_ms is not None:
+            payload["phase_elapsed_ms"] = int(phase_elapsed_ms)
+
+        # Best-effort file content read — never block the pipeline on IO errors.
+        if workspace_dir:
+            try:
+                full_path = p if _os.path.isabs(p) else _os.path.join(workspace_dir, p)
+                if _os.path.isfile(full_path):
+                    size = _os.path.getsize(full_path)
+                    payload["size"] = size
+                    if size <= _MAX_INLINE_BYTES:
+                        with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+                            payload["content"] = f.read()
+                    else:
+                        payload["content_truncated"] = True
+            except Exception:
+                pass
+
         try:
-            await websocket.send_json({
-                "type": "file_write_event",
-                "filename": p,
-                "action": action,
-            })
+            await websocket.send_json(payload)
         except Exception:
             # Disconnection during a big batch shouldn't abort the pipeline
             return
@@ -986,14 +1021,25 @@ async def call_claude_for_json(
                             await _ws_send(websocket, "error", f"❌ Claude API error ({response.status_code}).")
                         return None
 
+                    _stream_started_at = _time.monotonic()
                     async for line in response.aiter_lines():
                         if not line.startswith("data: "):
                             continue
                         raw_chunks.append(line[6:])
-                        # Heartbeat every 15s so the user sees progress
+                        # Heartbeat every 15s — sends UI progress AND logs
+                        # server-side so we can tell "Anthropic is slow but
+                        # streaming" from "Anthropic call has stalled
+                        # entirely" in container logs. Without the server
+                        # log, a 4-min Phase 1 timeout looks identical to
+                        # a hung connection.
                         now = _time.monotonic()
                         if now - last_heartbeat > 15:
                             last_heartbeat = now
+                            elapsed = int(now - _stream_started_at)
+                            logger.info(
+                                "Claude stream heartbeat (%s): %d chunks received in %ds",
+                                use_model, len(raw_chunks), elapsed,
+                            )
                             try:
                                 await websocket.send_json({"type": "progress", "message": "⏳ Writing files..."})
                             except Exception:
@@ -1397,6 +1443,102 @@ def _extract_layout_archetype(research: str, fallback_classification: dict) -> d
 
 
 # ╔══════════════════════════════════════════════════════════════╗
+# ║  STEP 2.5 — _expand_short_prompt()                          ║
+# ║  Expand 1-3 word prompts via Gemini Flash before research   ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+async def _expand_short_prompt(
+    description: str,
+    layout_archetype: str,
+    domain: str,
+    gemini_key: str,
+    websocket=None,
+) -> str:
+    """Expand a very short user prompt into a richer brief for downstream stages.
+
+    Short prompts ("ACCA website", "yoga studio app") give Gemini deep-research
+    nothing concrete to anchor on, so its ===PAGES===, ===ENTITIES===, ===HEADER===
+    blocks come back empty and the plan + schema render with bare fallbacks.
+
+    This helper calls Gemini Flash (cheap, sub-second) to flesh the prompt out
+    with: real organization name when applicable, audience, 5-7 likely pages,
+    and 1-2 visual/tone qualities. Result feeds the cache key, deep research,
+    schema parsing, and plan rendering — one upstream fix, multiple downstream
+    wins. Fail-soft: returns the original description on any error.
+    """
+    _clean = description.split("\n\n---\n\n")[0].strip()
+    # Skip expansion if prompt already has substance
+    if len(_clean.split()) > 4 or len(_clean) > 50:
+        return description
+
+    try:
+        import httpx as _httpx
+        # Flash is plenty for prompt expansion; thinkingBudget=0 keeps it sub-second.
+        _model = "gemini-2.5-flash"
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{_model}:generateContent?key={gemini_key}"
+        )
+        prompt = (
+            f"The user gave a very short product brief: \"{_clean}\".\n"
+            f"Project type: {layout_archetype.replace('_', ' ')} in the {domain} domain.\n\n"
+            "Expand this into a 3-4 sentence brief that includes:\n"
+            "1. The actual organization or concept (e.g. \"ACCA\" → "
+            "\"Association of Chartered Certified Accountants — global professional accounting body\").\n"
+            "2. The audience and what they want from the site/app.\n"
+            "3. The most likely 5-7 pages or sections (use real, domain-specific names).\n"
+            "4. One or two visual/tone qualities (e.g. \"authoritative and trustworthy\", "
+            "\"playful and energetic\").\n\n"
+            "STRICT FORMAT — the FIRST WORD must be the brand or concept name itself.\n"
+            "GOOD opening: \"Maplewood Grove is a small-batch candle studio that…\"\n"
+            "GOOD opening: \"ACCA (Association of Chartered Certified Accountants) is a…\"\n"
+            "BAD opening:  \"This project is for a landing page for Maplewood Grove…\"\n"
+            "BAD opening:  \"A landing page for Maplewood Grove that…\"\n"
+            "BAD opening:  \"The website is about Maplewood Grove…\"\n"
+            "Never start with: 'This project', 'A landing page', 'A website', 'The website', "
+            "'The app', 'A modern', 'Build', 'Create'.\n\n"
+            "Output ONLY the expanded brief as a single paragraph. "
+            "No preamble, no headers, no quotes, no markdown, no bullet lists."
+        )
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0,
+                "maxOutputTokens": 600,
+                "thinkingConfig": {"thinkingBudget": 0},
+            },
+        }
+        async with _httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.post(url, json=payload)
+        if r.status_code != 200:
+            logger.warning("Prompt expansion API %d: %s", r.status_code, r.text[:200])
+            return description
+        data = r.json()
+        expanded = ""
+        for cand in data.get("candidates", []):
+            for part in cand.get("content", {}).get("parts", []):
+                if "text" in part:
+                    expanded += part["text"]
+        expanded = expanded.strip().strip('"').strip("'")
+        if not expanded or len(expanded) < 80:
+            return description
+
+        suffix = ""
+        if "\n\n---\n\n" in description:
+            suffix = "\n\n---\n\n" + description.split("\n\n---\n\n", 1)[1]
+
+        await _ws_send(
+            websocket, "progress",
+            f"📝 Expanded brief: {expanded[:90]}{'…' if len(expanded) > 90 else ''}",
+        )
+        logger.info("Expanded short prompt %r → %d chars", _clean, len(expanded))
+        return expanded + suffix
+    except Exception as exc:
+        logger.warning("Prompt expansion failed (non-fatal): %s", exc)
+        return description
+
+
+# ╔══════════════════════════════════════════════════════════════╗
 # ║  STEP 3 — gemini_deep_research()                            ║
 # ║  Ultra-deep product research via Gemini with internet search ║
 # ╚══════════════════════════════════════════════════════════════╝
@@ -1748,7 +1890,21 @@ items:
 
 ===ENTITIES===
 Data entities this tool manages. Base on research of REAL {layout_archetype.replace("_", " ")} products.
-Minimum 3-4 entities for this domain.
+
+COVERAGE RULE — non-negotiable:
+EVERY user-facing CRUD page in your ===SIDEBAR=== above (Shipments, Routes,
+Carriers, Customers, Invoices, Drivers, Vehicles, etc.) MUST have a matching
+entity defined here. If the sidebar has /shipments and /carriers and /routes
+and /invoices, you MUST emit Shipment, Carrier, Route, AND Invoice entities.
+A sidebar item without a backing entity is a broken page.
+
+In addition, include any noun the user explicitly named in the project
+description even if it didn't reach the sidebar (referenced foreign keys
+like driver_id, vehicle_id, route_id, carrier_id all imply entities).
+
+Minimum 5 entities for an admin/CRM/TMS/ecommerce panel. Most real tools
+have 7-12. Only landing-style admin tools may have fewer. Do not stop at
+the minimum — list everything the tool actually manages.
 
 [entity: EntityName]
 purpose: [what this entity represents in the {domain} domain]
@@ -1757,7 +1913,7 @@ fields:
   [LIST ALL FIELDS from research — minimum 8-10 fields per entity]
 mock_data: [12-15 rows of realistic domain-specific data — real names, real statuses, real values]
 
-[REPEAT for every entity]
+[REPEAT for every sidebar CRUD item AND every domain noun]
 
 ===STATUS_BADGES===
 [status_value]: bg-[color]-100 text-[color]-800 dark:bg-[color]-900/30 dark:text-[color]-400
@@ -2498,6 +2654,102 @@ VISUAL AMBITION (non-negotiable):
 - Cards must have hover effects, images, and rich content — not placeholder boxes
 - Typography must be bold and expressive — hero headlines text-5xl to text-7xl
 - Generous whitespace: py-24 to py-32 between major sections
+
+====================================
+COLOR TOKENS — HARD BAN (read twice)
+====================================
+This project's `src/app/globals.css` is the SINGLE SOURCE OF TRUTH for color.
+It already defines the project's bespoke palette via shadcn/ui CSS variables —
+the deterministic builder wrote it BEFORE you started, with the exact warm /
+editorial / brutalist / etc. colors the Design Director chose for THIS brand.
+Every Tailwind class you write MUST resolve to one of those tokens. If you
+hardcode a Tailwind palette utility, you erase the Design Director's work
+and the project ends up looking like a generic gray template.
+
+❌ FORBIDDEN — never use any of these:
+   • bg-white, bg-black
+   • bg-gray-*, bg-slate-*, bg-zinc-*, bg-neutral-*, bg-stone-*  (any shade)
+   • text-white, text-black
+   • text-gray-*, text-slate-*, text-zinc-*, text-neutral-*, text-stone-*
+   • border-gray-*, border-slate-*, border-zinc-*, border-neutral-*, border-stone-*
+   • bg-gradient-to-* using from-gray-*/to-gray-*/from-slate-*/etc.
+     (gradients USING THE TOKENS are fine — see below)
+   • Arbitrary hex/HSL color literals: bg-[#fff], text-[#000], bg-[hsl(0,0%,90%)]
+   • Inline style={{backgroundColor: "..."}} or style={{color: "..."}}
+
+✅ ALLOWED — use ONLY these (they pull from the globals.css palette):
+   Backgrounds:  bg-background  bg-card  bg-popover  bg-muted
+                 bg-primary  bg-secondary  bg-accent  bg-destructive
+   Foregrounds:  text-foreground  text-card-foreground  text-popover-foreground
+                 text-muted-foreground  text-primary-foreground
+                 text-secondary-foreground  text-accent-foreground
+                 text-destructive-foreground
+   Borders/ring: border-border  border-input  ring-ring
+   With opacity: bg-primary/10, bg-muted/40, bg-foreground/5  (any token + /N)
+   Gradients:    bg-gradient-to-b from-background to-muted
+                 bg-gradient-to-br from-primary/20 to-accent/10
+                 (always token-based, never gray-N)
+
+PAIRING RULE — every background MUST pair with its matching foreground:
+   bg-background → text-foreground
+   bg-card       → text-card-foreground
+   bg-muted      → text-muted-foreground (for body) / text-foreground (for headings)
+   bg-primary    → text-primary-foreground
+   bg-secondary  → text-secondary-foreground
+   bg-accent     → text-accent-foreground
+   bg-destructive→ text-destructive-foreground
+NEVER pair a token-bg with text-white / text-black — those won't adapt to
+the project's actual palette and you get invisible-text bugs (white text on
+a near-white surface, dark text on a near-dark surface).
+
+QUICK FIX for the common temptation:
+   "I want a subtle hero gradient" → bg-gradient-to-b from-background via-muted/40 to-background
+   "I want a bold card"            → bg-card border border-border (NOT bg-white)
+   "I want darker text"            → text-foreground (NOT text-gray-900)
+   "I want lighter text"           → text-muted-foreground (NOT text-gray-500)
+   "I want a hero overlay"         → bg-foreground/60 (NOT bg-black/60)
+
+VIOLATIONS WILL BE LINTED. Files containing any forbidden class are flagged
+post-generation and may be auto-rewritten — costing time. Use tokens up front.
+
+====================================
+REACT ITERATOR KEYS — HARD BAN (read twice)
+====================================
+EVERY .map() / .filter().map() / for-rendered iterator that returns JSX MUST
+include a `key` prop on the OUTERMOST returned element. ESLint's `react/jsx-key`
+rule is ENFORCED on Vercel and a single missing key will FAIL the production
+build (exit code 1, deploy aborted).
+
+✅ CORRECT:
+   {features.map((f) => (
+     <div key={f.id} className="...">...</div>
+   ))}
+
+   {items.map((item, i) => (
+     <Card key={item.slug ?? i} {...item} />
+   ))}
+
+   {/* When wrapping in a Fragment, use <Fragment key=...> NOT <> */}
+   {rows.map((r) => (
+     <Fragment key={r.id}>
+       <td>{r.name}</td>
+       <td>{r.value}</td>
+     </Fragment>
+   ))}
+
+❌ WRONG (will fail build):
+   {features.map((f) => <div className="...">...</div>)}    // no key
+   {items.map((item) => <><Card {...item} /></>)}            // <> can't take key
+
+KEY-VALUE RULES:
+   1. Prefer a stable unique field: `item.id`, `item.slug`, `item.href`
+   2. Fall back to index ONLY when the list is static and never reordered:
+      `items.map((item, i) => <Card key={i} ... />)`
+   3. NEVER use `Math.random()` or `Date.now()` as a key — re-renders break
+   4. The key goes on the element RETURNED by the map callback, not on its children
+
+When in doubt, ALWAYS add a key. It is impossible to over-key — extra keys
+never fail a build, missing keys always do.
 
 You work ON TOP of an existing template. The template already provides:
 - UI components (shadcn/ui), layouts, routing, auth, API client, state management
@@ -3589,6 +3841,66 @@ async def generate_new_project(
         return False
 
 
+def _validate_plan_data(plan_data: dict, archetype: str) -> list[str]:
+    """Sanity-check the plan-card payload before emitting it to the user.
+
+    Returns a list of issue strings (empty list = plan looks solid). Today
+    we only LOG the issues — every gap should already be backfilled by
+    archetype defaults / brand sanitisation upstream — but the structured
+    log gives us visibility into how often plans are still thin in prod
+    and which fields are the weakest. Promote to a hard block once the
+    field is quiet.
+
+    Checks per archetype:
+      consumer/portfolio/blog/marketplace → ≥3 pages
+      single_page_landing                  → ≥3 page_items (sections)
+      admin/crm/tms/saas/ecommerce         → ≥1 entity
+      ALL                                  → brand looks like a name (not prose)
+                                           → design line mentions fonts AND palette
+                                           → about/description non-empty
+    """
+    issues: list[str] = []
+    brand = (plan_data.get("intro") or "")
+    pages = plan_data.get("pages") or []
+    entities = plan_data.get("entities") or []
+    design = (plan_data.get("design") or "").lower()
+    description = (plan_data.get("description") or "").strip()
+
+    # Brand sanity — if the intro contains telltale prose patterns, the
+    # downstream brand sanitiser missed something.
+    intro_low = brand.lower()
+    if any(p in intro_low for p in (
+        "this project", "project is for", "page for ", "website for ",
+    )):
+        issues.append("brand_intro_looks_like_prose")
+
+    if not description or len(description) < 30:
+        issues.append("description_thin")
+
+    _multipage = {"consumer_website", "portfolio", "blog", "marketplace"}
+    _admin = {"admin_dashboard", "crm", "tms", "saas_dashboard", "ecommerce"}
+
+    if archetype == "single_page_landing":
+        if len(pages) < 3:
+            issues.append(f"too_few_sections:{len(pages)}")
+    elif archetype in _multipage:
+        if len(pages) < 3:
+            issues.append(f"too_few_pages:{len(pages)}")
+    elif archetype in _admin:
+        if not entities:
+            issues.append("no_entities")
+        # Admin without sidebar nav is unusable
+        if not pages and not entities:
+            issues.append("admin_empty_structure")
+
+    if "fonts" not in design:
+        issues.append("design_missing_fonts")
+    if "palette" not in design:
+        issues.append("design_missing_palette")
+
+    return issues
+
+
 def _phase_token_budget(
     schema: dict,
     phase: int,
@@ -3652,7 +3964,20 @@ async def _generate_new_project_inner(
     _domain = _classification["domain"]
 
     await _ws_send(websocket, "progress", f"📋 {_layout_archetype.replace('_', ' ').title()} — {_domain} domain")
-    
+
+    # ── Step 2.5: Expand very short prompts ──
+    # "ACCA website" or "yoga studio" yields empty research blocks because Gemini
+    # has nothing concrete to anchor on. Expanding here propagates richer context
+    # to the cache key, deep research, schema parser, and plan rendering.
+    # We preserve the original (pre-expansion) prompt because brand-name and
+    # slug derivation work better on the clean short input than on the
+    # prose-heavy expansion (which can leak phrases like "This project is for…"
+    # into downstream fields). When no expansion happens, the two are identical.
+    original_description = description.split("\n\n---\n\n")[0].strip()
+    description = await _expand_short_prompt(
+        description, _layout_archetype, _domain, gemini_key, websocket,
+    )
+
     # ── Step 2: Read template context ──
     manifest = _read_manifest(workspace_path)
     _manifest_issue = _validate_manifest(manifest, workspace_path)
@@ -3692,10 +4017,19 @@ async def _generate_new_project_inner(
         f"{description.strip().lower()}|{stack}|{_layout_archetype}".encode()
     ).hexdigest()[:14]
     _cache_path = f"{_cache_dir}/{_cache_key}.txt"
-    _cache_max_age = 3600  # 1 hour
+    _design_cache_path = f"{_cache_dir}/{_cache_key}.design.json"
+    _cache_max_age = 600  # 10 minutes — short enough to retest variations
+                          # quickly, long enough to make Phase-1-retry-after-
+                          # timeout a free skip on the upstream stages.
 
     research = None
-    _design: dict | None = None  # Set by Design Director (below) on cache-miss.
+    # _design is the Design Director's per-project spec. Set on cache-miss
+    # (after the Director runs) OR on cache-hit (loaded from sidecar JSON).
+    # Downstream builders (design_system_js_builder, marketing_header_builder)
+    # consume this to produce per-project visual identity. If it's None, they
+    # fall through to safe minimal defaults — which is what made cached runs
+    # look visually flat before. The sidecar fixes that.
+    _design: dict | None = None
     try:
         import os as _os_cache
         _os_cache.makedirs(_cache_dir, exist_ok=True)
@@ -3709,6 +4043,27 @@ async def _generate_new_project_inner(
                     research_quality = "cached"
                     logger.info("Research cache HIT (%s, %.0fs old)", _cache_key, _age)
                     await _ws_send(websocket, "progress", "⚡ Research loaded from cache")
+                    # Sidecar load — keeps cached runs visually distinct.
+                    # Sidecar absence is fine for legacy cache entries written
+                    # before this change; builders will use defaults.
+                    try:
+                        if _os_cache.path.exists(_design_cache_path):
+                            import json as _json_dd
+                            with open(_design_cache_path, "r", encoding="utf-8") as _dcf:
+                                _design_loaded = _json_dd.load(_dcf)
+                            if isinstance(_design_loaded, dict) and _design_loaded:
+                                _design = _design_loaded
+                                logger.info(
+                                    "Design Director loaded from cache (%s) — name=%s archetype=%s",
+                                    _cache_key,
+                                    _design.get("design_system_name"),
+                                    _design.get("archetype"),
+                                )
+                    except Exception as _dd_load_exc:
+                        logger.warning(
+                            "Design sidecar load failed (non-fatal, will use defaults): %s",
+                            _dd_load_exc,
+                        )
     except Exception:
         pass  # Cache miss is fine — just proceed with fresh research
 
@@ -3796,6 +4151,21 @@ async def _generate_new_project_inner(
                     logger.info("Research cached (%s, %d chars)", _cache_key, len(research))
                 except Exception:
                     pass
+                # Sidecar: persist the Design Director's structured dict so
+                # future cache hits can hand the same spec to the builders.
+                # Without this, cached runs fall back to minimal defaults
+                # and every cached project looks identical.
+                if _design:
+                    try:
+                        import json as _json_dd_save
+                        with open(_design_cache_path, "w", encoding="utf-8") as _dcf:
+                            _json_dd_save.dump(_design, _dcf)
+                        logger.info("Design Director cached (%s)", _cache_key)
+                    except Exception as _dd_save_exc:
+                        logger.warning(
+                            "Design sidecar write failed (non-fatal): %s",
+                            _dd_save_exc,
+                        )
         except Exception as exc:
             logger.error("Gemini research failed: %s", exc)
             research_quality = "failed"
@@ -3859,7 +4229,56 @@ async def _generate_new_project_inner(
         app_type=app_type,
         api_key=api_key,
         websocket=websocket,
+        original_description=original_description,
     )
+
+    # ── Step 3b1: Generate Supabase backend schema (admin/CRM only) ──
+    # For data-driven projects (admin panels, CRMs, dashboards), turn the
+    # entity definitions into a runnable Postgres migration with RLS.
+    # Frontend stays on mock data — user runs the SQL in Supabase to get
+    # a real backend. Wiring frontend ↔ Supabase is a future step.
+    # FAIL-SOFT: any failure logs and proceeds; migration is nice-to-have.
+    _backend_archetypes = {
+        "admin_dashboard", "crm", "tms", "saas_dashboard", "ecommerce",
+    }
+    _wrote_backend_migration = False
+    _backend_table_count = 0
+    if (
+        _layout_archetype in _backend_archetypes
+        and (project_schema.get("entities") or [])
+    ):
+        try:
+            from app.services.backend_schema import (
+                build_supabase_migration,
+                write_supabase_migration,
+            )
+            await _ws_send(websocket, "progress", "💾 Designing Supabase schema…")
+            _migration = await asyncio.wait_for(
+                build_supabase_migration(
+                    description=description,
+                    project_schema=project_schema,
+                    spec_text=research,
+                    api_key=api_key,
+                    websocket=websocket,
+                ),
+                timeout=150.0,
+            )
+            if _migration and write_supabase_migration(workspace_path, _migration):
+                _wrote_backend_migration = True
+                _backend_table_count = len(_migration.get("tables_summary") or [])
+                logger.info(
+                    "backend_schema: wrote migration with %d tables",
+                    _backend_table_count,
+                )
+                await _ws_send(
+                    websocket,
+                    "progress",
+                    f"✅ Supabase migration ready — {_backend_table_count} tables in supabase/migrations/0001_init.sql",
+                )
+        except asyncio.TimeoutError:
+            logger.warning("backend_schema: timed out after 150s — continuing without migration")
+        except Exception as _bs_exc:
+            logger.warning("backend_schema failed (non-fatal): %s", _bs_exc)
 
     # ── Step 3b2: Copy Director (landing-family archetypes only) ──
     # Writes a brand-specific copy deck (hero/sections/features/microcopy/
@@ -3944,6 +4363,94 @@ async def _generate_new_project_inner(
         except Exception as e:
             logger.warning("Failed to write db.json: %s", e)
 
+    # ── Step 3c.1: Deterministic globals.css write ──
+    # The skeleton ships with shadcn-blue placeholder tokens. We rely on
+    # Claude in Phase 1 to swap them for the project's palette, but Claude
+    # frequently leaves the file untouched or only partially overrides — so
+    # every project ended up looking like the default blue/Inter theme.
+    # Writing globals.css here from the schema's theme + fonts guarantees
+    # the project ships with its own palette and Google Fonts every time.
+    # FAIL-SOFT: on any error the LLM still has a chance to write it.
+    _det_globals_written = False
+    _globals_rel_candidates = (
+        "src/app/globals.css",   # Next.js
+        "src/index.css",         # Vite (React/Vue)
+        "src/style.css",         # Vue alt
+        "src/styles/globals.css",
+    )
+    try:
+        from app.services.globals_css_builder import build_globals_css
+        _globals_css = build_globals_css(project_schema)
+        for _rel in _globals_rel_candidates:
+            _abs = os.path.join(workspace_path, _rel)
+            if os.path.isfile(_abs):
+                with open(_abs, "w", encoding="utf-8") as _gf:
+                    _gf.write(_globals_css)
+                _det_globals_written = True
+                logger.info(
+                    "Deterministic globals.css written to %s (%d chars, primary=%s)",
+                    _rel, len(_globals_css),
+                    (project_schema.get("theme") or {}).get("primary", "default"),
+                )
+                await _ws_send(
+                    websocket, "progress",
+                    f"🎨 Wrote project palette to {_rel}",
+                )
+                break
+        if not _det_globals_written:
+            logger.info(
+                "Deterministic globals.css skipped — no candidate file found in %s",
+                _globals_rel_candidates,
+            )
+    except Exception as _gcs_exc:
+        logger.warning(
+            "Deterministic globals.css write failed (non-fatal): %s", _gcs_exc,
+        )
+
+    # ── Step 3c.2: Deterministic src/lib/design-system.js write ──
+    # Picks card / button / motion / spacing / container presets based on a
+    # hash of (description + archetype). Two consumer projects don't end up
+    # sharing the LLM's defaults (shadow card + pill button + framer fade-up).
+    # Same project on retry → identical picks; different projects → different
+    # visual identity even when both are in the same archetype.
+    # FAIL-SOFT: on error the LLM still has a chance to write the file.
+    _det_design_system_written = False
+    _design_system_picks: dict[str, str] = {}
+    _design_system_rel_candidates = (
+        "src/lib/design-system.js",
+        "src/lib/design-system.ts",
+    )
+    try:
+        from app.services.design_system_js_builder import build_design_system_js
+        # Strip ws.py-appended conversation context so the seed is the user's
+        # original prompt only (used for logging / picks summary, not for
+        # design choices — those come from `_design`).
+        _ds_seed_desc = description.split("\n\n---\n\n")[0].strip()[:200]
+        _ds_contents, _design_system_picks = build_design_system_js(
+            project_schema, _ds_seed_desc, _layout_archetype, design=_design,
+        )
+        _lib_dir = os.path.join(workspace_path, "src", "lib")
+        os.makedirs(_lib_dir, exist_ok=True)
+        # Always write .js (Vue projects can import .js fine; we keep the
+        # convention single-file rather than branching by stack).
+        _ds_abs = os.path.join(_lib_dir, "design-system.js")
+        with open(_ds_abs, "w", encoding="utf-8") as _df:
+            _df.write(_ds_contents)
+        _det_design_system_written = True
+        logger.info(
+            "Deterministic design-system.js written (%d chars, picks=%s)",
+            len(_ds_contents), _design_system_picks,
+        )
+        await _ws_send(
+            websocket, "progress",
+            f"🧱 Wrote design-system.js (card={_design_system_picks.get('card')}, "
+            f"button={_design_system_picks.get('button')}, motion={_design_system_picks.get('motion')})",
+        )
+    except Exception as _ds_exc:
+        logger.warning(
+            "Deterministic design-system.js write failed (non-fatal): %s", _ds_exc,
+        )
+
     # ── Step 3d: Deterministic MarketingHeader.jsx write ──
     # The LLM occasionally preserves the cloned template's default navbar
     # (Sign In / Get Started, no logo) despite explicit Phase 1 instructions
@@ -3974,27 +4481,32 @@ async def _generate_new_project_inner(
                     or "Brand"
                 )
                 if _brand_mark and _nav_groups:
-                    _header_jsx = build_marketing_header_jsx(
+                    # Header variant is picked from Design Director's
+                    # brand_mark.placement, image_composition, hero_archetype
+                    # and spacing.rhythm — no hash, no random, no preset pool.
+                    _header_jsx, _header_variant = build_marketing_header_jsx(
                         brand_name=_schema_brand_name,
                         brand_mark=_brand_mark,
                         navigation=_nav_groups,
                         domain=_domain,
                         archetype=_layout_archetype,
+                        design=_design,
                     )
                     with open(_header_abs, "w", encoding="utf-8") as _hf:
                         _hf.write(_header_jsx)
                     _det_header_written = True
                     logger.info(
-                        "Deterministic MarketingHeader written: brand=%s domain=%s treatment=%s (%d chars)",
+                        "Deterministic MarketingHeader written: brand=%s domain=%s treatment=%s variant=%s (%d chars)",
                         _schema_brand_name,
                         _domain,
                         _brand_mark.get("treatment"),
+                        _header_variant,
                         len(_header_jsx),
                     )
                     await _ws_send(
                         websocket,
                         "progress",
-                        f"🎯 Wrote MarketingHeader (brand: {_schema_brand_name})",
+                        f"🎯 Wrote MarketingHeader ({_header_variant} variant, brand: {_schema_brand_name})",
                     )
                 else:
                     logger.info(
@@ -4023,6 +4535,9 @@ async def _generate_new_project_inner(
     _card_cls = ""
     _brand_name = description[:30]
     _plan_design_system_name = "Clean Slate"
+    # Plan-build outcomes (consumed by the confirmation gate below)
+    _plan_built_ok = False
+    _plan_data: dict | None = None
 
     # ════════════════════════════════════════════════════════════
     #  STEP A — Emit rich plan to chat (before any design work)
@@ -4042,7 +4557,25 @@ async def _generate_new_project_inner(
         # project name fallback uses only the original user description, not the
         # "## Previous conversation context\n\n..." block appended by ws.py.
         _clean_desc = description.split("\n\n---\n\n")[0].strip()
-        _project_name = _brand.get("name") or (_clean_desc[:40] if _clean_desc else "your app")
+        # Defensive: even after schema validation, reject any brand_name that
+        # looks like a sentence (extra safety in case a new code path bypasses
+        # _validate_schema). Recover from the original short prompt first,
+        # then the cleaned expanded description.
+        from app.services.project_schema import (
+            _looks_like_prose_brand,
+            _extract_brand_from_text,
+        )
+        _brand_raw = (_brand.get("name") or "").strip()
+        if _brand_raw and _looks_like_prose_brand(_brand_raw):
+            logger.info("Plan-render: discarding prose brand_name %r", _brand_raw[:60])
+            _brand_raw = ""
+        if not _brand_raw:
+            for _src in (original_description, _clean_desc):
+                _cand = _extract_brand_from_text(_src)
+                if _cand:
+                    _brand_raw = _cand
+                    break
+        _project_name = _brand_raw or "your app"
         _brand_domain = _brand.get("domain", _domain)
 
         _h_font      = _theme.get("heading_font", "")
@@ -4129,6 +4662,56 @@ async def _generate_new_project_inner(
                 if kw in _desc_lower and len(_page_items) < 10:
                     _page_items.append({"name": name, "desc": desc})
 
+        # Archetype-aware defaults — supplement (don't replace) the keyword
+        # scan when it produced fewer than 3 hits, so a single matched word
+        # like "contact" doesn't short-circuit the much richer default set.
+        # Threshold of 3 is the floor where a plan starts to feel substantive.
+        if len(_page_items) < 3:
+            _ARCHETYPE_DEFAULTS = {
+                "consumer_website": [
+                    {"name": "Home",     "desc": "Hero, value proposition, primary CTA"},
+                    {"name": "About",    "desc": "Mission, story, leadership"},
+                    {"name": "Services", "desc": "Core offerings and capabilities"},
+                    {"name": "Resources","desc": "Articles, guides, and downloadables"},
+                    {"name": "Contact",  "desc": "Contact form, locations, channels"},
+                ],
+                "marketplace": [
+                    {"name": "Home",     "desc": "Featured listings and search entry"},
+                    {"name": "Browse",   "desc": "Filterable listings grid"},
+                    {"name": "Listing",  "desc": "Detail view with seller info"},
+                    {"name": "Sell",     "desc": "Seller onboarding and create-listing flow"},
+                    {"name": "Account",  "desc": "Buyer/seller dashboard"},
+                ],
+                "portfolio": [
+                    {"name": "Home",     "desc": "Hero with featured work"},
+                    {"name": "Work",     "desc": "Project gallery"},
+                    {"name": "About",    "desc": "Bio and skills"},
+                    {"name": "Contact",  "desc": "Contact form and socials"},
+                ],
+                "blog": [
+                    {"name": "Home",        "desc": "Latest posts and featured article"},
+                    {"name": "Articles",    "desc": "Browse all posts with filters"},
+                    {"name": "Categories",  "desc": "Browse posts by topic"},
+                    {"name": "About",       "desc": "About the publication and authors"},
+                    {"name": "Contact",     "desc": "Reach the editorial team"},
+                ],
+                "single_page_landing": [
+                    {"name": "Hero",         "desc": "Headline, subtext, primary CTA"},
+                    {"name": "Features",     "desc": "Core product capabilities"},
+                    {"name": "How It Works", "desc": "Step-by-step walkthrough"},
+                    {"name": "Testimonials", "desc": "Customer quotes and social proof"},
+                    {"name": "Pricing",      "desc": "Plans and tiers"},
+                    {"name": "FAQ",          "desc": "Common questions"},
+                    {"name": "CTA",          "desc": "Final conversion section"},
+                ],
+            }
+            _existing_names = {item["name"].lower() for item in _page_items}
+            for _default in _ARCHETYPE_DEFAULTS.get(_layout_archetype, []):
+                if _default["name"].lower() not in _existing_names:
+                    _page_items.append(_default)
+                    if len(_page_items) >= 7:
+                        break
+
         # ── Entity list (admin panels) ─────────────────────────
         _entity_list = [
             {
@@ -4152,8 +4735,11 @@ async def _generate_new_project_inner(
         if _is_blog and _entities:
             # ── Blog / Content platform description ───────────────
             _vibe = _ds.get("overall_vibe", "") or "clean typographic"
-            _page_count = len(_pages)
             _page_names = [p.get("title", p.get("path", "")) for p in _pages[:6] if p.get("title") or p.get("path")]
+            # Fall back to _page_items (keyword + archetype defaults) when schema is thin
+            if not _page_names:
+                _page_names = [item["name"] for item in _page_items[:6]]
+            _page_count = len(_page_names) or len(_pages)
             _page_str = ", ".join(_page_names[:5])
             _entity_names = [e.get("name", "") for e in _entities[:4] if e.get("name")]
             _tagline = _brand.get("tagline", "")
@@ -4214,8 +4800,11 @@ async def _generate_new_project_inner(
         elif _is_consumer:
             # ── Consumer website description ──────────────────
             _vibe = _ds.get("overall_vibe", "") or "modern"
-            _page_count = len(_pages)
             _page_names = [p.get("title", p.get("path", "")) for p in _pages[:6] if p.get("title") or p.get("path")]
+            # Fall back to _page_items (keyword + archetype defaults) when schema is thin
+            if not _page_names:
+                _page_names = [item["name"] for item in _page_items[:6]]
+            _page_count = len(_page_names) or len(_pages)
             _page_str = ", ".join(_page_names[:5])
             _entity_names = [e.get("name", "") for e in _entities[:4] if e.get("name")]
             _tagline = _brand.get("tagline", "")
@@ -4322,67 +4911,139 @@ async def _generate_new_project_inner(
             "design":      _design_line,
             "requiresConfirmation": True,
         }
-        await websocket.send_json({
-            "type": "chat_message",
-            "role": "agent",
-            "messageType": "plan",
-            "planData": _plan_data,
-        })
 
-        # ── Persist plan to DB so chat history survives server restarts ──
-        if chat_session_id and user_jwt:
-            try:
-                from app.services.chat import ChatService
-                await ChatService.add_message(
-                    session_id=chat_session_id,
-                    role="assistant",
-                    content=json.dumps({"messageType": "plan", "planData": _plan_data}),
-                    event_type="Plan",
-                    user_jwt=user_jwt,
-                )
-            except Exception as _db_plan_err:
-                logger.warning("Failed to persist plan to DB (non-fatal): %s", _db_plan_err)
+        # Surface the Supabase migration in the plan when we wrote one.
+        # User-friendly framing — no jargon about RLS or migrations files.
+        if _wrote_backend_migration:
+            _plan_data["backend"] = (
+                f"Supabase database schema with {_backend_table_count or 'several'} "
+                "tables, ready to apply in your Supabase dashboard. The frontend "
+                "ships with sample data so you can preview immediately; swap to "
+                "real data after running the SQL."
+            )
+        _plan_built_ok = True
 
-        # ── Wait for user confirmation before proceeding ──────────────
-        # The user sees the plan and can either confirm ("Looks Good") or
-        # reject with a corrected description ("Change Direction").
-        # Auto-proceed after 5 minutes if no response.
-        await websocket.send_json({
-            "type": "plan_awaiting_confirmation",
-            "message": "Review your plan above and click 'Looks Good' to start building.",
-        })
-        _plan_future = register_plan_confirmation(websocket)
+    except Exception as _plan_exc:
+        logger.warning(
+            "Failed to build plan data (non-fatal): %s", _plan_exc, exc_info=True,
+        )
+        _plan_built_ok = False
+        _plan_data = None
+
+    # ──────────────────────────────────────────────────────────────────
+    #  STEP B — Emit the plan to the user (best-effort)
+    #  Tracked separately so a send failure doesn't bypass the gate.
+    # ──────────────────────────────────────────────────────────────────
+    _plan_emitted_ok = False
+    if _plan_built_ok and _plan_data is not None:
+        # Pre-emit validator — log structured warnings for any thin-plan
+        # fields so we can monitor how often defaults need to fire. NOT a
+        # hard block today; every gap is supposed to be backfilled upstream
+        # by archetype defaults / brand sanitisation. If a field shows up
+        # repeatedly in logs, that's a signal to promote it to a hard
+        # block + retry the schema parse.
+        _plan_issues = _validate_plan_data(_plan_data, _layout_archetype)
+        if _plan_issues:
+            logger.warning(
+                "plan_validate: archetype=%s issues=%s",
+                _layout_archetype, _plan_issues,
+            )
+        else:
+            logger.info(
+                "plan_validate: archetype=%s OK pages=%d entities=%d",
+                _layout_archetype,
+                len(_plan_data.get("pages") or []),
+                len(_plan_data.get("entities") or []),
+            )
+
+        try:
+            # Persistence to chat_messages happens automatically via
+            # WebSocketProxy._persist_chat_event — no explicit add_message
+            # needed here. The proxy detects messageType=plan and stores
+            # the JSON envelope so the history loader can re-hydrate the
+            # plan card on reload.
+            await websocket.send_json({
+                "type": "chat_message",
+                "role": "agent",
+                "messageType": "plan",
+                "planData": _plan_data,
+            })
+            _plan_emitted_ok = True
+        except Exception as _emit_err:
+            logger.warning("Plan emission failed: %s", _emit_err)
+
+    # ──────────────────────────────────────────────────────────────────
+    #  STEP C — Confirmation gate (REQUIRED if the plan reached the user)
+    #
+    #  Behavior:
+    #   - User confirmed                      → proceed
+    #   - User rejected WITH correction       → return False (orchestrator retries)
+    #   - User rejected WITHOUT correction    → return False (abort cleanly)
+    #   - 5-minute timeout                    → auto-proceed (existing behavior)
+    #   - Any other exception during the wait → return False (abort, do NOT
+    #     silently bill the user for code they never approved)
+    #   - Plan was never emitted              → skip gate (no UI to confirm with)
+    # ──────────────────────────────────────────────────────────────────
+    if _plan_emitted_ok:
+        _gate_key = _confirmation_key(websocket, chat_session_id)
+        try:
+            await websocket.send_json({
+                "type": "plan_awaiting_confirmation",
+                "message": "Review your plan above and click 'Looks Good' to start building.",
+            })
+        except Exception as _await_send_err:
+            logger.warning("plan_awaiting_confirmation send failed: %s", _await_send_err)
+
+        _plan_future = register_plan_confirmation(_gate_key)
         try:
             _confirmation = await asyncio.wait_for(
                 _plan_future, timeout=PLAN_CONFIRM_TIMEOUT_SECONDS
             )
             if not _confirmation.get("confirmed", True):
-                # User rejected — they want to change direction
                 _correction = _confirmation.get("correction", "")
                 if _correction:
                     await _ws_send(websocket, "progress", f"🔄 Re-researching: {_correction[:60]}...")
                     logger.info("Plan rejected — re-researching with correction: %s", _correction[:100])
-                    # Clean up the pending confirmation (already popped by resolve)
-                    # Return False to signal the caller to retry with the corrected description
-                    # Store the correction on the websocket for the orchestrator to pick up
                     websocket._plan_correction = _correction
                     return False
-                else:
-                    logger.info("Plan rejected but no correction — proceeding anyway")
-            else:
-                logger.info("Plan confirmed by user — proceeding to code generation")
-                await _ws_send(websocket, "progress", "✅ Plan confirmed — starting code generation...")
+                # Reject without correction → abort cleanly
+                logger.info("Plan rejected without correction — aborting generation")
+                await _ws_send(websocket, "warning", "❌ Plan rejected — generation aborted.")
+                return False
+            logger.info("Plan confirmed by user — proceeding to code generation")
+            await _ws_send(websocket, "progress", "✅ Plan confirmed — starting code generation...")
         except asyncio.TimeoutError:
-            logger.info("Plan confirmation timed out after %ds — auto-proceeding", PLAN_CONFIRM_TIMEOUT_SECONDS)
-            await _ws_send(websocket, "progress", "⏱️ Auto-proceeding with plan (no response after 5 min)...")
-            # Clean up
-            pending_plan_confirmations.pop(id(websocket), None)
+            logger.info(
+                "Plan confirmation timed out after %ds — auto-proceeding",
+                PLAN_CONFIRM_TIMEOUT_SECONDS,
+            )
+            await _ws_send(
+                websocket, "progress",
+                "⏱️ Auto-proceeding with plan (no response after 5 min)...",
+            )
+            pending_plan_confirmations.pop(_gate_key, None)
         except Exception as _conf_err:
-            logger.warning("Plan confirmation error (non-fatal, auto-proceeding): %s", _conf_err)
-            pending_plan_confirmations.pop(id(websocket), None)
-
-    except Exception as _plan_exc:
-        logger.warning("Failed to emit plan message (non-fatal): %s", _plan_exc)
+            # Non-Timeout error during the wait (e.g. ws error, future cancelled
+            # by some unexpected path). Abort instead of silently proceeding to
+            # code generation the user never approved.
+            logger.warning(
+                "Plan confirmation aborted due to error: %s", _conf_err, exc_info=True,
+            )
+            pending_plan_confirmations.pop(_gate_key, None)
+            try:
+                await _ws_send(
+                    websocket, "warning",
+                    "❌ Plan confirmation failed — generation aborted. "
+                    "Please retry your request.",
+                )
+            except Exception:
+                pass
+            return False
+    else:
+        logger.warning(
+            "Plan was not delivered to the user — skipping confirmation gate "
+            "and proceeding directly to code generation"
+        )
 
     # ── PHASE GATE: Research complete → Coding starts ──
     await _send_phase(websocket, 3, "Researching project", f"Research complete ({research_quality})", "done")
@@ -4397,7 +5058,25 @@ async def _generate_new_project_inner(
     
     # Design system file instruction — generates src/lib/design-system.js
     design_system_instruction = ""
-    if schema_design_spec:
+    if _det_design_system_written:
+        # Already written deterministically with project-specific picks.
+        # Just remind components to consume the tokens.
+        design_system_instruction = (
+            "\n7. DESIGN SYSTEM FILE — src/lib/design-system.js HAS ALREADY BEEN WRITTEN deterministically.\n"
+            f"   Picks for THIS project: card={_design_system_picks.get('card')}, "
+            f"button={_design_system_picks.get('button')}, motion={_design_system_picks.get('motion')}, "
+            f"spacing={_design_system_picks.get('spacing')}, container={_design_system_picks.get('container')}.\n"
+            "   DO NOT regenerate src/lib/design-system.js — skip it entirely.\n"
+            "   ALL components in Phase 2 and 3 MUST import { ds } from '@/lib/design-system' and use:\n"
+            "   - ds.card, ds.cardInteractive — every card\n"
+            "   - ds.buttonPrimary, ds.buttonSecondary, ds.buttonGhost — every button\n"
+            "   - ds.section — every <section> vertical padding\n"
+            "   - ds.container — every section's inner container\n"
+            "   - ds.heading, ds.body — heading vs body font classes\n"
+            "   - ds.motion — framer-motion props for in-view animations (spread it: <motion.div {...ds.motion}>)\n"
+            "   This is HOW each project gets a unique visual identity. Inventing your own card / button / motion classes per file BREAKS that.\n"
+        )
+    elif schema_design_spec:
         design_system_instruction = f"""\n7. DESIGN SYSTEM FILE — Generate src/lib/design-system.js (or .ts for Vue):
    Export a `ds` object with deterministic Tailwind class tokens:
    - card: exact classes for ALL cards in the project
@@ -4680,6 +5359,7 @@ Generate ONLY these foundation files (Phases 2 and 3 will handle sections/featur
    - Admin panels: sidebar (w-64, brand logo, nav groups, user profile area) + top header with search+notifications
    - DO NOT copy template defaults — create a UNIQUE layout matching the research
 {"   - ⚠️ MarketingHeader.jsx HAS ALREADY BEEN WRITTEN deterministically. DO NOT regenerate src/components/layout/MarketingHeader.jsx. Skip it entirely — do NOT include it in write_project_files. The Footer and Sidebar (if admin) are still yours to build." if _det_header_written else ""}
+{"   - ⚠️ globals.css (the project palette + Google Fonts) HAS ALREADY BEEN WRITTEN deterministically with the project's exact colors and fonts. DO NOT regenerate src/app/globals.css / src/index.css / src/styles/globals.css. Skip it entirely — do NOT include it in write_project_files. Trust the existing CSS variables (--primary, --accent, --background, --foreground, etc.) and the .font-heading / .font-body utility classes." if _det_globals_written else ""}
 
 5. MAIN PAGE:
    - Landing page: page.js that imports section components (sections come in Phase 2)
@@ -4725,32 +5405,77 @@ Call the write_project_files tool with ALL files.
     PHASE1_MAX_TOKENS, PHASE1_EXTENDED = _phase_token_budget(project_schema, 1, _layout_archetype)
     logger.info("Phase 1 budget: max_tokens=%d extended=%s (archetype=%s, complexity score derived from schema)",
                 PHASE1_MAX_TOKENS, PHASE1_EXTENDED, _layout_archetype)
-    # 4-min hard cap — Phase 1 is the critical path, cancel and fail fast if hung.
-    # Inner httpx read=60s handles mid-stream stalls; this covers any local hang
-    # (JSON parse, retry loop, etc.) so the pipeline can never be stuck here.
-    try:
-        result1 = await asyncio.wait_for(
-            call_claude_for_json(
-                system_prompt=_system_prompt_for_phase(1),
-                user_prompt=_phase_rules_prefix(1) + "\n" + phase1_prompt,
-                api_key=api_key,
-                websocket=websocket,
-                max_tokens=PHASE1_MAX_TOKENS,
-                model=MODEL,
-                extended_output=PHASE1_EXTENDED,
-            ),
-            timeout=240.0,
+    # Phase 1 is the critical path. Two-attempt strategy:
+    #   • Attempt 1: 6-min wall-clock cap. Inner httpx read=60s already
+    #     catches truly stalled connections; the wall-clock catches any
+    #     other local hang (JSON parse loop, async deadlock, etc.).
+    #   • Attempt 2 (only on timeout, not on other failures): immediate
+    #     retry with a fresh request. Anthropic per-request slowness is
+    #     uncorrelated, so a retry usually succeeds in normal duration.
+    #     Total worst-case: ~12 min; typical recovery: 2-4 min.
+    # Other failures (auth, rate-limit, content-blocked) are NOT retried —
+    # they're not transient and a retry would just burn another credit.
+    async def _phase1_attempt() -> Optional[dict]:
+        return await call_claude_for_json(
+            system_prompt=_system_prompt_for_phase(1),
+            user_prompt=_phase_rules_prefix(1) + "\n" + phase1_prompt,
+            api_key=api_key,
+            websocket=websocket,
+            max_tokens=PHASE1_MAX_TOKENS,
+            model=MODEL,
+            extended_output=PHASE1_EXTENDED,
         )
+
+    result1 = None
+    _phase1_timed_out_once = False
+    try:
+        result1 = await asyncio.wait_for(_phase1_attempt(), timeout=360.0)
     except asyncio.TimeoutError:
-        logger.error("Phase 1 (foundation) hit 4-min hard timeout — aborting pipeline")
-        await _ws_send(websocket, "error", "❌ Phase 1 timed out — please retry")
-        return False
+        _phase1_timed_out_once = True
+        logger.warning(
+            "Phase 1 hit 6-min wall-clock on attempt 1 — retrying once "
+            "(Anthropic slowness is usually uncorrelated)"
+        )
+        await _ws_send(
+            websocket, "progress",
+            "⏳ Phase 1 was slow — retrying with a fresh request...",
+        )
+        try:
+            result1 = await asyncio.wait_for(_phase1_attempt(), timeout=360.0)
+        except asyncio.TimeoutError:
+            logger.error(
+                "Phase 1 hit 6-min wall-clock on attempt 2 — aborting pipeline"
+            )
+            from app.services.llm_retry import emit_pipeline_failure
+            await emit_pipeline_failure(
+                websocket,
+                phase="execute",
+                code="timeout",
+                message=(
+                    "Code generation took too long even after retry. The AI "
+                    "provider seems to be having issues right now. Please try "
+                    "again in a few minutes."
+                ),
+                retriable=True,
+            )
+            await _ws_send(websocket, "error", "❌ Phase 1 timed out twice — please retry")
+            return False
+    if _phase1_timed_out_once and result1:
+        logger.info("Phase 1 succeeded on attempt 2 after attempt 1 timeout")
     if result1:
         written = write_files_from_json(result1, workspace_path)
         await _emit_file_writes(websocket, written)
         total_files += written
         await _ws_send(websocket, "progress", f"✅ Foundation: {len(written)} files")
     else:
+        from app.services.llm_retry import emit_pipeline_failure
+        await emit_pipeline_failure(
+            websocket,
+            phase="execute",
+            code="unknown",
+            message="Code generation failed unexpectedly. Please retry.",
+            retriable=True,
+        )
         await _ws_send(websocket, "error", "❌ Phase 1 failed")
         return False
     
@@ -5446,6 +6171,37 @@ Call the write_project_files tool with ALL files.
         })
     except Exception:
         pass
+
+    # ── Post-generation: nudge user to apply the Supabase migration ──
+    # The migration file is in the repo and the README explains how to
+    # apply it, but most users won't dig there on their own. This message
+    # surfaces it explicitly while the workspace is fresh in their mind.
+    # Skipped silently when no migration was written (landing pages etc).
+    if _wrote_backend_migration:
+        try:
+            _table_phrase = (
+                f"{_backend_table_count} Supabase tables"
+                if _backend_table_count
+                else "your Supabase database schema"
+            )
+            await websocket.send_json({
+                "type": "chat_message",
+                "role": "agent",
+                "content": (
+                    f"💾 **Your database is ready to set up**\n\n"
+                    f"I generated {_table_phrase} in `supabase/migrations/0001_init.sql`. "
+                    f"To turn the mock-data preview into a real backend:\n\n"
+                    f"1. Open your Supabase project → **SQL Editor** → New query\n"
+                    f"2. Paste the contents of `supabase/migrations/0001_init.sql` and click **Run**\n"
+                    f"3. Add your Supabase URL + anon key to `.env.local` and install "
+                    f"`@supabase/supabase-js`\n"
+                    f"4. Replace the mock fetches in your code with Supabase queries\n\n"
+                    f"Full step-by-step in `supabase/README.md`. Row-level security is "
+                    f"already configured — every user only sees their own data."
+                ),
+            })
+        except Exception as _nudge_err:
+            logger.warning("backend_schema nudge send failed (non-fatal): %s", _nudge_err)
 
     # ── Mark generation_complete in DB so re-entering skips rebuild ──
     # This flag is checked in ws.py when a new session opens for an

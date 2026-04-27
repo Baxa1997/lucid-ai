@@ -444,7 +444,17 @@ def validate_copy_deck(deck: dict, layout_archetype: str = "") -> list[str]:
 
 # ─── Claude caller ──────────────────────────────────────────────────────────
 
-async def _call_claude(system: str, user: str, api_key: str) -> Optional[dict]:
+async def _call_claude(system: str, user: str, api_key: str, user_id: str | None = None, websocket=None) -> Optional[dict]:
+    """Call Claude with automatic retry on rate limits / 5xx / network errors.
+
+    Returns the tool_use input dict on success, or None on permanent failure
+    (bad request, auth error, exhausted retries). Transient errors are
+    transparently retried up to 3 times with exponential backoff.
+    """
+    from app.services.llm_retry import (
+        call_with_retry, classify_http_error, LLMPermanentError,
+    )
+
     headers = {
         "Content-Type": "application/json",
         "x-api-key": api_key,
@@ -460,19 +470,36 @@ async def _call_claude(system: str, user: str, api_key: str) -> Optional[dict]:
         "tool_choice": {"type": "tool", "name": "emit_copy_deck"},
     }
 
-    try:
+    async def _do_call() -> dict:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.post(_API_URL, headers=headers, json=payload)
-    except Exception as exc:
-        logger.warning("Copy Director Claude call exception: %s", exc)
-        return None
-
-    if resp.status_code != 200:
-        logger.warning("Copy Director Claude error %d: %s", resp.status_code, resp.text[:300])
-        return None
+        if resp.status_code != 200:
+            raise classify_http_error(resp.status_code, resp.text)
+        return resp.json()
 
     try:
-        data = resp.json()
+        data = await call_with_retry(_do_call, label="copy_director", websocket=websocket)
+    except LLMPermanentError as exc:
+        logger.warning("Copy Director permanent failure: %s", exc)
+        return None
+    except Exception as exc:
+        logger.warning("Copy Director failed after retries: %s", exc)
+        return None
+
+    # Meter token usage (fire-and-forget)
+    try:
+        from app.services.billing_meter import report_token_usage
+        _u = data.get("usage") or {}
+        report_token_usage(
+            user_id,
+            int(_u.get("input_tokens", 0) or 0),
+            int(_u.get("output_tokens", 0) or 0),
+            source="copy_director",
+        )
+    except Exception:
+        pass
+
+    try:
         for block in data.get("content") or []:
             if block.get("type") == "tool_use" and block.get("name") == "emit_copy_deck":
                 return block.get("input") or {}
@@ -493,6 +520,7 @@ async def build_copy_deck(
     api_key: str,
     vibe: str = "",
     websocket=None,
+    user_id: str | None = None,
 ) -> Optional[dict]:
     """One Claude call that writes a brand-specific copy deck.
 
@@ -513,7 +541,7 @@ async def build_copy_deck(
 
     # Attempt 1
     try:
-        deck = await _call_claude(_SYSTEM_PROMPT, user, api_key)
+        deck = await _call_claude(_SYSTEM_PROMPT, user, api_key, user_id=user_id, websocket=websocket)
     except Exception as exc:
         logger.warning("Copy Director attempt 1 crashed: %s", exc)
         return None
@@ -546,7 +574,7 @@ async def build_copy_deck(
         violations=violations,
     )
     try:
-        deck2 = await _call_claude(_SYSTEM_PROMPT, user2, api_key)
+        deck2 = await _call_claude(_SYSTEM_PROMPT, user2, api_key, user_id=user_id, websocket=websocket)
     except Exception as exc:
         logger.warning("Copy Director attempt 2 crashed: %s", exc)
         return None

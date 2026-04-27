@@ -68,12 +68,17 @@ const DEFAULT_TREE = [
 ];
 
 // ── TreeNode component ─────────────────────────────────────
-function TreeNode({ node, depth = 0, selectedFile, onFileSelect, parentPath = '' }) {
+function TreeNode({ node, depth = 0, selectedFile, onFileSelect, parentPath = '', fileMetrics = null }) {
   const [isOpen, setIsOpen] = useState(depth < 2);
   const filePath = parentPath ? `${parentPath}/${node.name}` : node.name;
   const isDir = node.type === 'dir' || node.type === 'folder';
   const isSelected = selectedFile === filePath;
   const { icon: FileIcon, color: fileColor } = getFileIcon(node.name);
+
+  // Match this file against the metrics map. Try both the relative path
+  // (what the agent emits) and the leaf name (older tree paths).
+  const metric = fileMetrics ? (fileMetrics[filePath] || fileMetrics[node.name]) : null;
+  const isRecent = metric && (Date.now() - metric.lastWriteTs) < 30_000;
 
   return (
     <div>
@@ -112,7 +117,21 @@ function TreeNode({ node, depth = 0, selectedFile, onFileSelect, parentPath = ''
         )}
 
         {/* Name */}
-        <span className="truncate">{node.name}</span>
+        <span className="truncate flex-1">{node.name}</span>
+
+        {/* Activity badge: dot for "just written", N× for repeated writes */}
+        {!isDir && metric && (
+          <span className="flex items-center gap-1 shrink-0">
+            {isRecent && (
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" title="Just written" />
+            )}
+            {metric.writes > 1 && (
+              <span className="text-[10px] font-mono px-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-500">
+                {metric.writes}×
+              </span>
+            )}
+          </span>
+        )}
       </button>
 
       {/* Children */}
@@ -134,6 +153,7 @@ function TreeNode({ node, depth = 0, selectedFile, onFileSelect, parentPath = ''
                 selectedFile={selectedFile}
                 onFileSelect={onFileSelect}
                 parentPath={filePath}
+                fileMetrics={fileMetrics}
               />
             ))}
         </div>
@@ -148,6 +168,9 @@ export default function FileExplorer({
   selectedFile,
   onFileSelect,
   projectName = 'Project',
+  // Optional: { [filePath]: { writes, lastWriteTs, lastSize, lastPhase, ... } }
+  // Surfaces per-file activity badges next to each tree node.
+  fileMetrics = null,
 }) {
   const [search, setSearch] = useState('');
 
@@ -211,6 +234,7 @@ export default function FileExplorer({
             node={node}
             selectedFile={selectedFile}
             onFileSelect={onFileSelect}
+            fileMetrics={fileMetrics}
           />
         ))}
 

@@ -16,17 +16,16 @@ function adminClient() {
   );
 }
 
+// ── Subscription price → plan key resolution ──
+// Resolves the plan tier (free/starter/pro/enterprise) from the
+// Stripe price ID that was charged. Unknown price IDs default to
+// 'pro' so paid users never silently lose access.
 function planFromPriceId(priceId) {
   if (!priceId) return 'free';
-  if (
-    priceId === process.env.STRIPE_PRO_MONTHLY_PRICE_ID ||
-    priceId === process.env.STRIPE_PRO_YEARLY_PRICE_ID
-  ) return 'pro';
-  if (
-    priceId === process.env.STRIPE_ENTERPRISE_MONTHLY_PRICE_ID ||
-    priceId === process.env.STRIPE_ENTERPRISE_YEARLY_PRICE_ID
-  ) return 'enterprise';
-  return 'pro'; // Unknown price → treat as pro
+  if (priceId === process.env.STRIPE_STARTER_MONTHLY_PRICE_ID)    return 'starter';
+  if (priceId === process.env.STRIPE_PRO_MONTHLY_PRICE_ID)        return 'pro';
+  if (priceId === process.env.STRIPE_ENTERPRISE_MONTHLY_PRICE_ID) return 'enterprise';
+  return 'pro';
 }
 
 function intervalFromSubscription(subscription) {
@@ -35,9 +34,21 @@ function intervalFromSubscription(subscription) {
 }
 
 async function upsertSubscription(supabase, subscription, userId) {
-  const priceId = subscription.items?.data?.[0]?.price?.id;
+  const item = subscription.items?.data?.[0];
+  const priceId = item?.price?.id;
   const plan = planFromPriceId(priceId);
   const interval = intervalFromSubscription(subscription);
+
+  // Stripe's "Clover" API (2026-01-28) moved current_period_end off the
+  // Subscription object and onto each item. Older API versions still keep
+  // it at the top level, so try both before giving up.
+  const periodEndUnix =
+    item?.current_period_end ??
+    subscription.current_period_end ??
+    null;
+  const currentPeriodEndIso = periodEndUnix
+    ? new Date(periodEndUnix * 1000).toISOString()
+    : null;
 
   await supabase.from('subscriptions').upsert(
     {
@@ -47,14 +58,81 @@ async function upsertSubscription(supabase, subscription, userId) {
       plan,
       billing_interval: interval,
       status: subscription.status,
-      current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
-      cancel_at_period_end: subscription.cancel_at_period_end,
+      current_period_end: currentPeriodEndIso,
+      cancel_at_period_end: subscription.cancel_at_period_end ?? false,
     },
-    { onConflict: 'user_id' }
+    { onConflict: 'user_id' },
   );
 }
 
+// ── Credit-pack handling ──
+// Idempotent: the credit_pack_purchases table has a UNIQUE constraint
+// on stripe_payment_intent_id. If Stripe redelivers the event we
+// detect the existing row and skip the balance bump.
+async function applyCreditPack(supabase, session) {
+  const userId = session.metadata?.supabase_user_id;
+  const packKey = session.metadata?.pack_key;
+  const tokensAdded = Number(session.metadata?.tokens_added ?? 0);
+  const paymentIntentId = String(session.payment_intent ?? '');
+
+  if (!userId || !packKey || !tokensAdded || !paymentIntentId) {
+    console.warn('[webhook] credit pack session missing metadata', {
+      userId, packKey, tokensAdded, paymentIntentId,
+    });
+    return;
+  }
+
+  // Idempotency check — unique constraint on stripe_payment_intent_id
+  const { data: existing } = await supabase
+    .from('credit_pack_purchases')
+    .select('id')
+    .eq('stripe_payment_intent_id', paymentIntentId)
+    .maybeSingle();
+
+  if (existing) {
+    console.log('[webhook] credit pack already applied for', paymentIntentId);
+    return;
+  }
+
+  // Record the purchase
+  const { error: purchaseErr } = await supabase.from('credit_pack_purchases').insert({
+    user_id:                  userId,
+    pack_key:                 packKey,
+    tokens_added:             tokensAdded,
+    amount_cents:             session.amount_total ?? 0,
+    currency:                 session.currency ?? 'usd',
+    stripe_session_id:        String(session.id),
+    stripe_payment_intent_id: paymentIntentId,
+  });
+
+  if (purchaseErr) {
+    console.error('[webhook] insert credit_pack_purchases failed:', purchaseErr.message);
+    return;
+  }
+
+  // Bump the carry-over balance. Use raw SQL via rpc-style update so
+  // concurrent purchases don't clobber each other.
+  const { data: subRow } = await supabase
+    .from('subscriptions')
+    .select('extra_token_balance, stripe_customer_id')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  const newBalance = Number(subRow?.extra_token_balance ?? 0) + tokensAdded;
+
+  await supabase.from('subscriptions').upsert(
+    {
+      user_id: userId,
+      stripe_customer_id: subRow?.stripe_customer_id ?? String(session.customer ?? ''),
+      extra_token_balance: newBalance,
+    },
+    { onConflict: 'user_id' },
+  );
+}
+
+// ─────────────────────────────────────────────────────────
 // POST /api/stripe/webhook
+// ─────────────────────────────────────────────────────────
 export async function POST(req) {
   const body = await req.text();
   const sig  = req.headers.get('stripe-signature');
@@ -102,7 +180,7 @@ export async function POST(req) {
             status: 'canceled',
             cancel_at_period_end: false,
           },
-          { onConflict: 'user_id' }
+          { onConflict: 'user_id' },
         );
       }
       break;
@@ -110,13 +188,23 @@ export async function POST(req) {
 
     case 'checkout.session.completed': {
       const session = event.data.object;
+
+      // Subscription checkout
       if (session.mode === 'subscription' && session.subscription) {
         const userId = session.metadata?.supabase_user_id;
         if (userId) {
           const fullSub = await stripe.subscriptions.retrieve(String(session.subscription));
           await upsertSubscription(supabase, fullSub, userId);
         }
+        break;
       }
+
+      // One-time credit pack checkout
+      if (session.mode === 'payment' && session.metadata?.purchase_type === 'credit_pack') {
+        await applyCreditPack(supabase, session);
+        break;
+      }
+
       break;
     }
 

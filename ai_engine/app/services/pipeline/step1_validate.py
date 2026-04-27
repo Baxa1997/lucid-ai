@@ -192,7 +192,7 @@ async def validate_inputs(
                             _db_result = await _asyncio.wait_for(
                                 (
                                     sb.table("chat_sessions")
-                                    .select("platform_repo_url")
+                                    .select("platform_repo_url,platform_repo_branch")
                                     .eq("id", chat_session_id)
                                     .maybe_single()
                                     .execute()
@@ -240,7 +240,9 @@ async def validate_inputs(
                         token = platform_token
                         git_provider = "github"
                         scratch_mode = False
-                        branch = "main"
+                        # Default to staging — Lucid generations always live on
+                        # the staging branch; main is reserved for published code.
+                        branch = _db_result.data.get("platform_repo_branch") or "staging"
                         logger.info(
                             "FOLLOW-UP MODE: Reusing existing repo from chat_session %s: %s",
                             chat_session_id, existing_repo_url,

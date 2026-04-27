@@ -15,6 +15,8 @@ import logging
 import google.generativeai as genai
 from fastapi import WebSocket
 
+from app.services.llm_retry import call_with_retry
+
 from .constants import GEMINI_MODEL, GEMINI_BLUEPRINT_MODEL, GEMINI_RESEARCH_MODEL
 from .ws_utils import _send_chat_message
 
@@ -120,10 +122,27 @@ IMPORTANT SELECTION RULES:
 Return ONLY a valid JSON list of file paths. No markdown formatting, no backticks, just the JSON array.
 Example: ["src/app/page.js", "src/components/Header.js"]"""
 
-        filter_response = await asyncio.wait_for(
-            asyncio.to_thread(model.generate_content, filter_prompt),
-            timeout=60,
-        )
+        # Tiny JSON list output — temperature=0 for determinism. thinking_budget=0
+        # would save ~3-5s but is unsupported by the legacy google-generativeai SDK
+        # (would need migration to google-genai). Try-block is forward-looking.
+        try:
+            _filter_gen_config = genai.GenerationConfig(
+                temperature=0,
+                thinking_config=genai.types.ThinkingConfig(thinking_budget=0),  # noqa: SLF001
+            )
+        except (AttributeError, TypeError):
+            _filter_gen_config = genai.GenerationConfig(temperature=0)
+
+        async def _do_filter():
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    model.generate_content,
+                    filter_prompt,
+                    generation_config=_filter_gen_config,
+                ),
+                timeout=60,
+            )
+        filter_response = await call_with_retry(_do_filter, label="step4_filter_files", websocket=websocket)
 
         text = filter_response.text.strip()
         if "```" in text:
@@ -179,10 +198,7 @@ Example: ["src/app/page.js", "src/components/Header.js"]"""
 
     # STEP 4: Send focused context to Gemini
     try:
-        response = await asyncio.wait_for(
-            asyncio.to_thread(
-                model.generate_content,
-                f"""You are a senior software engineer.
+        _plan_prompt = f"""You are a senior software engineer.
 Task type: {classification.get('task_type', 'feature')}
 Task: {task}
 
@@ -246,10 +262,14 @@ FILES TO CHANGE:
 
 EXACT CHANGES:
 (show before/after for each file)
-""",
-            ),
-            timeout=180,
-        )
+"""
+
+        async def _do_plan():
+            return await asyncio.wait_for(
+                asyncio.to_thread(model.generate_content, _plan_prompt),
+                timeout=180,
+            )
+        response = await call_with_retry(_do_plan, label="step4_create_plan", websocket=websocket)
         plan = response.text
 
     except Exception as e:
@@ -490,17 +510,19 @@ If two different users asking for "blog landing page" get the same spec, you hav
 If the user's request is short/vague, you MUST still produce a COMPREHENSIVE spec by researching the niche.
 Research the specific niche. Customize everything.
 """
-        response = await asyncio.wait_for(
-            asyncio.to_thread(
-                model.generate_content,
-                spec_prompt,
-                generation_config=genai.GenerationConfig(
-                    temperature=0.3,
-                    max_output_tokens=16384,
+        async def _do_spec():
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    model.generate_content,
+                    spec_prompt,
+                    generation_config=genai.GenerationConfig(
+                        temperature=0.3,
+                        max_output_tokens=16384,
+                    ),
                 ),
-            ),
-            timeout=180,
-        )
+                timeout=180,
+            )
+        response = await call_with_retry(_do_spec, label="step4_research_spec", websocket=websocket)
         spec = response.text.strip()
         if not spec:
             spec = f"# Project Specification\n\nBuild: {task}"
@@ -527,24 +549,421 @@ Research the specific niche. Customize everything.
             "type": "progress",
             "message": "📋 Specification created",
         })
-        # Send a summary of the research to the chat panel
-        spec_lines = spec.split('\n')
-        summary_lines = []
-        for line in spec_lines[:30]:
-            if line.strip() and not line.startswith('#'):
-                summary_lines.append(line.strip())
-            if len(summary_lines) >= 5:
-                break
-        if summary_lines:
-            research_summary = '\n'.join(summary_lines[:5])
-            await _send_chat_message(
-                websocket,
-                f"🔍 **Research Complete**\n\n{research_summary}\n\n_Full spec saved to `.lucid/spec.md`_"
-            )
+        brief = _format_research_brief(
+            spec,
+            task,
+            stack=validated.get("project_stack", "") or validated.get("skeleton_stack", ""),
+            is_admin=is_admin,
+        )
+        if brief:
+            await _send_chat_message(websocket, brief)
     except Exception:
         pass
 
     return spec
+
+
+def _extract_spec_section(spec: str, header_keywords: tuple[str, ...]) -> str:
+    """Return the body of the first markdown section whose H2 header matches
+    any keyword in ``header_keywords`` (case-insensitive substring).
+
+    Body = every line until the next ``## `` header or EOF. Returns ``""``
+    when no matching header is found. Resilient to surrounding whitespace
+    and to specs that wrap headers in extra text (e.g. ``## Pages (complete)``).
+    """
+    lines = spec.split('\n')
+    in_section = False
+    body: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('## '):
+            header_text = stripped.lstrip('#').strip().lower()
+            if in_section:
+                break  # we already collected our section, stop at next header
+            if any(kw.lower() in header_text for kw in header_keywords):
+                in_section = True
+                continue
+        elif in_section:
+            body.append(line.rstrip())
+    # Strip leading/trailing blank lines
+    while body and not body[0].strip():
+        body.pop(0)
+    while body and not body[-1].strip():
+        body.pop()
+    return '\n'.join(body)
+
+
+# Persona / user-segment keywords. Hit any of these and the line is
+# almost certainly describing a target user, not the product pitch.
+# Tuned against real Gemini Pro outputs for ACCA, CRM, restaurants, SaaS.
+_USER_KEYWORDS = (
+    "students", "members", "professionals", "developers", "designers",
+    "managers", "managers,", "executives", "owners", "consultants",
+    "freelancers", "contractors", "employers", "customers", "clients",
+    "users:", "users (", "audience", "personas", "stakeholders",
+    "buyers", "sellers", "shoppers", "subscribers", "creators",
+    "patients", "doctors", "teachers", "students,", "operators",
+)
+
+# Meta-prompt artifacts the spec almost always echoes back. They look
+# like bullets but carry no real content (just "What this project does").
+_META_LABEL_FRAGMENTS = (
+    "what this project does",
+    "what it does",
+    "what problem it solves",
+    "key differentiators",
+    "premium differentiators",
+    "who uses it",
+    "target audience",
+    "project name",
+)
+
+
+def _strip_bullet(line: str) -> str:
+    """Strip a leading markdown bullet (``- `` or ``* ``) — and ONLY one.
+
+    Critical: don't use ``lstrip('-*')``, that's greedy and eats the
+    ``**`` of a leading bold label, breaking ``_strip_bold_label``.
+    """
+    s = line.strip()
+    if s.startswith(('- ', '* ')):
+        return s[2:].lstrip()
+    if s.startswith(('-', '*')) and len(s) > 1 and s[1] not in '-*':
+        return s[1:].lstrip()
+    return s
+
+
+def _strip_bold_label(line: str) -> str:
+    """Strip a leading bold label like ``**X:**`` so ``**Product:** Foo`` → ``Foo``.
+
+    Returns the line unchanged when there is no leading bold label or
+    when the label has no content after the closing colon.
+    """
+    s = _strip_bullet(line)
+    if s.startswith('**') and ':**' in s:
+        after = s.split(':**', 1)[1].strip()
+        if after:
+            return after
+    return s
+
+
+def _is_meta_label(line: str) -> bool:
+    """True for prompt-echo bullets like ``**What problem it solves:**`` with
+    no substantive trailing content. We never show these to the user."""
+    s = line.strip().lstrip('-*').strip().lower()
+    if not s:
+        return True
+    # Pure bold label, no content after the colon
+    if s.startswith('**') and (':**' in s):
+        after = s.split(':**', 1)[1].strip()
+        if not after:
+            return True
+    return any(frag in s for frag in _META_LABEL_FRAGMENTS) and len(s) < 80
+
+
+def _looks_like_user_segment(line: str) -> bool:
+    """True if the line names a user/persona segment (vs. project pitch).
+
+    Check the FULL original line, not the body — persona keywords often
+    live inside the bold label itself (e.g. ``**Prospective Students:**``).
+    """
+    return any(kw in line.lower() for kw in _USER_KEYWORDS)
+
+
+def _split_overview(overview: str) -> tuple[list[str], list[str]]:
+    """Parse the spec's Project Overview into (pitch_paragraphs, user_segments).
+
+    The overview comes in two wildly different shapes from Pro:
+      A) ### subsections (ACCA-style): "### What This Project Is..." then a
+         pitch paragraph then a bulleted list of user segments.
+      B) Bold labels with content on the next line (CRM-style):
+         "**What this project does:**\\n<pitch sentence>".
+
+    Strategy:
+      1. Split into paragraphs on blank lines.
+      2. Strip leading ``###``/``**Label:**`` from each paragraph; drop the
+         paragraph entirely if nothing substantive remains.
+      3. Within each paragraph, separate bulleted lines (candidate user
+         segments) from prose lines (candidate pitch).
+      4. Bullets matching persona keywords → user_lines. Prose paragraphs
+         become pitch lines, with persona-mentioning sentences also added
+         to users (CRM's "primary users are SDRs, AEs..." case).
+    Returns at most a few of each — caller truncates further.
+    """
+    paragraphs = [p.strip() for p in overview.split('\n\n') if p.strip()]
+    pitch: list[str] = []
+    users: list[str] = []
+
+    for para in paragraphs:
+        # Strip leading ### subsection header (we don't need its text)
+        body_lines = [
+            ln for ln in para.split('\n')
+            if not ln.strip().startswith('###')
+        ]
+        if not body_lines:
+            continue
+
+        # If first line is a meta-label like "**What problem it solves:**",
+        # drop it; the next line(s) carry the real content.
+        if _is_meta_label(body_lines[0]):
+            body_lines = body_lines[1:]
+        if not body_lines:
+            continue
+
+        # Walk lines: bullets vs prose
+        for raw in body_lines:
+            s = raw.strip()
+            if not s or _is_meta_label(s):
+                continue
+
+            # A bullet starts with "- " or "* " (NOT "**" — that's bold).
+            is_bullet = (
+                s.startswith(('- ', '* '))
+                or (s.startswith(('-', '*')) and len(s) > 1 and s[1] not in '-*')
+            )
+            cleaned = _strip_bold_label(s).strip()
+
+            # Numbered differentiators: "1.  **Action-Oriented UI:** desc..."
+            if cleaned and cleaned[0].isdigit() and '.' in cleaned[:4]:
+                cleaned = cleaned.split('.', 1)[1].strip()
+                cleaned = _strip_bold_label(cleaned).strip()
+
+            if not cleaned or len(cleaned) < 25:
+                continue
+
+            if is_bullet:
+                # Bullets in the overview are almost always user segments
+                # (when they have persona keywords) or differentiators
+                # (which we skip — they belong in features).
+                if _looks_like_user_segment(s) and cleaned not in users:
+                    users.append(cleaned)
+            else:
+                # Prose: route to ONE bucket only. If it has the
+                # explicit "users are..." pattern, treat as user info;
+                # otherwise it's pitch.
+                if _is_explicit_user_sentence(s) and cleaned not in users:
+                    users.append(cleaned)
+                elif cleaned not in pitch:
+                    pitch.append(cleaned)
+
+    return pitch, users
+
+
+def _is_explicit_user_sentence(line: str) -> bool:
+    """True only when the prose explicitly enumerates users.
+
+    Stricter than ``_looks_like_user_segment`` — that one matches any
+    persona keyword anywhere, which is too greedy for prose. This
+    requires phrases like "primary users are X" or "designed for X
+    teams" so the ACCA "...portal for a diverse audience:" lead-in
+    line doesn't get misclassified as a user segment.
+    """
+    low = line.lower()
+    return any(p in low for p in (
+        "users are", "users include", "primary users", "intended for",
+        "designed for", "built for", "made for",
+    ))
+
+    return pitch, users
+
+_FRONTEND_DATA_NOTE = (
+    "Frontend with mock data — `db.json` (json-server) acts as a fake REST "
+    "API at `localhost:3001`. No real database is provisioned."
+)
+_ADMIN_DATA_NOTE = (
+    "Spec describes Supabase tables + RLS policies, but the actual schema is "
+    "**not** auto-provisioned in this generation. The frontend wires to mock "
+    "data; you'll need to run the SQL migrations from `.lucid/spec.md` in "
+    "Supabase to make it real."
+)
+
+
+def _format_research_brief(
+    spec: str,
+    task: str,
+    *,
+    stack: str = "",
+    is_admin: bool = False,
+) -> str:
+    """Turn the structured spec.md into a PM-friendly brief for chat.
+
+    Sections rendered (each silently dropped when empty):
+      • What we'll build  ← Project Overview body
+      • Target users      ← user-segment lines mined from Project Overview
+      • Pages             ← from Pages section (### headers preferred)
+      • Key features      ← top bullets from MVP Feature List
+      • Design intent     ← primary color + typography from Design System
+      • Data layer        ← honest note about backend status (admin vs site)
+      • Stack             ← from ``stack`` arg
+
+    Returns ``""`` only when the spec is so malformed that even the
+    overview is missing — in which case the caller skips the message
+    so the user doesn't see an empty header.
+    """
+    overview = _extract_spec_section(spec, ("project overview", "overview"))
+    features_raw = _extract_spec_section(spec, ("mvp feature list", "features", "mvp"))
+    pages_raw = _extract_spec_section(spec, ("pages",))
+    design_raw = _extract_spec_section(spec, ("design system", "design"))
+
+    parts: list[str] = ["📋 **Project Brief**"]
+
+    pitch_lines, user_lines = _split_overview(overview) if overview else ([], [])
+
+    # ── What we'll build ─────────────────────────────────────────
+    if pitch_lines:
+        parts.append("**🎯 What we'll build**")
+        for ln in pitch_lines[:2]:
+            parts.append(ln)
+
+    # ── Target users ─────────────────────────────────────────────
+    if user_lines:
+        parts.append("\n**👥 Target users**")
+        for ln in user_lines[:4]:
+            parts.append(f"• {ln}")
+
+    if pages_raw:
+        # Two-pass strategy:
+        # 1. If the section uses ### headers ("### 1. Homepage"), those ARE
+        #    the page names. Use only those — bullets nested inside are
+        #    field labels (Route, Purpose, Sections) we must ignore.
+        # 2. Otherwise fall back to top-level bullets like
+        #    "- **Home** (/) — hero, features, ...".
+        page_names: list[str] = []
+        h3_pages = [
+            ln.strip().lstrip('#').strip().lstrip('0123456789.) ').strip()
+            for ln in pages_raw.split('\n')
+            if ln.strip().startswith('### ')
+        ]
+        if h3_pages:
+            for name in h3_pages:
+                if name and name not in page_names:
+                    page_names.append(name)
+                if len(page_names) >= 8:
+                    break
+        else:
+            # Field labels we must NOT treat as page names. Specs uniformly
+            # use these as bulleted attributes inside each page description.
+            _field_labels = {
+                "route", "purpose", "sections", "layout", "content",
+                "headline", "sub-headline", "subheadline", "description",
+                "interactive elements", "mobile layout differences",
+                "mobile layout", "data", "controls", "props",
+            }
+            for ln in pages_raw.split('\n'):
+                s = ln.strip()
+                if not s.startswith(('-', '*')):
+                    continue
+                body = s.lstrip('-*').strip()
+                # "- **Home** (/) — hero, features..." → "Home"
+                for stop in (':', '(', ' — ', ' - '):
+                    idx = body.find(stop)
+                    if idx > 0:
+                        body = body[:idx]
+                name = body.strip().strip('*').strip().rstrip(':').strip()
+                if not name or len(name) >= 60:
+                    continue
+                if name.lower() in _field_labels:
+                    continue
+                if name not in page_names:
+                    page_names.append(name)
+                if len(page_names) >= 8:
+                    break
+        if page_names:
+            parts.append(f"\n**📄 Pages ({len(page_names)})**")
+            parts.append(", ".join(page_names))
+
+    if features_raw:
+        feature_lines: list[str] = []
+        for ln in features_raw.split('\n'):
+            s = ln.strip()
+            if not s.startswith(('-', '*')):
+                continue
+            cleaned = _strip_bold_label(s).strip()
+            # Pure category labels with no content after the colon
+            # (e.g. ``**Dashboard:**`` followed by nested feature bullets).
+            # ``_strip_bold_label`` returns the original when after-colon is
+            # empty, so we have to filter both ``X:`` and ``**X:**`` shapes.
+            if cleaned.endswith((':', ':**')) and len(cleaned) < 40:
+                continue
+            if not cleaned or len(cleaned) < 12:
+                continue
+            low = cleaned.lower()
+            # Drop generic boilerplate the prompt always emits
+            if any(skip in low for skip in (
+                "navigation with active states",
+                "mobile responsive",
+                "loading states",
+                "micro-animations",
+            )):
+                continue
+            if cleaned not in feature_lines:
+                feature_lines.append(cleaned)
+            if len(feature_lines) >= 6:
+                break
+        if feature_lines:
+            parts.append("\n**✨ Key features**")
+            for f in feature_lines[:6]:
+                parts.append(f"• {f}")
+
+    # ── Design intent ───────────────────────────────────────────
+    # Pull primary color (first hex on a "primary" line) + font name.
+    if design_raw:
+        design_bits: list[str] = []
+        primary_color = ""
+        font_name = ""
+        for ln in design_raw.split('\n'):
+            low = ln.lower()
+            if not primary_color and "primary" in low:
+                # Find first #hex on that line OR the next 1-2 lines
+                m = _re_search_hex(ln)
+                if m:
+                    primary_color = m
+            if not font_name and ("font:" in low or "**font**" in low or "typography" in low):
+                # "Font: Inter" or "**Font:** Inter (...)" — strip to first comma/(
+                cand = ln.split(":", 1)[-1] if ":" in ln else ln
+                cand = cand.strip().strip('*').strip()
+                for stop in ("(", ",", " - ", " — "):
+                    i = cand.find(stop)
+                    if i > 0:
+                        cand = cand[:i]
+                cand = cand.strip()
+                if cand and len(cand) < 40:
+                    font_name = cand
+        if primary_color:
+            design_bits.append(f"• Primary color: `{primary_color}`")
+        if font_name:
+            design_bits.append(f"• Typography: {font_name}")
+        if design_bits:
+            parts.append("\n**🎨 Design intent**")
+            parts.extend(design_bits)
+
+    # ── Data layer (honest about backend status) ────────────────
+    parts.append("\n**💾 Data layer**")
+    parts.append(_ADMIN_DATA_NOTE if is_admin else _FRONTEND_DATA_NOTE)
+
+    # ── Stack ───────────────────────────────────────────────────
+    if stack:
+        parts.append(f"\n**🛠 Stack**: {stack}")
+
+    # If we got nothing useful from the spec (unusual — would mean the
+    # research call returned a one-liner fallback), don't send an empty
+    # brief. Heading-only output (just the title) is also useless.
+    if len(parts) <= 1 or (len(parts) <= 4 and not overview):
+        return ""
+
+    parts.append("\n_Building this now…_")
+    return '\n'.join(parts)
+
+
+def _re_search_hex(line: str) -> str:
+    """Return the first ``#RRGGBB`` (or ``#RGB``) hex color in ``line``, or "".
+
+    Inline regex helper instead of a top-level import: keeps the brief
+    extractor self-contained and avoids polluting the module namespace.
+    """
+    import re
+    m = re.search(r'#[0-9A-Fa-f]{6}\b|#[0-9A-Fa-f]{3}\b', line)
+    return m.group(0) if m else ""
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -822,18 +1241,20 @@ Return ONLY valid JSON (no markdown, no backticks):
 
 Return ONLY the raw JSON object. No markdown. No backticks. No explanation.
 """
-        response = await asyncio.wait_for(
-            asyncio.to_thread(
-                model.generate_content,
-                blueprint_prompt,
-                generation_config=genai.GenerationConfig(
-                    temperature=0.7,
-                    max_output_tokens=65536,
-                    response_mime_type="application/json",
+        async def _do_blueprint():
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    model.generate_content,
+                    blueprint_prompt,
+                    generation_config=genai.GenerationConfig(
+                        temperature=0.7,
+                        max_output_tokens=65536,
+                        response_mime_type="application/json",
+                    ),
                 ),
-            ),
-            timeout=240,
-        )
+                timeout=240,
+            )
+        response = await call_with_retry(_do_blueprint, label="step4_blueprint", websocket=websocket)
         blueprint_text = response.text.strip()
 
         # Clean up markdown fences if present

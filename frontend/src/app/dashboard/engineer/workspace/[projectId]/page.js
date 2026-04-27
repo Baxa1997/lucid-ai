@@ -27,6 +27,12 @@ import {
   Diamond,
   Download,
   ChevronLeft,
+  Lock,
+  Rocket,
+  ExternalLink,
+  Copy,
+  Check,
+  RefreshCw,
 } from "lucide-react";
 import {useAgentSession} from "@/hooks/useAgentSession";
 import agentWSManager from "@/lib/agentWSManager";
@@ -379,6 +385,8 @@ function ConversationPageInner({params}) {
     resolvingInfo,
     resolvingProgress,
     writtenFiles,
+    fileContents,
+    fileMetrics,
     errorStage,
     previewError,
     retryCount,
@@ -441,6 +449,115 @@ function ConversationPageInner({params}) {
   const [showPublishModal, setShowPublishModal] = useState(false);
   const [publishConfirmed, setPublishConfirmed] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(false);
+  const [copiedHeaderUrl, setCopiedHeaderUrl] = useState(false);
+  const [publishVisibility, setPublishVisibility] = useState("private");
+  const [publishing, setPublishing] = useState(false);
+  const [publishError, setPublishError] = useState("");
+  const [publishResult, setPublishResult] = useState(null); // { repoUrl, vercelUrl, message }
+
+  const handlePublish = async () => {
+    setPublishing(true);
+    setPublishError("");
+    try {
+      const res = await fetch(`/api/publish/${projectId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ visibility: publishVisibility }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setPublishError(data.error || `Publish failed (${res.status})`);
+        return;
+      }
+      setPublishResult(data);
+      setPublishConfirmed(true);
+      // Persist the live URL into workspace state so reopening the modal
+      // (or refreshing the page) shows the success state instead of the
+      // visibility picker. Without this, vercelDeployUrl resets to null
+      // until the next WS reconnect or page reload re-hydrates from DB.
+      if (data.vercelUrl) {
+        setRepoInfo((prev) => ({ ...prev, deployedUrl: data.vercelUrl }));
+      }
+    } catch (err) {
+      setPublishError(err?.message || "Network error");
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  // ── Subscription state (used by Upgrade button, usage meter, Export gate) ──
+  // Single fetch on mount; refreshed when the workspace tab becomes visible
+  // again (e.g. after returning from /billing in another tab).
+  const [subscription, setSubscription] = useState(null);
+  // Set to true when user clicks "Skip for testing" on the upgrade modal —
+  // ExportCodeModal then sends bypassLimits=true to /api/export-code so the
+  // full export flow runs end-to-end on the user's actual plan.
+  const [exportBypassLimits, setExportBypassLimits] = useState(false);
+  const [showExportUpgradeModal, setShowExportUpgradeModal] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () =>
+      fetch("/api/stripe/subscription")
+        .then((r) => r.json())
+        .then((d) => { if (!cancelled) setSubscription(d); })
+        .catch(() => {});
+    refresh();
+    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
+
+  const canExport = subscription?.limits?.canExport ?? false;
+
+  // Click handler for the toolbar Export button — opens upgrade modal for
+  // Free/Starter, normal export modal for Pro+.
+  const handleExportClick = () => {
+    if (canExport) {
+      setExportBypassLimits(false);
+      setShowExportModal(true);
+    } else {
+      setShowExportUpgradeModal(true);
+    }
+  };
+
+  const handleExportSkip = () => {
+    setShowExportUpgradeModal(false);
+    setExportBypassLimits(true);
+    setShowExportModal(true);
+  };
+
+  // ── ProjectDashboard handlers ──
+  // Rename — writes title to chat_sessions via Supabase (same path the chat
+  // history uses). Updates local conversation state on success.
+  const handleProjectRename = async (newTitle) => {
+    if (!conversationId) return;
+    const sb = getSupabaseBrowserClient();
+    const { error } = await sb
+      .from('chat_sessions')
+      .update({ title: newTitle })
+      .eq('project_id', conversationId);
+    if (error) throw error;
+    setConversation((prev) => (prev ? { ...prev, title: newTitle } : prev));
+  };
+
+  // Delete — calls existing /api/delete-project, then routes to the dashboard.
+  const handleProjectDelete = async () => {
+    if (!conversationId) return;
+    const res = await fetch('/api/delete-project', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId: conversationId }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Delete failed');
+    }
+    router.replace('/dashboard/engineer');
+  };
 
   // A "real" deployment URL — used by the Publish modal to show status and
   // copy/open buttons. The iframe's ``vercelUrl`` is now always the local
@@ -875,6 +992,15 @@ function ConversationPageInner({params}) {
     rejectPlan,
     // WebContainers file map — triggers browser sandbox boot in RightPanel
     previewFileMap,
+    // Per-file content + metrics for inline DiffViewer in the Code tab
+    fileContents,
+    fileMetrics,
+    // Project-dashboard surface (rendered inside RightPanel's "dashboard" tab)
+    subscription,
+    handleProjectRename,
+    handleProjectDelete,
+    router,
+    vercelDeployUrl,
   };
 
   return (
@@ -905,10 +1031,51 @@ function ConversationPageInner({params}) {
             Reconnecting to workspace…
           </div>
         )}
+        {/* ── Upgrade modal (shown when Free/Starter user clicks Export) ── */}
+        {showExportUpgradeModal && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <div className="relative w-full max-w-md bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200 dark:border-[#2d333b] shadow-2xl p-8">
+              <button
+                onClick={() => setShowExportUpgradeModal(false)}
+                className="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06]">
+                <X className="w-4 h-4" />
+              </button>
+              <div className="w-12 h-12 rounded-2xl bg-orange-50 dark:bg-orange-500/10 flex items-center justify-center mb-5">
+                <Rocket className="w-6 h-6 text-[#dc5426]" />
+              </div>
+              <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Code export is a Pro feature</h2>
+              <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
+                Push your generated project to GitHub, GitLab, or Bitbucket — included on Pro and Enterprise plans.
+              </p>
+              <div className="space-y-2 mb-6">
+                {["Push to GitHub, GitLab, or Bitbucket", "Optional CI/CD pipeline", "Public or private repo", "Includes README and Dockerfile"].map((f) => (
+                  <div key={f} className="flex items-center gap-2.5 text-sm text-slate-600 dark:text-slate-300">
+                    <div className="w-4 h-4 rounded-full bg-emerald-100 dark:bg-emerald-500/20 flex items-center justify-center shrink-0">
+                      <svg viewBox="0 0 10 10" className="w-2.5 h-2.5 text-emerald-600 dark:text-emerald-400"><path d="M2 5l2 2 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/></svg>
+                    </div>
+                    {f}
+                  </div>
+                ))}
+              </div>
+              <a
+                href="/dashboard/engineer/billing"
+                className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 bg-gradient-to-r from-[#dc5426] to-orange-500 text-white hover:opacity-90 shadow-sm shadow-orange-600/20 transition-all active:scale-[0.98]">
+                <CreditCard className="w-4 h-4" /> Upgrade to Pro — from $59/mo
+              </a>
+              <button
+                onClick={handleExportSkip}
+                className="w-full mt-3 py-2.5 rounded-xl text-sm font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-all">
+                Skip for testing
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Export Code Modal */}
         <ExportCodeModal
           isOpen={showExportModal}
-          onClose={() => setShowExportModal(false)}
+          bypassLimits={exportBypassLimits}
+          onClose={() => { setShowExportModal(false); setExportBypassLimits(false); }}
           projectSlug={
             conversation?.repo_name?.split("/").pop() ||
             (conversation?.title || "project")
@@ -932,50 +1099,29 @@ function ConversationPageInner({params}) {
             }}>
             <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
             <div className="relative bg-white dark:bg-[#161b22] rounded-2xl shadow-2xl border border-slate-200 dark:border-[#2d333b] w-full max-w-md mx-4 overflow-hidden">
-              {/* Header */}
+              {/* Header — single unified state, no pre/post split */}
               <div className="flex items-center justify-between px-6 pt-6 pb-4">
                 <div className="flex items-center gap-3">
-                  {publishConfirmed ? (
-                    <div className="w-10 h-10 rounded-xl bg-orange-100 dark:bg-orange-900/30 flex items-center justify-center">
-                      <svg
-                        className="w-5 h-5 text-[#dc5426]"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2.5}>
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M5 13l4 4L19 7"
-                        />
-                      </svg>
-                    </div>
-                  ) : (
-                    <div className="w-10 h-10 rounded-xl bg-slate-900 dark:bg-white flex items-center justify-center">
-                      <svg
-                        className="w-5 h-5 text-white dark:text-slate-900"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}>
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"
-                        />
-                      </svg>
-                    </div>
-                  )}
+                  <div className="w-10 h-10 rounded-xl bg-slate-900 dark:bg-white flex items-center justify-center">
+                    <svg
+                      className="w-5 h-5 text-white dark:text-slate-900"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}>
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"
+                      />
+                    </svg>
+                  </div>
                   <div>
                     <h3 className="text-[15px] font-bold text-slate-900 dark:text-white">
-                      {publishConfirmed ? "Published!" : "Publish to Vercel"}
+                      Publish your project
                     </h3>
                     <p className="text-[12px] text-slate-400 dark:text-slate-500 mt-0.5">
-                      {publishConfirmed
-                        ? "Your app is live on Vercel"
-                        : vercelDeployUrl
-                          ? "Your app has been deployed to Vercel"
-                          : "Connect Vercel to deploy your project"}
+                      Make your project available on the internet
                     </p>
                   </div>
                 </div>
@@ -997,137 +1143,161 @@ function ConversationPageInner({params}) {
                 </button>
               </div>
 
-              {/* URL display — only shows real Vercel/production URLs, never localhost */}
-              <div className="px-6 pb-4">
-                {vercelDeployUrl ? (
-                  <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-[#0d1117] border border-slate-200 dark:border-[#2d333b]">
-                    <div className="w-2 h-2 rounded-full bg-[#dc5426] shrink-0" />
-                    <span className="flex-1 text-[13px] font-medium text-slate-700 dark:text-slate-200 truncate">
-                      {vercelDeployUrl}
-                    </span>
-                    <button
-                      onClick={async () => {
-                        try {
-                          await navigator.clipboard.writeText(vercelDeployUrl);
-                          setCopiedUrl(true);
-                          setTimeout(() => setCopiedUrl(false), 2000);
-                        } catch {}
-                      }}
-                      className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg text-[12px] font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-white/[0.08] transition-all">
-                      {copiedUrl ? (
-                        <>
-                          <svg
-                            className="w-3.5 h-3.5 text-[#dc5426]"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
-                            strokeWidth={2.5}>
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              d="M5 13l4 4L19 7"
-                            />
-                          </svg>
-                          Copied
-                        </>
-                      ) : (
-                        <>
-                          <svg
-                            className="w-3.5 h-3.5"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
-                            strokeWidth={2}>
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-                            />
-                          </svg>
-                          Copy
-                        </>
+              {/* Body — single unified layout: URL+copy on top, visibility below */}
+              {(() => {
+                const liveUrl = publishResult?.vercelUrl || vercelDeployUrl || "";
+                const hasUrl = !!liveUrl;
+                const buildingNow = publishConfirmed && publishResult?.vercelUrl;
+                return (
+                  <div className="px-6 pb-4 space-y-3">
+                    {/* URL row — always visible. Disabled when no URL yet. */}
+                    <div>
+                      <label className="block text-[11.5px] font-semibold text-slate-600 dark:text-slate-400 mb-1.5">
+                        Live URL
+                      </label>
+                      <div
+                        className={cn(
+                          "flex items-center gap-2 h-9 pl-3 pr-1 rounded-xl border bg-slate-50 dark:bg-[#0d1117] transition-colors",
+                          hasUrl
+                            ? "border-slate-200 dark:border-[#2d333b]"
+                            : "border-slate-200 dark:border-[#2d333b] opacity-70",
+                        )}>
+                        <div
+                          className={cn(
+                            "w-1.5 h-1.5 rounded-full shrink-0",
+                            buildingNow
+                              ? "bg-amber-500 animate-pulse"
+                              : hasUrl
+                                ? "bg-emerald-500"
+                                : "bg-slate-300 dark:bg-slate-600",
+                          )}
+                        />
+                        <input
+                          type="text"
+                          readOnly
+                          disabled={!hasUrl}
+                          value={
+                            hasUrl
+                              ? liveUrl.replace(/^https?:\/\//, "")
+                              : "Your URL will appear here after publishing"
+                          }
+                          className={cn(
+                            "flex-1 min-w-0 bg-transparent border-0 outline-none text-[12px] truncate",
+                            hasUrl
+                              ? "text-slate-700 dark:text-slate-200 cursor-text"
+                              : "text-slate-400 dark:text-slate-500 cursor-not-allowed",
+                          )}
+                          title={hasUrl ? liveUrl : ""}
+                        />
+                        <button
+                          type="button"
+                          disabled={!hasUrl}
+                          onClick={async () => {
+                            if (!hasUrl) return;
+                            try {
+                              await navigator.clipboard.writeText(liveUrl);
+                              setCopiedUrl(true);
+                              setTimeout(() => setCopiedUrl(false), 2000);
+                            } catch {}
+                          }}
+                          className={cn(
+                            "shrink-0 w-7 h-7 flex items-center justify-center rounded-lg transition-all",
+                            hasUrl
+                              ? "text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-white/[0.08]"
+                              : "text-slate-300 dark:text-slate-600 cursor-not-allowed",
+                          )}
+                          title={hasUrl ? "Copy link" : "Publish first to get a link"}>
+                          {copiedUrl ? (
+                            <Check className="w-3.5 h-3.5 text-[#16a34a]" />
+                          ) : (
+                            <Copy className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                        {hasUrl && (
+                          <button
+                            type="button"
+                            onClick={() => window.open(liveUrl, "_blank")}
+                            className="shrink-0 w-7 h-7 flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200 dark:hover:bg-white/[0.08] transition-all"
+                            title="Open in new tab">
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+                      {buildingNow && (
+                        <p className="mt-1.5 text-[11px] text-amber-600 dark:text-amber-400">
+                          Building on Vercel — give it ~30s, then refresh.
+                        </p>
                       )}
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-[#0d1117] border border-slate-200 dark:border-[#2d333b]">
-                    <svg
-                      className="w-4 h-4 text-slate-400 shrink-0"
-                      fill="currentColor"
-                      viewBox="0 0 24 24">
-                      <path d="M11.293 1.293a1 1 0 011.414 0l8.5 8.5A1 1 0 0121 11.5h-2v9a1 1 0 01-1 1H6a1 1 0 01-1-1v-9H3a1 1 0 01-.707-1.707l8.5-8.5z" />
-                    </svg>
-                    <span className="text-[13px] text-slate-500 dark:text-slate-400">
-                      Connect your GitHub repo to Vercel to get a deployment URL.
-                    </span>
-                  </div>
-                )}
-              </div>
+                    </div>
 
-              {/* Actions */}
+                    {/* Visibility select */}
+                    <div>
+                      <label
+                        htmlFor="publish-visibility-select"
+                        className="block text-[11.5px] font-semibold text-slate-600 dark:text-slate-400 mb-1.5">
+                        Visibility
+                      </label>
+                      <select
+                        id="publish-visibility-select"
+                        value={publishVisibility}
+                        onChange={(e) => setPublishVisibility(e.target.value)}
+                        disabled={publishing}
+                        className="w-full h-9 px-3 rounded-xl border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] text-[13px] text-slate-700 dark:text-slate-200 outline-none focus:border-[#111827] dark:focus:border-white transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
+                        <option value="private">Private — only you can open the project</option>
+                        <option value="public">Public — anyone with the link can open it</option>
+                      </select>
+                    </div>
+
+                    {publishError && (
+                      <div className="px-3 py-2 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-900/40 text-[12px] text-red-700 dark:text-red-300">
+                        {publishError}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Actions — single primary button: "Publish" or "Update" */}
               <div className="px-6 pb-6 flex items-center gap-2">
-                {!publishConfirmed ? (
-                  <>
-                    <button
-                      onClick={() => {
-                        if (vercelDeployUrl) setPublishConfirmed(true);
-                      }}
-                      disabled={!vercelDeployUrl}
-                      className={cn(
-                        "flex-1 h-9 flex items-center justify-center gap-2 rounded-xl text-[13px] font-semibold transition-all",
-                        vercelDeployUrl
-                          ? "bg-[#111827] dark:bg-white text-white dark:text-[#111827] hover:bg-[#1f2937] dark:hover:bg-slate-100 shadow-sm"
-                          : "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed",
-                      )}>
-                      <svg
-                        className="w-3.5 h-3.5"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2.5}>
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"
-                        />
+                <button
+                  onClick={handlePublish}
+                  disabled={publishing}
+                  className={cn(
+                    "flex-1 h-9 flex items-center justify-center gap-2 rounded-xl text-[13px] font-semibold transition-all",
+                    publishing
+                      ? "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-wait"
+                      : "bg-[#111827] dark:bg-white text-white dark:text-[#111827] hover:bg-[#1f2937] dark:hover:bg-slate-100 shadow-sm",
+                  )}>
+                  {publishing ? (
+                    <>
+                      <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                        <circle cx="12" cy="12" r="10" stroke="currentColor" strokeOpacity="0.25" strokeWidth="3" />
+                        <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
                       </svg>
-                      {vercelDeployUrl ? "Mark as Published" : "Not deployed yet"}
-                    </button>
-                    <button
-                      onClick={() => setShowPublishModal(false)}
-                      className="h-9 px-4 rounded-xl text-[13px] font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors border border-slate-200 dark:border-[#2d333b]">
-                      Cancel
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      onClick={() =>
-                        vercelDeployUrl &&
-                        window.open(vercelDeployUrl, "_blank")
-                      }
-                      className="flex-1 h-9 flex items-center justify-center gap-2 rounded-xl text-[13px] font-semibold bg-[#dc5426] hover:bg-[#b8421e] text-white transition-all shadow-sm shadow-orange-500/20">
-                      <svg
-                        className="w-3.5 h-3.5"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth={2}>
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
-                        />
+                      Publishing…
+                    </>
+                  ) : vercelDeployUrl || publishResult?.vercelUrl ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      Update
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
                       </svg>
-                      Open in new tab
-                    </button>
-                    <button
-                      onClick={() => setShowPublishModal(false)}
-                      className="h-9 px-4 rounded-xl text-[13px] font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors border border-slate-200 dark:border-[#2d333b]">
-                      Done
-                    </button>
-                  </>
-                )}
+                      Publish
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={() => setShowPublishModal(false)}
+                  disabled={publishing}
+                  className="h-9 px-4 rounded-xl text-[13px] font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/[0.06] transition-colors border border-slate-200 dark:border-[#2d333b] disabled:opacity-50">
+                  Done
+                </button>
               </div>
             </div>
           </div>
@@ -1187,55 +1357,76 @@ function ConversationPageInner({params}) {
                     </span>
                   </button>
 
-                  {/* Credits card */}
-                  <div className="mx-3 my-3 border border-slate-200 dark:border-[#2d333b] rounded-xl overflow-hidden bg-[#fafafa] dark:bg-[#0d1117]">
-                    {/* Message credits */}
-                    <div className="px-4 pt-4 pb-3">
-                      <p className="text-[13px] font-semibold text-slate-800 dark:text-slate-100 mb-2.5">
-                        Message credits
-                      </p>
-                      <div className="flex items-center gap-3">
-                        <div className="flex-1 h-[8px] bg-orange-100 dark:bg-slate-700 rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-[#dc5426] rounded-full"
-                            style={{width: "0%"}}
-                          />
+                  {/* ── Plan + usage card (reads /api/stripe/subscription) ── */}
+                  {(() => {
+                    const planName = subscription?.plan
+                      ? subscription.plan.charAt(0).toUpperCase() + subscription.plan.slice(1)
+                      : "Free";
+                    const tokensUsed   = subscription?.usage?.tokensUsed ?? 0;
+                    const tokenQuota   = subscription?.limits?.monthlyTokenQuota ?? 0;
+                    const projUsed     = subscription?.usage?.projectsCreated ?? 0;
+                    const projLimit    = subscription?.limits?.maxProjectsPerMonth;
+                    const extraBalance = subscription?.extraTokenBalance ?? 0;
+
+                    const tokenPct = tokenQuota > 0 ? Math.min(100, (tokensUsed / tokenQuota) * 100) : 0;
+                    const fmtTok = (n) => n >= 1_000_000 ? `${(n/1_000_000).toFixed(n%1_000_000===0?0:1)}M` : n >= 1_000 ? `${Math.round(n/1_000)}k` : `${n}`;
+
+                    return (
+                      <div className="mx-3 my-3 border border-slate-200 dark:border-[#2d333b] rounded-xl overflow-hidden bg-[#fafafa] dark:bg-[#0d1117]">
+                        {/* Plan name header */}
+                        <div className="flex items-center justify-between px-4 pt-4 pb-2">
+                          <p className="text-[13px] font-semibold text-slate-800 dark:text-slate-100">
+                            {planName} plan
+                          </p>
+                          <span className="text-[10px] uppercase tracking-wider font-bold text-[#dc5426]">
+                            {subscription?.isPaid ? "Active" : "Free"}
+                          </span>
                         </div>
-                        <span className="text-[13px] text-slate-700 dark:text-slate-300 shrink-0 font-medium">
-                          0/25
-                        </span>
-                      </div>
-                    </div>
 
-                    {/* Daily Credits */}
-                    <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 dark:border-[#2d333b]">
-                      <span className="text-[13px] text-slate-600 dark:text-slate-200">
-                        Daily Credits
-                      </span>
-                      <span className="text-[13px] text-slate-700 dark:text-slate-300 font-medium">
-                        0/5
-                      </span>
-                    </div>
+                        {/* Tokens this month */}
+                        <div className="px-4 pb-3">
+                          <p className="text-[12px] text-slate-500 dark:text-slate-400 mb-2">
+                            Tokens this month
+                          </p>
+                          <div className="flex items-center gap-3">
+                            <div className="flex-1 h-[8px] bg-orange-100 dark:bg-slate-700 rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-[#dc5426] rounded-full transition-all"
+                                style={{width: `${tokenPct}%`}}
+                              />
+                            </div>
+                            <span className="text-[12px] text-slate-700 dark:text-slate-300 shrink-0 font-medium">
+                              {fmtTok(tokensUsed)}/{fmtTok(tokenQuota)}
+                            </span>
+                          </div>
+                          {extraBalance > 0 && (
+                            <p className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-1.5">
+                              +{fmtTok(extraBalance)} extra (carry-over)
+                            </p>
+                          )}
+                        </div>
 
-                    {/* Integration credits */}
-                    <div className="px-4 pt-3 pb-4 border-t border-slate-100 dark:border-[#2d333b]">
-                      <p className="text-[13px] text-slate-600 dark:text-slate-200 mb-2">
-                        Integration credits
-                      </p>
-                      <div className="flex items-center gap-3">
-                        <div className="flex-1 h-[8px] bg-[#f0e8e0] dark:bg-slate-700 rounded-full" />
-                        <span className="text-[13px] text-slate-700 dark:text-slate-300 shrink-0 font-medium">
-                          0/100
-                        </span>
+                        {/* Projects */}
+                        <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100 dark:border-[#2d333b]">
+                          <span className="text-[13px] text-slate-600 dark:text-slate-200">
+                            {subscription?.plan === "free" ? "Projects (lifetime)" : "Projects this month"}
+                          </span>
+                          <span className="text-[13px] text-slate-700 dark:text-slate-300 font-medium">
+                            {projUsed}/{projLimit ?? "∞"}
+                          </span>
+                        </div>
+
+                        {/* CTA */}
+                        <div className="px-4 pt-3 pb-4 border-t border-slate-100 dark:border-[#2d333b]">
+                          <a
+                            href="/dashboard/engineer/billing"
+                            className="text-[13px] font-semibold text-[#dc5426] hover:text-[#b8421e] transition-colors block">
+                            {subscription?.isPaid ? "Manage plan" : "Upgrade your plan"}
+                          </a>
+                        </div>
                       </div>
-                      <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-2">
-                        Renews monthly
-                      </p>
-                      <button className="text-[13px] font-semibold text-[#dc5426] hover:text-[#b8421e] mt-1 transition-colors block">
-                        Upgrade your plan
-                      </button>
-                    </div>
-                  </div>
+                    );
+                  })()}
 
                   {/* Menu items */}
                   <div className="py-1.5 border-t border-[#f0f0f0] dark:border-[#2d333b]">
@@ -1411,37 +1602,57 @@ function ConversationPageInner({params}) {
               </button>
             </div>
 
-            {/* Upgrade */}
-            <button
-              className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-[13px] font-semibold transition-all ml-1"
-              style={{
-                background:
-                  "linear-gradient(85deg, rgba(220,84,38,0.15) -70.38%, rgba(234,88,12,0.10) 98.95%)",
-                border: "1px solid rgba(220,84,38,0.35)",
-                color: "#dc5426",
-              }}>
-              <Diamond className="w-3.5 h-3.5 fill-current" />
-              Upgrade
-            </button>
+            {/* Upgrade — only show when user is on a non-paid plan */}
+            {!subscription?.isPaid && (
+              <a
+                href="/dashboard/engineer/billing"
+                className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-[13px] font-semibold transition-all ml-1"
+                style={{
+                  background:
+                    "linear-gradient(85deg, rgba(220,84,38,0.15) -70.38%, rgba(234,88,12,0.10) 98.95%)",
+                  border: "1px solid rgba(220,84,38,0.35)",
+                  color: "#dc5426",
+                }}
+                title="Upgrade to unlock more">
+                <Diamond className="w-3.5 h-3.5 fill-current" />
+                Upgrade
+              </a>
+            )}
 
-            {/* Export — outlined button next to Publish */}
+            {/* Export — locked for non-Pro plans; click opens upgrade modal */}
             <button
-              onClick={() => setShowExportModal(true)}
-              className="h-8 flex items-center gap-1.5 px-3 rounded-lg text-[13px] font-semibold border border-[#e5e7eb] dark:border-[#444c56] text-[#374151] dark:text-slate-200 hover:bg-[#f3f4f6] dark:hover:bg-white/[0.06] transition-all"
-              title="Export code">
-              <Download className="w-3.5 h-3.5" />
+              onClick={handleExportClick}
+              className={cn(
+                "h-8 flex items-center gap-1.5 px-3 rounded-lg text-[13px] font-semibold border transition-all",
+                canExport
+                  ? "border-[#e5e7eb] dark:border-[#444c56] text-[#374151] dark:text-slate-200 hover:bg-[#f3f4f6] dark:hover:bg-white/[0.06]"
+                  : "border-[#e5e7eb] dark:border-[#444c56] text-[#9ca3af] dark:text-slate-500 hover:bg-[#f9fafb] dark:hover:bg-white/[0.04]",
+              )}
+              title={canExport ? "Export code" : "Export is a Pro feature — click to upgrade"}>
+              {canExport ? <Download className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
               Export
             </button>
 
-            {/* Publish — solid dark h-8 */}
+            {/* Publish — always shows the visibility selector first. If a
+                live URL already exists, we surface it as a small banner inside
+                the modal so the user can re-publish (push latest changes) on
+                the same flow as the first publish. Previous behaviour skipped
+                straight to the "live!" view, which masked Vercel deploy
+                failures and produced stale URLs. */}
             <button
               onClick={() => {
                 setPublishConfirmed(false);
+                // Surface any prior URL as a banner so the user knows the
+                // current state, but DON'T pre-fill publishResult — that's
+                // the "we just published" state and would jump past selector.
+                setPublishResult(null);
+                setPublishError("");
                 setCopiedUrl(false);
+                setPublishVisibility("private");
                 setShowPublishModal(true);
               }}
               className="h-8 flex items-center px-4 rounded-lg text-[13px] font-semibold bg-[#111827] dark:bg-white text-white dark:text-[#111827] hover:bg-[#1f2937] dark:hover:bg-slate-100 transition-all"
-              title="Publish">
+              title={vercelDeployUrl ? "Open publish settings" : "Publish"}>
               Publish
             </button>
           </div>
@@ -1449,7 +1660,7 @@ function ConversationPageInner({params}) {
 
         {/* ════════════════════════════════════════════════
           BODY — 2-panel layout: Chat (left) + Preview/Code (right)
-      ════════════════════════════════════════════════ */}
+        ════════════════════════════════════════════════ */}
         <div className="flex-1 flex min-h-0 overflow-hidden">
           {/* ══ CHAT PANEL (left, collapsible + resizable) ══ */}
           <div

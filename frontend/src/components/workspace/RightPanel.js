@@ -37,6 +37,8 @@ import FileViewer from "@/components/workspace/FileViewer";
 import FileExplorer from "@/components/agent/FileExplorer";
 import TaskProgress from "@/components/TaskProgress";
 import BuildingScreen from "@/components/workspace/BuildingScreen";
+import ProjectDashboard from "@/components/ProjectDashboard";
+import DiffViewer from "@/components/DiffViewer";
 
 // ── PlanReviewPanel — full right-panel plan review UI ────────
 function PlanReviewPanel({planData, onConfirm, onReject}) {
@@ -314,7 +316,21 @@ export default function RightPanel() {
     confirmPlan,
     rejectPlan,
     previewFileMap,
+    // ── Project-dashboard surface (rendered inside the "dashboard" tab) ──
+    conversationId,
+    subscription,
+    handleProjectRename,
+    handleProjectDelete,
+    router,
+    vercelDeployUrl,
+    // ── Per-file content + metrics (powers DiffViewer in the Code tab) ──
+    fileContents,
+    fileMetrics,
   } = useWorkspace();
+
+  // ── Code-tab view mode toggle: 'diff' (live agent edits) vs 'source' (raw)
+  // Defaults to diff when the agent has touched a file, source otherwise.
+  const [codeViewMode, setCodeViewMode] = useState("diff");
 
   // ── File-viewer local state ─────────────────────────────
   const [selectedFile, setSelectedFile] = useState(null);
@@ -497,7 +513,12 @@ export default function RightPanel() {
             onConfirm={confirmPlan}
             onReject={rejectPlan}
           />
-        ) : buildingActive && (!repoInfo.vercelUrl || previewLoading) && !previewFileMap && status !== "error" ? (
+        ) : (
+          // Dashboard tab is plan-management; it never depends on the build,
+          // so let it render even while the preview is still being prepared.
+          rightPanel !== "dashboard" &&
+          buildingActive && (!repoInfo.vercelUrl || previewLoading) && !previewFileMap && status !== "error"
+        ) ? (
           <BuildingScreen
             status={status}
             phases={phases}
@@ -510,49 +531,39 @@ export default function RightPanel() {
           />
         ) : (
           <>
-            {/* DASHBOARD tab */}
+            {/* DASHBOARD tab — base44-style project management surface */}
             {rightPanel === "dashboard" && (
-              <div className="h-full overflow-y-auto bg-white dark:bg-[#0d1117] p-6 lg:p-10 custom-scrollbar">
-                <div className="max-w-4xl mx-auto space-y-8">
-                  <div className="flex items-center gap-4 border-b border-slate-100 dark:border-[#1c2128] pb-6">
-                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#dc5426] to-orange-600 flex items-center justify-center shrink-0">
-                      <Sparkles className="w-6 h-6 text-white" />
-                    </div>
-                    <div>
-                      <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100">
-                        Building Your Project
-                      </h2>
-                      <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-                        {status === "cloning"
-                          ? "Cloning your codebase..."
-                          : status === "installing"
-                            ? "Installing dependencies..."
-                            : status === "starting"
-                              ? "Running the code for Preview..."
-                              : status === "health_check"
-                                ? "Running the code for Preview..."
-                                : status === "preparing"
-                                  ? "Preparing workspace..."
-                                  : status === "running"
-                                    ? "Agent actively working..."
-                                    : phases.length > 0
-                                      ? "Build in progress..."
-                                      : "Waiting to start."}
-                      </p>
-                    </div>
-                  </div>
-                  <TaskProgress
-                    phases={phases}
-                    status={status}
-                    completionSummary={completionSummary}
-                  />
-                </div>
-              </div>
+              <ProjectDashboard
+                project={{
+                  project_id: conversationId,
+                  title: conversation?.title,
+                  created_at: conversation?.created_at,
+                }}
+                builtInUrl={vercelDeployUrl || repoInfo?.deployedUrl || ''}
+                subscription={subscription}
+                // While the chat session row is still being fetched OR the
+                // user has navigated to a brand-new (wizard-mode) project
+                // that hasn't been written to the DB yet, show a skeleton.
+                loading={convLoading || (!conversation && !isWizardMode)}
+                onRename={handleProjectRename}
+                onDelete={handleProjectDelete}
+                onOpenApp={() => {
+                  const u = vercelDeployUrl || repoInfo?.deployedUrl;
+                  if (u) window.open(u, '_blank');
+                }}
+                onUpgradeClick={() => router?.push('/dashboard/engineer/billing')}
+              />
             )}
 
-            {/* PREVIEW tab */}
-            {rightPanel === "preview" && (
-              <div className="h-full flex flex-col relative overflow-hidden">
+            {/* PREVIEW tab — always mounted, CSS-hidden when not active.
+                 The iframe holds dev-server state (HMR socket, scroll
+                 position, imperative reload via iframeRef), so unmounting
+                 and remounting it on every tab switch was breaking the
+                 live preview. Keep it in the DOM and just toggle visibility. */}
+            <div className={cn(
+              "h-full flex-col relative overflow-hidden",
+              rightPanel === "preview" ? "flex" : "hidden",
+            )}>
                 {status === "error" ? (
                   retryCount >= 3 ? (
                     <div className="flex flex-col items-center justify-center h-full text-center p-8 bg-white dark:bg-[#0d1117]">
@@ -741,7 +752,6 @@ export default function RightPanel() {
                   </div>
                 )}
               </div>
-            )}
 
             {/* CODE tab */}
             {rightPanel === "code" && (
@@ -846,37 +856,89 @@ export default function RightPanel() {
                         selectedFile={selectedFile}
                         onFileSelect={handleFileSelect}
                         projectName={conversation?.title || "Project"}
+                        fileMetrics={fileMetrics}
                       />
                     )}
                   </div>
                 </div>
 
                 {/* Editor area */}
-                <div className="flex-1 min-w-0 bg-white flex flex-col">
-                  {selectedFile && (
-                    <div className="shrink-0 px-4 py-2 bg-amber-50 dark:bg-amber-900/10 border-b border-amber-200/70 dark:border-amber-700/30 flex items-center gap-1">
-                      <span className="text-[13px] text-amber-800 dark:text-amber-300">
-                        Code editing is only available on paid plans.{" "}
-                        <button
-                          onClick={() => setShowExportModal(true)}
-                          className="font-semibold text-blue-500 hover:text-blue-600 hover:underline transition-colors">
-                          Upgrade your plan
-                        </button>
-                      </span>
-                    </div>
-                  )}
-                  <div className="flex-1 min-h-0">
-                    <FileViewer
-                      path={selectedFile}
-                      content={
-                        editedFileContent !== null
-                          ? editedFileContent
-                          : fileContent
-                      }
-                      loading={fileLoading}
-                      onContentChange={(val) => setEditedFileContent(val)}
-                    />
-                  </div>
+                <div className="flex-1 min-w-0 bg-white dark:bg-[#0d1117] flex flex-col">
+                  {(() => {
+                    const snapshot = selectedFile && fileContents ? fileContents[selectedFile] : null;
+                    const metric = selectedFile && fileMetrics ? fileMetrics[selectedFile] : null;
+                    const hasDiff = !!snapshot;
+                    const showDiff = hasDiff && codeViewMode === "diff";
+
+                    return (
+                      <>
+                        {selectedFile && hasDiff && (
+                          <div className="shrink-0 flex items-center justify-between px-4 py-2 border-b border-slate-200 dark:border-[#2d333b] bg-slate-50/60 dark:bg-[#0f1118]">
+                            <div className="inline-flex items-center bg-slate-200/60 dark:bg-[#21262d] rounded-md p-0.5">
+                              <button
+                                onClick={() => setCodeViewMode("diff")}
+                                className={cn(
+                                  "px-2.5 h-6 rounded text-[11px] font-semibold transition-colors",
+                                  codeViewMode === "diff"
+                                    ? "bg-white dark:bg-[#0d1117] text-slate-900 dark:text-white shadow-sm"
+                                    : "text-slate-500 dark:text-slate-400 hover:text-slate-700",
+                                )}>
+                                Diff
+                              </button>
+                              <button
+                                onClick={() => setCodeViewMode("source")}
+                                className={cn(
+                                  "px-2.5 h-6 rounded text-[11px] font-semibold transition-colors",
+                                  codeViewMode === "source"
+                                    ? "bg-white dark:bg-[#0d1117] text-slate-900 dark:text-white shadow-sm"
+                                    : "text-slate-500 dark:text-slate-400 hover:text-slate-700",
+                                )}>
+                                Source
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {selectedFile && !hasDiff && (
+                          <div className="shrink-0 px-4 py-2 bg-amber-50 dark:bg-amber-900/10 border-b border-amber-200/70 dark:border-amber-700/30 flex items-center gap-1">
+                            <span className="text-[13px] text-amber-800 dark:text-amber-300">
+                              Code editing is only available on paid plans.{" "}
+                              <button
+                                onClick={() => setShowExportModal(true)}
+                                className="font-semibold text-blue-500 hover:text-blue-600 hover:underline transition-colors">
+                                Upgrade your plan
+                              </button>
+                            </span>
+                          </div>
+                        )}
+
+                        <div className="flex-1 min-h-0">
+                          {showDiff ? (
+                            <DiffViewer
+                              filename={selectedFile}
+                              previous={snapshot.previous || ""}
+                              current={snapshot.current || ""}
+                              truncated={!!snapshot.truncated}
+                              metrics={metric}
+                            />
+                          ) : (
+                            <FileViewer
+                              path={selectedFile}
+                              content={
+                                // If we have a fresh snapshot from the agent,
+                                // prefer it over re-fetching from disk.
+                                editedFileContent !== null
+                                  ? editedFileContent
+                                  : (snapshot?.current ?? fileContent)
+                              }
+                              loading={fileLoading && !snapshot}
+                              onContentChange={(val) => setEditedFileContent(val)}
+                            />
+                          )}
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
             )}

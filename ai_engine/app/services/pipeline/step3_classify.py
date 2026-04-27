@@ -34,12 +34,12 @@ async def classify_task(
             "message": "🎯 Classifying task...",
         })
 
+        from app.services.llm_retry import call_with_retry
+
         genai.configure(api_key=gemini_key)
         model = genai.GenerativeModel(GEMINI_MODEL)
 
-        response = await asyncio.to_thread(
-            model.generate_content,
-            f"""You are a senior engineering manager at a top tier tech company.
+        _prompt = f"""You are a senior engineering manager at a top tier tech company.
 You assign tasks to the right developer.
 Return ONLY valid JSON, nothing else. No markdown. No backticks. Just JSON.
 
@@ -148,8 +148,28 @@ mid    → always between 12 and 18
 senior → always between 20 and 25
 Never go below these minimums.
 Better to give too many than too few.
-""",
-        )
+"""
+
+        # Tiny fixed-schema JSON — temperature=0 for determinism. Ideally we
+        # would also set thinking_budget=0 to cut ~3-5s of reasoning latency,
+        # but the legacy google-generativeai SDK does not expose ThinkingConfig.
+        # That requires migrating to the new google-genai package.
+        try:
+            _gen_config = genai.GenerationConfig(
+                temperature=0,
+                thinking_config=genai.types.ThinkingConfig(thinking_budget=0),  # noqa: SLF001
+            )
+        except (AttributeError, TypeError):
+            _gen_config = genai.GenerationConfig(temperature=0)
+
+        async def _do_classify():
+            return await asyncio.to_thread(
+                model.generate_content,
+                _prompt,
+                generation_config=_gen_config,
+            )
+
+        response = await call_with_retry(_do_classify, label="step3_classify", websocket=websocket)
 
         text = response.text.strip()
         # Remove markdown code fences if present

@@ -91,6 +91,15 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   // Accumulates filenames from file_write_event; reset at the start of each task.
   const [writtenFiles, setWrittenFiles] = useState([]);
 
+  // ── Per-file metrics + content snapshots (powers the inline DiffViewer) ──
+  //   fileContents : { [filename]: { current: string, previous: string|null } }
+  //                  current = latest content seen; previous = last-but-one
+  //                  (lets us diff "what just changed" without storing history).
+  //   fileMetrics  : { [filename]: { writes, lastAction, lastPhase, lastSize,
+  //                                  firstWriteTs, lastWriteTs, elapsedMs } }
+  const [fileContents, setFileContents] = useState({});
+  const [fileMetrics, setFileMetrics] = useState({});
+
   // ── Error recovery (Phase 8) ─────────────────────────────
   // errorStage: which init step failed fatally ('clone' | 'install' | null)
   //   → drives the workspace error card in the Preview panel
@@ -486,9 +495,52 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       if (msg.type === 'file_write_event') {
         const filename = msg.filename || '';
         const action = msg.action || 'write';
+        const incomingContent = typeof msg.content === 'string' ? msg.content : null;
+        const phase = msg.phase || null;
+        const size = typeof msg.size === 'number' ? msg.size : null;
+        const truncated = !!msg.content_truncated;
+
         if (filename) {
           setWrittenFiles(prev => prev.includes(filename) ? prev : [...prev, filename]);
           pushLog(`[${action}] ${filename}`, 'file_write');
+
+          // Snapshot file content for the inline DiffViewer.
+          // We keep one previous version per file so the user can always see
+          // "what just changed" without ballooning memory by storing history.
+          if (incomingContent !== null) {
+            setFileContents(prev => {
+              const existing = prev[filename];
+              const previousContent = existing ? existing.current : '';
+              return {
+                ...prev,
+                [filename]: {
+                  current: incomingContent,
+                  previous: previousContent,
+                  truncated,
+                },
+              };
+            });
+          }
+
+          // Per-file metrics: counts, latest action/phase, and elapsed time
+          // since the FIRST write to this file in the current run.
+          setFileMetrics(prev => {
+            const now = Date.now();
+            const existing = prev[filename];
+            const firstWriteTs = existing?.firstWriteTs ?? now;
+            return {
+              ...prev,
+              [filename]: {
+                writes: (existing?.writes ?? 0) + 1,
+                lastAction: action,
+                lastPhase: phase,
+                lastSize: size,
+                firstWriteTs,
+                lastWriteTs: now,
+                elapsedMs: now - firstWriteTs,
+              },
+            };
+          });
           setChatMessages((prev) => {
             if (prev.length === 0) return prev;
             const last = prev[prev.length - 1];
@@ -627,15 +679,30 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         return;
       }
 
+      // ─── Published — auto-publish on first generation completed ──
+      // Backend pushed staging→main and created a Vercel project. We surface
+      // the live URL in chat and feed it into deployUrl so the workspace
+      // header / Publish modal pick it up too.
+      if (msg.type === 'published') {
+        if (msg.vercelUrl) {
+          setDeployUrl(msg.vercelUrl);
+          pushChat('system',
+            `🚀 **Your project is live!**\n` +
+            `🌐 **[${msg.vercelUrl}](${msg.vercelUrl})**\n` +
+            `_Going live now — give it about 30 seconds, then open the link._`
+          );
+          pushLog(`[Published] ${msg.vercelUrl}`, 'system');
+        }
+        return;
+      }
+
       // ─── Repo Created ─────────────────────────────────────
       if (msg.type === 'repo_created') {
-        if (msg.platformOwned && msg.branch === 'main') {
-          // new_project_mode: brand-new private repo created for this project
-          pushChat('system',
-            `✅ **Project repository created!**\n` +
-            `📦 **[${msg.repoName || 'View Repository'}](${msg.repoUrl})**\n` +
-            `🌿 Branch: \`main\``
-          );
+        if (msg.platformOwned && msg.branch === 'staging') {
+          // new_project_mode: brand-new project workspace created.
+          // The 'published' event (above) handles the live-URL message;
+          // we keep this one quiet (logs only) so non-developers don't see
+          // git/branch chatter in their chat feed.
           pushLog(`[New Repo] ${msg.repoUrl}`, 'system');
         } else if (msg.branch && msg.branchUrl && msg.prUrl) {
           // branch-push mode: pushed to a feature branch — show PR link
@@ -699,6 +766,33 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         if (msg.files && typeof msg.files === 'object') {
           setPreviewFileMap({ files: msg.files, template: msg.template || 'react' });
           pushLog(`[Preview] Received ${Object.keys(msg.files).length} files — booting Sandpack (${msg.template || 'react'})…`, 'system');
+        }
+        return;
+      }
+
+      // ─── Structured pipeline failure ─────────────────────────
+      // Backend emits this with { phase, code, message, retriable } so we
+      // can show specific recovery UX (e.g. rate-limit → "wait a minute",
+      // auth → "reconnect", content_blocked → "rephrase your prompt") instead
+      // of the generic "Generation failed".
+      if (msg.type === 'pipeline_failure') {
+        const friendly = msg.message || "Generation hit a snag.";
+        const codeHint = ({
+          rate_limit:      "Our AI provider is rate-limiting us right now. Wait a minute and try again.",
+          auth_error:      "Your account session may have expired. Sign out and back in, then retry.",
+          content_blocked: "The AI provider blocked this request. Try rephrasing your prompt.",
+          network:         "Network hiccup talking to the AI provider. Please retry.",
+          timeout:         "The AI took too long to respond. Please retry.",
+          bad_request:     "Something about that request was malformed. Please retry, and if it keeps failing reach out.",
+        })[msg.code] || "Please try again. If it keeps happening, reach out and share what you were doing.";
+
+        pushChat('system',
+          `❌ **${friendly}**\n${codeHint}`
+        );
+        pushLog(`[Failure] phase=${msg.phase} code=${msg.code} retriable=${msg.retriable} — ${msg.message}`, 'system');
+        if (!msg.retriable) {
+          setState('ready');
+          setAgentStatus(null);
         }
         return;
       }
@@ -1271,6 +1365,10 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     files,
     setFiles,
     error,
+
+    // ── Per-file content snapshots + metrics (powers DiffViewer + Code-tab badges) ──
+    fileContents,
+    fileMetrics,
 
     // Structured progress steps
     steps,

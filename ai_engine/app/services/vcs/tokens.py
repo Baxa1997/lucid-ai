@@ -138,7 +138,8 @@ async def get_integration(
         logger.error("Unexpected error in get_integration: %s", exc)
         raise HTTPException(status_code=500, detail="Internal server error") from exc
 
-    row = result.data
+    # ``maybe_single()`` may return None (no row) or an object with .data = None
+    row = getattr(result, "data", None) if result is not None else None
     if not row:
         return None
 

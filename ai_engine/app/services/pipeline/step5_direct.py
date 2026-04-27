@@ -193,6 +193,7 @@ async def execute_direct_edit(
     *,
     manifest: str = "",
     timeout_s: float = 120.0,
+    user_id: str | None = None,
 ) -> bool:
     """Run the direct-API edit path.
 
@@ -379,14 +380,30 @@ async def execute_direct_edit(
         return False
 
     # Emit file_write_events so the Code-tab pills appear, same as the
-    # SDK path does via its streaming tool-use events.
+    # SDK path does via its streaming tool-use events. Includes post-write
+    # content (capped at 256 KB) so the frontend diff viewer has the data.
+    import os as _os_inline
     for rel in written:
+        _payload = {
+            "type": "file_write_event",
+            "filename": rel,
+            "action": "edit",
+            "phase": "step5_direct",
+        }
         try:
-            await websocket.send_json({
-                "type": "file_write_event",
-                "filename": rel,
-                "action": "edit",
-            })
+            _full = rel if _os_inline.path.isabs(rel) else _os_inline.path.join(str(workspace_path), rel)
+            if _os_inline.path.isfile(_full):
+                _sz = _os_inline.path.getsize(_full)
+                _payload["size"] = _sz
+                if _sz <= 256 * 1024:
+                    with open(_full, "r", encoding="utf-8", errors="replace") as _fh:
+                        _payload["content"] = _fh.read()
+                else:
+                    _payload["content_truncated"] = True
+        except Exception:
+            pass
+        try:
+            await websocket.send_json(_payload)
         except Exception:
             break
 
@@ -401,10 +418,19 @@ async def execute_direct_edit(
         pass
 
     usage = data.get("usage") or {}
+    _in_tok = int(usage.get("input_tokens", 0) or 0)
+    _out_tok = int(usage.get("output_tokens", 0) or 0)
     logger.info(
         "execute_direct_edit: applied %d edits across %d file(s) "
         "[input=%d output=%d tokens]",
-        len(edits), len(written),
-        usage.get("input_tokens", 0), usage.get("output_tokens", 0),
+        len(edits), len(written), _in_tok, _out_tok,
     )
+
+    # Meter against the user's monthly quota (fire-and-forget).
+    try:
+        from app.services.billing_meter import report_token_usage
+        report_token_usage(user_id, _in_tok, _out_tok, source="step5_direct")
+    except Exception:
+        pass
+
     return True

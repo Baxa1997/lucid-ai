@@ -85,6 +85,10 @@ export default function ExportCodeModal({
   onClose,
   projectSlug = '',
   projectId = '',
+  // Set true when launched via the upgrade modal's "Skip for testing" path —
+  // the export still runs end-to-end on the user's plan, the server just
+  // skips the canExportCode gate. Logs a warning server-side.
+  bypassLimits = false,
 }) {
   const [step, setStep] = useState('pick_provider');
   const [provider, setProvider] = useState(null);
@@ -260,6 +264,7 @@ export default function ExportCodeModal({
           includeCICD,
           gitlabInviteUser: gitlabInviteUser.trim(),
           godaddyAccountId: selectedGdAccount || undefined,
+          bypassLimits,
         }),
       });
 
