@@ -305,18 +305,52 @@ async def scan_and_report_bugs(
     except Exception:
         pass
 
+    # Run deterministic fixers BEFORE the Claude scan. The scan uses Claude
+    # with read-only tools (no Bash → no `next build`) so it can't catch
+    # syntax errors like `(&apos;text&apos;)` inside ternary branches —
+    # Claude reads through the bad escape and reports "no structural issues".
+    # Running run_all_fixers first lets the deterministic layer fix the
+    # known classes (mis-escaped entities in JS context, missing icon keys,
+    # named-import mismatches, etc.) before the report card is rendered.
+    deterministic_fixed = 0
+    try:
+        from app.services.post_generation_fixer import run_all_fixers
+        det_results = await run_all_fixers(workspace_path, websocket)
+        deterministic_fixed = det_results.get("total_fixes", 0) if det_results else 0
+        if deterministic_fixed > 0:
+            logger.info(
+                "Bug scan: deterministic fixers applied %d fix(es) before Claude scan",
+                deterministic_fixed,
+            )
+    except Exception as exc:
+        logger.warning("Bug scan: deterministic prepass failed (non-fatal): %s", exc)
+
     report = await _run_scan(workspace_path, api_key)
 
     if not report:
         try:
+            if deterministic_fixed > 0:
+                msg = (
+                    f"✅ Code scan complete — auto-applied {deterministic_fixed} "
+                    f"deterministic fix{'es' if deterministic_fixed != 1 else ''} "
+                    f"(common patterns like mis-escaped entities, missing imports, "
+                    f"icon keys). No further structural issues detected."
+                )
+            else:
+                msg = "✅ Code scan complete — no structural issues detected."
             await websocket.send_json({
                 "type": "chat_message",
                 "role": "agent",
-                "content": "✅ Code scan complete — no structural issues detected.",
+                "content": msg,
             })
         except Exception:
             pass
-        return {"health_score": 100, "total_findings": 0, "auto_fixable_count": 0, "fixes_applied": 0}
+        return {
+            "health_score": 100,
+            "total_findings": 0,
+            "auto_fixable_count": 0,
+            "fixes_applied": deterministic_fixed,
+        }
 
     findings = report.get("findings", [])
     health_score = report.get("health_score", 100)

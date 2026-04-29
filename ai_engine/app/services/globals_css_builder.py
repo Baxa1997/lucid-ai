@@ -44,6 +44,44 @@ _DEFAULT_LIGHT: dict[str, str] = {
     "ring": "221.2 83.2% 53.3%",
 }
 
+# Easing curve lookup for the Director's `motion_language.easing_signature`.
+# Mapped to concrete cubic-bezier() values written into globals.css as
+# --ease-sig — every transition/keyframe uses var(--ease-sig) so the curve is
+# globally consistent without any per-component opt-in.
+_EASING_CURVE_MAP: dict[str, str] = {
+    "quint-out":       "cubic-bezier(0.16, 1, 0.3, 1)",
+    "expo-out":        "cubic-bezier(0.19, 1, 0.22, 1)",
+    "circ-out":        "cubic-bezier(0, 0.55, 0.45, 1)",
+    "back-out-subtle": "cubic-bezier(0.34, 1.2, 0.64, 1)",
+    "linear-precise":  "linear",
+    # spring curves can't render as cubic-bezier — fall back to quint-out for
+    # the CSS variable; components that want the Motion spring use it directly.
+    "spring-quiet":    "cubic-bezier(0.16, 1, 0.3, 1)",
+}
+
+
+def _motion_signature_block(theme: dict) -> str:
+    """Emit the global motion variables consumed by .reveal-up + components.
+
+    Reads the Director's motion_signature off the schema's theme.motion_*
+    fields if present; otherwise emits sensible quint-out defaults so any
+    component using var(--ease-sig) / var(--d-base) Just Works.
+    """
+    motion = (theme.get("motion") or {})
+    easing_key = (motion.get("easing_signature") or "quint-out").strip().lower()
+    durations = motion.get("durations") or {}
+    fast = (durations.get("fast") or "180ms").strip()
+    base = (durations.get("base") or "550ms").strip()
+    slow = (durations.get("slow") or "1000ms").strip()
+    curve = _EASING_CURVE_MAP.get(easing_key, _EASING_CURVE_MAP["quint-out"])
+    return (
+        f"    --d-fast: {fast};\n"
+        f"    --d-base: {base};\n"
+        f"    --d-slow: {slow};\n"
+        f"    --ease-sig: {curve};\n"
+    )
+
+
 _DEFAULT_DARK: dict[str, str] = {
     "background": "222.2 84% 4.9%",
     "foreground": "210 40% 98%",
@@ -80,6 +118,76 @@ _LIGHT_TOKEN_ORDER: tuple[str, ...] = (
     "destructive", "destructive-foreground",
     "border", "input", "ring",
 )
+
+
+def _hsl_lightness(hsl: str) -> float | None:
+    """Extract the lightness percentage (0-100) from an 'H S% L%' HSL string."""
+    try:
+        parts = hsl.strip().split()
+        if len(parts) >= 3:
+            return float(parts[2].rstrip("%"))
+    except (ValueError, IndexError):
+        pass
+    return None
+
+
+def _hsl_set_lightness(hsl: str, new_l: float) -> str:
+    """Return the same hue+saturation with lightness replaced."""
+    parts = hsl.strip().split()
+    if len(parts) >= 3:
+        return f"{parts[0]} {parts[1]} {new_l:.1f}%"
+    return hsl
+
+
+def _enforce_readable_pair(fg_val: str, bg_val: str) -> str:
+    """Return a corrected foreground value that is readable against bg.
+
+    If the contrast between fg and bg is acceptable (lightness difference ≥ 45
+    percentage points), return fg unchanged.  Otherwise flip the foreground
+    lightness to the opposite pole so text is always legible.
+
+    This is a fast heuristic (lightness gap, not full WCAG luminance) — good
+    enough to prevent the invisible-text bug where a dark bg gets a dark fg.
+    """
+    bg_l = _hsl_lightness(bg_val)
+    fg_l = _hsl_lightness(fg_val)
+    if bg_l is None or fg_l is None:
+        return fg_val
+    # Dark background → foreground must be light (≥ 85%)
+    if bg_l < 40 and fg_l < 60:
+        return _hsl_set_lightness(fg_val, 92.0)
+    # Light background → foreground must be dark (≤ 20%)
+    if bg_l >= 60 and fg_l > 40:
+        return _hsl_set_lightness(fg_val, 8.0)
+    return fg_val
+
+
+def _fix_theme_contrast(theme: dict, defaults: dict[str, str]) -> dict:
+    """Return a copy of theme with foreground tokens corrected for readability.
+
+    Pairs checked: foreground/background, card-foreground/card,
+    muted-foreground/muted.  Other foreground tokens are left to the LLM.
+    """
+    result = dict(theme)
+    pairs = [
+        ("foreground", "background"),
+        ("card_foreground", "card"),
+        ("muted_foreground", "muted"),
+        ("popover_foreground", "popover"),
+    ]
+    for fg_key, bg_key in pairs:
+        fg_val = (result.get(fg_key) or "").strip() or defaults.get(fg_key.replace("_", "-"), "")
+        bg_val = (result.get(bg_key) or "").strip() or defaults.get(bg_key.replace("_", "-"), "")
+        if fg_val and bg_val:
+            fixed = _enforce_readable_pair(fg_val, bg_val)
+            if fixed != fg_val:
+                logger.info(
+                    "globals_css_builder: auto-corrected %s lightness for readability "
+                    "(bg=%s was %s, fg was %s → %s)",
+                    fg_key, bg_key, bg_val, fg_val, fixed,
+                )
+                result[fg_key] = fixed
+    return result
 
 
 def _theme_value(theme: dict, css_key: str, defaults: dict[str, str]) -> str:
@@ -154,15 +262,47 @@ def build_globals_css(schema: dict[str, Any]) -> str:
     theme = (schema or {}).get("theme") or {}
     radius = (theme.get("radius") or "").strip() or "0.5rem"
 
+    # Auto-correct foreground tokens before writing — prevents invisible text
+    # when Gemini/Claude returns a dark palette with a dark foreground.
+    theme = _fix_theme_contrast(theme, _DEFAULT_LIGHT)
+    dark_theme = _fix_theme_contrast(theme.get("dark_mode") or {}, _DEFAULT_DARK)
+
     font_imports = _font_imports(theme)
     font_imports_block = ("\n".join(font_imports) + "\n") if font_imports else ""
 
     light_vars = _emit_var_block(theme, _DEFAULT_LIGHT)
-    dark_vars = _emit_var_block(theme.get("dark_mode") or {}, _DEFAULT_DARK)
+    dark_vars = _emit_var_block(dark_theme, _DEFAULT_DARK)
     chart_vars_light = _emit_chart_vars(theme)
     chart_vars_dark = _emit_chart_vars(theme.get("dark_mode") or {})
 
+    motion_block = _motion_signature_block(theme)
     font_classes = _font_family_classes(theme)
+
+    # Reveal-up keyframe + .reveal-up class with stagger variants. Browsers
+    # without animation-timeline get a static fallback (no animation, content
+    # visible). prefers-reduced-motion is always honoured.
+    reveal_block = (
+        "/* ── Scroll-driven reveal utilities (CSS-first, framer-motion fallback) ── */\n"
+        "@keyframes reveal-up {\n"
+        "  from { opacity: 0; transform: translateY(24px); }\n"
+        "  to   { opacity: 1; transform: translateY(0); }\n"
+        "}\n"
+        ".reveal-up { opacity: 1; }\n"
+        "@supports (animation-timeline: view()) {\n"
+        "  .reveal-up {\n"
+        "    animation: reveal-up var(--d-base) var(--ease-sig) both;\n"
+        "    animation-timeline: view();\n"
+        "    animation-range: entry 10% cover 35%;\n"
+        "  }\n"
+        "  .reveal-up.stagger-1 { animation-delay: 80ms; }\n"
+        "  .reveal-up.stagger-2 { animation-delay: 160ms; }\n"
+        "  .reveal-up.stagger-3 { animation-delay: 240ms; }\n"
+        "  .reveal-up.stagger-4 { animation-delay: 320ms; }\n"
+        "}\n"
+        "@media (prefers-reduced-motion: reduce) {\n"
+        "  .reveal-up { animation: none !important; opacity: 1; transform: none; }\n"
+        "}\n"
+    )
 
     return (
         "@tailwind base;\n"
@@ -176,6 +316,7 @@ def build_globals_css(schema: dict[str, Any]) -> str:
         "  :root {\n"
         f"{light_vars}{chart_vars_light}\n"
         f"    --radius: {radius};\n"
+        f"{motion_block}"
         "  }\n"
         "\n"
         "  .dark {\n"
@@ -192,5 +333,7 @@ def build_globals_css(schema: dict[str, Any]) -> str:
         "    font-feature-settings: \"rlig\" 1, \"calt\" 1;\n"
         "  }\n"
         "}\n"
+        "\n"
+        f"{reveal_block}"
         f"\n{font_classes}"
     )

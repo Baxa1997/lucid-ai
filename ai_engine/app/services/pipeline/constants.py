@@ -18,9 +18,9 @@ logger = logging.getLogger(__name__)
 # and returning a truncated 3.4k-char spec — unrecoverable downstream.
 # Pro is consistent: ~50s research + ~45s blueprint, ~$0.25 per generation
 # vs ~$0.05 on Flash. The reliability gap dwarfs the cost gap for SaaS.
-GEMINI_MODEL           = "gemini-2.5-pro"   # classify, explore, implementation plan
-GEMINI_RESEARCH_MODEL  = "gemini-2.5-pro"   # product research (gemini_research / gemini_deep_research)
-GEMINI_BLUEPRINT_MODEL = "gemini-2.5-pro"   # blueprint → plan.json (gemini_create_plan)
+GEMINI_MODEL           = "gemini-3.1-pro-preview"   # classify, explore, implementation plan
+GEMINI_RESEARCH_MODEL  = "gemini-3.1-pro-preview"   # product research (gemini_research / gemini_deep_research)
+GEMINI_BLUEPRINT_MODEL = "gemini-3.1-pro-preview"   # blueprint → plan.json (gemini_create_plan)
 
 # ── Fallback Gemini API Key ──────────────────────────────────
 # Used when the user doesn't have their own key in Settings.

@@ -18,7 +18,7 @@ Config (env vars):
   SCREENSHOT_API_KEY      — API key for the screenshot service. If unset,
                             vision enrichment is skipped entirely.
   SCREENSHOT_SERVICE      — "apiflash" (default) | "screenshotone"
-  VISION_RESEARCH_MODEL   — Gemini model for vision (default gemini-2.5-pro)
+  VISION_RESEARCH_MODEL   — Gemini model for vision (default gemini-3.1-pro-preview)
   VISION_MAX_REFS         — max reference screenshots to include (default 3)
 """
 
@@ -298,7 +298,7 @@ async def vision_enrich_research(
 
     service = (os.environ.get("SCREENSHOT_SERVICE") or "apiflash").strip().lower()
     max_refs = int(os.environ.get("VISION_MAX_REFS", "3"))
-    model = (os.environ.get("VISION_RESEARCH_MODEL") or "gemini-2.5-pro").strip()
+    model = (os.environ.get("VISION_RESEARCH_MODEL") or "gemini-3.1-pro-preview").strip()
 
     urls = extract_reference_urls(research_text, max_urls=max_refs + 2)
     if not urls:

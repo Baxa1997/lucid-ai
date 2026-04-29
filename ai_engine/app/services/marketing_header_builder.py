@@ -274,6 +274,9 @@ def _flatten_nav(navigation: list) -> list[dict]:
 #    - transparent_overlay→ floats over hero, white nav, scroll → solid
 #    - centered_logo      → 3-column grid with brand centered
 #    - minimal            → no border, h-14 slim, text-link CTA
+#    - floating_capsule   → pill-shaped floating nav, max-w-4xl, top-4 mt
+#    - split_action_bar   → logo + single Menu trigger, opens fullscreen
+#                           overlay with oversized centered links
 #
 #  Translation rules (all fields are LLM-chosen per project):
 #    • brand_mark.placement = "navbar_center" / "split_navbar_header"
@@ -291,6 +294,8 @@ _VARIANTS: tuple[str, ...] = (
     "transparent_overlay",
     "centered_logo",
     "minimal",
+    "floating_capsule",
+    "split_action_bar",
 )
 
 _ADMIN_FAMILY = {
@@ -299,8 +304,11 @@ _ADMIN_FAMILY = {
 
 _FULL_BLEED_HERO_ARCHETYPES = {
     "full_bleed_dark", "cinematic", "layered", "layered-scroll",
-    "diagonal", "immersive",
+    "diagonal", "immersive", "cinematic-parallax", "editorial-offset",
+    "full-bleed-dark", "layered_scroll", "magazine",
 }
+# Substring fragments — if hero_archetype contains any of these it's full-bleed.
+_FULL_BLEED_KEYWORDS = ("cinematic", "full_bleed", "full-bleed", "layered", "immersive")
 
 
 def pick_header_variant(
@@ -308,12 +316,19 @@ def pick_header_variant(
     design: dict | None = None,
 ) -> str:
     """Translate Design Director's per-project spec into one of the four
-    structural templates. Pure function. No hash, no random.
+    structural templates.
 
-    ``design`` is the Design Director output dict (may be ``None``). When
-    absent the function returns ``solid_bordered`` — the safe default that
-    matches every shadcn-style consumer / admin site.
+    Hard constraints (no randomness):
+      • Admin family → ``solid_bordered`` (predictability for data-heavy UIs)
+      • brand_mark.placement = navbar_center → ``centered_logo`` (Director
+        explicitly asked for it; honour the request)
+
+    Soft constraints (multiple variants are visually defensible — pick at
+    random within the candidate set so two coffee-shop generations don't
+    produce IDENTICAL headers). Prior versions hard-pinned each soft case
+    to ONE variant which made every consumer landing page look the same.
     """
+    import random as _random
     a = (archetype or "").lower()
     if a in _ADMIN_FAMILY:
         return "solid_bordered"
@@ -325,22 +340,48 @@ def pick_header_variant(
     overlay_pattern = (image_comp.get("overlay_pattern") or "").lower()
     spacing_rhythm = ((design.get("spacing") or {}).get("rhythm") or "").lower()
 
-    # Centered placement is the strongest signal — the Design Director
-    # explicitly asked for the brand at the centre of the navbar.
+    # Centered placement is a hard signal — keep deterministic.
     if placement in ("navbar_center", "split_navbar_header"):
         return "centered_logo"
 
-    # Cinematic / full-bleed hero with a scrim → header should float over it.
-    if overlay_pattern in ("dark_scrim", "light_scrim") and (
-        hero_arch in _FULL_BLEED_HERO_ARCHETYPES or "full_bleed" in hero_arch
-    ):
-        return "transparent_overlay"
+    _is_full_bleed = (
+        hero_arch in _FULL_BLEED_HERO_ARCHETYPES
+        or any(kw in hero_arch for kw in _FULL_BLEED_KEYWORDS)
+    )
 
-    # Tight rhythm + portfolio leans minimal.
+    # Full-bleed hero — `transparent_overlay` is the obvious fit but
+    # `split_action_bar` (Aesop / The Row pattern) and `floating_capsule`
+    # both work above cinematic photography too. Pick across all three so
+    # cinematic projects don't all collapse to the translucent-nav cliché.
+    if _is_full_bleed:
+        return _random.choice((
+            "transparent_overlay",
+            "split_action_bar",
+            "floating_capsule",
+            "solid_bordered",
+        ))
+
+    # Tight + portfolio family — luxury / editorial brands. minimal and
+    # split_action_bar both fit this register.
     if a == "portfolio" and "tight" in spacing_rhythm:
-        return "minimal"
+        return _random.choice(("minimal", "split_action_bar", "solid_bordered"))
 
-    return "solid_bordered"
+    # General consumer / landing case — rotate across all 6 variants with
+    # roughly even weights. Prior 3:1:1 weighting on solid_bordered made
+    # every consumer site ship the same generic horizontal nav even when
+    # the design system explicitly varied. Equal-ish weights force the
+    # picker to actually use the structural alternatives we built.
+    return _random.choices(
+        (
+            "solid_bordered",
+            "centered_logo",
+            "minimal",
+            "floating_capsule",
+            "split_action_bar",
+        ),
+        weights=(2, 2, 2, 2, 1),
+        k=1,
+    )[0]
 
 
 # ───────────────────────────────────────────────────────────────
@@ -754,11 +795,218 @@ export default function MarketingHeader() {{
 """
 
 
+# ───────────────────────────────────────────────────────────────
+#  Variant 5: floating_capsule
+#  A pill-shaped nav floating top-center with margin from page edges.
+#  Visually distinct from the full-width "sticky bar across the top"
+#  family — reads as a deliberate UI object rather than a chrome strip.
+# ───────────────────────────────────────────────────────────────
+def _render_floating_capsule(
+    brand_block: str,
+    nav_array: str,
+    cta_text_jsx: str,
+    cta_href_attr: str,
+    lucide_imports: str,
+) -> str:
+    return f"""'use client';
+
+import Link from 'next/link';
+import {{ useState }} from 'react';
+import {{ {lucide_imports} }} from 'lucide-react';
+
+const navLinks = [
+  {nav_array}
+];
+
+export default function MarketingHeader() {{
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  return (
+    <header className="sticky top-4 z-50 w-full px-4">
+      <div className="mx-auto flex h-14 w-full max-w-4xl items-center justify-between rounded-full border border-border bg-background/85 px-3 pl-6 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-background/65">
+        {brand_block}
+
+        <nav className="hidden items-center gap-7 md:flex" aria-label="Primary">
+          {{navLinks.map((link) => (
+            <Link
+              key={{link.href}}
+              href={{link.href}}
+              className="text-sm font-medium text-foreground/75 transition-colors hover:text-foreground"
+            >
+              {{link.label}}
+            </Link>
+          ))}}
+        </nav>
+
+        <div className="hidden md:block">
+          <Link
+            href={cta_href_attr}
+            className="inline-flex h-10 items-center rounded-full bg-primary px-5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
+          >
+            {{{cta_text_jsx}}}
+          </Link>
+        </div>
+
+        <button
+          type="button"
+          onClick={{() => setMobileOpen(!mobileOpen)}}
+          className="inline-flex h-10 w-10 items-center justify-center rounded-full text-foreground md:hidden"
+          aria-label={{mobileOpen ? 'Close menu' : 'Open menu'}}
+          aria-expanded={{mobileOpen}}
+        >
+          {{mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}}
+        </button>
+      </div>
+
+      {{mobileOpen && (
+        <nav
+          className="mx-auto mt-3 max-w-4xl rounded-2xl border border-border bg-background p-3 shadow-lg md:hidden"
+          aria-label="Mobile"
+        >
+          <div className="flex flex-col gap-1">
+            {{navLinks.map((link) => (
+              <Link
+                key={{link.href}}
+                href={{link.href}}
+                onClick={{() => setMobileOpen(false)}}
+                className="rounded-md px-3 py-2 text-base font-medium text-foreground/80 hover:bg-muted hover:text-foreground"
+              >
+                {{link.label}}
+              </Link>
+            ))}}
+            <Link
+              href={cta_href_attr}
+              onClick={{() => setMobileOpen(false)}}
+              className="mt-1 inline-flex h-11 items-center justify-center rounded-full bg-primary px-5 text-sm font-medium text-primary-foreground shadow-sm"
+            >
+              {{{cta_text_jsx}}}
+            </Link>
+          </div>
+        </nav>
+      )}}
+    </header>
+  );
+}}
+"""
+
+
+# ───────────────────────────────────────────────────────────────
+#  Variant 6: split_action_bar
+#  Logo top-left, single hamburger top-right that opens a fullscreen
+#  overlay menu with oversized centered links. No primary nav visible
+#  in the bar itself — the entire navigation is behind the trigger.
+#  Reads as luxury/editorial (Aesop, COS, Maharishi).
+# ───────────────────────────────────────────────────────────────
+def _render_split_action_bar(
+    brand_block: str,
+    nav_array: str,
+    cta_text_jsx: str,
+    cta_href_attr: str,
+    lucide_imports: str,
+) -> str:
+    return f"""'use client';
+
+import Link from 'next/link';
+import {{ useState, useEffect }} from 'react';
+import {{ {lucide_imports} }} from 'lucide-react';
+
+const navLinks = [
+  {nav_array}
+];
+
+export default function MarketingHeader() {{
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {{
+    if (open) {{
+      document.body.style.overflow = 'hidden';
+      return () => {{ document.body.style.overflow = ''; }};
+    }}
+  }}, [open]);
+
+  return (
+    <>
+      <header className="sticky top-0 z-50 w-full bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/65">
+        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+          {brand_block}
+
+          <button
+            type="button"
+            onClick={{() => setOpen(true)}}
+            className="inline-flex items-center gap-3 rounded-full border border-border bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+            aria-label="Open menu"
+            aria-expanded={{open}}
+          >
+            <span className="hidden sm:inline">Menu</span>
+            <Menu className="h-4 w-4" />
+          </button>
+        </div>
+      </header>
+
+      {{open && (
+        <div
+          className="fixed inset-0 z-[60] flex flex-col bg-background"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Site navigation"
+        >
+          <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+            {brand_block}
+            <button
+              type="button"
+              onClick={{() => setOpen(false)}}
+              className="inline-flex h-10 w-10 items-center justify-center rounded-full text-foreground hover:bg-muted"
+              aria-label="Close menu"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          <nav
+            className="flex flex-1 flex-col items-center justify-center gap-6 px-6 pb-24"
+            aria-label="Primary"
+          >
+            {{navLinks.map((link, i) => (
+              <Link
+                key={{link.href}}
+                href={{link.href}}
+                onClick={{() => setOpen(false)}}
+                className="text-4xl font-semibold tracking-tight text-foreground/85 transition-colors hover:text-foreground sm:text-5xl md:text-6xl"
+                style={{{{ animation: `fadeUp 0.5s ease-out ${{i * 60}}ms both` }}}}
+              >
+                {{link.label}}
+              </Link>
+            ))}}
+            <Link
+              href={cta_href_attr}
+              onClick={{() => setOpen(false)}}
+              className="mt-6 inline-flex h-12 items-center rounded-full bg-primary px-8 text-base font-medium text-primary-foreground shadow-sm hover:bg-primary/90"
+            >
+              {{{cta_text_jsx}}}
+            </Link>
+          </nav>
+
+          <style>{{`
+            @keyframes fadeUp {{
+              from {{ opacity: 0; transform: translateY(12px); }}
+              to {{ opacity: 1; transform: translateY(0); }}
+            }}
+          `}}</style>
+        </div>
+      )}}
+    </>
+  );
+}}
+"""
+
+
 _VARIANT_RENDERERS = {
     "solid_bordered":      _render_solid_bordered,
     "transparent_overlay": _render_transparent_overlay,
     "centered_logo":       _render_centered_logo,
     "minimal":             _render_minimal,
+    "floating_capsule":    _render_floating_capsule,
+    "split_action_bar":    _render_split_action_bar,
 }
 
 

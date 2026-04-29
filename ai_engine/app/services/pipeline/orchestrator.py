@@ -1161,6 +1161,35 @@ async def run_pipeline(
                         logger.info("Project pushed to staging: %s", html_url)
 
         elif validated.get("new_project_mode"):
+            # Gate publish on the in-process build result. Pushing a broken
+            # project to GitHub + deploying to Vercel produces a noisy "your
+            # project is live" celebration on top of an actually-broken site,
+            # and worse — when the user pastes the error into chat to ask
+            # for a fix, the orchestrator is mid-deploy and the follow-up
+            # message races the deployment events. Skipping publish on a
+            # failed build keeps the workspace in a clean state where the
+            # user's next chat message can drive a focused fix loop.
+            _build_ok_for_publish = getattr(websocket, "_build_ok", True)
+            if not _build_ok_for_publish:
+                logger.info(
+                    "new_project_mode Phase 7: skipping publish — build failed. "
+                    "User can describe the error and the next agent run will fix it."
+                )
+                await _send_phase(
+                    7, "Publishing project",
+                    "Skipped — build failed. Tell the agent what you see and it'll fix it.",
+                    "skipped",
+                )
+                await websocket.send_json({
+                    "type": "chat_message",
+                    "role": "system",
+                    "content": (
+                        "⚠️ The build had errors, so I skipped publishing. "
+                        "Paste the runtime error you see in the preview and I'll fix it."
+                    ),
+                })
+                return workspace_path
+
             await _send_phase(7, "Publishing project", "Creating new repository…", "active")
 
             git_token      = validated.get("git_token", "")

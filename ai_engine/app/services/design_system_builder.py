@@ -37,11 +37,8 @@ Usage:
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
-import math
-from typing import Any, Optional
+from typing import Optional
 
 import httpx
 
@@ -54,6 +51,138 @@ _API_URL = "https://api.anthropic.com/v1/messages"
 _MODEL = "claude-sonnet-4-6"
 _MAX_TOKENS = 4000
 _TIMEOUT = 90.0
+
+
+# ─── Curated font pairings ──────────────────────────────────────────────────
+# 12 hand-picked Google Fonts pairings the Director chooses from. Constraining
+# to a curated list (vs free-form "pick any Google font") is what kills the
+# Inter+Geist / Inter+Inter convergence that makes every AI-generated site
+# look the same. Each entry has concrete Google Fonts CSS2 URLs and matched
+# weight defaults so the renderer can build globals.css verbatim regardless
+# of what free-form strings the Director also emits.
+
+_FONT_PAIRINGS: dict[str, dict] = {
+    "fraunces-inter": {
+        "heading_font": "Fraunces",
+        "heading_font_url": "https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&display=swap",
+        "body_font": "Inter",
+        "body_font_url": "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap",
+        "heading_weight": "700",
+        "body_weight": "400",
+        "vibe": "warm editorial — italic display serif + neutral sans",
+        "fits_archetypes": ["warm_artisan", "magazine_editorial", "editorial_serif_minimal", "quiet_luxury"],
+    },
+    "bricolage-grotesque-solo": {
+        "heading_font": "Bricolage Grotesque",
+        "heading_font_url": "https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,200..800&display=swap",
+        "body_font": "Bricolage Grotesque",
+        "body_font_url": "https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,200..800&display=swap",
+        "heading_weight": "700",
+        "body_weight": "400",
+        "vibe": "modern grotesque — single variable family with weight contrast",
+        "fits_archetypes": ["spatial_functional", "neo_swiss", "minimal_luxe", "fluid_typographic"],
+    },
+    "dm-serif-dm-sans": {
+        "heading_font": "DM Serif Display",
+        "heading_font_url": "https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&display=swap",
+        "body_font": "DM Sans",
+        "body_font_url": "https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300..900&display=swap",
+        "heading_weight": "400",
+        "body_weight": "400",
+        "vibe": "classic publication — high-contrast serif display + clean sans",
+        "fits_archetypes": ["magazine_editorial", "editorial_serif_minimal", "quiet_luxury"],
+    },
+    "space-grotesk-jetbrains": {
+        "heading_font": "Space Grotesk",
+        "heading_font_url": "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300..700&display=swap",
+        "body_font": "JetBrains Mono",
+        "body_font_url": "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap",
+        "heading_weight": "600",
+        "body_weight": "400",
+        "vibe": "terminal-precise — geometric sans + mono body for technical feel",
+        "fits_archetypes": ["dense_luxury", "brutalist_mono", "tech_noir_gradient", "sharp_corporate"],
+    },
+    "playfair-source-sans": {
+        "heading_font": "Playfair Display",
+        "heading_font_url": "https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap",
+        "body_font": "Source Sans 3",
+        "body_font_url": "https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,200..900;1,200..900&display=swap",
+        "heading_weight": "700",
+        "body_weight": "400",
+        "vibe": "luxury feminine — high-contrast Didone + restrained sans",
+        "fits_archetypes": ["quiet_luxury", "magazine_editorial", "warm_artisan"],
+    },
+    "instrument-serif-instrument-sans": {
+        "heading_font": "Instrument Serif",
+        "heading_font_url": "https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&display=swap",
+        "body_font": "Instrument Sans",
+        "body_font_url": "https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&display=swap",
+        "heading_weight": "400",
+        "body_weight": "400",
+        "vibe": "editorial italic — sibling typefaces, italic display headlines",
+        "fits_archetypes": ["editorial_serif_minimal", "warm_artisan", "magazine_editorial", "dark_editorial"],
+    },
+    "archivo-archivo-narrow": {
+        "heading_font": "Archivo Black",
+        "heading_font_url": "https://fonts.googleapis.com/css2?family=Archivo+Black&display=swap",
+        "body_font": "Archivo Narrow",
+        "body_font_url": "https://fonts.googleapis.com/css2?family=Archivo+Narrow:ital,wght@0,400..700;1,400..700&display=swap",
+        "heading_weight": "900",
+        "body_weight": "400",
+        "vibe": "bold + tight — heavy display contrast against narrow body",
+        "fits_archetypes": ["high_contrast_brutalist", "brutalist_mono", "sharp_corporate", "dense_luxury"],
+    },
+    "crimson-pro-public-sans": {
+        "heading_font": "Crimson Pro",
+        "heading_font_url": "https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,200..900;1,200..900&display=swap",
+        "body_font": "Public Sans",
+        "body_font_url": "https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,100..900;1,100..900&display=swap",
+        "heading_weight": "600",
+        "body_weight": "400",
+        "vibe": "official editorial — book-style serif + civic sans",
+        "fits_archetypes": ["editorial_serif_minimal", "magazine_editorial", "scandi_clean", "quiet_luxury"],
+    },
+    "unbounded-manrope": {
+        "heading_font": "Unbounded",
+        "heading_font_url": "https://fonts.googleapis.com/css2?family=Unbounded:wght@200..900&display=swap",
+        "body_font": "Manrope",
+        "body_font_url": "https://fonts.googleapis.com/css2?family=Manrope:wght@200..800&display=swap",
+        "heading_weight": "700",
+        "body_weight": "400",
+        "vibe": "futuristic display + soft humanist body",
+        "fits_archetypes": ["tech_noir_gradient", "spatial_functional", "fluid_typographic", "playful_retro"],
+    },
+    "young-serif-rubik": {
+        "heading_font": "Young Serif",
+        "heading_font_url": "https://fonts.googleapis.com/css2?family=Young+Serif&display=swap",
+        "body_font": "Rubik",
+        "body_font_url": "https://fonts.googleapis.com/css2?family=Rubik:ital,wght@0,300..900;1,300..900&display=swap",
+        "heading_weight": "400",
+        "body_weight": "400",
+        "vibe": "vintage editorial — rounded serif + neutral body",
+        "fits_archetypes": ["warm_artisan", "botanical_organic", "magazine_editorial"],
+    },
+    "bodoni-moda-outfit": {
+        "heading_font": "Bodoni Moda",
+        "heading_font_url": "https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,400..900;1,6..96,400..900&display=swap",
+        "body_font": "Outfit",
+        "body_font_url": "https://fonts.googleapis.com/css2?family=Outfit:wght@200..900&display=swap",
+        "heading_weight": "700",
+        "body_weight": "400",
+        "vibe": "fashion editorial — high-contrast Didone + geometric sans",
+        "fits_archetypes": ["quiet_luxury", "magazine_editorial", "minimal_luxe", "dark_editorial"],
+    },
+    "bricolage-jetbrains": {
+        "heading_font": "Bricolage Grotesque",
+        "heading_font_url": "https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,200..800&display=swap",
+        "body_font": "JetBrains Mono",
+        "body_font_url": "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap",
+        "heading_weight": "700",
+        "body_weight": "400",
+        "vibe": "tech editorial — variable display grotesque + mono body",
+        "fits_archetypes": ["dense_luxury", "tech_noir_gradient", "spatial_functional"],
+    },
+}
 
 
 # ─── System prompt — the taste instruction ──────────────────────────────────
@@ -89,11 +218,27 @@ HARD RULES:
 3. ANTI-GENERIC
    - Never output `217 91% 60%` (default Tailwind blue).
    - Never output `Inter + Inter` as the font pairing.
+   - Never output `Inter + Geist` — overused by AI tools in 2024-2025.
    - Never output `0.5rem` radius with no thought.
    - Never use symmetric 3-column icon grids as features_archetype.
    - Never use gradient-pastel hero as hero_archetype.
    - Never ship a landing page with generic "About / Features / Pricing /
      Sign In / Get Started" nav for a physical-world brand.
+
+3b. ANTI-2024-OVERUSE (these were cutting-edge in 2024, now clichés in 2026):
+   - Never use a generic bento grid as the default features layout — Apple
+     bento was fresh in 2022-2023, AI tools overused it through 2024-2025.
+     Use bento ONLY if it's the most natural fit; otherwise pick zigzag,
+     vertical-tabs, timeline, or numbered-editorial.
+   - Never use floating gradient orbs as the ONLY hero decoration — two
+     blurred circles behind a headline is the #1 AI-generated cliché signal.
+     If you use orbs, combine with grain noise, topographic lines, or strong
+     typographic elements so the page has a real identity.
+   - Never default to glassmorphism (backdrop-blur cards) — peaked 2022,
+     now associated with low-quality templates. Use glass only for a specific
+     visual reason (e.g. overlay on a full-bleed photo), never as a card style.
+   - Never use "frosted glass navbar on a white page" — meaningless blur with
+     no photo underneath looks like an oversight, not a design choice.
 
 4. PROJECT-SPECIFIC
    - A coffee roaster's palette should feel like espresso + cream + one
@@ -103,11 +248,30 @@ HARD RULES:
      picking ANY HSL value.
 
 5. COMMIT TO A PERSONALITY
-   - Pick one of these archetypes (or blend two): editorial_serif_minimal,
-     brutalist_mono, neo_swiss, dark_cinematic, soft_pastel_organic,
+   - Pick one of these archetypes (or blend two):
+     editorial_serif_minimal, brutalist_mono, neo_swiss, dark_cinematic,
      tech_noir_gradient, maximalist_collage, minimal_luxe, warm_artisan,
      scandi_clean, japanese_ma, bauhaus_modern, magazine_editorial,
-     sharp_corporate, playful_retro, botanical_organic, high_contrast_brutalist.
+     sharp_corporate, playful_retro, botanical_organic, high_contrast_brutalist,
+     spatial_functional, dark_editorial, fluid_typographic, quiet_luxury, dense_luxury.
+   - DO NOT pick soft_pastel_organic — banned as a dated 2020-era pattern.
+   - 2026 archetypes (prefer these for new projects where the domain fits):
+     • spatial_functional — pure utility + depth hierarchy without decoration.
+       Zero ornamentation. Typography and spacing ARE the design. Depth comes
+       from shadow hierarchy (shadow-xs / shadow-sm only), never kitsch 3D.
+       Reference: Vercel Dashboard, Linear, Ramp, Attio.
+     • dark_editorial — near-black backgrounds (hsl ~220 15% 6%), editorial
+       serif or high-contrast grotesque, minimal chrome, premium ink-on-paper
+       feel. One restrained accent color. Reference: The Atlantic, Are.na, iA.
+     • fluid_typographic — variable fonts + clamp() everywhere. Type IS the
+       design: oversized headlines, weight contrast, tight leading [0.88],
+       generous whitespace. Photography plays second fiddle to letterforms.
+     • quiet_luxury — tone-on-tone palettes, barely-there color, material
+       texture (grain at 3%, linen, stone). Expensive without shouting. Status
+       signal is restraint. Reference: The Row, Bottega Veneta, Loro Piana.
+     • dense_luxury — information density as aesthetic. Bloomberg Terminal
+       energy with premium materials. Compact type, hairline borders, every
+       pixel earns its place. Reference: Bloomberg, FT, Stripe Revenue dashboard.
 
 6. MUST BE INTERNALLY CONSISTENT
    - Signature motif appears 2-3x across the page.
@@ -154,6 +318,36 @@ HARD RULES:
      centered container (max-w-5xl mx-auto), or half of a split grid.
      NEVER a half-width image next to raw whitespace — that reads as
      a broken layout. Specify image_container_mode.
+
+9. HERO ↔ IMAGE COMPOSITION COUPLING (STRICT — VALIDATED)
+   The hero_archetype dictates what image_composition is allowed. Picking
+   a structural hero (e.g. 'magazine') and then setting overlay_pattern
+   to 'dark_scrim' with image_container_mode='full_bleed' silently
+   collapses the hero back into the banned full-bleed-dark recipe.
+
+   ALLOWED combinations:
+     • hero_archetype = 'cinematic-parallax' OR 'full-bleed-dark'
+         → overlay_pattern = 'dark_scrim'
+         → image_container_mode = 'full_bleed'
+         (the only two archetypes that may use the dark photo recipe)
+
+     • hero_archetype = 'magazine' OR 'typographic-hero' OR 'diagonal'
+         → overlay_pattern = 'split_solid' OR 'side_caption'
+         → image_container_mode = 'centered' OR 'split_third'
+         (image is decorative/secondary, not a backdrop)
+
+     • hero_archetype = 'split' OR 'product-showcase' OR 'editorial-offset'
+         → overlay_pattern = 'split_solid' OR 'card_lift' OR 'side_caption'
+         → image_container_mode = 'split_half' OR 'split_third' OR 'centered'
+         (image is one half/quadrant, NEVER full bleed)
+
+     • hero_archetype = 'bento' OR 'layered-scroll'
+         → overlay_pattern = any EXCEPT 'dark_scrim'
+         → image_container_mode = any EXCEPT 'full_bleed'
+
+   FORBIDDEN: 'dark_scrim' + 'full_bleed' for any hero_archetype other
+   than 'cinematic-parallax' / 'full-bleed-dark'. The validator rejects
+   this combination and the run will retry with a violation message.
 
 Output ONLY via the provided tool. No prose.
 """
@@ -262,8 +456,30 @@ _DESIGN_TOOL = {
             "typography": {
                 "type": "object",
                 "properties": {
-                    "heading_font":     {"type": "string", "description": "Google Fonts family name (e.g. 'Fraunces', 'Space Grotesk')"},
-                    "heading_font_url": {"type": "string", "description": "Full Google Fonts CSS2 URL with weight/style axes"},
+                    "font_pairing_id": {
+                        "type": "string",
+                        "description": (
+                            "REQUIRED — pick ONE of the 12 curated Google Fonts pairings. "
+                            "The renderer overrides heading_font / body_font / *_url with the "
+                            "canonical values from this pairing, so don't worry about getting the "
+                            "URLs perfect. Pick based on archetype mood:\n"
+                            "  • fraunces-inter                  — warm editorial italic display + sans body\n"
+                            "  • bricolage-grotesque-solo        — modern grotesque single family, weight contrast\n"
+                            "  • dm-serif-dm-sans                — classic publication, high-contrast serif\n"
+                            "  • space-grotesk-jetbrains         — terminal-precise sans + mono body\n"
+                            "  • playfair-source-sans            — luxury feminine Didone + restrained sans\n"
+                            "  • instrument-serif-instrument-sans — editorial italic, sibling typefaces\n"
+                            "  • archivo-archivo-narrow          — bold + tight, heavy display + narrow body\n"
+                            "  • crimson-pro-public-sans         — official editorial book serif + civic sans\n"
+                            "  • unbounded-manrope               — futuristic display + soft humanist body\n"
+                            "  • young-serif-rubik               — vintage editorial rounded serif + neutral body\n"
+                            "  • bodoni-moda-outfit              — fashion editorial Didone + geometric sans\n"
+                            "  • bricolage-jetbrains             — tech editorial variable display + mono body\n"
+                            "NEVER pick `inter-inter` or `inter-geist` — those are not in the list and will be rejected."
+                        ),
+                    },
+                    "heading_font":     {"type": "string", "description": "(Auto-overridden by font_pairing_id)"},
+                    "heading_font_url": {"type": "string", "description": "(Auto-overridden by font_pairing_id)"},
                     "body_font":        {"type": "string"},
                     "body_font_url":    {"type": "string"},
                     "heading_weight":   {"type": "string", "description": "e.g. '600', '700', '800'"},
@@ -276,7 +492,7 @@ _DESIGN_TOOL = {
                     },
                     "overall_vibe": {"type": "string", "description": "2-3 words, e.g. 'bookish editorial', 'crisp technical', 'bold artisan'"},
                 },
-                "required": ["heading_font", "heading_font_url", "body_font", "body_font_url", "heading_weight", "body_weight", "type_scale", "overall_vibe"],
+                "required": ["font_pairing_id", "heading_font", "heading_font_url", "body_font", "body_font_url", "heading_weight", "body_weight", "type_scale", "overall_vibe"],
             },
             "spacing": {
                 "type": "object",
@@ -284,7 +500,7 @@ _DESIGN_TOOL = {
                     "base":              {"type": "number", "description": "Base unit in px — 4 or 8"},
                     "section_padding_y": {"type": "number", "description": "Section vertical padding in px"},
                     "section_padding_x": {"type": "number"},
-                    "rhythm":            {"type": "string", "description": "tight_editorial / standard_modern / airy_luxury / asymmetric / dense_information"},
+                    "rhythm":            {"type": "string", "description": "ONE of: tight-editorial / standard-modern / airy-luxury / asymmetric / dense-information. Use these EXACT dashed names — they map to wrapper Tailwind classes."},
                 },
                 "required": ["base", "section_padding_y", "section_padding_x", "rhythm"],
             },
@@ -301,14 +517,87 @@ _DESIGN_TOOL = {
             },
             "motion_language": {
                 "type": "object",
+                "description": (
+                    "Per-project motion DNA. The first 5 fields (enter, hover, "
+                    "scroll, duration, easing) describe what code-gen should "
+                    "EMIT for typical reveals. The last 4 (easing_signature, "
+                    "durations, signature_transition, cursor_treatment) are "
+                    "hard-typed enums that downstream prompts and the wrapper "
+                    "templates consume verbatim — they kill the 'every section "
+                    "animates differently' tell that AI tools (base44, Lovable) "
+                    "leave behind."
+                ),
                 "properties": {
                     "enter":   {"type": "string", "description": "e.g. 'fade-up stagger 80ms', 'slide-in-from-left'"},
                     "hover":   {"type": "string"},
                     "scroll":  {"type": "string"},
                     "duration":{"type": "string", "description": "e.g. '300ms', '450ms'"},
                     "easing":  {"type": "string", "description": "CSS easing fn or curve"},
+
+                    # ── Strict tokens consumed by code-gen + wrapper templates ──
+                    "easing_signature": {
+                        "type": "string",
+                        "description": (
+                            "ONE named curve used for EVERY entrance/transition. "
+                            "Pick one based on archetype mood. Use these EXACT names — "
+                            "code-gen prompts map them to concrete cubic-bezier values:\n"
+                            "  • 'quint-out'         — cubic-bezier(0.16, 1, 0.3, 1) — premium, calm, awwwards default\n"
+                            "  • 'expo-out'          — cubic-bezier(0.19, 1, 0.22, 1) — confident, snappy\n"
+                            "  • 'circ-out'          — cubic-bezier(0, 0.55, 0.45, 1) — soft, organic\n"
+                            "  • 'back-out-subtle'   — cubic-bezier(0.34, 1.2, 0.64, 1) — playful (small overshoot)\n"
+                            "  • 'linear-precise'    — linear — for brutalist/dense_luxury archetypes\n"
+                            "  • 'spring-quiet'      — Motion spring(80, 16) — for fluid_typographic"
+                        ),
+                    },
+                    "durations": {
+                        "type": "object",
+                        "description": (
+                            "Three named durations used everywhere. Code-gen MUST "
+                            "use these three ms values for ALL motion — no ad-hoc "
+                            "200/350/500ms scattered across components."
+                        ),
+                        "properties": {
+                            "fast": {"type": "string", "description": "Hover, focus, micro-interactions. Typically '150ms' to '220ms'"},
+                            "base": {"type": "string", "description": "Standard reveals, card stagger. Typically '450ms' to '650ms'"},
+                            "slow": {"type": "string", "description": "Hero entrance, dramatic moments. Typically '900ms' to '1200ms'"},
+                        },
+                        "required": ["fast", "base", "slow"],
+                    },
+                    "signature_transition": {
+                        "type": "string",
+                        "description": (
+                            "ONE bespoke transition reused in hero AND ≥1 other "
+                            "section — the project's motion fingerprint. Without "
+                            "this, every section invents its own animation and the "
+                            "page reads as 'AI-assembled'. Pick one:\n"
+                            "  • 'mask-reveal-diag'   — diagonal clip-path mask sweeps text in\n"
+                            "  • 'weight-shift'       — variable-font weight animates 100→700 on enter\n"
+                            "  • 'sticky-pin-scrub'   — element pins while inner content scrubs (GSAP-style)\n"
+                            "  • 'horizontal-rail'    — section scrolls horizontally inside a vertical pin\n"
+                            "  • 'chromatic-glitch'   — RGB channel offset on hover + entrance\n"
+                            "  • 'duotone-fade'       — image desaturates → colour on viewport entry\n"
+                            "  • 'kinetic-typography' — characters rise individually with 40ms stagger\n"
+                            "  • 'parallax-layered'   — 3-layer depth with different scroll speeds\n"
+                            "  • 'magnetic-pull'      — interactive elements pull toward cursor in 80px radius\n"
+                            "  • 'minimal-precise'    — single 200ms fade-up only — no signature (for brutalist_mono / sharp_corporate)"
+                        ),
+                    },
+                    "cursor_treatment": {
+                        "type": "string",
+                        "description": (
+                            "Custom cursor behaviour. Big perceived-quality lift. "
+                            "ONE of:\n"
+                            "  • 'default'        — OS cursor, no override (safest for admin/CRM)\n"
+                            "  • 'magnetic'       — primary CTAs pull toward cursor inside 60-80px radius\n"
+                            "  • 'custom-blob'    — replace with branded blob/dot that scales over interactive elements\n"
+                            "  • 'crosshair'      — minimal crosshair for editorial/brutalist archetypes"
+                        ),
+                    },
                 },
-                "required": ["enter", "hover", "scroll", "duration", "easing"],
+                "required": [
+                    "enter", "hover", "scroll", "duration", "easing",
+                    "easing_signature", "durations", "signature_transition", "cursor_treatment",
+                ],
             },
             "section_rhythm": {
                 "type": "object",
@@ -342,13 +631,17 @@ _DESIGN_TOOL = {
                 },
                 "required": ["overlay_pattern", "overlay_text_color", "image_container_mode", "form_treatment"],
             },
-            "hero_archetype":           {"type": "string", "description": "split / bento / diagonal / magazine / layered / cinematic / editorial_offset / full_bleed_dark / typographic / invented"},
-            "features_archetype":       {"type": "string", "description": "bento_mixed / zigzag / vertical_tabs / horizontal_scroll / masonry / tilt_stack / showcase / timeline / numbered_editorial"},
+            # ARCHETYPE NAMES MUST USE DASHES — these strings are matched against
+            # wrapper-template lookup tables in project_generator.py. Underscored
+            # variants (e.g. 'cinematic_parallax') will silently fall through and
+            # the code-gen prompt won't know which JSX skeleton to apply.
+            "hero_archetype":           {"type": "string", "description": "ONE of: split / bento / diagonal / magazine / layered-scroll / cinematic-parallax / editorial-offset / full-bleed-dark / product-showcase / typographic-hero. Use these EXACT dashed names — they map to wrapper JSX templates."},
+            "features_archetype":       {"type": "string", "description": "ONE of: bento-mixed / zigzag / vertical-tabs / horizontal-scroll / masonry / tilt-stack / showcase / timeline / numbered-editorial. Use these EXACT dashed names — they map to wrapper JSX templates."},
             "signature_motif":          {"type": "string", "description": "One recurring decorative element used 2-3x (e.g. 'hairline divider with offset dot', 'hand-drawn squiggle', 'topographic contour line', 'grain texture overlay')"},
             "decorative_pattern":       {"type": "string", "description": "One low-opacity recurring texture — 'dots', 'noise', 'squiggles', 'orbs', 'topographic', or 'none'"},
             "border_radius_language":   {"type": "string", "description": "sharp / crisp / soft / pill / organic / mixed"},
-            "color_application_strategy": {"type": "string", "description": "mono_accent / duotone_photos / gradient_mesh / inverted_dark / polychrome / photographic_neutral / brand_flood"},
-            "hover_interaction_style":  {"type": "string", "description": "lift_and_shadow / tilt_3d / reveal_content / glow_ring / morph_shape / invert_colors / magnetic_cursor"},
+            "color_application_strategy": {"type": "string", "description": "ONE of: mono-accent / duotone-photos / gradient-mesh / inverted-dark / polychrome / photographic-neutral / brand-flood. Use these EXACT dashed names — they map to wrapper templates."},
+            "hover_interaction_style":  {"type": "string", "description": "ONE of: lift-and-shadow / tilt-3d / reveal-content / glow-ring / morph-shape / invert-colors / magnetic-cursor. Use these EXACT dashed names — they map to wrapper templates."},
             "chart_colors":             {"type": "array", "items": {"type": "string"}, "description": "5 HSL values for data viz, harmonious with palette."},
             "banned_patterns":          {"type": "array", "items": {"type": "string"}, "description": "3-5 design moves you explicitly reject for this project"},
             "distinctive_moves":        {"type": "array", "items": {"type": "string"}, "description": "3-5 specific patterns that MUST appear to make this design identifiable"},
@@ -481,6 +774,7 @@ def _build_user_prompt(
     copy_tone: str,
     layout_archetype: str,
     vibe: str,
+    cultural_atmosphere: str = "",
     retry_feedback: Optional[str] = None,
 ) -> str:
     feedback_block = ""
@@ -540,6 +834,72 @@ Admin design rules:
   8. Brand mark: wordmark vs icon+wordmark vs monogram? Pick the font and exact case/tracking.
 """
 
+    # Variety nudge — pin a random seed into the prompt so two runs of the
+    # same domain produce DIFFERENT archetype/palette/motif choices. Without
+    # this even with temperature=0.75 the model converges on the obvious
+    # default for each domain (coffee → warm_artisan, candle → quiet_luxury,
+    # etc.) and the user gets identical-feeling sites across regenerations.
+    import random as _rand
+    _variety_seed = _rand.randint(1000, 9999)
+
+    variety_block = f"""
+DIVERSITY DIRECTIVE (variety_seed={_variety_seed}):
+  This is one of MANY generations for {domain}-domain projects. The OBVIOUS
+  archetype for "{domain}" (e.g. coffee → warm_artisan + editorial_serif_minimal,
+  candle studio → quiet_luxury, finance → sharp_corporate) is BANNED for
+  this run. Pick a tasteful but LESS expected archetype that still suits
+  the brand. Lean on a 2026 archetype where it fits:
+  spatial_functional / dark_editorial / fluid_typographic / quiet_luxury /
+  dense_luxury / brutalist_mono / magazine_editorial / minimal_luxe.
+
+  Same applies to palette (don't go straight to espresso+cream for coffee),
+  signature motif, hero archetype, and font pairing. Two consecutive runs
+  for the same domain should produce VISIBLY DIFFERENT sites — not just
+  re-shuffled accent values. The goal: a designer commissioned 5 different
+  studios for the same brief would get 5 different directions; you should
+  feel like ONE of those studios, not the average of all five.
+
+BANNED DEFAULT — DO NOT PRODUCE THIS HERO RECIPE:
+  ✗ full-bleed Unsplash photo background (absolute inset-0 object-cover)
+  ✗ dark gradient scrim (from-black/75 via-black/35 to-transparent)
+  ✗ tiny uppercase tracking-widest eyebrow above H1
+  ✗ huge italic serif H1 in white
+  ✗ "min-h-screen flex items-center" wrapper
+
+  This exact recipe has shipped on the last 4 generations across coffee,
+  restaurant, school, and finance verticals — every site looks identical.
+  Pick a hero_archetype that produces a STRUCTURALLY different composition:
+    • split (text left + media right, light bg)        ← e-bike, product, B2B
+    • magazine (12-col grid, oversized H1, small img)  ← editorial brand
+    • product-showcase (device/product mockup focus)   ← consumer goods, audio
+    • typographic-hero (giant text, no photo)          ← agency, studio, manifesto
+    • bento (asymmetric tiled grid)                    ← saas, tools, dashboards
+    • editorial-offset (asymmetric, image bottom-right)← fashion, hospitality
+    • diagonal (clip-path split)                       ← bold, playful, sports
+  Use full-bleed-dark / cinematic-parallax ONLY when the brief explicitly
+  demands cinematic immersion (a luxury hotel, a film studio, a perfume
+  campaign) — never as the safe default.
+"""
+
+    cultural_block = ""
+    if cultural_atmosphere and cultural_atmosphere.strip():
+        cultural_block = f"""
+CULTURAL ATMOSPHERE (from research — use as PRIMARY input for palette + typography
++ signature_motif when country_or_region is set; ignore when "none — modern global"):
+{cultural_atmosphere.strip()}
+
+Apply the cultural atmosphere as follows:
+  • palette → use cultural_palette values, NOT generic premium-dark + gold
+  • typography_pairing → honor typographic_signature; only fall back to default
+    pairings when country_or_region is "none"
+  • signature_motif + decorative_pattern → pick from motif_inventory
+  • banned_generics from research are FORBIDDEN this run — do not produce them
+  • For non-"none" cultures, the design should read as authentically FROM that
+    place to a designer who knows it, not "AI-generated landing page with a
+    foreign name"
+
+"""
+
     return f"""Design the bespoke design system for this project.
 
 PROJECT DESCRIPTION: {description}
@@ -548,7 +908,7 @@ DOMAIN: {domain}
 LAYOUT TYPE: {layout_archetype}
 COPY TONE: {copy_tone or '(not specified — infer from domain)'}
 VIBE KEYWORDS: {vibe or '(not specified — infer from description)'}
-{archetype_block}
+{cultural_block}{archetype_block}{variety_block}
 {think_block}{feedback_block}
 Call the emit_design_system tool with the complete, internally consistent system."""
 
@@ -650,15 +1010,45 @@ def validate_design_system(design: dict, layout_archetype: str = "") -> list[str
 
     # Typography validation
     typo = design.get("typography") or {}
-    heading = (typo.get("heading_font") or "").strip().lower()
-    body = (typo.get("body_font") or "").strip().lower()
-    if heading and body and heading == body:
-        # Same family is OK ONLY if heading weight/style differs dramatically
-        h_style = (typo.get("heading_style") or "normal").lower()
-        if h_style != "italic":
+    pairing_id = (typo.get("font_pairing_id") or "").strip().lower()
+
+    # font_pairing_id is now the primary control. If present and known, the
+    # renderer enforces canonical heading/body fonts so the heading==body /
+    # Inter+Geist checks below don't matter (they'll get overridden anyway).
+    # If MISSING or UNKNOWN, flag it as a violation so the retry loop forces
+    # a pick from the curated 12-pair table.
+    if not pairing_id:
+        violations.append(
+            "typography.font_pairing_id is missing. Pick ONE of the 12 curated "
+            "pairings (e.g. 'fraunces-inter', 'bricolage-grotesque-solo', "
+            "'instrument-serif-instrument-sans')."
+        )
+    elif pairing_id not in _FONT_PAIRINGS:
+        valid_ids = sorted(_FONT_PAIRINGS.keys())
+        violations.append(
+            f"typography.font_pairing_id='{pairing_id}' is not in the curated list. "
+            f"Pick ONE of: {', '.join(valid_ids)}."
+        )
+
+    # Only run the heading==body / Inter+Geist drift checks when there's no
+    # valid pairing override (otherwise the renderer's _apply_font_pairing
+    # will replace whatever the Director put in heading_font / body_font).
+    if not pairing_id or pairing_id not in _FONT_PAIRINGS:
+        heading = (typo.get("heading_font") or "").strip().lower()
+        body = (typo.get("body_font") or "").strip().lower()
+        if heading and body and heading == body:
+            h_style = (typo.get("heading_style") or "normal").lower()
+            if h_style != "italic":
+                violations.append(
+                    f"Heading font equals body font ({heading}) and heading style is not italic. "
+                    "Pick a display font for headings OR set heading_style to 'italic' for clear contrast."
+                )
+        # Hard ban Inter+Geist outside the pairing system — it's the most
+        # recognizable AI-template tell of 2024-2025.
+        if heading == "inter" and body == "geist":
             violations.append(
-                f"Heading font equals body font ({heading}) and heading style is not italic. "
-                "Pick a display font for headings OR set heading_style to 'italic' for clear contrast."
+                "Inter + Geist is the #1 recognizable AI-template font pairing. "
+                "Pick a font_pairing_id from the curated list instead."
             )
 
     scale = typo.get("type_scale") or []
@@ -749,6 +1139,27 @@ def validate_design_system(design: dict, layout_archetype: str = "") -> list[str
             "(e.g. 'bg-gradient-to-t from-black/70 via-black/30 to-transparent')."
         )
 
+    # Hero ↔ image_composition coupling. Without this, the model picks a
+    # structural hero_archetype (magazine, split, etc.) and then defaults
+    # to dark_scrim + full_bleed for image_composition, which silently
+    # collapses the hero back into the banned full-bleed-dark recipe.
+    hero_arch = (design.get("hero_archetype") or "").strip().lower().replace("_", "-")
+    _DARK_HERO_ARCHETYPES = {"cinematic-parallax", "full-bleed-dark"}
+    if hero_arch and hero_arch not in _DARK_HERO_ARCHETYPES:
+        if ovp == "dark_scrim":
+            violations.append(
+                f"hero_archetype='{hero_arch}' forbids image_composition.overlay_pattern="
+                "'dark_scrim'. Use 'split_solid', 'card_lift', 'side_caption', or "
+                "'light_scrim' instead — dark_scrim is reserved for cinematic-parallax "
+                "and full-bleed-dark."
+            )
+        if icm == "full_bleed":
+            violations.append(
+                f"hero_archetype='{hero_arch}' forbids image_composition.image_container_mode="
+                "'full_bleed'. Use 'split_half', 'split_third', or 'centered' — full_bleed "
+                "is reserved for cinematic-parallax and full-bleed-dark."
+            )
+
     # Admin-only: required admin blocks + status palette contrast
     if is_admin:
         required_admin_blocks = [
@@ -822,7 +1233,11 @@ async def _call_claude(
     payload = {
         "model": _MODEL,
         "max_tokens": _MAX_TOKENS,
-        "temperature": 0.45,  # a bit of taste variance — not deterministic
+        "temperature": 0.75,  # high taste variance — same domain shouldn't
+                              # produce the same archetype/palette twice. Was
+                              # 0.45; that turned out too tight and made
+                              # coffee-shop runs converge on espresso+cream
+                              # warm_artisan over and over.
         "system": system,
         "messages": [{"role": "user", "content": user}],
         "tools": [_DESIGN_TOOL],
@@ -877,6 +1292,7 @@ async def build_design_system(
     layout_archetype: str,
     api_key: str,
     vibe: str = "",
+    cultural_atmosphere: str = "",
     websocket=None,
 ) -> Optional[dict]:
     """One Claude call that designs a bespoke, validated design system.
@@ -907,6 +1323,7 @@ async def build_design_system(
         copy_tone=copy_tone,
         layout_archetype=layout_archetype,
         vibe=vibe,
+        cultural_atmosphere=cultural_atmosphere,
     )
     design = await _call_claude(_SYSTEM_PROMPT, prompt, api_key, websocket=websocket)
     if not design:
@@ -940,6 +1357,7 @@ async def build_design_system(
         copy_tone=copy_tone,
         layout_archetype=layout_archetype,
         vibe=vibe,
+        cultural_atmosphere=cultural_atmosphere,
         retry_feedback=feedback,
     )
     design2 = await _call_claude(_SYSTEM_PROMPT, prompt_retry, api_key, websocket=websocket)
@@ -994,13 +1412,46 @@ def _render_css_variables(design: dict) -> str:
     return "\n".join(lines)
 
 
+def _apply_font_pairing(typography: dict) -> dict:
+    """Override Director's free-form font fields with canonical pairing values.
+
+    The Director picks a `font_pairing_id`; the renderer enforces the
+    canonical heading_font / body_font / *_url / *_weight from the curated
+    table. This guarantees:
+      • Inter+Geist drift is impossible (pairing not in table)
+      • Bad Google Fonts URLs (typos, missing axes) get fixed automatically
+      • Same `font_pairing_id` always produces the same CSS @import lines
+
+    If `font_pairing_id` is missing or unknown, the Director's free-form
+    values are kept unchanged (back-compat for cached designs).
+    """
+    pairing_id = (typography.get("font_pairing_id") or "").strip().lower()
+    if not pairing_id or pairing_id not in _FONT_PAIRINGS:
+        return typography
+    pairing = _FONT_PAIRINGS[pairing_id]
+    out = dict(typography)
+    out["heading_font"]     = pairing["heading_font"]
+    out["heading_font_url"] = pairing["heading_font_url"]
+    out["body_font"]        = pairing["body_font"]
+    out["body_font_url"]    = pairing["body_font_url"]
+    if not (typography.get("heading_weight") or "").strip():
+        out["heading_weight"] = pairing["heading_weight"]
+    if not (typography.get("body_weight") or "").strip():
+        out["body_weight"]    = pairing["body_weight"]
+    return out
+
+
 def _render_fonts(design: dict) -> str:
-    t = design.get("typography") or {}
+    t = _apply_font_pairing(design.get("typography") or {})
     scale = t.get("type_scale") or []
     body_size = scale[2] if len(scale) > 2 else 16
     hero_size = scale[-1] if scale else 72
     h2_size = scale[-3] if len(scale) > 3 else 40
+    pairing_line = ""
+    if t.get("font_pairing_id"):
+        pairing_line = f"font_pairing_id: {t.get('font_pairing_id')}\n"
     return (
+        f"{pairing_line}"
         f"heading: {t.get('heading_font', '')} ({t.get('heading_font_url', '')})\n"
         f"body: {t.get('body_font', '')} ({t.get('body_font_url', '')})\n"
         f"hero_size: {hero_size}px / 1.05 / -0.02em\n"
@@ -1024,7 +1475,7 @@ def _render_palette_notes(design: dict) -> str:
 
 
 def _render_typography_notes(design: dict) -> str:
-    t = design.get("typography") or {}
+    t = _apply_font_pairing(design.get("typography") or {})
     scale = t.get("type_scale") or []
     return (
         f"heading: {t.get('heading_font', '')} weight {t.get('heading_weight', '')}, style {t.get('heading_style', 'normal')}\n"
@@ -1150,6 +1601,20 @@ def _render_admin_ui_language(design: dict) -> str:
     )
 
 
+def _norm_archetype(value: str) -> str:
+    """Normalize archetype-style enum strings to the dashed form.
+
+    The wrapper-template lookup tables in project_generator.py key on dashed
+    names (e.g. 'cinematic-parallax', 'lift-and-shadow'). The Director
+    occasionally emits underscored variants from training memory despite the
+    schema description; this rewrites them so the wrapper match never
+    silently falls through to the generic default.
+    """
+    if not value:
+        return ""
+    return str(value).strip().replace("_", "-").lower()
+
+
 def _render_layout_blueprint(design: dict) -> str:
     card = design.get("card_language") or {}
     motion = design.get("motion_language") or {}
@@ -1160,8 +1625,8 @@ def _render_layout_blueprint(design: dict) -> str:
     return (
         f"design_dna_summary: {design.get('personality', '')} — archetype {design.get('archetype', '')}\n"
         f"\n"
-        f"hero_archetype: {design.get('hero_archetype', '')}\n"
-        f"features_archetype: {design.get('features_archetype', '')}\n"
+        f"hero_archetype: {_norm_archetype(design.get('hero_archetype', ''))}\n"
+        f"features_archetype: {_norm_archetype(design.get('features_archetype', ''))}\n"
         f"\n"
         f"card_language: radius {card.get('radius', '')} | border {card.get('border', '')} | shadow {card.get('shadow', '')} | padding {card.get('padding', '')}\n"
         f"  → {card.get('description', '')}\n"
@@ -1169,13 +1634,19 @@ def _render_layout_blueprint(design: dict) -> str:
         f"typography_pairing: {(design.get('typography') or {}).get('heading_font', '')} heading + {(design.get('typography') or {}).get('body_font', '')} body\n"
         f"\n"
         f"motion_language: enter {motion.get('enter', '')} | hover {motion.get('hover', '')} | scroll {motion.get('scroll', '')} | {motion.get('duration', '')} {motion.get('easing', '')}\n"
+        f"motion_signature: easing={motion.get('easing_signature', 'quint-out')} | "
+        f"durations(fast/base/slow)={(motion.get('durations') or {}).get('fast', '180ms')}/"
+        f"{(motion.get('durations') or {}).get('base', '550ms')}/"
+        f"{(motion.get('durations') or {}).get('slow', '1000ms')} | "
+        f"signature_transition={motion.get('signature_transition', 'minimal-precise')} | "
+        f"cursor_treatment={motion.get('cursor_treatment', 'default')}\n"
         f"\n"
         f"decorative_pattern: {design.get('decorative_pattern', '')}\n"
         f"signature_motif: {design.get('signature_motif', '')}\n"
-        f"border_radius_language: {design.get('border_radius_language', '')}\n"
-        f"color_application_strategy: {design.get('color_application_strategy', '')}\n"
-        f"hover_interaction_style: {design.get('hover_interaction_style', '')}\n"
-        f"spacing_rhythm: {spacing.get('rhythm', '')} (base {spacing.get('base', 8)}px, section_y {spacing.get('section_padding_y', 96)}px)\n"
+        f"border_radius_language: {_norm_archetype(design.get('border_radius_language', ''))}\n"
+        f"color_application_strategy: {_norm_archetype(design.get('color_application_strategy', ''))}\n"
+        f"hover_interaction_style: {_norm_archetype(design.get('hover_interaction_style', ''))}\n"
+        f"spacing_rhythm: {_norm_archetype(spacing.get('rhythm', ''))} (base {spacing.get('base', 8)}px, section_y {spacing.get('section_padding_y', 96)}px)\n"
         f"\n"
         f"section_rhythm:\n{rhythm_lines}\n"
         f"\n"
@@ -1210,8 +1681,11 @@ def _render_image_composition(design: dict) -> str:
         f"     BETWEEN the image and the text.",
         f"  2. Text over imagery MUST use '{text_color}'. Never the default "
         f"     text-foreground on an unmediated photograph.",
-        f"  3. Image container must be '{container}'. Never a half-width "
-        f"     image next to raw whitespace — read as a broken layout.",
+        f"  3. Image container must be '{container}'. "
+        f"     If split_half: ONE column holds the photo, the OTHER column holds "
+        f"     text/CTAs on bg-background — the text column IS the content, NOT whitespace. "
+        f"     Do NOT add a background image to the text column or the section wrapper. "
+        f"     If full_bleed: ONE image fills the section; do NOT also add a side panel image.",
         f"  4. Forms (reservation, contact, signup, booking, newsletter) "
         f"     use form_treatment='{form}'. NEVER glassmorphism over busy "
         f"     photography — inputs become unreadable.",

@@ -642,11 +642,12 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
             return updated.sort((a, b) => a.phase - b.phase);
           });
         }
-        // Update live chat status indicator
+        // Update live chat status indicator + push phase label into chat stream
         if (msg.status === 'active') {
           const PHASE_ICONS = { 1: '✓', 2: '📁', 3: '🔍', 4: '📐', 5: '✍️', 6: '🔨', 7: '🚀', 8: '🌐' };
           const icon = PHASE_ICONS[msg.phase] || '⚡';
           setAgentStatus({ label: `${icon} ${msg.title}`, subtext: msg.description || '' });
+          pushChat('system', `${icon} ${msg.title}`);
         } else if (msg.status === 'error') {
           setAgentStatus({ label: `❌ ${msg.title}`, subtext: msg.description || 'Failed' });
         }
@@ -684,13 +685,12 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       // the live URL in chat and feed it into deployUrl so the workspace
       // header / Publish modal pick it up too.
       if (msg.type === 'published') {
+        // setDeployUrl already surfaces the live URL in the workspace header
+        // (the "Open" / "Share" buttons), so a duplicate chat bubble just
+        // adds deployment chatter to a stream the user wants to keep focused
+        // on plan + statuses. Keep the URL in logs for debugging only.
         if (msg.vercelUrl) {
           setDeployUrl(msg.vercelUrl);
-          pushChat('system',
-            `🚀 **Your project is live!**\n` +
-            `🌐 **[${msg.vercelUrl}](${msg.vercelUrl})**\n` +
-            `_Going live now — give it about 30 seconds, then open the link._`
-          );
           pushLog(`[Published] ${msg.vercelUrl}`, 'system');
         }
         return;
@@ -903,8 +903,8 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
 
             // ── Detect persisted plan messages ────────────────────
             // Plan messages are saved as JSON: {"messageType": "plan", "planData":{...}}
-            // Python json.dumps adds spaces after colons, so check for the key only.
-            if (m.role === 'assistant' && content.trimStart().startsWith('{"messageType"')) {
+            // Role may be 'assistant' or 'agent' depending on the backend event type.
+            if ((m.role === 'assistant' || m.role === 'agent') && content.trimStart().startsWith('{"messageType"')) {
               try {
                 const parsed = JSON.parse(content);
                 if (parsed.messageType === 'plan' && parsed.planData) {
@@ -1315,7 +1315,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         if (sep !== -1) content = content.slice(sep + 2).trim();
       }
       // Detect persisted plan messages (same logic as chat_history WS handler)
-      if (m.role === 'assistant' && content.trimStart().startsWith('{"messageType"')) {
+      if ((m.role === 'assistant' || m.role === 'agent') && content.trimStart().startsWith('{"messageType"')) {
         try {
           const parsed = JSON.parse(content);
           if (parsed.messageType === 'plan' && parsed.planData) {

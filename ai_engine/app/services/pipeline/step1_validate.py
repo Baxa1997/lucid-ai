@@ -160,6 +160,7 @@ async def validate_inputs(
         token = None
         repo_url = None
         scratch_mode = False
+        branch: str | None = None
         # Tracks whether the repo we will operate on was created by our
         # platform (wizard flow). Used by the edit-mode router to pick the
         # direct-API single-call path vs the agentic SDK path.
@@ -309,9 +310,12 @@ async def validate_inputs(
                 return None
 
         # ── Branch ────────────────────────────────────────
-        branch = str(user.get("selected_branch", "main")).strip()
-        if not branch:
-            branch = "main"
+        # Follow-up mode (line 245) already set branch="staging" from chat_sessions.
+        # Why: Lucid generations live on staging; main is reserved for publish.
+        # If we let user.selected_branch overwrite, every follow-up edit lands on
+        # main → Vercel auto-deploys before the user clicks Publish.
+        if branch is None:
+            branch = str(user.get("selected_branch", "main")).strip() or "main"
 
         # ── Task string ───────────────────────────────────
         if not task or not task.strip():

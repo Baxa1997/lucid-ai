@@ -241,6 +241,7 @@ def _build_user_prompt(
     layout_archetype: str,
     vibe: str,
     section_ids: list[str],
+    cultural_atmosphere: str = "",
     violations: Optional[list[str]] = None,
 ) -> str:
     lines: list[str] = []
@@ -253,6 +254,22 @@ def _build_user_prompt(
     lines.append(f"VIBE: {vibe or '(use your judgment from domain)'}")
     lines.append(f"PROJECT_DESCRIPTION: {description[:800]}")
     lines.append("")
+    if cultural_atmosphere and cultural_atmosphere.strip() and "none" not in cultural_atmosphere[:80].lower():
+        lines.append("CULTURAL_ATMOSPHERE (apply when writing copy):")
+        lines.append(cultural_atmosphere.strip())
+        lines.append("")
+        lines.append("Cultural copy rules:")
+        lines.append("  • Use language_phrases as section labels / eyebrows / accent words.")
+        lines.append("    Keep them in the source language — DO NOT translate.")
+        lines.append("    Example: 'Antipasti / Primi / Secondi / Dolci' as menu sections,")
+        lines.append("    'La Famiglia' as About header, 'Benvenuti' as welcome eyebrow.")
+        lines.append("  • Apply section_label_overrides — rename 'Menu' to 'La Carta',")
+        lines.append("    'Reservations' to 'Prenotazioni', etc. when a mapping exists.")
+        lines.append("  • Match cultural_voice_overlay tone — warm/familial/quiet/precise per culture.")
+        lines.append("  • CTAs may include a culturally-flavored phrase ('Prenota un Tavolo'")
+        lines.append("    rather than 'Reserve a Table') when appropriate.")
+        lines.append("  • Microcopy may include source-language honorifics or interjections.")
+        lines.append("")
     if section_ids:
         lines.append(
             "SECTIONS TO COVER (one copy block per id, in this order):"
@@ -519,6 +536,7 @@ async def build_copy_deck(
     section_ids: list[str],
     api_key: str,
     vibe: str = "",
+    cultural_atmosphere: str = "",
     websocket=None,
     user_id: str | None = None,
 ) -> Optional[dict]:
@@ -537,6 +555,7 @@ async def build_copy_deck(
         layout_archetype=layout_archetype,
         vibe=vibe,
         section_ids=section_ids or [],
+        cultural_atmosphere=cultural_atmosphere,
     )
 
     # Attempt 1
@@ -571,6 +590,7 @@ async def build_copy_deck(
         layout_archetype=layout_archetype,
         vibe=vibe,
         section_ids=section_ids or [],
+        cultural_atmosphere=cultural_atmosphere,
         violations=violations,
     )
     try:

@@ -25,6 +25,20 @@ def _slugify_repo(repo: str) -> str:
     return s[:100] or "lucid-project"
 
 
+def _canonical_alias(project_data: dict) -> str | None:
+    """Pick the canonical *.vercel.app hostname Vercel actually serves.
+
+    For projects whose slug exceeds Vercel's hostname budget (~35 chars once
+    the team suffix is appended), Vercel truncates the assigned alias —
+    so `f"{slug}.vercel.app"` 404s. The real alias lives in
+    targets.production.alias. We pick the shortest plain *.vercel.app entry
+    (skipping git-branch and team-scoped variants).
+    """
+    aliases = ((project_data.get("targets") or {}).get("production") or {}).get("alias") or []
+    plain = [a for a in aliases if a.endswith(".vercel.app") and "-git-" not in a and "-projects." not in a]
+    return min(plain, key=len) if plain else None
+
+
 async def create_vercel_project(
     *,
     owner: str,
@@ -163,8 +177,8 @@ async def create_vercel_project(
             if deploy.status_code in (200, 201, 202):
                 dep_id = deploy.json().get("id", "?")
                 logger.info(
-                    "Triggered Vercel deploy for %s (deployment=%s) → %s",
-                    project_slug, dep_id, predicted_url,
+                    "Triggered Vercel deploy for %s (deployment=%s)",
+                    project_slug, dep_id,
                 )
             else:
                 # Project exists, deploy failed — log but still return URL,
@@ -173,6 +187,24 @@ async def create_vercel_project(
                     "Vercel deploy trigger failed (%d): %s",
                     deploy.status_code, deploy.text[:300],
                 )
+
+            # Re-fetch the project so we read the assigned alias post-deploy.
+            # `_proj` from the create/lookup above might have an empty
+            # targets.production.alias for fresh projects; after triggering
+            # the deploy Vercel publishes the canonical hostname.
+            try:
+                refreshed = await client.get(
+                    f"{_VERCEL_API}/v9/projects/{project_slug}{qs}",
+                    headers=headers,
+                )
+                if refreshed.status_code == 200:
+                    canonical = _canonical_alias(refreshed.json())
+                    if canonical:
+                        logger.info("Resolved canonical Vercel URL: https://%s", canonical)
+                        return f"https://{canonical}"
+            except Exception as al_exc:
+                logger.debug("Alias refresh failed (using predicted URL): %s", al_exc)
+
             return predicted_url
     except Exception as exc:
         logger.warning("Vercel API error (non-fatal): %s", exc)

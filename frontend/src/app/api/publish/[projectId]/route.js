@@ -178,7 +178,12 @@ export async function POST(req, { params }) {
       // SHA we wanted. Other 4xx/5xx is a real failure.
       if (!createRes.ok && createRes.status !== 422) {
         const txt = await createRes.text().catch(() => '');
-        throw new Error(`Failed to create main branch: ${createRes.status} ${txt.slice(0, 150)}`);
+        // Include owner/repo/sha in the error so we can triage 404s without
+        // having to repro — bare "404 Not Found" hides which side broke.
+        throw new Error(
+          `Failed to create main on ${owner}/${repo} from ${sourceBranch}@${stagingSha.slice(0, 8)}: ` +
+          `${createRes.status} ${txt.slice(0, 150)}`
+        );
       }
     };
 
@@ -214,15 +219,28 @@ export async function POST(req, { params }) {
     // Vercel's webhook doesn't fire reliably for our flow because we push
     // to main *before* the project link, so we trigger deploys explicitly.
     const vercelToken = process.env.VERCEL_TOKEN;
-    let predictedVercelUrl = session.vercel_url || null;
+    let resolvedVercelUrl = null;
     if (vercelToken) {
+      const teamId = process.env.VERCEL_TEAM_ID || '';
       const projectSlug = repo.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 50);
-      if (!predictedVercelUrl) {
-        predictedVercelUrl = `https://${projectSlug}.vercel.app`;
+
+      // Resolve the actual canonical *.vercel.app URL by fetching the project
+      // record and reading targets.production.alias. Vercel truncates hostnames
+      // when the slug + team suffix would exceed its DNS limits (~35-char cap),
+      // so naively predicting `${slug}.vercel.app` 404s for long repo names.
+      resolvedVercelUrl = await resolveVercelProductionUrl({
+        token: vercelToken, teamId, projectSlug,
+      });
+
+      // Fallback chain: prefer freshly-resolved alias, then whatever was saved
+      // on a prior publish, finally a best-guess prediction (last resort, may 404).
+      if (!resolvedVercelUrl) {
+        resolvedVercelUrl = session.vercel_url || `https://${projectSlug}.vercel.app`;
       }
+
       ensureVercelProject({
         token: vercelToken,
-        teamId: process.env.VERCEL_TEAM_ID || '',
+        teamId,
         projectSlug,
         owner,
         repo,
@@ -238,7 +256,7 @@ export async function POST(req, { params }) {
           user_id: ctx.userId,
           project_id: projectId,
           repo_url: session.platform_repo_url,
-          deploy_url: predictedVercelUrl,
+          deploy_url: resolvedVercelUrl,
           deploy_method: 'vercel',
           status: 'deployed',
           deployed_at: new Date().toISOString(),
@@ -246,10 +264,12 @@ export async function POST(req, { params }) {
         { onConflict: 'user_id,project_id' }
       );
 
-    if (predictedVercelUrl && !session.vercel_url) {
+    // Always overwrite the saved URL with the resolved canonical one — earlier
+    // publishes may have stored a wrongly-predicted URL that 404s.
+    if (resolvedVercelUrl && resolvedVercelUrl !== session.vercel_url) {
       await supabase
         .from('chat_sessions')
-        .update({ vercel_url: predictedVercelUrl })
+        .update({ vercel_url: resolvedVercelUrl })
         .eq('user_id', ctx.userId)
         .eq('project_id', projectId);
     }
@@ -257,7 +277,7 @@ export async function POST(req, { params }) {
     return NextResponse.json({
       ok: true,
       repoUrl: session.platform_repo_url,
-      vercelUrl: predictedVercelUrl,
+      vercelUrl: resolvedVercelUrl,
       visibility,
       message: 'Published! Your code is live on main. Vercel is building in the background — check back in a minute.',
     });
@@ -267,6 +287,38 @@ export async function POST(req, { params }) {
       { error: err.message || 'Publish failed' },
       { status: 502 }
     );
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+//  Resolve the canonical production URL Vercel actually serves
+//
+//  For projects whose slug exceeds Vercel's hostname budget (~35 chars once
+//  the team suffix is appended), Vercel truncates the assigned alias. The
+//  truncation rules aren't public, so we read the real alias from the project
+//  record instead of trying to replicate them. Returns null when the project
+//  doesn't exist yet OR has no production alias assigned (fresh project,
+//  pre-first-deploy).
+// ─────────────────────────────────────────────────────────
+async function resolveVercelProductionUrl({ token, teamId, projectSlug }) {
+  const qs = teamId ? `?teamId=${teamId}` : '';
+  try {
+    const res = await fetch(`${VERCEL_API}/v9/projects/${projectSlug}${qs}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    const proj = await res.json();
+    const aliases = proj?.targets?.production?.alias || [];
+    // Filter to plain *.vercel.app entries (skip git-branch and team-scoped
+    // aliases). Pick the shortest — that's Vercel's canonical assignment.
+    const canonical = aliases
+      .filter((a) => /\.vercel\.app$/.test(a) && !a.includes('-git-') && !a.includes('-projects.'))
+      .sort((a, b) => a.length - b.length)[0];
+    return canonical ? `https://${canonical}` : null;
+  } catch (e) {
+    console.warn('[publish] resolveVercelProductionUrl failed:', e.message);
+    return null;
   }
 }
 

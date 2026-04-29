@@ -373,8 +373,220 @@ def fix_banned_icons(workspace_path: str) -> list[str]:
     
     if fixed_files:
         logger.info("Banned icon fixer fixed %d files", len(fixed_files))
-    
+
     return fixed_files
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  FIXER 2b — Missing Icons.foo Object-Key Auto-Adder         ║
+# ╚══════════════════════════════════════════════════════════════╝
+# Catches the bug class:
+#   ContactSection.jsx imports `import { Icons } from "@/config/icons"` then
+#   renders `<Icons.instagram />`, but icons.js never declared an `instagram`
+#   key. React resolves `Icons.instagram` to `undefined` and crashes with
+#   "Element type is invalid: ... got: undefined".
+#
+# The fix: scan src/ for Icons.<key> references, diff against the actual
+# Icons object, and append the missing keys (with matching lucide-react
+# imports) to icons.js. Idempotent — safe to run multiple times.
+
+# Common lucide icon name lookup. Keys are the lowercase tokens AI tools
+# tend to write (Icons.instagram, Icons.share2, etc.); values are the
+# PascalCase lucide-react component names.
+_ICON_NAME_LOOKUP: dict[str, str] = {
+    # Social / brand
+    "instagram": "Instagram", "twitter": "Twitter", "facebook": "Facebook",
+    "linkedin": "Linkedin", "youtube": "Youtube", "github": "Github",
+    "twitch": "Twitch", "dribbble": "Dribbble", "figma": "Figma",
+    "slack": "Slack", "discord": "MessageSquare", "tiktok": "Music2",
+    # Contact
+    "mail": "Mail", "email": "Mail", "phone": "Phone", "telephone": "Phone",
+    "mappin": "MapPin", "map": "Map", "location": "MapPin",
+    "globe": "Globe", "world": "Globe", "website": "Globe",
+    "share": "Share", "share2": "Share2",
+    "message": "MessageCircle", "messagecircle": "MessageCircle",
+    "messagesquare": "MessageSquare", "send": "Send", "chat": "MessageCircle",
+    # Common UI
+    "check": "Check", "checkcircle": "CheckCircle", "x": "X", "close": "X",
+    "menu": "Menu", "search": "Search", "filter": "Filter",
+    "plus": "Plus", "minus": "Minus", "edit": "Edit", "trash": "Trash2",
+    "arrowright": "ArrowRight", "arrowleft": "ArrowLeft",
+    "arrowup": "ArrowUp", "arrowdown": "ArrowDown",
+    "chevronright": "ChevronRight", "chevronleft": "ChevronLeft",
+    "chevronup": "ChevronUp", "chevrondown": "ChevronDown",
+    # Domain
+    "home": "Home", "user": "User", "users": "Users", "settings": "Settings",
+    "logout": "LogOut", "login": "LogIn", "lock": "Lock", "unlock": "Unlock",
+    "calendar": "Calendar", "clock": "Clock", "star": "Star", "heart": "Heart",
+    "bookmark": "Bookmark", "tag": "Tag", "image": "Image", "camera": "Camera",
+    "play": "Play", "pause": "Pause", "video": "Video", "music": "Music",
+    "shoppingcart": "ShoppingCart", "shoppingbag": "ShoppingBag",
+    "creditcard": "CreditCard", "wallet": "Wallet",
+    "alertcircle": "AlertCircle", "info": "Info", "bell": "Bell",
+    "loader": "Loader2", "loader2": "Loader2", "spinner": "Loader2",
+    "morevertical": "MoreVertical", "morehorizontal": "MoreHorizontal",
+    "external": "ExternalLink", "externallink": "ExternalLink",
+    "download": "Download", "upload": "Upload", "copy": "Copy",
+    "eye": "Eye", "eyeoff": "EyeOff",
+    "coffee": "Coffee", "leaf": "Leaf", "flame": "Flame",
+}
+
+# Where the project's Icons object lives. Try each path until one resolves.
+_ICONS_FILE_CANDIDATES = (
+    "src/config/icons.js",
+    "src/config/icons.jsx",
+    "src/config/icons.ts",
+    "src/config/icons.tsx",
+    "src/lib/icons.js",
+    "src/lib/icons.jsx",
+)
+
+# Match `Icons.<key>` references in JSX/JS. Captures the key.
+_ICONS_REF_RE = re.compile(r"\bIcons\.([A-Za-z][A-Za-z0-9]*)\b")
+
+# Find the lucide-react `import { ... } from "lucide-react"` in the icons file
+_ICONS_LUCIDE_IMPORT_RE = re.compile(
+    r"import\s*\{\s*([^}]+?)\s*\}\s*from\s*[\"']lucide-react[\"']",
+    re.DOTALL,
+)
+
+# Find the `export const Icons = {` … `}` block in the icons file
+_ICONS_OBJECT_RE = re.compile(
+    r"export\s+const\s+Icons\s*=\s*\{(.*?)\}\s*;?",
+    re.DOTALL,
+)
+
+
+def _resolve_icons_file(workspace_path: str) -> Optional[str]:
+    for rel in _ICONS_FILE_CANDIDATES:
+        p = os.path.join(workspace_path, rel)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def _existing_icons_keys(icons_src: str) -> set[str]:
+    """Return the set of keys currently declared in `export const Icons = { ... }`."""
+    m = _ICONS_OBJECT_RE.search(icons_src)
+    if not m:
+        return set()
+    body = m.group(1)
+    # Match `key: Component,` or `key,` shorthand
+    keys = re.findall(r"([A-Za-z][A-Za-z0-9]*)\s*[:,]", body)
+    return set(keys)
+
+
+def _existing_lucide_imports(icons_src: str) -> set[str]:
+    """Return the set of lucide-react component names currently imported."""
+    out: set[str] = set()
+    for m in _ICONS_LUCIDE_IMPORT_RE.finditer(icons_src):
+        for tok in m.group(1).split(","):
+            name = tok.strip().split(" as ")[0].strip()
+            if name:
+                out.add(name)
+    return out
+
+
+def _collect_icons_refs(workspace_path: str) -> set[str]:
+    """Walk the project, return the set of all `Icons.<key>` keys referenced."""
+    src_dir = os.path.join(workspace_path, "src")
+    if not os.path.isdir(src_dir):
+        src_dir = workspace_path
+    refs: set[str] = set()
+    for root, dirs, files in os.walk(src_dir):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for fname in files:
+            if os.path.splitext(fname)[1].lower() not in _JSX_EXTENSIONS:
+                continue
+            try:
+                with open(os.path.join(root, fname), "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except Exception:
+                continue
+            # Only count refs in files that import the Icons object
+            if "@/config/icons" not in content and "from '../config/icons'" not in content:
+                continue
+            for m in _ICONS_REF_RE.finditer(content):
+                refs.add(m.group(1))
+    return refs
+
+
+def fix_missing_icons_object_keys(workspace_path: str) -> list[str]:
+    """Add missing keys to `src/config/icons.js` so `Icons.foo` references resolve.
+
+    Returns a list with the icons.js path if it was patched (else empty).
+    Why: AI code-gen frequently writes `<Icons.instagram />` without remembering
+    to add `instagram: Instagram` to the shared icons object — at runtime that
+    produces "Element type is invalid: ... got: undefined" and crashes the page.
+    """
+    icons_path = _resolve_icons_file(workspace_path)
+    if not icons_path:
+        return []
+
+    try:
+        with open(icons_path, "r", encoding="utf-8", errors="replace") as f:
+            icons_src = f.read()
+    except Exception as exc:
+        logger.warning("Could not read icons file %s: %s", icons_path, exc)
+        return []
+
+    declared = _existing_icons_keys(icons_src)
+    referenced = _collect_icons_refs(workspace_path)
+    missing = sorted(referenced - declared)
+    if not missing:
+        return []
+
+    # Map each missing key to a lucide component, skipping unknowns
+    additions: list[tuple[str, str]] = []   # (icons_key, lucide_component)
+    for key in missing:
+        comp = _ICON_NAME_LOOKUP.get(key.lower())
+        if comp:
+            additions.append((key, comp))
+    if not additions:
+        logger.info("fix_missing_icons_object_keys: %d unknown keys, no fix applied: %s", len(missing), missing)
+        return []
+
+    # 1. Update the lucide-react import line — add any components not yet imported.
+    existing_lucide = _existing_lucide_imports(icons_src)
+    new_components = sorted({c for _, c in additions if c not in existing_lucide})
+    if new_components:
+        lucide_match = _ICONS_LUCIDE_IMPORT_RE.search(icons_src)
+        if lucide_match:
+            existing_block = lucide_match.group(1).strip().rstrip(",")
+            merged = existing_block + ",\n  " + ",\n  ".join(new_components)
+            new_import = f"import {{\n  {merged}\n}} from \"lucide-react\""
+            icons_src = icons_src[:lucide_match.start()] + new_import + icons_src[lucide_match.end():]
+        else:
+            # No existing lucide import — prepend one
+            new_import = f"import {{ {', '.join(new_components)} }} from \"lucide-react\";\n\n"
+            icons_src = new_import + icons_src
+
+    # 2. Append missing keys to the Icons object. Insert before the closing brace.
+    obj_match = _ICONS_OBJECT_RE.search(icons_src)
+    if not obj_match:
+        logger.warning("fix_missing_icons_object_keys: no Icons object found in %s", icons_path)
+        return []
+    obj_body = obj_match.group(1).rstrip().rstrip(",")
+    additions_text = ",\n  ".join(f"{key}: {comp}" for key, comp in additions)
+    sep = ",\n  " if obj_body.strip() else "  "
+    new_body = f"{obj_body}{sep}{additions_text},\n"
+    new_obj = f"export const Icons = {{\n  {new_body.lstrip()}}};"
+    # Replace the matched span
+    icons_src = icons_src[:obj_match.start()] + new_obj + icons_src[obj_match.end():]
+
+    try:
+        with open(icons_path, "w", encoding="utf-8") as f:
+            f.write(icons_src)
+    except Exception as exc:
+        logger.warning("Could not write icons file %s: %s", icons_path, exc)
+        return []
+
+    added_keys = [k for k, _ in additions]
+    logger.info(
+        "fix_missing_icons_object_keys: added %d keys to %s — %s",
+        len(added_keys), icons_path, added_keys,
+    )
+    return [os.path.relpath(icons_path, workspace_path)]
 
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -1028,9 +1240,26 @@ _JSX_TEXT_RE = re.compile(r">((?:[^<]|\n)*?)<", re.DOTALL)
 
 def _escape_jsx_text(match: re.Match) -> str:
     text = match.group(1)
-    # Skip if this contains a JSX expression {..} — escaping inside JS breaks the code.
-    # e.g. {item.id === 'active' ? 'Yes' : 'No'} must NOT be touched.
-    if "{" in text:
+    # Skip when ANY JSX/JS-expression markers are present. Previous version
+    # only checked for `{` which left a class of bugs:
+    #
+    #   {isSubmitting ? (
+    #     <>Loading…</>
+    #   ) : (
+    #     'Reserve'   ← regex captures `>...</>...) : (...'Reserve'...)}...<`
+    #   )}
+    #
+    # The captured slice has no `{` (only `}`) but it IS the else-branch of a
+    # JS ternary, so escaping `'` to `&apos;` produced invalid JS and broke
+    # `next build` with "Expression expected".
+    #
+    # Skip if any of these are present:
+    #   • `{` `}` — JSX expression boundaries
+    #   • `(` `)` — JS expression continuation across newlines (ternary arms,
+    #              fragment-wrapped JSX, conditional renders)
+    #   • `=>`    — inline arrow function
+    #   • `\`...\``  — template-literal continuation
+    if any(c in text for c in "{}()`") or "=>" in text:
         return match.group(0)
     text = text.replace("'", "&apos;")
     text = text.replace('"', "&quot;")
@@ -1071,6 +1300,115 @@ def fix_unescaped_entities(workspace_path: str) -> list[str]:
 
     if fixed_files:
         logger.info("Unescaped entities fixer fixed %d file(s)", len(fixed_files))
+    return fixed_files
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  FIXER 5b — Reverse mis-escaped HTML entities in JS context ║
+# ╚══════════════════════════════════════════════════════════════╝
+# Recovery layer for projects produced by an older fix_unescaped_entities
+# that escaped `'`/`"` inside JS expression context (ternary branches,
+# function args, return statements). Symptom: `next build` fails with
+# "Expression expected" pointing at `&apos;` or `&quot;` in JS code.
+#
+# This finds `&apos;`/`&quot;` that appear OUTSIDE a JSX tag's text content
+# (i.e. either between `(` and `)` of a JS expression, after `return`, or
+# after `=` `,` `:`) and reverses them back to bare quotes.
+
+# Match a PAIR of escaped quotes that look like a string literal — the
+# same entity name on both sides (apos…apos or quot…quot), no newlines or
+# unrelated entities inside. This is far more reliable than scanning every
+# entity in isolation: when the pair is in JS expression context (e.g.
+# `cond ? &apos;yes&apos; : &apos;no&apos;`), the opener's preceding
+# operator (`?`, `:`) classifies the WHOLE pair, not just one side.
+_ESCAPED_STRING_PAIR_RE = re.compile(
+    r"&(apos|quot);([^&\n]*?)&\1;",
+    re.DOTALL,
+)
+
+# JS-expression operators. If the LAST non-whitespace char immediately
+# BEFORE the opening entity is one of these, the pair is a JS string
+# literal (ternary branch, fn arg, attribute, logical-op operand, etc.).
+# We strip prior HTML entities first so e.g. `It&apos;s ` doesn't leave a
+# bare `;` that fools the test.
+_JS_TAIL_OPERATORS = frozenset("():,?=|&;")
+_ENTITY_STRIP_RE = re.compile(r"&[a-zA-Z]+;|&#\d+;|&#x[0-9a-fA-F]+;")
+
+
+def fix_mis_escaped_entities_in_js(workspace_path: str) -> list[str]:
+    """Reverse `&apos;`/`&quot;` that ended up inside JS expression context.
+
+    The previous fix_unescaped_entities ran with a too-loose JSX-text regex
+    that captured ternary else-branches like `) : ('text')` and wrote
+    `&apos;text&apos;` into the JS source. `next build` then chokes with
+    'Expression expected'.
+
+    Walks each .jsx/.tsx file, finds every `&apos;`/`&quot;`, examines the
+    preceding 30 chars to decide if the entity is in JS context, and reverts
+    only those occurrences. JSX text node entities are left alone.
+    """
+    fixed_files = []
+    src_dir = os.path.join(workspace_path, "src")
+    if not os.path.isdir(src_dir):
+        src_dir = workspace_path
+
+    for root, dirs, files in os.walk(src_dir):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for fname in files:
+            if os.path.splitext(fname)[1].lower() not in {".jsx", ".tsx"}:
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                    original = f.read()
+            except Exception:
+                continue
+            if "&apos;" not in original and "&quot;" not in original:
+                continue
+
+            # Iterate over PAIRS of escaped entities. For each pair, look at
+            # the last non-whitespace char immediately before the opener:
+            #   • JS operator → the pair is a JS string literal → revert both
+            #   • alphanumeric → the pair is two separate JSX-text entities
+            #     (e.g. `It&apos;s a day, isn&apos;t`) → keep both
+            #
+            # Why pairs work where single-entity scanning failed:
+            #   `cond ? (&apos;Reserve&apos;)`  ← opener is preceded by `(` (JS)
+            #   `It&apos;s isn&apos;t`         ← opener `&apos;` after `t` (text)
+            # The single-entity scan correctly classified the OPENER but
+            # mis-classified the CLOSER (its preceding char is the last
+            # letter of the string content, e.g. `e` in `Reserve`).
+            changed = False
+            new_chunks: list[str] = []
+            cursor = 0
+            for m in _ESCAPED_STRING_PAIR_RE.finditer(original):
+                # Walk back up to 200 chars to find the most recent `>`
+                window = original[max(0, m.start() - 200):m.start()]
+                last_gt = window.rfind(">")
+                gap = window[last_gt + 1:] if last_gt >= 0 else window
+                gap_clean = _ENTITY_STRIP_RE.sub("", gap).rstrip()
+                in_js_ctx = bool(gap_clean) and gap_clean[-1] in _JS_TAIL_OPERATORS
+                if in_js_ctx:
+                    quote = "'" if m.group(1) == "apos" else '"'
+                    new_chunks.append(original[cursor:m.start()])
+                    new_chunks.append(f"{quote}{m.group(2)}{quote}")
+                    cursor = m.end()
+                    changed = True
+            if changed:
+                new_chunks.append(original[cursor:])
+                fixed = "".join(new_chunks)
+                try:
+                    with open(fpath, "w", encoding="utf-8") as f:
+                        f.write(fixed)
+                    fixed_files.append(os.path.relpath(fpath, workspace_path))
+                except Exception as e:
+                    logger.warning("fix_mis_escaped_entities_in_js: write failed %s: %s", fpath, e)
+
+    if fixed_files:
+        logger.info(
+            "fix_mis_escaped_entities_in_js: reverted JS-context entities in %d file(s)",
+            len(fixed_files),
+        )
     return fixed_files
 
 
@@ -1755,6 +2093,7 @@ async def run_all_fixers(
         "use_client_fixed": [],
         "config_stripped": [],
         "icons_fixed": [],
+        "icons_object_keys_fixed": [],
         "stubs_created": [],
         "route_conflicts_fixed": [],
         "import_mismatches_fixed": [],
@@ -1806,7 +2145,22 @@ async def run_all_fixers(
             await _ws_send(websocket, "progress", f"✅ Fixed banned icons in {len(fixed)} files")
     except Exception as e:
         logger.warning("Banned icon fixer failed (non-fatal): %s", e)
-    
+
+    # 2b. Add missing keys to the shared Icons object so `Icons.foo` references
+    #     resolve at runtime. Catches the "Element type is invalid: ... got
+    #     undefined" crash that fires when AI code-gen writes <Icons.instagram>
+    #     without first declaring `instagram: Instagram` in icons.js.
+    try:
+        fixed = fix_missing_icons_object_keys(workspace_path)
+        results["icons_object_keys_fixed"] = fixed
+        if fixed:
+            await _ws_send(
+                websocket, "progress",
+                f"✅ Added missing keys to {fixed[0]} (prevents Icons.foo undefined crashes)",
+            )
+    except Exception as e:
+        logger.warning("Icons-object key fixer failed (non-fatal): %s", e)
+
     # 3. Fix named-import / default-export mismatches (import { X } where X is a default export)
     try:
         fixed = fix_named_import_default_export_mismatch(workspace_path)
@@ -1867,6 +2221,23 @@ async def run_all_fixers(
     except Exception as e:
         logger.warning("Attribute-entity fixer failed (non-fatal): %s", e)
 
+    # 4c. Recover any &apos;/&quot; that an earlier run mis-escaped INSIDE
+    #     JS expression context (ternary branches, function args). Symptom:
+    #     `next build` fails with "Expression expected" pointing at &apos;
+    #     in something like `cond ? (<Foo/>) : (&apos;text&apos;)`.
+    #     Must run before fix_unescaped_entities so the same-pattern doesn't
+    #     get re-broken by the same call.
+    try:
+        fixed = fix_mis_escaped_entities_in_js(workspace_path)
+        results["mis_escaped_entities_reverted"] = fixed
+        if fixed:
+            await _ws_send(
+                websocket, "progress",
+                f"🔧 Reverted mis-escaped entities in JS context in {len(fixed)} file(s)",
+            )
+    except Exception as e:
+        logger.warning("Mis-escaped entities recovery failed (non-fatal): %s", e)
+
     # 5. Fix unescaped JSX entities (' and " in text nodes → &apos; / &quot;)
     try:
         fixed = fix_unescaped_entities(workspace_path)
@@ -1909,6 +2280,7 @@ async def run_all_fixers(
         len(results["config_stripped"])
         + len(results["use_client_fixed"])
         + len(results["icons_fixed"])
+        + len(results.get("icons_object_keys_fixed", []))
         + len(results["stubs_created"])
         + len(results["route_conflicts_fixed"])
         + len(results["import_mismatches_fixed"])
@@ -1920,11 +2292,12 @@ async def run_all_fixers(
     if results["total_fixes"] > 0:
         logger.info(
             "Post-generation fixers: %d total fixes "
-            "(config_stripped=%d, use_client=%d, icons=%d, stubs=%d, route_conflicts=%d)",
+            "(config_stripped=%d, use_client=%d, icons=%d, icons_keys=%d, stubs=%d, route_conflicts=%d)",
             results["total_fixes"],
             len(results["config_stripped"]),
             len(results["use_client_fixed"]),
             len(results["icons_fixed"]),
+            len(results.get("icons_object_keys_fixed", [])),
             len(results["stubs_created"]),
             len(results["route_conflicts_fixed"]),
         )

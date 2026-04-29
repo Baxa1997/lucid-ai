@@ -15,7 +15,7 @@ services:
       - PYTHON_BACKEND_URL=http://ai_engine:8000
       - AI_SERVICE_URL=http://ai_engine:8000
       - AI_SERVICE_WS_URL=ws://ai_engine:8000
-      - NEXT_PUBLIC_AGENT_WS_URL=ws://localhost:8000/api/v1/ws
+      - NEXT_PUBLIC_AGENT_WS_URL=wss://lucid.shopsready.com/api/v1/ws
       - INTERNAL_API_KEY=${INTERNAL_API_KEY}
       - SESSION_SECRET=${SESSION_SECRET}
       - AUTH_SECRET=${AUTH_SECRET}

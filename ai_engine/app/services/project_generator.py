@@ -16,9 +16,10 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
 import subprocess
-from typing import Any, Optional
+from typing import Optional
 
 logger = logging.getLogger("lucid.project_generator")
 
@@ -167,6 +168,115 @@ async def _emit_file_writes(
             return
 
 
+# Domain keyword → evocative design-system name. Used by
+# _generate_design_system_name as the LAST cosmetic fallback when neither
+# the schema builder nor the Design Director produced a name. Module-level
+# so it isn't rebuilt on every call.
+_DOMAIN_DESIGN_NAMES: dict[str, str] = {
+    "library": "Living Archive",
+    "archive": "Paper & Ink",
+    "education": "Scholar Studio",
+    "school": "Campus Canvas",
+    "university": "Campus Canvas",
+    "course": "Scholar Studio",
+    "restaurant": "Saffron Kitchen",
+    "food": "Harvest Table",
+    "recipe": "Harvest Table",
+    "cafe": "Morning Ritual",
+    "coffee": "Morning Ritual",
+    "ecommerce": "Commerce Canvas",
+    "shop": "Merchant Studio",
+    "store": "Merchant Studio",
+    "market": "Merchant Studio",
+    "fashion": "Editorial Grid",
+    "clothing": "Editorial Grid",
+    "luxury": "Obsidian Atelier",
+    "premium": "Obsidian Atelier",
+    "brutalist": "Brutalist Canvas",
+    "portfolio": "Folio Black",
+    "agency": "Studio Noir",
+    "creative": "Void & Light",
+    "design": "Void & Light",
+    "saas": "Midnight Stack",
+    "software": "Midnight Stack",
+    "platform": "Midnight Stack",
+    "startup": "Launch Pad",
+    "analytics": "Data Horizon",
+    "data": "Data Horizon",
+    "dashboard": "Control Tower",
+    "admin": "Control Tower",
+    "healthcare": "Vital White",
+    "health": "Vital White",
+    "medical": "Clinical Blue",
+    "clinic": "Clinical Blue",
+    "finance": "Sterling Grid",
+    "fintech": "Sterling Grid",
+    "banking": "Vault Blue",
+    "invest": "Vault Blue",
+    "real_estate": "Urban Elevation",
+    "property": "Urban Elevation",
+    "real estate": "Urban Elevation",
+    "travel": "Horizon Atlas",
+    "trip": "Horizon Atlas",
+    "hotel": "Grand Welcome",
+    "fitness": "Kinetic Form",
+    "gym": "Kinetic Form",
+    "sport": "Kinetic Form",
+    "music": "Sonic Wave",
+    "audio": "Sonic Wave",
+    "podcast": "Sonic Wave",
+    "movie": "Cinematic Dark",
+    "video": "Cinematic Dark",
+    "film": "Cinematic Dark",
+    "blog": "Prose & Type",
+    "article": "Prose & Type",
+    "news": "Press Layout",
+    "media": "Press Layout",
+    "social": "Pulse Network",
+    "community": "Pulse Network",
+    "chat": "Pulse Network",
+    "booking": "Reserve & Go",
+    "appointment": "Reserve & Go",
+    "schedule": "Reserve & Go",
+    "hospitality": "Grand Welcome",
+    "tech": "Silicon Studio",
+    "developer": "Silicon Studio",
+    "api": "Silicon Studio",
+    "tool": "Silicon Studio",
+    "productivity": "Flow Studio",
+    "task": "Flow Studio",
+    "project": "Flow Studio",
+    "crm": "Relation Grid",
+    "hr": "Relation Grid",
+    "hiring": "Relation Grid",
+    "job": "Relation Grid",
+    "event": "Stage Light",
+    "concert": "Stage Light",
+    "ticket": "Stage Light",
+    "game": "Neon Arena",
+    "gaming": "Neon Arena",
+    "legal": "Charter Blue",
+    "law": "Charter Blue",
+    "logistics": "Route Zero",
+    "delivery": "Route Zero",
+    "shipping": "Route Zero",
+    "agriculture": "Root & Soil",
+    "farm": "Root & Soil",
+    "environment": "Green Grid",
+    "sustainability": "Green Grid",
+    "eco": "Green Grid",
+}
+
+# Generic last-resort design-system names — picked at random when even the
+# domain keyword search misses.
+_DESIGN_NAME_FALLBACKS: tuple[str, ...] = (
+    "Obsidian Canvas", "Minimal Grid", "Aurora Studio",
+    "Quantum Form", "Prism Layout", "Signal Studio",
+    "Apex Grid", "Lumen Form", "Contour Studio", "Slate Zero",
+    "Eclipse Form", "Polar Grid", "Meridian Studio", "Zenith Canvas",
+)
+
+
 def _generate_design_system_name(
     domain: str,
     heading_font: str,
@@ -181,112 +291,16 @@ def _generate_design_system_name(
     `description` for topic keywords so that even generic app_types like
     "landing_page" resolve to a meaningful name.
     """
-    # Domain → evocative name mapping
-    _domain_names = {
-        "library": "Living Archive",
-        "archive": "Paper & Ink",
-        "education": "Scholar Studio",
-        "school": "Campus Canvas",
-        "university": "Campus Canvas",
-        "course": "Scholar Studio",
-        "restaurant": "Saffron Kitchen",
-        "food": "Harvest Table",
-        "recipe": "Harvest Table",
-        "cafe": "Morning Ritual",
-        "coffee": "Morning Ritual",
-        "ecommerce": "Commerce Canvas",
-        "shop": "Merchant Studio",
-        "store": "Merchant Studio",
-        "market": "Merchant Studio",
-        "fashion": "Editorial Grid",
-        "clothing": "Editorial Grid",
-        "luxury": "Obsidian Atelier",
-        "premium": "Obsidian Atelier",
-        "brutalist": "Brutalist Canvas",
-        "portfolio": "Folio Black",
-        "agency": "Studio Noir",
-        "creative": "Void & Light",
-        "design": "Void & Light",
-        "saas": "Midnight Stack",
-        "software": "Midnight Stack",
-        "platform": "Midnight Stack",
-        "startup": "Launch Pad",
-        "analytics": "Data Horizon",
-        "data": "Data Horizon",
-        "dashboard": "Control Tower",
-        "admin": "Control Tower",
-        "healthcare": "Vital White",
-        "health": "Vital White",
-        "medical": "Clinical Blue",
-        "clinic": "Clinical Blue",
-        "finance": "Sterling Grid",
-        "fintech": "Sterling Grid",
-        "banking": "Vault Blue",
-        "invest": "Vault Blue",
-        "real_estate": "Urban Elevation",
-        "property": "Urban Elevation",
-        "real estate": "Urban Elevation",
-        "travel": "Horizon Atlas",
-        "trip": "Horizon Atlas",
-        "hotel": "Grand Welcome",
-        "fitness": "Kinetic Form",
-        "gym": "Kinetic Form",
-        "sport": "Kinetic Form",
-        "music": "Sonic Wave",
-        "audio": "Sonic Wave",
-        "podcast": "Sonic Wave",
-        "movie": "Cinematic Dark",
-        "video": "Cinematic Dark",
-        "film": "Cinematic Dark",
-        "blog": "Prose & Type",
-        "article": "Prose & Type",
-        "news": "Press Layout",
-        "media": "Press Layout",
-        "social": "Pulse Network",
-        "community": "Pulse Network",
-        "chat": "Pulse Network",
-        "booking": "Reserve & Go",
-        "appointment": "Reserve & Go",
-        "schedule": "Reserve & Go",
-        "hospitality": "Grand Welcome",
-        "tech": "Silicon Studio",
-        "developer": "Silicon Studio",
-        "api": "Silicon Studio",
-        "tool": "Silicon Studio",
-        "productivity": "Flow Studio",
-        "task": "Flow Studio",
-        "project": "Flow Studio",
-        "crm": "Relation Grid",
-        "hr": "Relation Grid",
-        "hiring": "Relation Grid",
-        "job": "Relation Grid",
-        "event": "Stage Light",
-        "concert": "Stage Light",
-        "ticket": "Stage Light",
-        "game": "Neon Arena",
-        "gaming": "Neon Arena",
-        "legal": "Charter Blue",
-        "law": "Charter Blue",
-        "logistics": "Route Zero",
-        "delivery": "Route Zero",
-        "shipping": "Route Zero",
-        "agriculture": "Root & Soil",
-        "farm": "Root & Soil",
-        "environment": "Green Grid",
-        "sustainability": "Green Grid",
-        "eco": "Green Grid",
-    }
-
     # Search in domain first, then fall through to description
     search_text = domain.lower()
-    for keyword, name in _domain_names.items():
+    for keyword, name in _DOMAIN_DESIGN_NAMES.items():
         if keyword in search_text:
             return name
 
     # Search the raw user description for stronger signal
     if description:
         desc_lower = description.lower()
-        for keyword, name in _domain_names.items():
+        for keyword, name in _DOMAIN_DESIGN_NAMES.items():
             if keyword in desc_lower:
                 return name
 
@@ -297,8 +311,7 @@ def _generate_design_system_name(
 
     # Color-vibe fallback — map HSL hue range to evocative names
     if primary_hsl:
-        import re as _re
-        hue_match = _re.search(r"(\d+(?:\.\d+)?)\s*(?:deg|°)?", primary_hsl)
+        hue_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:deg|°)?", primary_hsl)
         if hue_match:
             hue = float(hue_match.group(1))
             if hue < 30 or hue >= 330:
@@ -315,14 +328,7 @@ def _generate_design_system_name(
                 return "Violet Studio"
 
     # Last resort: pick randomly so repeated runs produce different names
-    import random as _random
-    _fallbacks = [
-        "Obsidian Canvas", "Minimal Grid", "Aurora Studio",
-        "Quantum Form", "Prism Layout", "Signal Studio",
-        "Apex Grid", "Lumen Form", "Contour Studio", "Slate Zero",
-        "Eclipse Form", "Polar Grid", "Meridian Studio", "Zenith Canvas",
-    ]
-    return _random.choice(_fallbacks)
+    return random.choice(_DESIGN_NAME_FALLBACKS)
 
 
 
@@ -710,80 +716,6 @@ def _load_skills(app_type: str, stack: str, layout_archetype: str = "") -> str:
     )
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  HELPER — Parse JSON from Claude response text               ║
-# ╚══════════════════════════════════════════════════════════════╝
-
-def _parse_json_response(text: str) -> Optional[dict]:
-    """Extract a JSON object from Claude's text response.
-    
-    Handles:
-    - Pure JSON
-    - JSON wrapped in ```json ... ``` code fences
-    - JSON embedded in narrative text
-    - Truncated JSON (attempts best-effort recovery)
-    """
-    if not text:
-        return None
-
-    cleaned = text.strip()
-
-    # Strip markdown code fences
-    if cleaned.startswith("```"):
-        first_nl = cleaned.find("\n")
-        if first_nl != -1:
-            cleaned = cleaned[first_nl + 1:]
-    if cleaned.endswith("```"):
-        cleaned = cleaned[:cleaned.rfind("```")]
-    cleaned = cleaned.strip()
-
-    # Attempt 1: direct parse
-    try:
-        result = json.loads(cleaned)
-        if isinstance(result, dict):
-            return result
-    except json.JSONDecodeError:
-        pass
-
-    # Attempt 2: find outermost { ... }
-    start = cleaned.find("{")
-    if start != -1:
-        # Find the matching closing brace
-        depth = 0
-        last_valid_end = -1
-        for i in range(start, len(cleaned)):
-            if cleaned[i] == "{":
-                depth += 1
-            elif cleaned[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    last_valid_end = i
-                    break
-
-        if last_valid_end > start:
-            try:
-                result = json.loads(cleaned[start:last_valid_end + 1])
-                if isinstance(result, dict):
-                    return result
-            except json.JSONDecodeError:
-                pass
-
-    # Attempt 3: truncated JSON recovery — try adding closing brackets
-    if start != -1:
-        substr = cleaned[start:]
-        for fix in ["}", "]}", "\"]}}", "\"}]}", "\"]}]}"]:
-            try:
-                result = json.loads(substr + fix)
-                if isinstance(result, dict) and result.get("files"):
-                    logger.warning("Recovered truncated JSON with fix: +%s", fix)
-                    return result
-            except json.JSONDecodeError:
-                continue
-
-    logger.error("Failed to parse JSON from response (%d chars)", len(text))
-    return None
-
-
-# ╔══════════════════════════════════════════════════════════════╗
 # ║  HELPER — Detect package manager                             ║
 # ╚══════════════════════════════════════════════════════════════╝
 
@@ -823,13 +755,12 @@ def _salvage_partial_json(partial: str) -> Optional[dict]:
     When the stream is cut mid-way, we attempt to find all complete
     {"path": ..., "content": ...} objects and return them wrapped in a files list.
     """
-    import re as _re
     files = []
     # Find all complete path+content pairs using a non-greedy regex
-    for m in _re.finditer(
+    for m in re.finditer(
         r'\{\s*"path"\s*:\s*"([^"]+)"\s*,\s*"content"\s*:\s*"((?:[^"\\]|\\.)*)"\s*\}',
         partial,
-        _re.DOTALL,
+        re.DOTALL,
     ):
         path = m.group(1)
         raw = m.group(2)
@@ -1323,7 +1254,7 @@ _DISTILL_SECTIONS: tuple[tuple[str, int], ...] = (
     # visual observations survive — Claude leans on them heavily for hero
     # composition, card language, and motion cues.
     ("VISUAL_DNA", 1800),
-    ("LIVE_UI_RESEARCH", 1200),  # scroll effects, counters, marquee, hover depth, ambient — from actual 2025 site research
+    ("LIVE_UI_RESEARCH", 1200),  # scroll effects, counters, marquee, hover depth, ambient — from actual 2025-2026 site research
     ("LAYOUT_BLUEPRINT", 5500),  # Design DNA: 25 creative variables per project (hero/features/rhythm/motif/mood/cards/type/motion/pattern/radius/color/hover/spacing + live_ui_recipe/scroll_reveal/counter/marquee/ambient)
     # Admin/CRM/TMS visual language — table/form/sidebar/status/density recipe.
     # Only present when layout_archetype is admin-family.
@@ -1343,12 +1274,12 @@ def _distill_research(research: str, max_total: int = 12000) -> str:
     The raw research is typically 10–20K chars with many ===SECTION=== blocks
     (and often long prose inside each). This helper:
       - Picks out the sections known to be load-bearing for UI generation.
-      - Truncates each to a per-section cap tuned to keep the total under 8K.
+      - Truncates each to a per-section cap, total bounded by max_total.
       - Re-emits the same ===HEADER=== markers so downstream extractors still
         find what they need.
 
     If research is already short or lacks ===HEADERS=== (fallback path),
-    return it head-truncated. This keeps the function total over robust input.
+    return it head-truncated. This keeps the helper robust over messy input.
     """
     if not research:
         return ""
@@ -1551,6 +1482,42 @@ async def _expand_short_prompt(
 _gemini_semaphore = asyncio.Semaphore(2)
 
 
+# Section names produced by the design prompt. Used to defensively rewrite
+# Gemini's markdown headers (### NAME / **NAME** / NAME:) back to the literal
+# ===NAME=== form that _extract_research_section expects.
+_DESIGN_SECTION_NAMES: tuple[str, ...] = (
+    "ERA_CALIBRATION",
+    "LIVE_UI_RESEARCH",
+    "LAYOUT_BLUEPRINT",
+)
+
+
+def _normalize_research_headers(text: str, section_names: tuple[str, ...]) -> str:
+    """Rewrite markdown-style section headers to ===NAME=== form.
+
+    Gemini sometimes ignores the requested literal `===NAME===` format and
+    emits `### NAME` or `**NAME**` instead. _extract_research_section needs
+    the exact `===NAME===` literal, so this helper canonicalizes the output.
+    Only the listed section names are rewritten — unrelated `### Heading`
+    text is left alone.
+    """
+    if not text:
+        return text
+    for name in section_names:
+        canonical = f"==={name}==="
+        if canonical in text:
+            continue
+        # Match: "### NAME", "**NAME**", "**NAME:**", "NAME:" (line start),
+        # optionally with leading bold markers and trailing colons.
+        # Whole-line replacement to avoid touching prose mentions.
+        pattern = re.compile(
+            rf"^\s*(?:#{{1,6}}\s*)?(?:\*\*)?{re.escape(name)}(?:\*\*)?\s*:?\s*$",
+            re.MULTILINE,
+        )
+        text = pattern.sub(canonical, text)
+    return text
+
+
 async def _call_gemini_single(
     prompt: str,
     gemini_url: str,
@@ -1649,6 +1616,162 @@ async def _call_gemini_single(
     return text
 
 
+# ── Cultural anchor pool — used when prompt is ambiguous ───────────────────
+# Each pool entry = a regional anchor that ships with its own palette / motifs /
+# language phrases via the cultural_atmosphere block. Curated to be visually
+# DISTINCT from each other — picking from this pool guarantees that two runs
+# of "a restaurant" produce structurally different sites.
+_CULTURAL_ANCHOR_POOLS: dict[str, list[str]] = {
+    "restaurant": [
+        "USA → Brooklyn deli", "France → Lyonnaise bistro",
+        "Italy → Roman trattoria", "Italy → Sicilian seafood osteria",
+        "Mexico → Mexico City taquería", "Spain → Andalusian taberna",
+        "Japan → Tokyo izakaya", "Korea → Seoul gastropub",
+        "Vietnam → Hanoi pho house", "Thailand → Bangkok night-market",
+        "USA → Pacific NW farm-to-table", "Greece → Athenian psarotaverna",
+        "Argentina → Buenos Aires asador", "Lebanon → Beirut mezze house",
+        "Morocco → Marrakech tagine room", "USA → New Orleans Creole",
+        "Peru → Lima cevichería", "Ethiopia → Addis injera house",
+    ],
+    "cafe": [
+        "USA → Portland third-wave coffee", "Australia → Melbourne specialty",
+        "Italy → Roman espresso bar", "Vietnam → Hanoi cà phê sữa đá",
+        "Sweden → Stockholm fika kafé", "Austria → Vienna kaffeehaus",
+        "Japan → Tokyo kissaten", "Türkiye → Istanbul kahvehane",
+        "France → Parisian zinc-bar café", "USA → Brooklyn pour-over shop",
+    ],
+    "hotel": [
+        "Greece → Cycladic minimalism", "Morocco → Marrakech riad",
+        "Mexico → Tulum coastal", "Japan → Kyoto ryokan",
+        "Italy → Tuscan agriturismo", "Iceland → Reykjavik design hotel",
+        "Indonesia → Bali jungle villa", "Switzerland → Alpine chalet",
+        "USA → Joshua Tree desert lodge", "Portugal → Lisbon townhouse hotel",
+    ],
+    "fashion": [
+        "France → Parisian minimalism", "Japan → Tokyo avant-garde",
+        "Italy → Milan tailoring", "Denmark → Copenhagen utilitarian",
+        "USA → New York streetwear", "UK → London punk-tailoring",
+        "Sweden → Stockholm Scandi-clean", "Korea → Seoul gender-fluid",
+    ],
+    "bakery": [
+        "France → Parisian boulangerie", "Italy → Roman pasticceria",
+        "USA → Brooklyn artisan bakery", "Denmark → Copenhagen smørrebrød",
+        "Japan → Tokyo neo-patisserie", "Portugal → Lisbon pastel de nata shop",
+        "Germany → Berlin bread house",
+    ],
+    "salon": [
+        "France → Parisian atelier-salon", "USA → LA West Hollywood blowout bar",
+        "Japan → Tokyo precision-cut studio", "UK → London Soho colour bar",
+        "Korea → Seoul K-beauty parlour",
+    ],
+    "spa": [
+        "Indonesia → Bali jungle wellness", "Japan → onsen ryokan",
+        "Iceland → geothermal lagoon spa", "Türkiye → Istanbul hammam",
+        "Mexico → Tulum cenote spa", "Switzerland → Alpine wellness retreat",
+    ],
+    "fitness": [
+        "USA → Brooklyn boxing studio", "Japan → Tokyo precision pilates",
+        "Sweden → Stockholm minimalist gym", "Australia → Bondi beach fitness",
+        "USA → LA hot yoga studio", "Germany → Berlin functional training box",
+    ],
+    "portfolio": [
+        "Denmark → Copenhagen design studio", "Japan → Tokyo design firm",
+        "USA → Brooklyn creative agency", "France → Parisian atelier",
+        "Switzerland → Zurich Swiss-grid studio", "UK → London design house",
+    ],
+    "travel": [
+        "Greece → Aegean island hopping", "Japan → Kyoto cultural travel",
+        "Iceland → ring-road expedition", "Morocco → Atlas mountains trek",
+        "Peru → Sacred Valley trail", "Mexico → Yucatán cenote tours",
+    ],
+}
+
+# Substrings that reveal the user already specified a culture / region — when
+# any of these appear in the prompt we leave the anchor decision to Gemini
+# (the user has already given a strong cue).
+_CULTURE_KEYWORDS_IN_PROMPT = (
+    "italian", "italy", "italia", "naples", "rome", "milan", "tuscany", "sicilian",
+    "japanese", "japan", "tokyo", "kyoto", "osaka", "izakaya", "ramen",
+    "mexican", "mexico", "oaxaca", "yucatan", "taqueria", "mezcal",
+    "french", "france", "paris", "parisian", "lyon", "provence", "bistro",
+    "spanish", "spain", "madrid", "barcelona", "andalusian", "tapas",
+    "korean", "korea", "seoul", "k-beauty",
+    "vietnamese", "vietnam", "hanoi", "saigon", "pho",
+    "thai", "thailand", "bangkok", "chiang mai",
+    "indian", "india", "mumbai", "delhi", "kerala",
+    "chinese", "china", "shanghai", "beijing", "dim sum",
+    "greek", "greece", "athens", "cycladic", "santorini",
+    "moroccan", "morocco", "marrakech", "fez", "riad",
+    "turkish", "türkiye", "istanbul", "anatolian",
+    "scandinavian", "swedish", "danish", "norwegian", "stockholm", "copenhagen",
+    "german", "germany", "berlin", "munich",
+    "argentine", "argentina", "buenos aires", "asador",
+    "peruvian", "peru", "lima", "ceviche",
+    "ethiopian", "ethiopia", "addis", "injera",
+    "lebanese", "lebanon", "beirut",
+    "australian", "melbourne", "sydney",
+    "brazilian", "brazil", "rio",
+    "english", "british", "uk", "london",
+    "irish", "ireland", "dublin",
+    "icelandic", "iceland", "reykjavik",
+    "balinese", "bali", "indonesia",
+    "portuguese", "portugal", "lisbon",
+    "brooklyn", "manhattan", "queens", "portland", "austin", "nashville",
+    "los angeles", "san francisco", "chicago",
+)
+
+
+def _pick_cultural_anchor(description: str, domain: str) -> str:
+    """Pre-pick a regional anchor for ambiguous prompts; return "" otherwise.
+
+    The user types "a restaurant" → Python rolls the dice and returns
+    "Spain → Andalusian taberna". This anchor is then injected as a HARD
+    constraint into the Gemini research prompt so country_or_region is locked
+    to the picked value, guaranteeing variety across consecutive runs of the
+    same ambiguous prompt.
+
+    If the user already wrote a culture-specific prompt ("Italian restaurant"
+    / "Tokyo izakaya") we return "" — Gemini handles those cases well on its
+    own from explicit keywords.
+    """
+    desc_lc = (description or "").lower()
+    # Already culture-specific → let Gemini handle it.
+    if any(kw in desc_lc for kw in _CULTURE_KEYWORDS_IN_PROMPT):
+        return ""
+
+    # Map domain → pool key.
+    domain_lc = (domain or "").lower()
+    pool_key: str | None = None
+    if any(s in domain_lc for s in ("restaurant", "food", "dining", "tapas", "tavern", "trattoria", "bistro")):
+        pool_key = "restaurant"
+    elif any(s in domain_lc for s in ("café", "cafe", "coffee", "espresso", "roastery", "roaster")):
+        pool_key = "cafe"
+    elif any(s in domain_lc for s in ("hotel", "resort", "inn", "bnb", "lodging", "hostel", "boutique_hotel")):
+        pool_key = "hotel"
+    elif any(s in domain_lc for s in ("fashion", "apparel", "clothing", "boutique")):
+        pool_key = "fashion"
+    elif any(s in domain_lc for s in ("bakery", "patisserie", "boulangerie")):
+        pool_key = "bakery"
+    elif any(s in domain_lc for s in ("salon", "barber", "hair")):
+        pool_key = "salon"
+    elif any(s in domain_lc for s in ("spa", "wellness", "massage")):
+        pool_key = "spa"
+    elif any(s in domain_lc for s in ("fitness", "gym", "yoga", "pilates", "crossfit")):
+        pool_key = "fitness"
+    elif any(s in domain_lc for s in ("portfolio", "studio", "agency", "designer")):
+        pool_key = "portfolio"
+    elif any(s in domain_lc for s in ("travel", "tour", "trip", "expedition")):
+        pool_key = "travel"
+
+    # Domain doesn't match a hospitality / lifestyle pool → Gemini decides
+    # (most likely "none — modern global" for B2B SaaS / dev tools).
+    if not pool_key:
+        return ""
+
+    import random as _rand
+    return _rand.choice(_CULTURAL_ANCHOR_POOLS[pool_key])
+
+
 async def gemini_deep_research(
     description: str,
     classification: dict,   # rich dict from classify_project_type_ai
@@ -1669,6 +1792,14 @@ async def gemini_deep_research(
     has_admin = classification.get("has_admin_features", False)
     is_locked = classification.get("classification_locked", False)
 
+    # ── Cultural anchor pre-selection (Python-side, hard constraint) ────
+    # When the user's prompt is ambiguous ("a restaurant", "a coffee shop"),
+    # Gemini left to its own devices keeps converging on the same regional
+    # anchor (Brooklyn deli / Parisian minimal / etc.) — the model has training
+    # bias toward whatever's most documented. Rolling the anchor in Python
+    # guarantees real variety across N consecutive runs of the same prompt.
+    _cultural_anchor_override = _pick_cultural_anchor(description, domain)
+
     # Human-readable archetype label for the prompt
     _archetype_label = {
         "single_page_landing": "single-page landing page (ONE scrollable page, no sub-routes)",
@@ -1683,12 +1814,34 @@ async def gemini_deep_research(
         "marketplace": "marketplace platform (buyers + sellers + listings)",
     }.get(layout_archetype, layout_archetype.replace("_", " "))
 
+    _cultural_anchor_block = ""
+    if _cultural_anchor_override:
+        _cultural_anchor_block = f"""
+
+╔══════════════════════════════════════════════════════════════════════════╗
+║  CULTURAL ANCHOR — HARD CONSTRAINT (do not override, do not negotiate)   ║
+╠══════════════════════════════════════════════════════════════════════════╣
+║  The user gave an AMBIGUOUS prompt with no specific country / cuisine.   ║
+║  To guarantee variety across runs, an anchor was pre-selected by the     ║
+║  pipeline (random, evenly-weighted across cultures).                     ║
+║                                                                          ║
+║  >>>  country_or_region = "{_cultural_anchor_override}"
+║                                                                          ║
+║  Apply this anchor to the ===CULTURAL_ATMOSPHERE=== block, the imagery,  ║
+║  the palette, the typography, and the language phrases. Do NOT pick a    ║
+║  different region. Do NOT output "none — modern global". Do NOT default  ║
+║  to a generic upscale style — make this site feel authentically FROM     ║
+║  that place to a designer who knows it.                                  ║
+╚══════════════════════════════════════════════════════════════════════════╝
+"""
+
     research_prompt = f"""You are an AUTONOMOUS PRODUCT RESEARCHER and UI/UX ARCHITECT with full internet search access.
 Research and blueprint a production-quality web application.
 
 PROJECT: "{description}"
 INITIAL TYPE: {_archetype_label} | DOMAIN: {domain}
 TECH STACK: {stack}
+{_cultural_anchor_block}
 
 ═══════════════════════════════════════════════════════════════
 STEP 1 — CONFIRM CLASSIFICATION
@@ -1722,13 +1875,13 @@ STEP 2 — INTERNET RESEARCH (MUST use google_search grounding)
 ═══════════════════════════════════════════════════════════════
 
 YOU HAVE google_search AVAILABLE. USE IT. Do NOT rely on training memory —
-training data is 2023-era and will produce dated design. The goal of this step
-is to anchor the design in ACTUAL 2024-2025 reality.
+training data cutoff is mid-2024 and will produce dated design. The goal of this step
+is to anchor the design in ACTUAL 2025-2026 reality.
 
 Run AT LEAST these searches before answering:
-  1. "{domain} best website navigation structure pages 2025"
-  2. "top {domain} website homepage sections content features"
-  3. "best {domain} website user experience must-haves 2024 2025"
+  1. "{domain} best website navigation structure pages 2026"
+  2. "top {domain} website homepage sections content features 2025 2026"
+  3. "best {domain} website user experience must-haves 2025 2026"
   4. (if "{description}" names a specific brand) "{description}" official website pages and structure
 
 Focus on STRUCTURE: what pages exist, what navigation labels are used, what sections appear
@@ -1999,10 +2152,127 @@ badge: [pill badge classes]
 input: [form input classes]
 overall_vibe: [2-3 descriptive words from research]
 
+===CULTURAL_ATMOSPHERE===
+country_or_region:
+  [Identify the specific country / region / sub-culture this brand should evoke.
+   Examples: "Italy → Campania (Naples)", "Japan → Tokyo izakaya", "Mexico → Oaxaca",
+   "France → Provence", "USA → Brooklyn deli", "Korea → Seoul minimalist".
+
+   STRICT RULES — WHEN "none" IS / IS NOT ALLOWED:
+   ✓ "none — modern global" is ALLOWED only for genuinely culture-neutral verticals:
+       B2B SaaS, dev tools, AI infrastructure, generic agency, internal admin tools,
+       crypto/web3, fintech dashboards. These have no inherent national identity.
+
+   ✗ "none" is FORBIDDEN for any of these — pick a region even if the user didn't say:
+       restaurants / cafés / bakeries / bars (food + hospitality)
+       hotels / B&Bs / travel agencies / tour operators (travel + hospitality)
+       fashion / apparel / shoes / accessories (consumer goods)
+       beauty / salons / spas (lifestyle services)
+       wellness / yoga / fitness studios (lifestyle services)
+       ecommerce for consumer products
+       portfolio sites / personal brands
+
+   When the user prompt is ambiguous (e.g. "a restaurant", "a coffee shop",
+   "a fitness studio") and gives no cuisine / region / style cue, YOU MUST PICK
+   a regional anchor by inferring from context or rolling a tasteful default.
+   Be deliberate — don't always default to NYC/Brooklyn or Paris/France. Examples
+   of valid auto-anchors when the prompt is generic:
+
+     "a restaurant"       → "USA → Brooklyn deli", "France → Lyonnaise bistro",
+                            "Mexico → Mexico City taquería", "USA → Pacific NW
+                            farm-to-table", "Japan → Tokyo izakaya", "Spain →
+                            Andalusian taberna" — pick ONE deliberately.
+     "a coffee shop"      → "USA → Portland third-wave", "Australia → Melbourne
+                            specialty", "Italy → Roman espresso bar", "Vietnam
+                            → Hanoi cà phê" — pick ONE.
+     "a fashion brand"    → "France → Parisian minimalism", "Japan → Tokyo
+                            avant-garde", "Italy → Milan tailoring", "Denmark →
+                            Copenhagen utilitarian" — pick ONE.
+     "a hotel"            → "Greece → Cycladic", "Morocco → Marrakech riad",
+                            "Mexico → Tulum coastal", "Japan → Kyoto ryokan" —
+                            pick ONE.
+
+   Rotate variety_seed-style — for ambiguous prompts, pick a culturally distinct
+   anchor each run so two "a restaurant" generations don't both default to the
+   same Brooklyn-deli look. The point is to ALWAYS be evocative and specific —
+   ambiguity in user prompt is opportunity for the system to pick richly, not
+   an excuse to fall through to generic.]
+
+authenticity_cues:
+  [5-8 specific cultural/visual elements that signal "this is genuinely FROM that place,"
+   not a tourist's idea. Be concrete and unfamiliar — avoid Eiffel Tower / pizza-hat
+   clichés. For Italian trattoria, NOT "checkered tablecloths" but "hand-rolled pasta
+   on a flour-dusted wooden board, copper pots above an open kitchen, vintage Faema
+   espresso machine, hand-painted Vietri ceramic plates, family photos in mismatched
+   frames, candlelit Tuscan-stone walls". Each cue: 1 short concrete phrase.]
+
+signature_imagery:
+  [6-10 specific image search terms / scene descriptions that would feel authentic to
+   the culture, NOT generic stock photography. Each as: "search_term: [terms] | mood: [mood]".
+   For Italian: "fresh tagliatelle on floured board | rustic warm", "wood-fired pizza
+   oven flames | dramatic close-up", "espresso crema pour | quiet morning", "antique
+   copper saucepan on stove | lived-in", "italian nonna hands rolling dough | hands-only".
+   Use these EXACT search terms in hero_image_url and supporting_image_urls — the
+   default picks ("modern restaurant interior" / "elegant dining table") are forbidden.]
+
+cultural_palette:
+  [Palette grounded in cultural authenticity, not generic "premium dark + gold".
+   For Italian trattoria: "warm cream + sun-dried tomato red + olive green + aged
+   copper accent" — reasoning: "matches a traditional southern-Italian trattoria
+   palette, not a corporate steakhouse". Output as: "values: [4-5 named colors] |
+   reasoning: [why these and not navy+gold]". If country_or_region is "none",
+   output "use design system default" and skip.]
+
+typographic_signature:
+  [ONE typographic move that feels CULTURALLY authentic to the place, not the
+   industry default. For Italian: "vintage hand-painted Italian café signage style
+   heading (Cooper, Beth Ellen, or Reenie Beanie for accents) + warm humanist sans
+   for body (Source Sans, Mulish)". For Japanese: "thin elegant serif (Shippori
+   Mincho) + clean geometric sans (Noto Sans JP) with extra leading". Avoid the
+   generic Playfair/Fraunces+Inter pairing if a culturally-specific pairing fits.]
+
+language_phrases:
+  [3-6 untranslated source-language words or short phrases to weave into UI copy as
+   section headers, eyebrow tags, accent words, or microcopy. For Italian:
+   "Antipasti / Primi / Secondi / Dolci" (menu sections), "La Famiglia" (about),
+   "Benvenuti" (welcome eyebrow), "Buon Appetito" (CTA accent).
+   For Japanese: "おもてなし (omotenashi)" as a values eyebrow, "本日のおすすめ (today's
+   recommendation)" for a feature label. NEVER translate these — they are atmospheric
+   anchors. If country_or_region is "none", output "n/a" and skip.]
+
+section_label_overrides:
+  [If the cultural mapping suggests renaming standard sections, list as
+   "default → cultural" pairs. For Italian restaurant:
+   "Menu → La Carta", "Our Story → La Nostra Storia", "Reservations → Prenotazioni",
+   "Hours → Orari". Codegen will use these renamed labels in headers and section
+   eyebrows. If country_or_region is "none", skip.]
+
+banned_generics:
+  [5-8 design choices that would make THIS specific cultural site feel generic /
+   AI-generated. For Italian trattoria: "navy + gold palette (looks corporate, not
+   trattoria)", "blurry restaurant tablescape stock photo (every AI site)", "Playfair
+   italic at 8rem (overused on every restaurant template)", "'Reserve a Table' CTA
+   without Italian flavor — use 'Prenota' or 'Riserva il tuo Tavolo'".
+   These are FORBIDDEN for this run. If country_or_region is "none", list cliches
+   for the industry instead (SaaS: "blue gradient hero", "abstract dashboard mockup
+   floating in the void").]
+
+motif_inventory:
+  [4-6 small recurring decorative motifs to use as signature_motif and supporting
+   decorations across sections. For Italian: "olive branch SVG", "hand-drawn pasta
+   shape outline (penne, fusilli silhouette)", "vintage Italian postage stamp border",
+   "cracked terracotta texture overlay at 8% opacity", "small espresso cup icon".
+   Codegen will scatter these 2-3× across sections per signature_motif spec.]
+
 ===COPY_TONE===
 hero_headline_style: [punchy|formal|warm|bold — max chars and style description]
 body_copy_style: [tone description]
 cta_style: [verb style]
+cultural_voice_overlay: [if cultural_atmosphere is set, override default copy tone
+  with a culturally-specific voice. Italian trattoria: "warm, familial, slightly
+  exclamatory — like a host welcoming you in. Use occasional Italian phrases as
+  accents, not translation". Japanese izakaya: "quiet, precise, respectful, with
+  small 'お' honorific touches in microcopy." If "none", output "n/a".]
 
 ===IMAGE_SOURCES===
 hero: [treatment from research]
@@ -2055,8 +2325,37 @@ design_mood:
   [2-3 sentences: visual personality, ONE-WORD adjective, how it translates to type/cards/color.]
   reasoning: [1 sentence citing a research finding or target-user insight]
 
+hero_image_strategy:
+  [ONE of these — picks how the hero uses imagery. Coupled to hero_archetype below:
+    • background_full      — image is full-bleed backdrop with a scrim. ONLY valid for
+                             hero_archetype = cinematic-parallax / full-bleed-dark.
+    • structural_half      — image is a HALF or THIRD of the hero (one column/quadrant).
+                             Use for: split / editorial-offset / product-showcase.
+    • single_feature_card  — ONE small image inside a card or framed panel, NOT a backdrop.
+                             Use for: magazine / bento (image as one tile).
+    • decorative_scatter   — 3-5 SMALL images scattered around the headline at different
+                             sizes/rotations/positions (a wine bottle, a tapas plate,
+                             a small portrait — each rotated/offset distinctly). NO single
+                             dominant photo. Use for: bento / diagonal / playful brands.
+    • illustration_3d      — request a 3D-style render or SVG illustration instead of a
+                             photo (Spline-style geometry, abstract gradient blobs,
+                             isometric scenes). Use for: tech, SaaS, abstract brands,
+                             agency sites, anywhere a photo would feel literal/cliched.
+    • typographic_only     — NO hero image at all. Pure typography hero. ONLY valid for
+                             hero_archetype = typographic-hero.
+    PICK based on what would look LEAST like a generic AI-generated landing page. If the
+    domain is "boring" (consulting, legal, finance, education) prefer illustration_3d or
+    decorative_scatter over a stock photo. If the project is product-focused (e-bike,
+    audio gear, fashion) prefer structural_half with a real product photo.
+  ]
+  reasoning: [1 sentence on why this strategy fits the domain + chosen hero_archetype]
+
 hero_image_url:
-  [ONE Unsplash URL: https://images.unsplash.com/photo-PHOTO_ID?auto=format&fit=crop&w=1600&q=80]
+  [Provide an Unsplash URL ONLY when hero_image_strategy ∈ {background_full, structural_half,
+   single_feature_card}. For decorative_scatter list 3-5 URLs separated by " | ".
+   For illustration_3d output the literal string "GENERATE_3D" (codegen will substitute
+   an SVG/Spline placeholder). For typographic_only output the literal string "NONE".
+   When provided as URL: https://images.unsplash.com/photo-PHOTO_ID?auto=format&fit=crop&w=1600&q=80]
 
 supporting_image_urls:
   [3-6 Unsplash URLs: "section_name: https://images.unsplash.com/photo-PHOTO_ID?auto=format&fit=crop&w=1200&q=80"]
@@ -2071,8 +2370,10 @@ hero_archetype:
   reasoning: [1 sentence why this fits the domain mood]
 
 features_archetype:
-  [ONE of: bento-mixed / zigzag-split / vertical-tabs / horizontal-scroll / masonry /
-   tilt-stack / interactive-showcase / timeline / comparison-grid / numbered-editorial / INVENT]
+  [ONE of: bento-mixed / zigzag / vertical-tabs / horizontal-scroll / masonry /
+   tilt-stack / showcase / timeline / numbered-editorial / INVENT.
+   These EXACT names map to wrapper JSX templates — do not invent variants
+   like `zigzag-split` or `interactive-showcase`; pick the canonical name.]
   reasoning: [1 sentence]
 
 card_language:
@@ -2131,9 +2432,18 @@ CRITICAL: Concrete, code-translatable language. No one-word answers. No generic 
     )
 
     _design_prompt = f"""You are an AWARD-WINNING VISUAL DESIGN DIRECTOR with full internet search access.
-Your sole task: research 2025 visual design trends for the project below, then output ONLY these three
+Your sole task: research 2025-2026 visual design trends for the project below, then output ONLY these three
 sections: ERA_CALIBRATION, LIVE_UI_RESEARCH, LAYOUT_BLUEPRINT.
 Do NOT output CLASSIFICATION, CSS_VARIABLES, FONTS, PAGES, ENTITIES, or any structural blocks.
+
+⚠️ OUTPUT FORMAT — STRICT:
+  Section headers MUST be the LITERAL string `===NAME===` on their own line.
+  ✓ CORRECT:   ===ERA_CALIBRATION===
+  ✗ WRONG:     ### ERA_CALIBRATION
+  ✗ WRONG:     **ERA_CALIBRATION**
+  ✗ WRONG:     ERA_CALIBRATION:
+  Sub-fields are plain `key: value` lines (no markdown bold). A downstream parser
+  searches for the literal `===HEADER===` markers — anything else is dropped silently.
 
 PROJECT: "{description}"
 DOMAIN: {domain}
@@ -2146,15 +2456,17 @@ CLASSIFICATION (locked — do NOT change):
 DESIGN RESEARCH — MUST use google_search (do NOT rely on training memory)
 ════════════════════════════════════════════════════════════
 
-Training data is 2023-era and will produce dated design. USE google_search.
+Training data cutoff is mid-2024. The current year is 2026. YOU MUST USE google_search
+to find what's actually trending in 2025-2026 — do not rely on training memory alone.
 
 Run AT LEAST these searches:
-  1. "awwwards {domain} site of the year 2024"
-  2. "awwwards {domain} site of the year 2025"
-  3. "best {domain} website visual design typography 2025"
-  4. "2025 web design trends scroll animations {domain} framer motion"
-  5. "{domain} website hover interactions micro-animations 2025"
-  6. (if "{description}" names a specific brand) "{description}" official site visual design
+  1. "awwwards {domain} site of the year 2025"
+  2. "awwwards {domain} site of the year 2026"
+  3. "best {domain} website visual design typography 2026"
+  4. "2026 web design trends {domain} scroll-driven animations variable fonts"
+  5. "{domain} website hover interactions micro-animations 2025 2026"
+  6. "best {domain} website design inspiration 2025 2026"
+  7. (if "{description}" names a specific brand) "{description}" official site visual design
 
 For EACH site discovered, note:
   a) Layout: H1 position, split/bento/full-bleed, asymmetry, grid structure
@@ -2166,44 +2478,65 @@ For EACH site discovered, note:
 DESIGN ERA CALIBRATION
 ════════════════════════════════════════════════════════════
 
-FORBIDDEN 2020-2022 patterns (produce dated / template output — never use these):
-  ✗ Flat pastel gradient hero with centered text stack and no motion
-  ✗ Symmetric 3-column feature grid with icon-over-title-over-description, no hover effect
-  ✗ Generic rounded-xl cards with small shadow and nothing else distinctive
-  ✗ "From $X/month" pricing cards all identical shape
-  ✗ Stock photos of smiling office workers / diverse-team-around-laptop
-  ✗ Hero H1 with two dead-centered CTAs and no imagery breaking the grid
-  ✗ Hero with bg-background/95 washing out a photo (use dark gradient overlays)
-  ✗ Nav with "About / Features / Pricing / Sign In / Get Started" on a non-SaaS site
-  ✗ Static stat counters that don't animate when scrolled into view
-  ✗ Logo rows with no scroll or motion
-  ✗ Hero that has zero motion — everything must have at least an entry animation
+FORBIDDEN — NEVER USE THESE (dated / generic signal of AI-generated templates):
+  ✗ [2020-2022 era] Flat pastel gradient hero with centered text stack and no motion
+  ✗ [2020-2022 era] Symmetric 3-column feature grid with icon-over-title-over-description, no hover effect
+  ✗ [2020-2022 era] Generic rounded-xl cards with small shadow and nothing else distinctive
+  ✗ [2020-2022 era] "From $X/month" pricing cards all identical shape
+  ✗ [2020-2022 era] Stock photos of smiling office workers / diverse-team-around-laptop
+  ✗ [2020-2022 era] Hero H1 with two dead-centered CTAs and no imagery breaking the grid
+  ✗ [2020-2022 era] Hero with bg-background/95 washing out a photo (use dark gradient overlays)
+  ✗ [2020-2022 era] Nav with "About / Features / Pricing / Sign In / Get Started" on a non-SaaS site
+  ✗ [2020-2022 era] Static stat counters that don't animate when scrolled into view
+  ✗ [2020-2022 era] Logo rows with no scroll or motion
+  ✗ [2020-2022 era] Hero that has zero motion — everything must have at least an entry animation
+  ✗ [2023-2024 era — now overused by AI tools, avoid these as defaults]:
+    - Generic bento grid with uniform-sized tiles and no visual hierarchy or content strategy
+    - Two blurred gradient orbs as the ONLY hero background decoration
+    - Glassmorphism (backdrop-blur) cards on non-photo backgrounds
+    - Inter + Geist font pairing (2024 AI default, recognizable from a mile away)
+    - Purple/indigo gradient as the go-to SaaS accent color
+    - "Frosted glass card on white background" navbar that blurs nothing
+    - Dark mode with generic #18181b background + white text and no real palette work
 
-REQUIRED 2024-2025 moves (blueprint MUST include at least 4):
-  ✓ Bento grid somewhere (hero or features) — inspired by Apple iOS/iPadOS
-  ✓ Typographic statement: oversized H1 (text-[clamp(3rem,10vw,9rem)]) or
-    variable-weight / italic serif (Fraunces, Editorial New, Migra, PP Editorial)
-  ✓ At least one asymmetric section (offset grid, editorial magazine layout)
-  ✓ Signature motif (dot-grid, grain, hand-drawn squiggle, floating orbs, topographic)
-  ✓ Depth via contrast — at least one dramatically inverted section
-    (bg-foreground text-background, or full-bleed dark with cinematic photo)
-  ✓ Animated stat counters — numbers count up from 0 when scrolled into view
-  ✓ Horizontal marquee strip — logos, testimonials, or product photos scroll infinitely
-  ✓ Scroll-linked stagger reveals — each card enters 80ms after the previous
-  ✓ Hover 3D tilt on feature cards (2-4deg on mouse move with framer-motion)
-  ✓ Sticky header that transitions from transparent to frosted-glass bg on scroll
-  ✓ Ambient motion: slowly drifting gradient mesh or floating orbs in hero background
+REQUIRED 2025-2026 moves (blueprint MUST include at least 5 of these):
+  ✓ Oversized editorial type — at least one H1 using clamp(4rem,10vw,9rem) with
+    leading-[0.88] and tight tracking. Type as the primary design element, not decoration.
+  ✓ Asymmetric layout — at least one section breaks the symmetric grid: editorial
+    magazine offset, staggered columns, intentional negative space, or content
+    bleeding out of the container.
+  ✓ Depth via material contrast — NOT heavy drop-shadows; instead: hairline borders
+    (border-foreground/10), one dramatically inverted section (bg-foreground text-background),
+    or a full-bleed dark photo. Restraint IS the luxury signal.
+  ✓ Signature motif applied 2-3x — grain noise (opacity-[0.04]), topographic lines,
+    hand-drawn squiggle, dot grid, or a brand-specific shape. Must be specific to
+    this domain, not a generic choice.
+  ✓ Scroll-linked stagger reveals — each card enters 60-80ms after the previous
+    (framer-motion staggerChildren or CSS animation-delay).
+  ✓ Sticky header scroll transition — transparent → frosted-glass bg-background/90
+    backdrop-blur-md on scroll (still essential in 2026, still differentiates premium sites).
+  ✓ Horizontal marquee strip for logos / testimonials / stats — CSS keyframe, no JS library.
+  ✓ Type-first section — at least one section where oversized text + spacing IS the full
+    design (no icons, no photos, just letterforms + tight grid).
+  ✓ Animated stat counters — numbers count up from 0 when scrolled into view.
+  ✓ Hero entry sequence — badge → H1 → subtitle → CTA → image, cascading 100-600ms delays,
+    NOT all at once. Use framer-motion initial/animate (not whileInView for hero).
+  ✓ Ambient motion in hero — at minimum one of: CSS scroll-driven background shift,
+    grain texture overlay, slow-drifting orbs COMBINED WITH grain/topographic lines
+    (orbs alone is the 2024 cliché — layer at least one other texture).
+  ✓ Variable font personality — if the heading font supports variable axes, animate
+    font-weight on hover (100→700) or use clamp() to vary weight with viewport width.
 
 ===ERA_CALIBRATION===
-moves_borrowed: [List the 4+ 2024-2025 moves you will use and WHY — 1 line each]
-patterns_avoided: [List the 2-3 dated patterns you rejected and why]
+moves_borrowed: [List the 5+ 2025-2026 moves you will use and WHY — 1 line each]
+patterns_avoided: [List the 3-5 dated patterns you rejected and why — include both 2020-2022 and 2023-2024 era clichés]
 
 ════════════════════════════════════════════════════════════
 LIVE UI RESEARCH
 ════════════════════════════════════════════════════════════
 
 Based on your research above, answer: what makes top {domain} websites feel "live" and
-premium in 2025?
+premium in 2025-2026?
 
 ===LIVE_UI_RESEARCH===
 scroll_effects: [stagger? parallax? clip-path reveals? opacity wipes? Be specific with values]
@@ -2229,7 +2562,7 @@ Output ONLY ERA_CALIBRATION, LIVE_UI_RESEARCH, and LAYOUT_BLUEPRINT blocks.
     # ── Parallel Gemini calls ─────────────────────────────────────────────────
     import httpx
 
-    _research_model = os.environ.get("GEMINI_RESEARCH_MODEL", "gemini-2.5-pro")
+    _research_model = os.environ.get("GEMINI_RESEARCH_MODEL", "gemini-3.1-pro-preview")
     await _ws_send(websocket, "progress", f"🔬 Calling {_research_model} — structure & design in parallel...")
 
     gemini_url = (
@@ -2259,6 +2592,13 @@ Output ONLY ERA_CALIBRATION, LIVE_UI_RESEARCH, and LAYOUT_BLUEPRINT blocks.
     if isinstance(_results[1], Exception):
         logger.warning("Gemini design research failed (non-fatal): %s", _results[1])
         await _ws_send(websocket, "progress", "⚠️ Design research partial — continuing with structure only...")
+
+    # Normalize any markdown headers Gemini emitted (### NAME / **NAME**) back
+    # to the literal ===NAME=== form. Live testing showed Gemini occasionally
+    # ignores the format directive on the smaller design prompt, which silently
+    # drops every design-only section downstream.
+    if design_text:
+        design_text = _normalize_research_headers(design_text, _DESIGN_SECTION_NAMES)
 
     # Merge: structure sections come first so _extract_research_section (which
     # returns the FIRST occurrence) finds structural CLASSIFICATION/PAGES/ENTITIES
@@ -2451,7 +2791,17 @@ NEXTJS_WEBSITE_RULES = """
 - etc.
 
 ### Import rules:
-- Icons: import { IconName } from 'lucide-react'
+- Icons: ALWAYS import directly from 'lucide-react' — do NOT route through a
+  shared `Icons` object.
+    ✅ import { Instagram, Twitter, MapPin, Phone } from 'lucide-react'
+       <Instagram className="h-5 w-5" />
+    ❌ import { Icons } from '@/config/icons'
+       <Icons.instagram className="h-5 w-5" />
+  WHY: the template's `src/config/icons.js` only exports a small admin set
+  (home, dashboard, users, settings, …). Writing `<Icons.instagram />` when
+  `instagram` was never declared resolves to `undefined` at render and
+  crashes the page with "Element type is invalid: ... got: undefined".
+  Direct lucide-react imports never hit this bug class. Never modify icons.js.
 - UI: import { Button } from '@/components/ui/Button'  (uppercase custom)
       import { Accordion, AccordionItem } from '@/components/ui/accordion'  (lowercase shadcn)
 - Config: import { siteConfig } from '@/config/site'
@@ -2507,7 +2857,12 @@ src/features/<entity>/
 └── pages/<Entity>FormPage.jsx      # Form (create + edit)
 
 ### Import rules:
-- Icons: import { IconName } from 'lucide-react'
+- Icons: ALWAYS import directly from 'lucide-react' — never route through a
+  shared `Icons` object (`@/config/icons`). `<Icons.foo />` resolves to
+  undefined at runtime when `foo` was never declared in icons.js and crashes
+  the page with "Element type is invalid".
+    ✅ import { Plus, Edit, Trash2 } from 'lucide-react'
+    ❌ import { Icons } from '@/config/icons'  →  <Icons.plus />
 - UI: import { Button } from '@/components/ui/Button'
       import { DataTable } from '@/components/ui/data-table'
       import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card'
@@ -2563,6 +2918,126 @@ VUE_ADMIN_RULES = """
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  STEP 8 — SYSTEM PROMPT                                    ║
 # ╚══════════════════════════════════════════════════════════════╝
+
+# Curated Unsplash photo pools per category. Each generation picks ONE id at
+# random from the matching category — replaces the previous single-id-per-
+# category list that made every restaurant ship `photo-1517248135467` and
+# every coffee shop ship `photo-1509042239860`. Multiple ids per category =
+# real visual variety across runs even before cultural_atmosphere kicks in.
+_UNSPLASH_POOLS: dict[str, list[str]] = {
+    "Coffee / espresso": [
+        "photo-1509042239860-f550ce710b93", "photo-1497935586351-b67a49e012bf",
+        "photo-1495474472287-4d71bcdd2085", "photo-1485808191679-5f86510681a2",
+        "photo-1494314671902-399b18174975", "photo-1442550528053-c431ecb55509",
+        "photo-1521488756137-bce62c6e3ce6",
+    ],
+    "Coffee shop interior": [
+        "photo-1554118811-1e0d58224f24", "photo-1453614512568-c4024d13c247",
+        "photo-1559056199-641a0ac8b55e", "photo-1521017432531-fbd92d768814",
+        "photo-1525629722858-bccd4f88491e", "photo-1559925393-8be0ec4767c8",
+    ],
+    "Latte art": [
+        "photo-1517231925375-bf2cb42917a5", "photo-1572442388796-11668a67e53d",
+        "photo-1551030173-122aabc4489c", "photo-1461023058943-07fcbe16d735",
+        "photo-1534687941688-651ccaafbff8",
+    ],
+    "Plated food": [
+        "photo-1414235077428-338989a2e8c0", "photo-1546069901-ba9599a7e63c",
+        "photo-1567620905732-2d1ec7ab7445", "photo-1565958011703-44f9829ba187",
+        "photo-1504674900247-0877df9cc836", "photo-1540189549336-e6e99c3679fe",
+        "photo-1551183053-bf91a1d81141",
+    ],
+    "Restaurant": [
+        "photo-1517248135467-4c7edcad34c4", "photo-1592861956120-e524fc739696",
+        "photo-1559339352-11d035aa65de", "photo-1466978913421-dad2ebd01d17",
+        "photo-1424847651672-bf20a4b0982b", "photo-1552566626-52f8b828add9",
+    ],
+    "Italian / pasta": [
+        "photo-1551183053-bf91a1d81141", "photo-1473093295043-cdd812d0e601",
+        "photo-1565299624946-b28f40a0ae38", "photo-1574484184081-afea8a62f9ab",
+        "photo-1572441713132-51c75654db73", "photo-1551892589-865f69869476",
+    ],
+    "Pizza / wood-fired oven": [
+        "photo-1513104890138-7c749659a591", "photo-1604382354936-07c5d9983bd3",
+        "photo-1594007654729-407eedc4be65", "photo-1565299624946-b28f40a0ae38",
+        "photo-1571066811602-716837d681de",
+    ],
+    "Japanese / izakaya / sushi": [
+        "photo-1579871494447-9811cf80d66c", "photo-1553621042-f6e147245754",
+        "photo-1617196034796-73dfa7b1fd56", "photo-1611143669185-af224c5e3252",
+        "photo-1535473895227-bdecb20fb157",
+    ],
+    "Mexican / tacos / mezcal": [
+        "photo-1565299585323-38d6b0865b47", "photo-1551504734-5ee1c4a1479b",
+        "photo-1542528180-a1208c5169a5", "photo-1604847658149-a1c50d2c4d3c",
+    ],
+    "Bakery": [
+        "photo-1509440159596-0249088772ff", "photo-1555507036-ab1f4038808a",
+        "photo-1568254183919-78a4f43a2877", "photo-1486427944299-d1955d23e34d",
+        "photo-1517686469429-8bdb88b9f907",
+    ],
+    "Gym / weights": [
+        "photo-1540497077202-7c8a3999166f", "photo-1517836357463-d25dfeac3438",
+        "photo-1571019613454-1cb2f99b2d8b", "photo-1534438327276-14e5300c3a48",
+        "photo-1581009146145-b5ef050c2e1e",
+    ],
+    "Yoga / pilates": [
+        "photo-1544367567-0f2fcb009e0b", "photo-1506629082955-511b1aa562c8",
+        "photo-1518611012118-696072aa579a", "photo-1599901860904-17e6ed7083a0",
+        "photo-1545205597-3d9d02c29597",
+    ],
+    "Salon / hair": [
+        "photo-1560066984-138dadb4c035", "photo-1522337360788-8b13dee7a37e",
+        "photo-1599387737420-2af44f5ab51d", "photo-1521590832167-7bcbfaa6381f",
+    ],
+    "Spa": [
+        "photo-1540555700478-4be289fbecef", "photo-1544161515-4ab6ce6db874",
+        "photo-1571019613454-1cb2f99b2d8b", "photo-1519823551278-64ac92734fb1",
+    ],
+    "Hotel / travel": [
+        "photo-1488085061387-422e29b40080", "photo-1501117716987-c8e1ecb210bc",
+        "photo-1564501049412-61c2a3083791", "photo-1542314831-068cd1dbfeeb",
+        "photo-1444201983204-c43cbd584d93",
+    ],
+    "Real estate": [
+        "photo-1560518883-ce09059eeffa", "photo-1493809842364-78817add7ffb",
+        "photo-1568605114967-8130f3a36994", "photo-1502672260266-1c1ef2d93688",
+    ],
+    "Dog / pet": [
+        "photo-1450778869180-41d0601e046e", "photo-1548199973-03cce0bbc87b",
+        "photo-1583511655857-d19b40a7a54e", "photo-1561037404-61cd46aa615b",
+    ],
+    "Wedding": [
+        "photo-1519741497674-611481863552", "photo-1465495976277-4387d4b0e4a6",
+        "photo-1511285560929-80b456fea0bc", "photo-1583939003579-730e3918a45a",
+    ],
+    "Car / automotive": [
+        "photo-1492144534655-ae79c964c9d7", "photo-1492144534655-ae79c964c9d7",
+        "photo-1503376780353-7e6692767b70", "photo-1580273916550-e323be2ae537",
+    ],
+    "Fashion / apparel": [
+        "photo-1483985988355-763728e1935b", "photo-1490481651871-ab68de25d43d",
+        "photo-1469334031218-e382a71b716b", "photo-1487744480471-9ca1bca6fb7d",
+    ],
+}
+
+
+def _build_unsplash_pool_block() -> str:
+    """Build the prompt's photo-URL block by picking ONE id per category at random.
+
+    Called fresh per generation so two consecutive runs of the same domain don't
+    ship identical hero photos. The shape of the block matches the previous static
+    list so downstream prompt rules ("Use AT MOST ONE of these URLs in the hero...")
+    keep working unchanged.
+    """
+    import random as _rand
+    lines = []
+    for label, ids in _UNSPLASH_POOLS.items():
+        picked = _rand.choice(ids)
+        # 22-char left-justified label keeps the visual alignment of the old block.
+        lines.append(f"  {label:<22}→ https://images.unsplash.com/{picked}")
+    return "\n".join(lines)
+
 
 SYSTEM_PROMPT_CORE = """You are a world-class Senior Frontend Engineer and UI/UX expert building award-winning websites.
 Your output must match the visual quality of top Awwwards sites, Stripe, Linear, Vercel — NEVER boilerplates or templates.
@@ -2684,7 +3159,7 @@ CSS marquee (infinite scroll) — NOT a static centered row of logos.
 
 ── 5. STICKY HEADER WITH SCROLL TRANSITION ───────────────────────────────
 Headers must transition from transparent to frosted-glass on scroll. This is
-standard on ALL premium sites in 2025 and makes the page feel polished:
+standard on ALL premium sites in 2025-2026 and makes the page feel polished:
 
   'use client'
   import { useEffect, useState } from 'react'
@@ -2708,8 +3183,8 @@ standard on ALL premium sites in 2025 and makes the page feel polished:
 
 ── 6. CARD HOVER — 3D TILT ───────────────────────────────────────────────
 Feature cards and product cards use subtle 3D tilt on mouse hover. This is the
-single biggest differentiator between a 2020 site (flat hover-shadow) and a 2025
-site (spatial, dimensional hover):
+single biggest differentiator between a 2020 site (flat hover-shadow) and a
+premium 2025-2026 site (spatial, dimensional hover):
 
   'use client'
   import { useRef } from 'react'
@@ -2736,9 +3211,11 @@ site (spatial, dimensional hover):
   Do NOT use on text paragraphs, nav items, or full-page sections.
 
 ── 7. AMBIENT BACKGROUND MOTION ──────────────────────────────────────────
-Hero backgrounds must have gentle, slow movement — never completely static:
+Hero backgrounds must have gentle, slow movement — never completely static.
+⚠️ 2026 NOTE: Two gradient orbs ALONE are the most recognizable AI-generated
+cliché. ALWAYS layer orbs with at least one of Option B, C, or D below.
 
-  Option A — Gradient orbs (organic, modern):
+  Option A — Gradient orbs (MUST be combined with B, C, or D — not standalone):
   <div className="absolute inset-0 overflow-hidden pointer-events-none">
     <div className="absolute top-1/4 -left-20 w-96 h-96 bg-primary/20 rounded-full blur-3xl"
          style={{ animation: 'float1 12s ease-in-out infinite alternate' }} />
@@ -2750,13 +3227,17 @@ Hero backgrounds must have gentle, slow movement — never completely static:
     `}</style>
   </div>
 
-  Option B — Grain noise (tactile, editorial):
+  Option B — Grain noise (tactile, editorial — pairs well with orbs AND alone):
   <div className="fixed inset-0 pointer-events-none z-[1] opacity-[0.04]"
        style={{ backgroundImage: "url(\"data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E\")", backgroundRepeat: 'repeat', backgroundSize: '128px' }} />
 
-  Option C — Dot grid:
+  Option C — Dot grid (structural, pairs with any palette):
   <div className="absolute inset-0 pointer-events-none"
        style={{ backgroundImage: 'radial-gradient(circle, hsl(var(--foreground)/0.08) 1px, transparent 1px)', backgroundSize: '28px 28px' }} />
+
+  Option D — Topographic / contour lines (2026 premium signal):
+  <div className="absolute inset-0 pointer-events-none opacity-[0.06]"
+       style={{ backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Cpath d='M0 50 Q25 30 50 50 Q75 70 100 50' fill='none' stroke='currentColor' stroke-width='0.5'/%3E%3Cpath d='M0 30 Q25 10 50 30 Q75 50 100 30' fill='none' stroke='currentColor' stroke-width='0.5'/%3E%3Cpath d='M0 70 Q25 50 50 70 Q75 90 100 70' fill='none' stroke='currentColor' stroke-width='0.5'/%3E%3C/svg%3E\")", backgroundSize: '100px 100px' }} />
 
 ── 8. TEXT CLIP-PATH REVEAL (for H1 / H2) ────────────────────────────────
 Use this for dramatic section headings — text slides up from behind a clip mask:
@@ -2977,7 +3458,7 @@ Only import from packages that exist in the template. DO NOT add imports from an
 
 Next.js template packages (use ONLY these):
   next, react, react-dom
-  lucide-react                   ← icons ONLY
+  lucide-react                   ← icons ONLY (see icon import rule below)
   framer-motion                  ← animations
   @tanstack/react-query          ← server state / data fetching
   axios                          ← HTTP client
@@ -3155,10 +3636,69 @@ ANIMATIONS (safe patterns)
 Page transition: initial={{opacity:0,y:8}} animate={{opacity:1,y:0}} transition={{duration:0.15}}
 List stagger: staggerChildren:0.04, child y:20→0
 Card hover: whileHover={{y:-2}} transition={{duration:0.1}}
-Scroll reveal: whileInView + viewport={{once:true}}
 Every interactive element has a hover state + transition-colors duration-150 on hover/focus.
 
 NEVER: layoutId on table rows | animate during loading
+
+====================================
+SCROLL-DRIVEN REVEALS — CSS-FIRST WITH MOTION FALLBACK (preferred)
+====================================
+For section-level entrance reveals (cards staggering in, headlines rising, images
+fading), USE CSS `animation-timeline: view()` first. It's native, runs at 60fps on
+low-end devices, doesn't bundle 30KB of framer-motion JS for a single fade-up,
+and was tagged Baseline-2024 / Chrome+Edge 115+ / Safari 18+ / Firefox 130+.
+
+Pattern — globals.css (write ONCE, every section reuses):
+
+  @keyframes reveal-up {{
+    from {{ opacity: 0; transform: translateY(24px); }}
+    to   {{ opacity: 1; transform: translateY(0); }}
+  }}
+  /* Default (fallback for browsers without scroll-driven animations): static, no animation */
+  .reveal-up {{ opacity: 1; }}
+
+  @supports (animation-timeline: view()) {{
+    .reveal-up {{
+      animation: reveal-up var(--d-base, 550ms) var(--ease-sig, cubic-bezier(0.16, 1, 0.3, 1)) both;
+      animation-timeline: view();
+      animation-range: entry 10% cover 35%;
+    }}
+    /* Stagger: children get incrementally offset start positions via animation-delay */
+    .reveal-up.stagger-1 {{ animation-delay: 80ms;  }}
+    .reveal-up.stagger-2 {{ animation-delay: 160ms; }}
+    .reveal-up.stagger-3 {{ animation-delay: 240ms; }}
+    .reveal-up.stagger-4 {{ animation-delay: 320ms; }}
+  }}
+
+  @media (prefers-reduced-motion: reduce) {{
+    .reveal-up {{ animation: none; opacity: 1; transform: none; }}
+  }}
+
+Usage in JSX (NO framer-motion needed for these — saves bundle size + js cost):
+
+  <section>
+    <h2 className="reveal-up">Section headline</h2>
+    <p  className="reveal-up stagger-1">Sub-paragraph</p>
+    <div className="grid md:grid-cols-3 gap-6">
+      <Card className="reveal-up stagger-1" />
+      <Card className="reveal-up stagger-2" />
+      <Card className="reveal-up stagger-3" />
+    </div>
+  </section>
+
+When to STILL use framer-motion (not CSS):
+  • Hero entrance sequences with cascading delays (badge → H1 → sub → CTAs)
+    — these run on initial load, not on scroll, so animation-timeline doesn't apply.
+  • Hover micro-interactions (whileHover scale/rotate) where state-driven animation matters.
+  • Layout transitions (`layoutId`) on filtering/reordering lists.
+  • Scroll-linked scrubbing (`useScroll` + `useTransform`) — the signature_transition
+    types like `sticky-pin-scrub` and `parallax-layered`.
+
+For everything else (the 80% case of "card grid stagger as user scrolls in"), use CSS
+scroll-driven. Faster, smaller bundle, smoother on mid-tier devices.
+
+Bundle-size rule: if a section's only animation is reveal/stagger/fade-up, do NOT
+import motion at all. CSS classes only.
 
 ====================================
 SPACING DENSITY RULES
@@ -3418,12 +3958,13 @@ Fields you will see in LAYOUT_BLUEPRINT:
   section_rhythm                → every section → bg treatment (open-ended phrases)
   signature_motif               → one decorative element used 2-3x across the page
   design_mood                   → 2-3 sentences on the visual personality
-  hero_image_url                → exact Unsplash URL for the hero
+  hero_image_strategy           → background_full | structural_half | single_feature_card | decorative_scatter | illustration_3d | typographic_only
+  hero_image_url                → URL or pipe-separated list or "GENERATE_3D" or "NONE" (depends on strategy)
   supporting_image_urls         → URLs for other sections, mapped by section
   accent_detail                 → one signature micro-detail + placement
 
   DESIGN DNA variables (NEW — these control the unique visual language):
-  hero_archetype                → split / bento / diagonal / magazine / layered / cinematic / editorial-offset / full-bleed-dark / typographic / invented
+  hero_archetype                → split / bento / diagonal / magazine / layered-scroll / cinematic-parallax / editorial-offset / full-bleed-dark / product-showcase / typographic-hero / invented
   features_archetype            → bento-mixed / zigzag / vertical-tabs / horizontal-scroll / masonry / tilt-stack / showcase / timeline / numbered-editorial
   card_language                 → 1-2 sentences on radius + border + shadow + micro-details (paper-fold, wax-seal, glass, organic-blob, brutalist etc.)
   typography_pairing            → heading font + body font + mixing rules (tracking, weight, italic, caps)
@@ -3472,7 +4013,26 @@ one project is what makes output look "AI-generated". Pick the DNA once,
 apply it everywhere.
 
 ▸ hero_archetype → wrapper JSX skeleton:
+
+  ╔══════════════════════════════════════════════════════════════════╗
+  ║ HARD ENFORCEMENT: The LAYOUT_BLUEPRINT contains ONE assigned     ║
+  ║ hero_archetype value (e.g. "magazine" or "split"). You MUST use  ║
+  ║ THAT skeleton verbatim. The list below is a REFERENCE so you     ║
+  ║ know what each value means — NOT a menu to pick from.            ║
+  ║                                                                  ║
+  ║ FORBIDDEN: producing a hero pattern that doesn't match the       ║
+  ║ assigned hero_archetype. Specifically forbidden as a fallback:   ║
+  ║   • full-bleed photo background with dark scrim                  ║
+  ║   • absolute inset-0 object-cover Image as the wrapper           ║
+  ║   • white-text-over-dark-photo hero unless hero_archetype is     ║
+  ║     literally "full-bleed-dark" or "cinematic-parallax"          ║
+  ║                                                                  ║
+  ║ This default has shipped on 4 consecutive generations and made   ║
+  ║ every site look identical. Break the pattern.                    ║
+  ╚══════════════════════════════════════════════════════════════════╝
+
     split               → grid md:grid-cols-2 gap-12 items-center min-h-[85vh]
+                          (LIGHT background — text col-1, image col-2; no dark scrim)
     bento               → grid md:grid-cols-6 md:grid-rows-3 gap-4 min-h-[85vh]
                           (one tile md:col-span-4 md:row-span-2 holds H1)
     diagonal            → relative overflow-hidden + inner
@@ -3480,15 +4040,60 @@ apply it everywhere.
                                  style={{clipPath:'polygon(0 0, 55% 0, 40% 100%, 0 100%)'}} />
     magazine            → grid md:grid-cols-12 gap-8, H1 at col-span-9 text-[clamp(3rem,10vw,9rem)]
                           font-bold leading-[0.9], image at col-span-3 col-start-10 self-start
+                          (LIGHT background — H1 is the visual hero, image is small)
     layered-scroll      → relative min-h-screen with 3 absolute layers, data-parallax speeds
     cinematic-parallax  → relative h-screen with <img absolute inset-0 object-cover scale-110> +
                           dark gradient overlay + centered text-white H1
     editorial-offset    → relative h-[90vh] + H1 absolute top-16 left-12 + image absolute
                           bottom-0 right-0 w-[55%] aspect-[4/5] object-cover
+                          (LIGHT background — image is bottom-right card, NOT full-bleed)
     full-bleed-dark     → relative min-h-[90vh] + img absolute inset-0 + bg-gradient-to-t
                           from-black/80 via-black/40 to-transparent overlay + text-white
+                          (only use if BLUEPRINT explicitly assigned this — never as fallback)
     product-showcase    → grid md:grid-cols-5 gap-8, device mockup at col-span-3, text col-span-2
+                          (LIGHT or branded background — product photo is the hero, NOT a scrim)
     typographic-hero    → py-40 text-center with H1 at text-[clamp(4rem,14vw,12rem)] font-black
+                          (NO photo background — pure typography)
+
+▸ hero_image_strategy → how to render imagery in the hero:
+    background_full     → only when hero_archetype is cinematic-parallax / full-bleed-dark.
+                          <Image src={{hero_image_url}} className="absolute inset-0 object-cover" />
+                          + scrim overlay + white text. Anywhere else: FORBIDDEN.
+
+    structural_half     → image is one column of a grid. NEVER absolute inset-0.
+                          <Image src={{hero_image_url}} className="rounded-2xl object-cover aspect-[4/5]" />
+                          inside its grid cell. Light page bg, text-foreground (NOT text-white).
+
+    single_feature_card → image inside a small card, NOT a backdrop. Wrap in:
+                          <div className="rounded-3xl bg-card p-3 shadow-lg">
+                            <Image className="rounded-2xl aspect-[4/3] object-cover" />
+                          </div>
+                          The image is decorative — H1 is the visual hero.
+
+    decorative_scatter  → hero_image_url is pipe-separated (3-5 URLs). Render each as a small
+                          rotated card absolutely positioned around the centered headline:
+                          <div className="absolute top-12 right-[18%] w-32 aspect-[4/5] rotate-6 rounded-xl shadow-xl overflow-hidden">
+                            <Image src={{urls[0]}} className="object-cover" />
+                          </div>
+                          (different sizes/rotations/positions per image — NEVER stack them in a row)
+
+    illustration_3d     → hero_image_url is "GENERATE_3D". DO NOT use Unsplash. Instead build:
+                          (a) an inline SVG illustration with gradient blobs, isometric shapes,
+                              or abstract geometric scene matching the brand palette, OR
+                          (b) a CSS-only 3D scene: stacked rounded shapes with shadow + gradient
+                              backgrounds + blur orbs (no image src at all).
+                          Position it where the image would otherwise go for the chosen
+                          hero_archetype (e.g. col-2 of split, bottom-right of editorial-offset).
+
+    typographic_only    → hero_image_url is "NONE". Render NO image at all. The hero is pure
+                          typography. Only valid when hero_archetype is typographic-hero.
+
+  COUPLING (will be visually obvious if violated):
+    cinematic-parallax / full-bleed-dark → background_full ONLY
+    typographic-hero                     → typographic_only ONLY
+    split / editorial-offset / product-showcase → structural_half | illustration_3d
+    magazine / bento                     → single_feature_card | decorative_scatter | illustration_3d
+    diagonal / layered-scroll            → any except background_full
 
 ▸ features_archetype → section JSX skeleton (choose the one named, do NOT default to 3-col grid):
     bento-mixed         → grid md:grid-cols-4 md:auto-rows-[16rem] gap-4
@@ -3532,6 +4137,42 @@ apply it everywhere.
     All H1/H2 use font-heading. Body paragraphs use font-body (or default).
     Honor tracking/italic/caps rules from the blueprint (e.g. "italic for H1" → italic class).
 
+  HERO H1 LEGIBILITY RULES (override blueprint when these apply):
+    • If H1 font is a display SERIF (Fraunces, Playfair, DM Serif, Cormorant, Bodoni):
+        - Cap font size at clamp(2.75rem, 7vw, 5.5rem) — NEVER 8rem+ italic display serif
+          (at extreme sizes the italic 'p'+'a' overlaps and reads as 'b' — "Spain"
+          renders as "Sbain"; "place" as "blace")
+        - Use tracking-tight or tracking-[-0.02em] — italic display serifs need
+          NEGATIVE letter-spacing at large sizes or letters merge
+        - Prefer roman (no italic class) for the FULL headline. If the blueprint
+          says "italic for H1", apply italic to ONE WORD ONLY (the accent word in
+          a different color), not the whole sentence.
+        - Always add leading-[1.05] or tighter — italic display serifs visually
+          collide with the descenders of the line above at default leading
+    • If hero_archetype is editorial-offset / split / product-showcase (light bg):
+        - H1 is text-foreground (NOT text-white) — display serifs lose stroke
+          contrast on light/cream backgrounds; bump font-weight to 700+ if cream
+    • Universal: NEVER ship a hero H1 wider than max-w-5xl. Long single-line
+      display serifs at viewport width is the AI-generated hero giveaway.
+
+    • ACCENT WORD PLACEMENT (the "Sbain on a plate / Where Naples Comes to Your Table"
+      problem — italic accent word breaks alone onto its own line at the end):
+        - When using <span className="italic text-primary"> or similar to highlight
+          ONE word in the headline, that word MUST sit IN-LINE with surrounding text,
+          NEVER alone on its own line. If the word naturally falls at line end:
+          (a) wrap the word + the preceding word together inside the span so they
+              break together, OR
+          (b) put a <br /> BEFORE the accent phrase to make it intentional, OR
+          (c) wrap the entire accent phrase (3-4 words) in the span so it occupies
+              a full line by itself rather than one orphan word.
+        - The pattern "...Comes to Your <span>Table</span>" with "Table" wrapping
+          alone reads as a layout bug. Either rewrite to put the accent at the
+          start ("<span>Tonight</span>, Naples Comes to Your Table") or expand the
+          span ("...Comes to <span>Your Table Tonight</span>").
+        - Headlines with accent words should have a LIGATURE-SAFE choice: avoid
+          one-word italic accents containing 'p', 'a', 'b', 'g' next to similar
+          letters at extreme display sizes — the italic shapes merge.
+
 ▸ motion_language → add Framer Motion or Motion One (preferred: motion/react), wrap components:
     stagger-fade-up     → <motion.div initial={{opacity:0,y:20}} whileInView={{opacity:1,y:0}}
                              viewport={{once:true}} transition={{duration:0.5,delay:i*0.08}}>
@@ -3540,6 +4181,69 @@ apply it everywhere.
                           "transition-all duration-200 hover:-translate-y-1 hover:shadow-xl"
     parallax-scroll     → use useScroll + useTransform from motion/react for background layers
     Install: add "framer-motion" to package.json dependencies if motion_language isn't "minimal".
+
+▸ motion_signature → ONE consistent motion DNA across the whole project. Look for the
+  `motion_signature:` line in LAYOUT_BLUEPRINT. It carries 4 strict tokens:
+
+  EASING_SIGNATURE (apply this curve to EVERY transition/motion.div):
+    quint-out         → cubic-bezier(0.16, 1, 0.3, 1)         ← awwwards default — premium feel
+    expo-out          → cubic-bezier(0.19, 1, 0.22, 1)        ← confident, snappy
+    circ-out          → cubic-bezier(0, 0.55, 0.45, 1)        ← soft, organic
+    back-out-subtle   → cubic-bezier(0.34, 1.2, 0.64, 1)      ← playful, small overshoot
+    linear-precise    → linear                                ← brutalist / dense_luxury
+    spring-quiet      → use Motion's spring(80, 16) — no cubic-bezier
+
+    In CSS: `transition-timing-function: <curve>;`
+    In Motion: `transition={{ease: [0.16, 1, 0.3, 1], duration: ...}}`
+    NEVER mix curves across sections.
+
+  DURATIONS (3 named values — use them everywhere; no ad-hoc values):
+    fast  → hover, focus, micro-interactions (e.g. 180ms)
+    base  → reveals, card stagger entrances (e.g. 550ms)
+    slow  → hero entrance, dramatic moments (e.g. 1000ms)
+
+    Encode in CSS as variables in globals.css:
+      :root {{
+        --d-fast: 180ms; --d-base: 550ms; --d-slow: 1000ms;
+        --ease-sig: cubic-bezier(0.16, 1, 0.3, 1);
+      }}
+    Then `transition-duration: var(--d-fast); transition-timing-function: var(--ease-sig);`
+    Or in Motion: `transition={{duration: 0.55, ease: [0.16, 1, 0.3, 1]}}`
+
+  SIGNATURE_TRANSITION (build ONE bespoke component, reuse in hero AND ≥1 other section):
+    mask-reveal-diag    → clip-path:polygon(0 0,100% 0,100% 100%,0 100%) animates from
+                          polygon(0 0,0 0,0 100%,0 100%) (a sweep from left). On scroll-in.
+    weight-shift        → variable-font: animate font-variation-settings:'wght' 100→700
+                          on viewport entry over base duration. Requires variable font.
+    sticky-pin-scrub    → sticky outer + inner translateY scrubbing — Framer
+                          useScroll+useTransform with target: ref, offset: ['start end','end start']
+    horizontal-rail     → vertical pin (sticky top-0 h-screen) wrapping a flex row that
+                          translateX scrolls horizontally based on scroll progress.
+    chromatic-glitch    → 3 stacked text/img layers (red/green/blue tinted) offset by 1-2px
+                          on hover; merge to single layer at rest.
+    duotone-fade        → grayscale(100%) at rest → grayscale(0) over base on viewport-enter.
+                          Use `filter: grayscale(...)` with a transition.
+    kinetic-typography  → split headline into <span> per char; each rises with stagger
+                          delay = i * 40ms.
+    parallax-layered    → 3 absolute div layers with different translateY based on scroll.
+                          Use Framer useScroll + useTransform([0,1],[0,Δ]).
+    magnetic-pull       → primary CTA tracks cursor in 80px radius; useEventListener
+                          + transform translate(x*0.2, y*0.2).
+    minimal-precise     → ONE 200ms fade-up on viewport entry, nothing else. For
+                          brutalist_mono / sharp_corporate / spatial_functional.
+
+    REQUIREMENT: build the chosen signature as ONE reusable component
+    (e.g. <SignatureMaskReveal>, <ChromaticHover>, <HorizontalRail>) and use it
+    in the hero AND at least one other section. A single signature applied
+    twice is what makes a site read as 'designed' instead of 'assembled'.
+
+  CURSOR_TREATMENT (perceived-quality lift; respects prefers-reduced-motion):
+    default       → no override
+    magnetic      → wrap primary CTAs in <MagneticButton> that translates toward cursor
+                    when within 80px (transform translate(x*0.25, y*0.25))
+    custom-blob   → fixed div following cursor with mix-blend-mode:difference, scales 2x
+                    over interactive elements
+    crosshair     → 1px horizontal + 1px vertical line tracking cursor; fade out on idle
 
 ▸ decorative_pattern → place once in a global component (background fixed layer) OR per-section:
     dot-grid            → absolute inset-0 bg-[radial-gradient(circle_at_1px_1px,rgb(var(--foreground-rgb)/0.08)_1px,transparent_0)] bg-[size:24px_24px]
@@ -3642,7 +4346,10 @@ the hero MUST include real imagery. Text-only heroes are FORBIDDEN for these dom
 Pick ONE of these hero layouts:
 
   a) SPLIT SCREEN (recommended default):
-     <section className="relative min-h-[90vh] grid md:grid-cols-2 gap-12 items-center
+     ⚠️  LEFT column = text on a CLEAN background. NO background image on the <section> or
+         the text <div>. The photo lives ONLY inside the right column div. Do NOT use a
+         bg-[url(...)] or an absolute <img> on the section wrapper for this layout.
+     <section className="bg-background relative min-h-[90vh] grid md:grid-cols-2 gap-12 items-center
                          container mx-auto px-6 py-20">
        <div>{/* badge, H1, sub, CTAs, social-proof row */}</div>
        <div className="relative aspect-[4/5] rounded-3xl overflow-hidden shadow-2xl">
@@ -3709,21 +4416,17 @@ BEFORE committing any hero, self-check:
   If any answer is NO, redesign before writing the JSX.
 
 USE THESE UNSPLASH PHOTO URLs (exact, not /random):
-  Coffee / espresso   → https://images.unsplash.com/photo-1509042239860-f550ce710b93
-  Coffee shop interior→ https://images.unsplash.com/photo-1554118811-1e0d58224f24
-  Latte art           → https://images.unsplash.com/photo-1517231925375-bf2cb42917a5
-  Plated food         → https://images.unsplash.com/photo-1414235077428-338989a2e8c0
-  Restaurant          → https://images.unsplash.com/photo-1517248135467-4c7edcad34c4
-  Bakery              → https://images.unsplash.com/photo-1509440159596-0249088772ff
-  Gym / weights       → https://images.unsplash.com/photo-1540497077202-7c8a3999166f
-  Yoga / pilates      → https://images.unsplash.com/photo-1544367567-0f2fcb009e0b
-  Salon / hair        → https://images.unsplash.com/photo-1560066984-138dadb4c035
-  Spa                 → https://images.unsplash.com/photo-1540555700478-4be289fbecef
-  Hotel / travel      → https://images.unsplash.com/photo-1488085061387-422e29b40080
-  Real estate         → https://images.unsplash.com/photo-1560518883-ce09059eeffa
-  Dog / pet           → https://images.unsplash.com/photo-1450778869180-41d0601e046e
-  Wedding             → https://images.unsplash.com/photo-1519741497674-611481863552
-  Car / automotive    → https://images.unsplash.com/photo-1492144534655-ae79c964c9d7
+  ⚠️  Use AT MOST ONE of these URLs in the hero section — not two. For split screen,
+      pick ONE URL for the right column. Do NOT also use a second URL as a section
+      background. Multiple domain photos in the same hero is the #1 banner regression.
+
+  ⚠️  PRIORITY: When ===CULTURAL_ATMOSPHERE=== signature_imagery contains a more
+      specific search term for the project (e.g. "blistered cornicione of margherita",
+      "tahona stone wheel in palenque", "binchotan yakitori grill smoke"), PREFER
+      finding a real Unsplash URL for that specific scene over the generic pool
+      below. The generic pool is a fallback. Cultural specificity beats stock.
+
+<<UNSPLASH_POOL_BLOCK>>
 
 Append `?auto=format&fit=crop&w=1600&q=80` to every Unsplash URL for performance.
 
@@ -3999,12 +4702,21 @@ def _phase_rules_prefix(phase: int) -> str:
         return PHASE_APPENDIX_FOUNDATION
     if phase == 3:
         return PHASE_APPENDIX_COMPLETENESS
-    return PHASE_APPENDIX_CONTENT
+    # Phase 2 (CONTENT) — substitute the rotating Unsplash pool fresh each call
+    # so two generations of the same domain don't ship identical photos.
+    return PHASE_APPENDIX_CONTENT.replace("<<UNSPLASH_POOL_BLOCK>>", _build_unsplash_pool_block())
 
 
 # Back-compat alias — any legacy reference to SYSTEM_PROMPT gets a reasonable
 # default (CORE + full content appendix, matches previous superset behaviour).
-SYSTEM_PROMPT = SYSTEM_PROMPT_CORE + PHASE_APPENDIX_FOUNDATION + PHASE_APPENDIX_CONTENT + PHASE_APPENDIX_COMPLETENESS
+# Photo pool is substituted at import time; callers that need fresh photos per
+# generation should use _get_appendix_for_phase(2) instead.
+SYSTEM_PROMPT = (
+    SYSTEM_PROMPT_CORE
+    + PHASE_APPENDIX_FOUNDATION
+    + PHASE_APPENDIX_CONTENT.replace("<<UNSPLASH_POOL_BLOCK>>", _build_unsplash_pool_block())
+    + PHASE_APPENDIX_COMPLETENESS
+)
 
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -4046,6 +4758,201 @@ async def generate_new_project(
         logger.error("generate_new_project crashed: %s", exc, exc_info=True)
         await _ws_send(websocket, "error", f"❌ Generation failed: {str(exc)[:200]}")
         return False
+
+
+def _audit_admin_entity_coverage(
+    workspace_path: str,
+    entities: list,
+) -> list[dict]:
+    """Return entities whose CRUD UI is missing from the generated project.
+
+    Phase 2 generates 4 files per entity in heavy admin batches:
+      • src/features/<entity>/services/<entity>.service.{js,jsx,ts,tsx}
+      • src/features/<entity>/hooks/use<Entity>.{js,jsx,ts,tsx}
+      • src/features/<entity>/pages/<Entity>ListPage.{js,jsx,ts,tsx}
+      • src/features/<entity>/pages/<Entity>FormPage.{js,jsx,ts,tsx}
+
+    A batch can fail silently (transient stream stall, max_tokens truncation)
+    and the merge step at the call site just takes whatever batches succeeded
+    — leaving 3 entities with NO UI in the final project. The Phase 3
+    completeness prompt only enumerates `schema.pages`, not `schema.entities`,
+    so it doesn't catch this on its own.
+
+    This auditor walks the workspace, looks for the `<Entity>ListPage.*`
+    file for each entity, and returns the entities that are missing. Caller
+    decides what to do (recovery batch, Phase 3 hint, hard error).
+
+    Returns: list of entity dicts (the original schema objects) that are
+    missing their ListPage. Empty list = full coverage.
+    """
+    if not entities or not workspace_path:
+        return []
+
+    src_dir = os.path.join(workspace_path, "src")
+    if not os.path.isdir(src_dir):
+        return entities  # No src dir → everything is missing
+
+    # Index every JSX/TSX file in the project once so the per-entity check
+    # is O(1) instead of os.walk per entity.
+    found_list_pages: set[str] = set()
+    found_form_pages: set[str] = set()
+    for root, dirs, files in os.walk(src_dir):
+        dirs[:] = [d for d in dirs if d not in ("node_modules", ".git", ".next", "dist", "build")]
+        for fname in files:
+            if not fname.endswith((".js", ".jsx", ".ts", ".tsx")):
+                continue
+            stem = os.path.splitext(fname)[0]
+            if stem.endswith("ListPage"):
+                found_list_pages.add(stem[: -len("ListPage")].lower())
+            elif stem.endswith("FormPage"):
+                found_form_pages.add(stem[: -len("FormPage")].lower())
+
+    missing: list[dict] = []
+    for ent in entities:
+        if not isinstance(ent, dict):
+            continue
+        name = (ent.get("name") or "").strip()
+        if not name:
+            continue
+        # Match on lowercased entity name. Tolerate plurals: schema name
+        # is typically singular (Vehicle), file is VehicleListPage.
+        key = name.lower()
+        if key not in found_list_pages or key not in found_form_pages:
+            missing.append(ent)
+
+    return missing
+
+
+async def _recover_missing_entities(
+    workspace_path: str,
+    missing_entities: list,
+    project_schema: dict,
+    description: str,
+    api_key: str,
+    websocket,
+    research_distilled: str,
+    manifest_sliced: str,
+    file_tree: str,
+    stack_rules: str,
+    api_env: str,
+    api_default: str,
+) -> int:
+    """Run ONE focused Claude call to generate CRUD for missing entities.
+
+    Called between Phase 2 and Phase 3 when the entity-coverage auditor
+    finds gaps. Trades a ~30-60s cost for guaranteed full coverage on
+    bigger admin panels — preferable to silently shipping a project with
+    half its sidebar nav linking to non-existent pages.
+
+    Returns the number of files written (0 on failure). Failure is
+    non-fatal: caller continues to Phase 3 which has its own gap-fill logic.
+    """
+    if not missing_entities:
+        return 0
+
+    from app.services.project_schema import schema_to_entity_spec
+
+    # Build a minimal schema slice with only the missing entities so the
+    # spec helper produces a focused entity list.
+    recovery_schema = {**project_schema, "entities": missing_entities}
+    recovery_spec = schema_to_entity_spec(recovery_schema)
+    missing_names = ", ".join(e.get("name", "?") for e in missing_entities)
+
+    await _ws_send(
+        websocket,
+        "progress",
+        f"🔁 Phase 2.5 — recovering {len(missing_entities)} missing entit"
+        f"{'ies' if len(missing_entities) != 1 else 'y'}: {missing_names}",
+    )
+    logger.info(
+        "Phase 2.5 entity recovery: generating CRUD for %d missing entit%s — %s",
+        len(missing_entities),
+        "ies" if len(missing_entities) != 1 else "y",
+        missing_names,
+    )
+
+    recovery_prompt = f"""PHASE 2.5 — ENTITY COVERAGE RECOVERY
+
+The Phase 2 batch generation missed CRUD modules for these entities:
+  {missing_names}
+
+These entities exist in the schema but their feature folders were not
+written (the parallel batch that owned them either failed or truncated).
+
+For EACH missing entity below, create the COMPLETE feature folder with
+ALL FOUR files. This is the ONLY chance to recover them — Phase 3 won't
+backfill missing entity CRUD.
+
+  - src/features/<entity>/services/<entity>.service.{{js,jsx,ts,tsx}}
+  - src/features/<entity>/hooks/use<Entity>.{{js,jsx,ts,tsx}}
+  - src/features/<entity>/pages/<Entity>ListPage.{{js,jsx,ts,tsx}}
+  - src/features/<entity>/pages/<Entity>FormPage.{{js,jsx,ts,tsx}}
+
+IMPORTANT — API-READY SERVICES:
+  const API_URL = import.meta.env.{api_env} || '{api_default}';
+  Services must use REAL fetch() calls. DO NOT hardcode mock data arrays.
+  Catch errors and return empty arrays on failure.
+
+IMPORTANT — DESIGN SYSTEM:
+  Import {{ ds }} from '@/lib/design-system' in ALL components.
+  Use ds.card for card wrappers, ds.badge[status] for status badges.
+
+IMPORTANT — DO NOT regenerate any other files. Only the missing entities.
+The foundation, sidebar, layouts, and other entities' CRUD already exist.
+
+{recovery_spec}
+
+PROJECT: {description}
+
+DESIGN SYSTEM FROM RESEARCH:
+{research_distilled}
+
+TEMPLATE MANIFEST:
+{manifest_sliced}
+
+CURRENT FILE TREE:
+{file_tree[:2000]}
+
+{stack_rules}
+
+Call the write_project_files tool with the recovery files only.
+"""
+
+    try:
+        result = await asyncio.wait_for(
+            call_claude_for_json(
+                system_prompt=_system_prompt_for_phase(2),
+                user_prompt=_phase_rules_prefix(2) + "\n" + recovery_prompt,
+                api_key=api_key,
+                websocket=websocket,
+                # 4 files × N entities; size cap stays well under truncation risk.
+                max_tokens=min(48000, 12000 * len(missing_entities)),
+                model=DEFAULT_MODEL,
+                extended_output=True,
+            ),
+            timeout=240.0,  # 4-min cap — recovery is bonus work, don't block Phase 3
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Phase 2.5 entity recovery timed out — proceeding to Phase 3")
+        return 0
+    except Exception as exc:
+        logger.warning("Phase 2.5 entity recovery failed: %s", exc)
+        return 0
+
+    if not result or not isinstance(result, dict) or not result.get("files"):
+        logger.warning("Phase 2.5 entity recovery returned no files")
+        return 0
+
+    written = write_files_from_json(result, workspace_path)
+    if written:
+        await _emit_file_writes(websocket, written, action="recover")
+        await _ws_send(
+            websocket,
+            "progress",
+            f"✅ Recovered {len(written)} file(s) for missing entities",
+        )
+        logger.info("Phase 2.5 recovered %d files for entities: %s", len(written), missing_names)
+    return len(written)
 
 
 def _validate_plan_data(plan_data: dict, archetype: str) -> list[str]:
@@ -4214,14 +5121,21 @@ async def _generate_new_project_inner(
     await _ws_send(websocket, "progress", "🔬 Researching real products in this domain...")
     research_quality = "full"
 
-    # Research cache keyed by md5(description+stack)[:14] — avoids re-researching
-    # identical tasks (e.g. retries, repeated demos).  Stored in /tmp, auto-evicted
-    # by OS.  Cache entries expire after 1 hour via mtime check.
+    # Research cache keyed by md5(description+stack+chat_session_id)[:14].
+    # Including chat_session_id is important: WITHOUT it, two users (or the
+    # same user starting a fresh chat) generating "Coffee Roaster landing
+    # page" within 10 minutes of each other got the IDENTICAL Gemini research
+    # AND Design Director output — same archetype, same palette, same
+    # warm_artisan everything. That's the opposite of "every generation
+    # should feel different." Including the session id means:
+    #   • Retry inside the SAME chat → cache HIT (saves Gemini cost)
+    #   • New chat for the same idea → cache MISS → fresh research +
+    #     fresh Director output → different archetype, palette, header.
     import hashlib as _hashlib
     import time as _time_cache
     from app.paths import RESEARCH_CACHE_DIR as _cache_dir
     _cache_key = _hashlib.md5(
-        f"{description.strip().lower()}|{stack}|{_layout_archetype}".encode()
+        f"{description.strip().lower()}|{stack}|{_layout_archetype}|{chat_session_id or ''}".encode()
     ).hexdigest()[:14]
     _cache_path = f"{_cache_dir}/{_cache_key}.txt"
     _design_cache_path = f"{_cache_dir}/{_cache_key}.design.json"
@@ -4321,6 +5235,11 @@ async def _generate_new_project_inner(
                     )
                     _vibe_from_research = _extract_research_section(research, "===VIBE===", max_chars=400)
                     _copy_tone_from_research = _extract_research_section(research, "===COPY_TONE===", max_chars=400)
+                    # Cultural atmosphere — Gemini's research on what country/region
+                    # cues this brand should evoke. Drives palette, typography,
+                    # imagery, and language phrases. For "none — modern global"
+                    # brands, the design system falls back to its generic logic.
+                    _cultural_atmosphere = _extract_research_section(research, "===CULTURAL_ATMOSPHERE===", max_chars=2400)
                     # Brand name: Claude can infer it from description inside the call;
                     # passing description as-is avoids brittle regex extraction here.
                     # Outer cap (220s): two Claude attempts × ~90s httpx timeout +
@@ -4334,6 +5253,7 @@ async def _generate_new_project_inner(
                             copy_tone=_copy_tone_from_research,
                             layout_archetype=_layout_archetype,
                             vibe=_vibe_from_research,
+                            cultural_atmosphere=_cultural_atmosphere,
                             api_key=api_key,
                             websocket=websocket,
                         ),
@@ -4388,6 +5308,7 @@ async def _generate_new_project_inner(
     _research_copy_tone = _extract_research_section(research, "===COPY_TONE===")
     _research_domain_must_haves = _extract_research_section(research, "===DOMAIN_MUST_HAVES===")
     _research_design_system_name = _extract_research_section(research, "===DESIGN_SYSTEM_NAME===", max_chars=100).strip().strip('"').strip("'")
+    _research_cultural_atmosphere = _extract_research_section(research, "===CULTURAL_ATMOSPHERE===", max_chars=2400)
 
     # Re-derive layout archetype from Gemini's confirmed classification in research
     _classification = _extract_layout_archetype(research, _classification)
@@ -4438,6 +5359,28 @@ async def _generate_new_project_inner(
         websocket=websocket,
         original_description=original_description,
     )
+
+    # Bridge the Director's motion_language onto schema.theme.motion so the
+    # deterministic globals.css writer can emit --d-fast/--d-base/--d-slow/
+    # --ease-sig variables. Without this the CSS reveal utilities fall back
+    # to safe defaults (quint-out / 180/550/1000ms) — still works, but the
+    # Director's per-project taste choice doesn't reach the stylesheet.
+    if _design and isinstance(_design, dict):
+        _ml = _design.get("motion_language") or {}
+        if any(_ml.get(k) for k in ("easing_signature", "durations", "signature_transition", "cursor_treatment")):
+            project_schema.setdefault("theme", {})
+            project_schema["theme"]["motion"] = {
+                "easing_signature": _ml.get("easing_signature", "quint-out"),
+                "durations": _ml.get("durations") or {"fast": "180ms", "base": "550ms", "slow": "1000ms"},
+                "signature_transition": _ml.get("signature_transition", "minimal-precise"),
+                "cursor_treatment": _ml.get("cursor_treatment", "default"),
+            }
+            logger.info(
+                "Bridged Director motion_signature onto schema.theme.motion: easing=%s transition=%s cursor=%s",
+                project_schema["theme"]["motion"]["easing_signature"],
+                project_schema["theme"]["motion"]["signature_transition"],
+                project_schema["theme"]["motion"]["cursor_treatment"],
+            )
 
     # ── Step 3b1: Generate Supabase backend schema (admin/CRM only) ──
     # For data-driven projects (admin panels, CRMs, dashboards), turn the
@@ -4520,6 +5463,7 @@ async def _generate_new_project_inner(
                     section_ids=_section_ids,
                     api_key=api_key,
                     vibe=_extract_research_section(research, "===VIBE===", max_chars=400),
+                    cultural_atmosphere=_extract_research_section(research, "===CULTURAL_ATMOSPHERE===", max_chars=2400),
                     websocket=websocket,
                 ),
                 timeout=220.0,
@@ -5050,8 +5994,7 @@ async def _generate_new_project_inner(
             # so each generation reflects its unique palette rather than a generic line.
             _primary_hint = ""
             if _primary_hsl:
-                import re as _re_hsl
-                _hm = _re_hsl.search(r"(\d+(?:\.\d+)?)\s*(?:deg|°)?", _primary_hsl)
+                _hm = re.search(r"(\d+(?:\.\d+)?)\s*(?:deg|°)?", _primary_hsl)
                 if _hm:
                     _h = float(_hm.group(1))
                     if _h < 30 or _h >= 330:
@@ -5074,8 +6017,7 @@ async def _generate_new_project_inner(
                 f"Purpose-built {_vibe} aesthetic — {_primary_hint or 'curated'} color tokens, clean typography, conversion-optimised flow.",
                 f"Fully responsive {_primary_hint or _vibe} design with framer-motion micro-interactions and focused conversion paths.",
             ]
-            import random as _rand_about
-            _about += " " + _rand_about.choice(_style_closers)
+            _about += " " + random.choice(_style_closers)
 
         # ── Design description line ────────────────────────────
         font_str = " + ".join(f for f in [_h_font, _b_font] if f) or "Inter + sans-serif"
@@ -5478,6 +6420,27 @@ DO NOT use CSS variable syntax. Use only Tailwind utility classes.
             f"\nDOMAIN-SPECIFIC COMPONENTS (from research — build these exactly):\n{_research_key_components}\n"
             if _research_key_components else ""
         )
+        _cultural_block_codegen = (
+            f"""
+====================================
+CULTURAL ATMOSPHERE (from research — apply across all sections):
+====================================
+{_research_cultural_atmosphere}
+
+When country_or_region is set (NOT "none — modern global"):
+  • Use signature_imagery search terms in ALL <Image> tags — never default to
+    "modern restaurant interior" / "elegant office" / "lifestyle photo"
+  • Use language_phrases as eyebrow tags, accent words, microcopy — keep them
+    in the source language, do NOT translate
+  • Apply section_label_overrides to nav links and section headers
+  • banned_generics from research are FORBIDDEN — do not produce them in JSX
+  • motif_inventory items appear 2-3× per page as small SVG decorations
+
+When country_or_region is "none — modern global", skip cultural rules.
+"""
+            if _research_cultural_atmosphere and _research_cultural_atmosphere.strip()
+            else ""
+        )
         stitch_instruction = f"""
 ====================================
 DESIGN SPEC — "{_plan_design_system_name}"
@@ -5488,7 +6451,7 @@ Accent             : {_accent_desc}
 Typography         : {_font_desc}
 Border radius      : {_radius}
 Card surface       : {_card_desc}
-{_admin_components_block}
+{_admin_components_block}{_cultural_block_codegen}
 SPATIAL PATTERNS — apply exactly with Tailwind classes:
 - Sidebar: w-64 bg-card border-r border-border, "{_brand_name}" logo h-16 border-b,
   nav items px-3 py-2 rounded-md hover:bg-muted, icon w-4 h-4 mr-3, active bg-primary/10 text-primary,
@@ -6119,7 +7082,58 @@ Call the write_project_files tool with ALL files for THIS batch only.
                 "role": "system",
                 "content": "⚠️ Phase 2 generated no files (response was truncated). Phase 3 will attempt to fill the gap.",
             })
-    
+
+    # ── Phase 2.5: Entity coverage audit (admin/CRM/TMS only) ───────────
+    # Heavy admin batches occasionally fail silently (one of N parallel
+    # batches truncates or stalls), leaving entire entities with no CRUD UI.
+    # Phase 3's completeness check only walks `schema.pages`, so it doesn't
+    # catch this. Run a focused recovery batch BEFORE Phase 3 so the
+    # generated project actually has every entity the user asked for.
+    _missing_entities_for_p3 = []
+    if _is_admin and _entities_list:
+        try:
+            _missing = _audit_admin_entity_coverage(workspace_path, _entities_list)
+            if _missing:
+                _missing_names = [e.get("name", "?") for e in _missing]
+                logger.warning(
+                    "Entity coverage audit: %d/%d entities missing CRUD UI: %s",
+                    len(_missing), len(_entities_list), _missing_names,
+                )
+                _recovered = await _recover_missing_entities(
+                    workspace_path=workspace_path,
+                    missing_entities=_missing,
+                    project_schema=project_schema,
+                    description=description,
+                    api_key=api_key,
+                    websocket=websocket,
+                    research_distilled=research_distilled,
+                    manifest_sliced=manifest_sliced,
+                    file_tree=_build_file_tree(workspace_path),
+                    stack_rules=stack_rules,
+                    api_env=_api_env,
+                    api_default=_api_default,
+                )
+                total_files += _recovered
+
+                # Re-audit after recovery — anything STILL missing rides into
+                # the Phase 3 prompt as an explicit "must create" list so
+                # Claude can take one more shot at it.
+                _missing_entities_for_p3 = _audit_admin_entity_coverage(
+                    workspace_path, _entities_list,
+                )
+                if _missing_entities_for_p3:
+                    logger.warning(
+                        "Phase 2.5 recovery left %d entities still missing — passing to Phase 3",
+                        len(_missing_entities_for_p3),
+                    )
+            else:
+                logger.info(
+                    "Entity coverage audit: all %d entities have CRUD UI ✓",
+                    len(_entities_list),
+                )
+        except Exception as _audit_err:
+            logger.warning("Entity coverage audit failed (non-fatal): %s", _audit_err)
+
     # Rebuild file tree for Phase 3
     file_tree_3 = _build_file_tree(workspace_path)
     
@@ -6155,6 +7169,30 @@ Call the write_project_files tool with ALL files for THIS batch only.
             f"Any pages/sections referenced in navigation or schema not yet generated. "
             f"For a {_layout_archetype.replace('_', ' ')} ({_domain} domain), "
             f"ensure all expected {'sections' if _is_landing else 'pages'} are fully built."
+        )
+
+    # If the Phase 2.5 entity-recovery batch couldn't bring everything home,
+    # surface the still-missing entities as an explicit "MUST CREATE" block in
+    # the Phase 3 prompt. Phase 3 then becomes the third (and last) chance to
+    # fill in CRUD for entities the user actually asked for.
+    _missing_entity_p3_block = ""
+    if _missing_entities_for_p3:
+        _names = ", ".join(e.get("name", "?") for e in _missing_entities_for_p3)
+        _expected_files: list[str] = []
+        for ent in _missing_entities_for_p3:
+            _ename = (ent.get("name") or "Entity").strip()
+            _slug = _ename.lower()
+            _expected_files.append(
+                f"   - src/features/{_slug}/services/{_slug}.service.* "
+                f"+ hooks/use{_ename}.* + pages/{_ename}ListPage.* + pages/{_ename}FormPage.*"
+            )
+        _missing_entity_p3_block = (
+            "\n\n⚠️ CRITICAL — MISSING ENTITY CRUD (final recovery attempt):\n"
+            f"   Phase 2 + Phase 2.5 did not generate CRUD UI for: {_names}\n"
+            f"   These entities exist in the schema and are linked from the sidebar nav.\n"
+            f"   You MUST create the four files for each missing entity:\n"
+            + "\n".join(_expected_files)
+            + "\n   Use the schema entity definitions below as the source of truth for fields.\n"
         )
 
     # ── Single-page landing: Phase 3 is COMPLETENESS-ONLY — no extra pages ──────
@@ -6219,7 +7257,7 @@ Generate:
 
 {f'''SIDEBAR PAGES WITHOUT CRUD (build these as full feature pages — NOT stubs):
 {schema_extra_pages_spec}
-''' if schema_extra_pages_spec and _is_admin else ''}
+''' if schema_extra_pages_spec and _is_admin else ''}{_missing_entity_p3_block}
 2. COMPLETENESS CHECK — verify EVERY schema page:
    Schema-required pages:
 {schema_pages_list}
@@ -6428,11 +7466,3 @@ Call the write_project_files tool with ALL files.
             logger.warning("Failed to set generation_complete (non-fatal): %s", _gc_err)
 
     return True
-
-
-VALID_APP_TYPES = [
-    "admin_panel", "dashboard", "e_commerce", "saas_app",
-    "landing_page", "blog", "portfolio", "crm", "erp",
-    "logistics", "healthcare", "finance", "education", "other",
-]
-

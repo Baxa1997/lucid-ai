@@ -321,94 +321,75 @@ export default function ChatPanel() {
             </div>
           ))}
 
-          {/* Unified status line — shows whenever the agent is working and
-              we are waiting on the next agent message (covers the FIRST reply
-              AND every follow-up reply during a running session). */}
-          {(() => {
-            const ALL_ACTIVE = ['connecting', 'preparing', 'cloning', 'installing', 'starting', 'health_check', 'running'];
-            if (!ALL_ACTIVE.includes(status)) return null;
-            const liveMessages = messages.filter((m) => !m.fromHistory);
-            const lastLive = liveMessages.slice(-1)[0];
-            // Show the indicator whenever we're not currently displaying an
-            // agent reply in the live stream. The previous implementation
-            // suppressed the indicator once ANY agent reply had landed, which
-            // meant follow-up user messages never showed a thinking state.
-            const shouldShow = !lastLive || lastLive.role === 'user' || lastLive.role === 'system';
-            if (!shouldShow) return null;
-            // For 'running': mirror the BuildingScreen phase label so both
-            // panels always show the same status rather than conflicting text.
-            const activePhase = (phases || []).find((p) => p.status === 'active');
-            const maxDonePhase = (phases || [])
-              .filter((p) => p.status === 'done')
-              .reduce((max, p) => Math.max(max, p.phase || 0), 0);
-            const currentPhaseNum = activePhase?.phase || maxDonePhase || 0;
-            const PHASE_LABELS = {
-              0: 'Thinking…',
-              1: 'Building app...',
-              2: 'Preparing workspace...',
-              3: 'Researching your idea...',
-              4: activePhase?.title?.toLowerCase().includes('design')
-                  ? 'Choosing design style...'
-                  : 'Planning your code...',
-              5: 'Writing your code...',
-              6: 'Verifying build...',
-              7: 'Publishing project...',
-            };
-            const phaseLabel = currentPhaseNum > 0
-              ? (PHASE_LABELS[currentPhaseNum] || PHASE_LABELS[currentPhaseNum >= 8 ? 7 : 0])
-              : (wizardDesc
-                  ? `Designing your ${wizardDesc.length > 28 ? wizardDesc.slice(0, 28) + '…' : wizardDesc.toLowerCase()}...`
-                  : 'Thinking…');
-            // Prefer the granular agentStatus.label when the backend has set
-            // one (e.g. "✍️ Writing code — Phase 5/3…"). Fall back to the
-            // phase-based label, then to the status-based labels.
-            const LABELS = {
-              connecting: 'Connecting to workspace...',
-              preparing: resolvingProgress?.message || 'Preparing workspace...',
-              cloning: 'Cloning repository...',
-              installing: 'Installing dependencies...',
-              starting: 'Starting dev server...',
-              health_check: 'Connecting live preview...',
-              running: phaseLabel,
-            };
-            const primary =
-              (status === 'running' && agentStatus?.label) ||
-              LABELS[status] ||
-              'Thinking…';
-            const secondary = status === 'running' ? (agentStatus?.subtext || '') : '';
-            return (
-              <div className="flex items-start gap-2.5 px-4 py-2.5 animate-in fade-in duration-500">
-                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-[#dc5426] to-orange-600 flex items-center justify-center shrink-0 shadow-sm shadow-orange-500/15 mt-0.5">
-                  <Sparkles className="w-3 h-3 text-white" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[13px] text-slate-500 dark:text-slate-400 truncate">
-                      {primary}
-                    </span>
-                    <div className="flex items-center gap-[3px] shrink-0">
-                      {[0, 200, 400].map((delay) => (
-                        <span
-                          key={delay}
-                          className="w-1 h-1 rounded-full bg-orange-400/70 animate-bounce"
-                          style={{ animationDelay: `${delay}ms`, animationDuration: '1s' }}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                  {secondary && (
-                    <span className="block text-[11px] text-slate-400 dark:text-slate-500 mt-0.5 truncate">
-                      {secondary}
-                    </span>
-                  )}
-                </div>
-              </div>
-            );
-          })()}
-
           <div ref={chatEndRef} className="h-4" />
         </div>
       </div>
+
+      {/* Status bar — pinned above suggestions, always visible when agent is active */}
+      {(() => {
+        const ALL_ACTIVE = ['connecting', 'preparing', 'cloning', 'installing', 'starting', 'health_check', 'running'];
+        if (!ALL_ACTIVE.includes(status)) return null;
+        const activePhase = (phases || []).find((p) => p.status === 'active');
+        const maxDonePhase = (phases || [])
+          .filter((p) => p.status === 'done')
+          .reduce((max, p) => Math.max(max, p.phase || 0), 0);
+        const currentPhaseNum = activePhase?.phase || maxDonePhase || 0;
+        const PHASE_LABELS = {
+          0: 'Thinking…',
+          1: 'Building app...',
+          2: 'Preparing workspace...',
+          3: 'Researching your idea...',
+          4: activePhase?.title?.toLowerCase().includes('design')
+              ? 'Choosing design style...'
+              : 'Planning your code...',
+          5: 'Writing your code...',
+          6: 'Verifying build...',
+          7: 'Publishing project...',
+        };
+        const phaseLabel = currentPhaseNum > 0
+          ? (PHASE_LABELS[currentPhaseNum] || PHASE_LABELS[currentPhaseNum >= 8 ? 7 : 0])
+          : (wizardDesc
+              ? `Designing your ${wizardDesc.length > 28 ? wizardDesc.slice(0, 28) + '…' : wizardDesc.toLowerCase()}...`
+              : 'Thinking…');
+        const LABELS = {
+          connecting: 'Connecting to workspace...',
+          preparing: resolvingProgress?.message || 'Preparing workspace...',
+          cloning: 'Cloning repository...',
+          installing: 'Installing dependencies...',
+          starting: 'Starting dev server...',
+          health_check: 'Connecting live preview...',
+          running: phaseLabel,
+        };
+        const primary =
+          (status === 'running' && agentStatus?.label) ||
+          LABELS[status] ||
+          'Thinking…';
+        const secondary = status === 'running' ? (agentStatus?.subtext || '') : '';
+        return (
+          <div className="shrink-0 flex items-center gap-2.5 px-4 py-2 border-t border-[#e3e5eb] dark:border-[#1c2128] bg-[#f8f9fc] dark:bg-[#0d1117] animate-in fade-in duration-300">
+            <div className="w-5 h-5 rounded-full bg-gradient-to-br from-[#dc5426] to-orange-600 flex items-center justify-center shrink-0 shadow-sm shadow-orange-500/15">
+              <Sparkles className="w-2.5 h-2.5 text-white" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-[12px] text-slate-500 dark:text-slate-400 truncate">{primary}</span>
+                <div className="flex items-center gap-[3px] shrink-0">
+                  {[0, 200, 400].map((delay) => (
+                    <span
+                      key={delay}
+                      className="w-1 h-1 rounded-full bg-orange-400/70 animate-bounce"
+                      style={{ animationDelay: `${delay}ms`, animationDuration: '1s' }}
+                    />
+                  ))}
+                </div>
+              </div>
+              {secondary && (
+                <span className="block text-[11px] text-slate-400 dark:text-slate-500 truncate">{secondary}</span>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Suggestions bar */}
       {messages.length > 0 && (
