@@ -176,6 +176,11 @@ async def start_local_preview(
     except Exception as _esl_err:
         logger.debug("local_preview: eslint --fix skipped: %s", _esl_err)
 
+    # ── Pre-flight: npm install if node_modules is missing ─────────────
+    # Repos are cloned fresh (no node_modules in git). Without this step
+    # Next.js/Vite can't find tailwindcss/postcss → page renders unstyled.
+    await _ensure_node_modules(workspace_path, websocket)
+
     # ── Port allocation + spawn + health check — retryable on port race ──
     # Between _find_free_port releasing the port and the dev server binding
     # it, another process can grab it (EADDRINUSE). Up to 3 attempts with
@@ -196,6 +201,10 @@ async def start_local_preview(
                         message="No preview ports available — please wait and retry.")
             return None
         tried_ports.add(port)
+
+        # Patch next.config.mjs with basePath/assetPrefix so /_next/ assets
+        # are served at /preview-{port}/_next/ — matches our nginx proxy rule.
+        await _patch_nextjs_base_path(workspace_path, port)
 
         cmd = _build_start_cmd(workspace_path, package_manager, port)
         logger.info(
@@ -222,6 +231,10 @@ async def start_local_preview(
                 "HOST": "0.0.0.0",
                 "HOSTNAME": "0.0.0.0",
                 "PATH": f"{os.environ.get('PATH', _node_paths)}:{_node_paths}",
+                # Picked up by next.config.mjs in the updated template:
+                #   assetPrefix: process.env.NEXT_PUBLIC_ASSET_PREFIX || ''
+                # Older projects fall back to _patch_nextjs_base_path file injection.
+                "NEXT_PUBLIC_ASSET_PREFIX": f"/preview-{port}",
             }
 
             with open(_stderr_path, "w") as _stderr_fh:
@@ -394,9 +407,23 @@ def _is_port_in_use_error(stderr: str) -> bool:
 
 
 def _build_url(port: int) -> str:
+    # Option 1: PREVIEW_BASE_URL — path-based proxy via existing HTTPS domain.
+    #   e.g. PREVIEW_BASE_URL=https://lucid.shopsready.com
+    #   → https://lucid.shopsready.com/preview-4001/
+    #   Nginx routes location ~ ^/preview-(\d+)/(.*) → localhost:$1/$2
+    #   Works with existing SSL cert — no wildcard cert needed.
+    base_url = os.environ.get("PREVIEW_BASE_URL", "").strip().rstrip("/") or "https://lucid.shopsready.com"
+    if base_url:
+        return f"{base_url}/preview-{port}"
+
+    # Option 2: PREVIEW_DOMAIN — subdomain-based (requires wildcard SSL + DNS).
+    #   e.g. PREVIEW_DOMAIN=preview.yourdomain.com
+    #   → https://preview-4001.preview.yourdomain.com
     domain = os.environ.get("PREVIEW_DOMAIN", "").strip()
     if domain:
         return f"https://preview-{port}.{domain}"
+
+    # Fallback: localhost (only works in local dev — blocked by browsers in prod).
     return f"http://localhost:{port}"
 
 
@@ -473,6 +500,189 @@ def _process_alive(proc) -> bool:
     if proc is None:
         return False
     return proc.returncode is None
+
+
+async def _ensure_node_modules(workspace_path: str, websocket) -> None:
+    """Run the appropriate package-manager install if node_modules is absent.
+
+    This is the most common cause of missing Tailwind CSS in previews:
+    repos are cloned fresh (node_modules is gitignored) so dependencies
+    must be installed before the dev server can process Tailwind/PostCSS.
+
+    Also handles the case where node_modules exists but tailwindcss is
+    missing (e.g. partial install from a previous run).
+    """
+    nm = os.path.join(workspace_path, "node_modules")
+    tailwind_bin = os.path.join(nm, ".bin", "tailwindcss")
+    next_bin = os.path.join(nm, ".bin", "next")
+    vite_bin = os.path.join(nm, ".bin", "vite")
+
+    # Skip if node_modules has the framework binary (install already done)
+    if os.path.isfile(next_bin) or os.path.isfile(vite_bin):
+        # Also verify tailwindcss is present — it can be missing after
+        # a partial install or if the lock file was updated.
+        if os.path.isfile(tailwind_bin):
+            logger.debug("local_preview: node_modules OK — skipping install")
+            return
+        logger.info("local_preview: tailwindcss missing from node_modules — reinstalling")
+    else:
+        logger.info("local_preview: node_modules missing or incomplete — installing deps")
+
+    pm = _detect_pm(workspace_path) or "pnpm"
+    # Always try pnpm first (fastest), fall back to npm then yarn.
+    install_cmd = "pnpm install || npm install || yarn install"
+
+    logger.info("local_preview: running [%s] in %s", install_cmd, workspace_path)
+    await _emit(websocket, "preview_status", status="installing",
+                message="📦 Installing dependencies (pnpm → npm → yarn)…")
+    try:
+        _node_paths = "/usr/local/bin:/usr/bin:/bin"
+        env = {
+            **os.environ,
+            "PATH": f"{os.environ.get('PATH', _node_paths)}:{_node_paths}",
+            "CI": "1",  # suppress interactive prompts
+        }
+        proc = await asyncio.create_subprocess_shell(
+            install_cmd,
+            cwd=workspace_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=env,
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=300)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            logger.error("local_preview: dependency install timed out after 300s")
+            await _emit(websocket, "preview_status", status="install_timeout",
+                        message="⚠️ Dependency install timed out — preview may be unstyled")
+            return
+
+        if proc.returncode != 0:
+            snippet = (stdout or b"").decode(errors="replace")[-400:]
+            logger.error("local_preview: install failed (rc=%d): %s", proc.returncode, snippet)
+            await _emit(websocket, "preview_status", status="install_failed",
+                        message=f"⚠️ Dependency install failed — preview may be unstyled\n{snippet[:200]}")
+        else:
+            logger.info("local_preview: dependencies installed successfully")
+            await _emit(websocket, "preview_status", status="install_done",
+                        message="✅ Dependencies installed")
+    except Exception as exc:
+        logger.warning("local_preview: install error (non-fatal): %s", exc)
+
+
+async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
+    """Inject basePath + assetPrefix into next.config.mjs before starting dev server.
+
+    Without this, Next.js generates HTML with absolute asset URLs like:
+        <script src="/_next/static/chunks/main.js">
+
+    When served through the nginx path-proxy at /preview-{port}/*, the browser
+    requests /_next/... from the root domain — which hits FastAPI (404).
+
+    With basePath=/preview-{port}, Next.js prefixes every asset URL:
+        <script src="/preview-4004/_next/static/chunks/main.js">
+
+    These now match the nginx location ~ ^/preview-(\d+) rule and are
+    correctly proxied to localhost:{port}.
+    """
+    import re
+
+    base_path = f"/preview-{port}"
+
+    for fname in ("next.config.mjs", "next.config.js", "next.config.ts"):
+        config_path = os.path.join(workspace_path, fname)
+        if not os.path.isfile(config_path):
+            continue
+
+        try:
+            with open(config_path) as f:
+                content = f.read()
+
+            # New template reads NEXT_PUBLIC_ASSET_PREFIX from the environment —
+            # we already set it in the spawn env, so no file edit is needed.
+            # Skipping the write avoids a Next.js config-change restart on first load.
+            if "NEXT_PUBLIC_ASSET_PREFIX" in content and "unoptimized" in content:
+                logger.debug("local_preview: %s reads NEXT_PUBLIC_ASSET_PREFIX from env — skipping patch", fname)
+                return
+
+            # If correct assetPrefix already set for this port — nothing to do.
+            if f'assetPrefix: "{base_path}"' in content:
+                logger.debug("local_preview: %s already has assetPrefix=%s — skipping", fname, base_path)
+                return
+
+            # If a stale assetPrefix from a previous port exists, replace it.
+            # (Happens when the server restarts on a different port.)
+            if "assetPrefix" in content:
+                content = re.sub(
+                    r'assetPrefix:\s*"[^"]*"',
+                    f'assetPrefix: "{base_path}"',
+                    content,
+                    count=1,
+                )
+                with open(config_path, "w") as f:
+                    f.write(content)
+                logger.info("local_preview: updated %s assetPrefix → %s", fname, base_path)
+                return
+
+            # First time — inject right after the opening `{` of the config object.
+            # Handles the two most common patterns:
+            #   const nextConfig = { ...          (CommonJS / ESM with variable)
+            #   export default {                   (inline export)
+            #
+            # assetPrefix is injected at the top level.
+            # images.unoptimized is injected INSIDE the existing `images: {` block
+            # (not as a new top-level key) so it doesn't get overridden by the
+            # original images.remotePatterns block. JS keeps the last duplicate key.
+            injected = False
+            for pat in (
+                r"(const\s+nextConfig\s*=\s*\{)",
+                r"(export\s+default\s+\{)",
+            ):
+                new_content = re.sub(
+                    pat,
+                    rf'\1\n  assetPrefix: "{base_path}",',
+                    content,
+                    count=1,
+                )
+                if new_content != content:
+                    content = new_content
+                    injected = True
+                    break
+
+            # Inject unoptimized: true inside the existing images: { block.
+            # If no images: block exists, add a standalone one.
+            if "images:" in content:
+                content = re.sub(
+                    r"(images\s*:\s*\{)",
+                    r"\1\n    unoptimized: true,",
+                    content,
+                    count=1,
+                )
+            else:
+                content = re.sub(
+                    r"(assetPrefix\s*:\s*\"[^\"]*\",)",
+                    r'\1\n  images: { unoptimized: true },',
+                    content,
+                    count=1,
+                )
+
+            if not injected:
+                logger.warning(
+                    "local_preview: could not inject assetPrefix into %s — unknown format", fname
+                )
+                return
+
+            with open(config_path, "w") as f:
+                f.write(content)
+
+            logger.info("local_preview: patched %s with assetPrefix=%s", fname, base_path)
+        except Exception as exc:
+            logger.warning("local_preview: failed to patch %s: %s", fname, exc)
+        return  # only patch the first config file found
 
 
 class _ProcessExitedError(RuntimeError):

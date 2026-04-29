@@ -118,6 +118,10 @@ services:
       - VISION_RESEARCH_MODEL=${VISION_RESEARCH_MODEL:-gemini-2.5-pro}
       # Max reference screenshots per generation (2-4 recommended).
       - VISION_MAX_REFS=${VISION_MAX_REFS:-3}
+      # Preview URL base — nginx proxies /preview-{port}/* → localhost:{port}/*
+      # Set to the public HTTPS domain so previews work in the browser iframe.
+      # Leave empty for local dev (falls back to http://localhost:{port}).
+      - PREVIEW_BASE_URL=${PREVIEW_BASE_URL:-}
 
 volumes:
   frontend_node_modules:
