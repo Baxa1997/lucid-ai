@@ -100,7 +100,7 @@ services:
       - LUCID_FRONTEND_URL=${LUCID_FRONTEND_URL:-http://frontend:3000}
       # Must match frontend ENCRYPTION_KEY — used to decrypt stored git tokens
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
-      - ALLOWED_ORIGINS=http://localhost:3000,http://frontend:3000
+      - ALLOWED_ORIGINS=http://localhost:3000,http://frontend:3000,https://lucid-ai-pearl.vercel.app
       - STITCH_API_KEY=${STITCH_API_KEY}
       # E2B cloud sandbox for live preview (get key at https://e2b.dev)
       - E2B_API_KEY=${E2B_API_KEY}
