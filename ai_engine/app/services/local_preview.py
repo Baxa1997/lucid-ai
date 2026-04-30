@@ -478,7 +478,11 @@ def _build_start_cmd(workspace_path: str, package_manager: str, port: int) -> st
         return f"PORT={port} {next_bin} dev -p {port} -H 0.0.0.0"
     elif is_vite:
         logger.info("local_preview: Vite detected — invoking %s directly", vite_bin)
-        return f"PORT={port} {vite_bin} --port {port} --host 0.0.0.0"
+        # --base sets the public base path so Vite generates /@vite/client and
+        # /src/main.jsx as /preview-{port}/@vite/client etc., matching the nginx
+        # path-proxy rule. Without this every asset request goes to the root
+        # domain and gets a 404 from FastAPI.
+        return f"PORT={port} {vite_bin} --port {port} --host 0.0.0.0 --base=/preview-{port}/"
     else:
         # Unknown framework — fall back to `pnpm run dev` with env vars only
         logger.info("local_preview: unknown framework — running 'pnpm run dev' with PORT/HOSTNAME env")
