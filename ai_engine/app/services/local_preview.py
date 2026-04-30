@@ -627,12 +627,12 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
                 logger.debug("local_preview: %s reads NEXT_PUBLIC_ASSET_PREFIX from env — skipping patch", fname)
                 return
 
-            # If correct assetPrefix + basePath already set for this port — nothing to do.
-            if f'assetPrefix: "{base_path}"' in content and f'basePath: "{base_path}"' in content:
-                logger.debug("local_preview: %s already has assetPrefix+basePath=%s — skipping", fname, base_path)
+            # If correct assetPrefix already set for this port — nothing to do.
+            if f'assetPrefix: "{base_path}"' in content:
+                logger.debug("local_preview: %s already has assetPrefix=%s — skipping", fname, base_path)
                 return
 
-            # If a stale assetPrefix from a previous port exists, replace it (and basePath).
+            # If a stale assetPrefix from a previous port exists, replace it.
             # (Happens when the server restarts on a different port.)
             if "assetPrefix" in content:
                 content = re.sub(
@@ -641,24 +641,9 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
                     content,
                     count=1,
                 )
-                # Also update or inject basePath
-                if "basePath" in content:
-                    content = re.sub(
-                        r"basePath:\s*['\"][^'\"]*['\"]",
-                        f'basePath: "{base_path}"',
-                        content,
-                        count=1,
-                    )
-                else:
-                    content = re.sub(
-                        r"(assetPrefix:\s*\"[^\"]*\",)",
-                        rf'\1\n  basePath: "{base_path}",',
-                        content,
-                        count=1,
-                    )
                 with open(config_path, "w") as f:
                     f.write(content)
-                logger.info("local_preview: updated %s assetPrefix+basePath → %s", fname, base_path)
+                logger.info("local_preview: updated %s assetPrefix → %s", fname, base_path)
                 return
 
             # First time — inject assetPrefix right after the opening `{` of the
@@ -681,7 +666,7 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
             ):
                 new_content = re.sub(
                     pat,
-                    rf'\1\n  assetPrefix: "{base_path}",\n  basePath: "{base_path}",\n  trailingSlash: true,',
+                    rf'\1\n  assetPrefix: "{base_path}",',
                     content,
                     count=1,
                 )
@@ -705,8 +690,6 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
                         f'/** Lucid AI preview patch — original at {fname}.bak */\n'
                         f'module.exports = {{\n'
                         f'  assetPrefix: "{base_path}",\n'
-                        f'  basePath: "{base_path}",\n'
-                        f'  trailingSlash: true,\n'
                         f'  images: {{ unoptimized: true }},\n'
                         f'}};\n'
                     )
@@ -715,8 +698,6 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
                         f'/** Lucid AI preview patch — original at {fname}.bak */\n'
                         f'const nextConfig = {{\n'
                         f'  assetPrefix: "{base_path}",\n'
-                        f'  basePath: "{base_path}",\n'
-                        f'  trailingSlash: true,\n'
                         f'  images: {{ unoptimized: true }},\n'
                         f'}};\n'
                         f'export default nextConfig;\n'
@@ -740,7 +721,7 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
                 )
             else:
                 content = re.sub(
-                    r"(basePath\s*:\s*\"[^\"]*\",)",
+                    r"(assetPrefix\s*:\s*\"[^\"]*\",)",
                     r'\1\n  images: { unoptimized: true },',
                     content,
                     count=1,
@@ -749,7 +730,7 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
             with open(config_path, "w") as f:
                 f.write(content)
 
-            logger.info("local_preview: patched %s with assetPrefix+basePath=%s", fname, base_path)
+            logger.info("local_preview: patched %s with assetPrefix=%s", fname, base_path)
         except Exception as exc:
             logger.warning("local_preview: failed to patch %s: %s", fname, exc)
         return  # only patch the first config file found
@@ -762,8 +743,7 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
             f'/** Lucid AI preview patch */\n'
             f'const nextConfig = {{\n'
             f'  assetPrefix: "{base_path}",\n'
-            f'  basePath: "{base_path}",\n'
-            f'  trailingSlash: true,\n'
+            f'  reactStrictMode: true,\n'
             f'  images: {{ unoptimized: true }},\n'
             f'}};\n'
             f'export default nextConfig;\n'
@@ -771,7 +751,7 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
         with open(config_path, "w") as f:
             f.write(minimal)
         logger.info(
-            "local_preview: no next.config found — created next.config.mjs with assetPrefix+basePath=%s",
+            "local_preview: no next.config found — created next.config.mjs with assetPrefix=%s",
             base_path,
         )
     except Exception as exc:
