@@ -361,9 +361,13 @@ export default function RightPanel() {
   // one switch, no inconsistent renders.
   const previewPhase = (() => {
     if (status === "error") return "fatal";
-    if (latchedPreviewUrl && repoInfo.vercelUrl) return "live";
-    if (latchedPreviewUrl && !repoInfo.vercelUrl && previewError) return "live-with-error-overlay";
-    if (latchedPreviewUrl && !repoInfo.vercelUrl) return "live-with-restart-overlay";
+    if (latchedPreviewUrl) {
+      // Once we have a latched URL the iframe is always mounted.
+      // Overlays layer on top for transient states only.
+      if (previewError) return "live-with-error-overlay";
+      if (previewLoading) return "live-with-restart-overlay";
+      return "live";
+    }
     if (previewError) return "crashed";
     if (previewLoading) return "booting";
     if (isNewProject && files.length === 0) return "wizard-empty";
@@ -462,9 +466,9 @@ export default function RightPanel() {
                 title="Refresh preview"
                 onClick={() => {
                   const iframe = iframeRef?.current;
-                  if (!iframe) return;
+                  if (!iframe || !iframe.src) return;
                   const src = iframe.src;
-                  iframe.src = "";
+                  iframe.src = "about:blank";
                   setTimeout(() => {
                     iframe.src = src;
                   }, 50);

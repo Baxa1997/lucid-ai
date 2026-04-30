@@ -342,7 +342,11 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         if (msg.event === 'connected') {
           setState('preparing');
           setErrorStage(null);
-          setPreviewError(null);
+          // Do NOT clear previewError here. If the dev server crashed before the
+          // reconnect, clearing the error would flip the phase from
+          // "live-with-error-overlay" (recoverable) to the stuck
+          // "live-with-restart-overlay" (no error, no URL → overlay never clears).
+          // previewError is cleared by: preview_ready, manual retry, or stopPreview.
           setErrorCode(null);
           pushLog('Connected — preparing workspace…', 'system');
         } else if (msg.event === 'error') {
