@@ -504,23 +504,62 @@ async def websocket_agent(websocket: WebSocket):
 
         if not existing and project_id:
             try:
-                # Step 1: find the session row using only guaranteed-existing columns.
-                # Do NOT select optional columns (platform_repo_url, generation_complete)
-                # in this query — they require migrations 009/014 which may not be run,
-                # and a PostgREST error here would leave _prev_session_data as None and
-                # cause the pipeline to re-run on every re-entry.
+                # Step 1: find the best previous session for this project.
+                # PRIORITY: completed sessions > sessions with platform_repo > plain latest.
+                # Without this, an empty reconnect-session created AFTER the real generation
+                # gets picked first → _prev_session_data looks empty → no preview started.
+                prev_sid: str | None = None
                 async with db_client(user_jwt) as client:
-                    prev_s = await (
-                        client.table("chat_sessions")
-                        .select("id")
-                        .eq("user_id", user_id)
-                        .eq("project_id", project_id)
-                        .order("created_at", desc=True)
-                        .limit(1)
-                        .execute()
-                    )
-                if prev_s.data:
-                    prev_sid = prev_s.data[0]["id"]
+                    # 1a. Most recent session with generation_complete=True
+                    try:
+                        completed_r = await (
+                            client.table("chat_sessions")
+                            .select("id")
+                            .eq("user_id", user_id)
+                            .eq("project_id", project_id)
+                            .eq("generation_complete", True)
+                            .order("created_at", desc=True)
+                            .limit(1)
+                            .execute()
+                        )
+                        if completed_r.data:
+                            prev_sid = completed_r.data[0]["id"]
+                    except Exception:
+                        pass  # column may not exist yet
+
+                    # 1b. Most recent session with platform_repo_url set
+                    if not prev_sid:
+                        try:
+                            repo_r = await (
+                                client.table("chat_sessions")
+                                .select("id")
+                                .eq("user_id", user_id)
+                                .eq("project_id", project_id)
+                                .not_.is_("platform_repo_url", "null")
+                                .order("created_at", desc=True)
+                                .limit(1)
+                                .execute()
+                            )
+                            if repo_r.data:
+                                prev_sid = repo_r.data[0]["id"]
+                        except Exception:
+                            pass
+
+                    # 1c. Last resort: plain latest session
+                    if not prev_sid:
+                        plain_r = await (
+                            client.table("chat_sessions")
+                            .select("id")
+                            .eq("user_id", user_id)
+                            .eq("project_id", project_id)
+                            .order("created_at", desc=True)
+                            .limit(1)
+                            .execute()
+                        )
+                        if plain_r.data:
+                            prev_sid = plain_r.data[0]["id"]
+
+                if prev_sid:
 
                     # Step 2: try to read optional flag columns (added in later migrations).
                     # Fail silently — if the columns don't exist the flags just stay False/None.
