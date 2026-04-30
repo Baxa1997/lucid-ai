@@ -381,6 +381,7 @@ function ConversationPageInner({params}) {
     previewUrl,
     previewLoading,
     previewStatusMsg,
+    previewEverReady,
     stopPreview,
     resolvingInfo,
     resolvingProgress,
@@ -433,9 +434,10 @@ function ConversationPageInner({params}) {
   }, [deployUrl]);
 
   useEffect(() => {
-    if (previewUrl) {
-      setRepoInfo((prev) => ({...prev, vercelUrl: previewUrl}));
-    }
+    // Sync both directions: when previewUrl becomes null (dev server crashed
+    // or stopped), clear vercelUrl too so the iframe doesn't keep pointing at
+    // a dead URL — that's what causes the "preview disappears" symptom.
+    setRepoInfo((prev) => ({...prev, vercelUrl: previewUrl || null}));
   }, [previewUrl]);
 
   // ── Layout state ────────────────────────────────────────
@@ -833,19 +835,19 @@ function ConversationPageInner({params}) {
         _HMR_HARD_RELOAD_RE.test(f),
       );
       if (needsHardReload) {
-        // Give the dev server 2s to finish restarting, then hard-reload the iframe.
+        // Give the dev server 2s to finish restarting, then reload the iframe.
+        // contentWindow.location.reload() is the smooth path (no visible blank
+        // frame). The cross-origin src='' fallback was removed because it
+        // caused a visible flash; in production the iframe is same-origin via
+        // the /preview-{port} nginx proxy, and in local dev HMR handles config
+        // changes on its own without an explicit reload.
         setTimeout(() => {
           const iframe = iframeRef.current;
           if (!iframe) return;
           try {
             iframe.contentWindow.location.reload();
           } catch {
-            // Cross-origin fallback: reset src to trigger a reload
-            const src = iframe.src;
-            iframe.src = "";
-            setTimeout(() => {
-              iframe.src = src;
-            }, 100);
+            // Cross-origin (local dev only) — let HMR pick it up; don't blank the iframe.
           }
         }, 2000);
       }
@@ -955,6 +957,7 @@ function ConversationPageInner({params}) {
     previewError,
     previewLoading,
     previewStatusMsg,
+    previewEverReady,
     retryCount,
     retry,
     phases,

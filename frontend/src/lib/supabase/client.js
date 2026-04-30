@@ -42,8 +42,14 @@ export function clearAllSupabaseCookies() {
 export function syncCookiesFromSession(session) {
   if (typeof document === 'undefined') return;
   if (!session?.access_token) return;
-  document.cookie = `sb-access-token=${session.access_token}; path=/; max-age=${60 * 60 * 24}; samesite=lax`;
-  document.cookie = `sb-refresh-token=${session.refresh_token}; path=/; max-age=${60 * 60 * 24}; samesite=lax`;
+  // Secure flag on HTTPS — Safari/iOS strip non-secure cookies set right
+  // after a cross-site OAuth redirect, which manifests as "login doesn't
+  // navigate to dashboard": cookie set, redirect fires, middleware sees no
+  // cookie, bounces back to /login.
+  const isHttps = window.location.protocol === 'https:';
+  const secure = isHttps ? '; secure' : '';
+  document.cookie = `sb-access-token=${session.access_token}; path=/; max-age=${60 * 60 * 24}; samesite=lax${secure}`;
+  document.cookie = `sb-refresh-token=${session.refresh_token}; path=/; max-age=${60 * 60 * 24}; samesite=lax${secure}`;
 }
 
 export function getSupabaseBrowserClient() {

@@ -304,6 +304,7 @@ export default function RightPanel() {
     previewError,
     previewLoading,
     previewStatusMsg,
+    previewEverReady,
     stopPreview,
     completionSummary,
     isNewProject,
@@ -331,6 +332,44 @@ export default function RightPanel() {
   // ── Code-tab view mode toggle: 'diff' (live agent edits) vs 'source' (raw)
   // Defaults to diff when the agent has touched a file, source otherwise.
   const [codeViewMode, setCodeViewMode] = useState("diff");
+
+  // ── Latched live-preview URL ─────────────────────────────────────
+  // The iframe must NOT unmount on every transient null (auto-restart, WS
+  // reconnect, single dropped frame from the agent). React re-mounts iframes
+  // when their `src` changes to/from falsy, which kills HMR socket, scroll
+  // position, and the user's interaction state. We latch the last known live
+  // URL and only clear it on a hard reset (conversation change / explicit
+  // stop / fatal terminal error). Transient states layer as overlays on top.
+  const [latchedPreviewUrl, setLatchedPreviewUrl] = useState(repoInfo.vercelUrl || null);
+  useEffect(() => {
+    if (repoInfo.vercelUrl) setLatchedPreviewUrl(repoInfo.vercelUrl);
+  }, [repoInfo.vercelUrl]);
+  // Reset latch when the user navigates between workspaces — otherwise an
+  // old project's iframe would briefly show up in the new one.
+  useEffect(() => {
+    setLatchedPreviewUrl(null);
+  }, [conversationId]);
+  // After 3 failed retries we surface "Preview unavailable" — drop the latch
+  // so the iframe doesn't sit there pointing at a dead URL behind the error.
+  useEffect(() => {
+    if (previewError && retryCount >= 3) setLatchedPreviewUrl(null);
+  }, [previewError, retryCount]);
+
+  // ── Preview phase — single source of truth for the preview tab UI ──
+  // Replaces the previous chain of nested ternaries on individual flags
+  // (previewLoading || previewError || previewEverReady || ...). One value,
+  // one switch, no inconsistent renders.
+  const previewPhase = (() => {
+    if (status === "error") return "fatal";
+    if (latchedPreviewUrl && repoInfo.vercelUrl) return "live";
+    if (latchedPreviewUrl && !repoInfo.vercelUrl && previewError) return "live-with-error-overlay";
+    if (latchedPreviewUrl && !repoInfo.vercelUrl) return "live-with-restart-overlay";
+    if (previewError) return "crashed";
+    if (previewLoading) return "booting";
+    if (isNewProject && files.length === 0) return "wizard-empty";
+    if (previewEverReady) return "stopped";
+    return "preparing";
+  })();
 
   // ── File-viewer local state ─────────────────────────────
   const [selectedFile, setSelectedFile] = useState(null);
@@ -564,7 +603,62 @@ export default function RightPanel() {
               "h-full flex-col relative overflow-hidden",
               rightPanel === "preview" ? "flex" : "hidden",
             )}>
-                {status === "error" ? (
+                {/* Stable iframe layer — mounted once a live URL is latched and
+                     kept mounted across transient state churn (auto-restart, WS
+                     reconnects). Overlays render on top for non-live phases. */}
+                {latchedPreviewUrl && previewPhase !== "fatal" && (
+                  <div className="relative flex-1 min-h-0 flex flex-col bg-[#f1f2f6] dark:bg-[#161b22]">
+                    {status === "running" && (
+                      <div className="absolute top-0 left-0 right-0 h-[2px] overflow-hidden pointer-events-none z-20">
+                        <div className="absolute inset-y-0 w-1/2 bg-gradient-to-r from-transparent via-orange-400 to-transparent animate-hmr-slide" />
+                      </div>
+                    )}
+                    <div className="relative flex-1 flex flex-col overflow-hidden">
+                      <iframe
+                        ref={iframeRef}
+                        src={latchedPreviewUrl}
+                        title="Live Preview"
+                        className="flex-1 w-full border-0 bg-white"
+                        sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+                      />
+                      {previewPhase === "live-with-restart-overlay" && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/85 dark:bg-[#0d1117]/85 backdrop-blur-sm z-30">
+                          <Loader2 className="w-8 h-8 text-blue-500 animate-spin mb-3" />
+                          <p className="text-[13px] font-semibold text-slate-700 dark:text-slate-200">
+                            Restarting preview…
+                          </p>
+                          <p className="text-[12px] text-slate-500 dark:text-slate-400 max-w-sm mt-1 text-center px-6">
+                            {previewStatusMsg || "Dev server is restarting — your preview will be back in a few seconds."}
+                          </p>
+                        </div>
+                      )}
+                      {previewPhase === "live-with-error-overlay" && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/90 dark:bg-[#0d1117]/90 backdrop-blur-sm z-30">
+                          <div className="w-12 h-12 rounded-2xl bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-800/30 flex items-center justify-center mb-3">
+                            <TriangleAlert className="w-6 h-6 text-amber-400" />
+                          </div>
+                          <p className="text-[14px] font-bold text-slate-800 dark:text-slate-200 mb-1">
+                            Preview failed
+                          </p>
+                          <p className="text-[12px] text-slate-500 dark:text-slate-400 max-w-md mb-4 text-center px-6 leading-relaxed">
+                            {previewError?.message || "Dev server stopped responding."}
+                          </p>
+                          <button
+                            onClick={() => retry("preview")}
+                            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-[12px] font-semibold hover:bg-slate-800 dark:hover:bg-slate-100 transition-colors shadow-sm">
+                            <RefreshCw className="w-3.5 h-3.5" />
+                            Restart Preview
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Full-screen panels — only shown when there's no latched URL.
+                     Once we have a URL the iframe handles rendering and overlays
+                     handle transient states, so these never re-mount. */}
+                {!latchedPreviewUrl && previewPhase === "fatal" && (
                   retryCount >= 3 ? (
                     <div className="flex flex-col items-center justify-center h-full text-center p-8 bg-white dark:bg-[#0d1117]">
                       <div className="w-16 h-16 rounded-2xl bg-red-50 dark:bg-red-900/20 flex items-center justify-center mb-5">
@@ -574,8 +668,7 @@ export default function RightPanel() {
                         Still having trouble
                       </h3>
                       <p className="text-[13px] text-slate-500 dark:text-slate-400 max-w-sm mb-6 leading-relaxed">
-                        {error ||
-                          "The workspace could not be initialized after multiple attempts."}
+                        {error || "The workspace could not be initialized after multiple attempts."}
                       </p>
                       <div className="flex flex-col items-center gap-3 w-full max-w-xs">
                         {isNewProject && (
@@ -604,18 +697,14 @@ export default function RightPanel() {
                         )}
                       </div>
                       <h3 className="relative z-10 text-lg font-bold text-slate-800 dark:text-slate-200 mb-2">
-                        {errorStage === "clone"
-                          ? "Repository clone failed"
-                          : "Workspace error"}
+                        {errorStage === "clone" ? "Repository clone failed" : "Workspace error"}
                       </h3>
                       <p className="relative z-10 text-[13px] text-slate-500 dark:text-slate-400 max-w-sm mb-1.5 leading-relaxed">
-                        {error ||
-                          "Something went wrong initializing your workspace."}
+                        {error || "Something went wrong initializing your workspace."}
                       </p>
                       {errorStage === "clone" && (
                         <p className="relative z-10 text-[11px] text-slate-400 dark:text-slate-500 max-w-xs mb-6">
-                          Check that your repository URL and access token are
-                          correct, then retry.
+                          Check that your repository URL and access token are correct, then retry.
                         </p>
                       )}
                       {!errorStage && <div className="mb-6" />}
@@ -634,25 +723,9 @@ export default function RightPanel() {
                       )}
                     </div>
                   )
-                ) : repoInfo.vercelUrl ? (
-                  /* ── Primary: local dev server or Vercel/deploy URL ── */
-                  <div className="relative flex-1 min-h-0 flex flex-col bg-[#f1f2f6] dark:bg-[#161b22]">
-                    {status === "running" && (
-                      <div className="absolute top-0 left-0 right-0 h-[2px] overflow-hidden pointer-events-none z-20">
-                        <div className="absolute inset-y-0 w-1/2 bg-gradient-to-r from-transparent via-orange-400 to-transparent animate-hmr-slide" />
-                      </div>
-                    )}
-                    <div className="relative flex-1 flex flex-col overflow-hidden">
-                      <iframe
-                        ref={iframeRef}
-                        src={repoInfo.vercelUrl}
-                        title="Live Preview"
-                        className="flex-1 w-full border-0 bg-white"
-                        sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
-                      />
-                    </div>
-                  </div>
-                ) : previewError ? (
+                )}
+
+                {!latchedPreviewUrl && previewPhase === "crashed" && (
                   retryCount >= 3 ? (
                     <div className="flex flex-col items-center justify-center h-full text-center p-8 bg-white dark:bg-[#0d1117]">
                       <div className="w-14 h-14 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center mb-4">
@@ -661,9 +734,8 @@ export default function RightPanel() {
                       <h3 className="text-base font-bold text-slate-800 dark:text-slate-200 mb-2">
                         Preview unavailable
                       </h3>
-                      <p className="text-[13px] text-slate-500 dark:text-slate-400 max-w-sm mb-5 leading-relaxed">
-                        The preview server could not be started after several
-                        attempts. You can still chat and edit code.
+                      <p className="text-[13px] text-slate-500 dark:text-slate-400 max-w-sm mb-5 leading-relaxed whitespace-pre-wrap">
+                        {previewError?.message || "The preview server could not be started after several attempts."}
                       </p>
                       <button
                         onClick={() => setRightPanel("code")}
@@ -680,8 +752,8 @@ export default function RightPanel() {
                       <h3 className="text-base font-bold text-slate-800 dark:text-slate-200 mb-2">
                         Preview failed
                       </h3>
-                      <p className="text-[13px] text-slate-500 dark:text-slate-400 max-w-sm mb-5 leading-relaxed">
-                        {previewError.message}
+                      <p className="text-[13px] text-slate-500 dark:text-slate-400 max-w-md mb-5 leading-relaxed whitespace-pre-wrap">
+                        {previewError?.message || "Dev server failed to start."}
                       </p>
                       <button
                         onClick={() => retry("preview")}
@@ -696,19 +768,9 @@ export default function RightPanel() {
                       )}
                     </div>
                   )
-                ) : previewLoading ? (
-                  <div className="flex flex-col items-center justify-center h-full text-center p-8 bg-white dark:bg-[#0d1117]">
-                    <div className="w-16 h-16 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center mb-5">
-                      <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
-                    </div>
-                    <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-2">
-                      Setting up preview…
-                    </h3>
-                    <p className="text-[14px] text-slate-500 dark:text-slate-400 max-w-sm">
-                      {previewStatusMsg || 'Starting cloud sandbox and installing dependencies. This can take a minute.'}
-                    </p>
-                  </div>
-                ) : isNewProject && files.length === 0 ? (
+                )}
+
+                {!latchedPreviewUrl && previewPhase === "wizard-empty" && (
                   <div className="flex flex-col items-center justify-center h-full text-center p-8 bg-white dark:bg-[#0d1117]">
                     <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-blue-600 flex items-center justify-center mb-5 shadow-lg shadow-blue-500/20">
                       <Wand2 className="w-8 h-8 text-white" />
@@ -724,16 +786,18 @@ export default function RightPanel() {
                       Chat to generate code
                     </div>
                   </div>
-                ) : (
+                )}
+
+                {!latchedPreviewUrl && previewPhase === "stopped" && (
                   <div className="flex flex-col items-center justify-center h-full text-center p-8 bg-white dark:bg-[#0d1117]">
                     <div className="w-16 h-16 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center mb-5">
                       <Monitor className="w-8 h-8 text-slate-400 dark:text-slate-500" />
                     </div>
                     <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-2">
-                      Preview Not Available
+                      Preview stopped
                     </h3>
                     <p className="text-[14px] text-slate-500 dark:text-slate-400 max-w-sm mb-6">
-                      The preview server may have stopped. Try restarting it.
+                      The dev server is no longer running. Restart it to bring the preview back.
                     </p>
                     <div className="flex flex-col items-center gap-3 w-full max-w-xs">
                       <button
@@ -742,13 +806,30 @@ export default function RightPanel() {
                         <RefreshCw className="w-4 h-4" />
                         Restart Preview
                       </button>
-                      <button
-                        onClick={() => setRightPanel("code")}
-                        className="flex items-center gap-2 px-4 py-2 rounded-xl text-[13px] font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors">
-                        <Code2 className="w-4 h-4" />
-                        View Source Code
-                      </button>
                     </div>
+                  </div>
+                )}
+
+                {/* "preparing" + "booting" share the same UI — the only difference
+                     is the sub-text source. Single block, no flicker between them. */}
+                {!latchedPreviewUrl && (previewPhase === "preparing" || previewPhase === "booting") && (
+                  <div className="flex flex-col items-center justify-center h-full text-center p-8 bg-white dark:bg-[#0d1117]">
+                    <div className="w-16 h-16 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center mb-5">
+                      <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
+                    </div>
+                    <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-2">
+                      {previewPhase === "booting" ? "Setting up preview…" : "Preparing workspace…"}
+                    </h3>
+                    <p className="text-[14px] text-slate-500 dark:text-slate-400 max-w-sm">
+                      {previewStatusMsg
+                        || (status === "connecting" && "Connecting to the agent…")
+                        || (status === "cloning" && "Cloning the repository…")
+                        || (status === "installing" && "Installing dependencies…")
+                        || (status === "starting" && "Starting the dev server…")
+                        || (status === "health_check" && "Waiting for the dev server to come up…")
+                        || (status === "running" && "Generating your project — preview will start shortly.")
+                        || "Booting workspace — the preview will appear here as soon as the dev server is ready."}
+                    </p>
                   </div>
                 )}
               </div>

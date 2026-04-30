@@ -414,7 +414,10 @@ def _build_url(port: int) -> str:
     #   → https://lucid.shopsready.com/preview-4001/
     #   Nginx routes location ~ ^/preview-(\d+)/(.*) → localhost:$1/$2
     #   Works with existing SSL cert — no wildcard cert needed.
-    base_url = os.environ.get("PREVIEW_BASE_URL", "").strip().rstrip("/") or "https://lucid.shopsready.com"
+    # Production servers set PREVIEW_BASE_URL in their environment (server
+    # docker-compose / systemd / pipeline). Local dev MUST leave it unset —
+    # the production proxy URL doesn't reach a dev server running on a laptop.
+    base_url = os.environ.get("PREVIEW_BASE_URL", "").strip().rstrip("/")
     if base_url:
         return f"{base_url}/preview-{port}"
 
@@ -425,7 +428,8 @@ def _build_url(port: int) -> str:
     if domain:
         return f"https://preview-{port}.{domain}"
 
-    # Fallback: localhost (only works in local dev — blocked by browsers in prod).
+    # Default for local development — browser connects directly to the dev
+    # server via the docker port mapping (4000-4050).
     return f"http://localhost:{port}"
 
 

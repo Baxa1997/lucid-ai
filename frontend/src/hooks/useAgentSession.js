@@ -78,6 +78,10 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   const [previewTaskId, setPreviewTaskId] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewStatusMsg, setPreviewStatusMsg] = useState('');
+  // Latches true on the first `preview_ready` event. Lets the UI tell apart
+  // "preview hasn't started yet" (show preparing) from "preview was running
+  // and stopped" (show restart). Reset only by stopPreview.
+  const [previewEverReady, setPreviewEverReady] = useState(false);
 
   // ── WebContainers preview ─────────────────────────────────
   // Sandpack preview — { files: Record<string,string>, template: string }
@@ -739,6 +743,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         setPreviewError(null);
         setPreviewLoading(false);
         setPreviewStatusMsg('');
+        setPreviewEverReady(true);
         pushLog(`[Preview] ${msg.message || 'Preview ready'}`, 'system');
         return;
       }
@@ -1247,6 +1252,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     setPreviewLoading(false);
     setPreviewStatusMsg('');
     setPreviewError(null);
+    setPreviewEverReady(false);
   }, []);
 
   // ── Retry — Phase 8 error recovery ───────────────────────
@@ -1405,7 +1411,8 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     previewTaskId,
     previewLoading,
     previewStatusMsg,
-    clearPreview: () => { setPreviewUrl(null); setPreviewTaskId(null); setPreviewLoading(false); setPreviewStatusMsg(''); },
+    previewEverReady,
+    clearPreview: () => { setPreviewUrl(null); setPreviewTaskId(null); setPreviewLoading(false); setPreviewStatusMsg(''); setPreviewEverReady(false); },
     stopPreview,
 
     // Sandpack preview — { files, template } from backend
