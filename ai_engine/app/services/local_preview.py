@@ -627,13 +627,13 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
                 logger.debug("local_preview: %s reads NEXT_PUBLIC_ASSET_PREFIX from env — skipping patch", fname)
                 return
 
-            # If correct assetPrefix already set for this port — nothing to do.
-            if f'assetPrefix: "{base_path}"' in content:
+            # If correct assetPrefix already set AND no stale basePath — nothing to do.
+            if f'assetPrefix: "{base_path}"' in content and "basePath" not in content:
                 logger.debug("local_preview: %s already has assetPrefix=%s — skipping", fname, base_path)
                 return
 
-            # If a stale assetPrefix from a previous port exists, replace it.
-            # (Happens when the server restarts on a different port.)
+            # If a stale assetPrefix from a previous port exists (or correct
+            # assetPrefix but stale basePath from reverted code), clean it up.
             if "assetPrefix" in content:
                 content = re.sub(
                     r"assetPrefix:\s*['\"][^'\"]*['\"]",
@@ -641,6 +641,12 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
                     content,
                     count=1,
                 )
+                # Strip any leftover basePath / trailingSlash injected by older code.
+                if "basePath" in content:
+                    content = re.sub(r"\s*basePath:\s*['\"][^'\"]*['\"],?\n?", "", content)
+                    logger.info("local_preview: removed stale basePath from %s", fname)
+                if "trailingSlash" in content:
+                    content = re.sub(r"\s*trailingSlash:\s*\w+,?\n?", "", content)
                 with open(config_path, "w") as f:
                     f.write(content)
                 logger.info("local_preview: updated %s assetPrefix → %s", fname, base_path)
