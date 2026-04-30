@@ -231,15 +231,15 @@ async def start_local_preview(
                 "HOST": "0.0.0.0",
                 "HOSTNAME": "0.0.0.0",
                 "PATH": f"{os.environ.get('PATH', _node_paths)}:{_node_paths}",
-                # Picked up by next.config.mjs in the updated template:
-                #   assetPrefix: process.env.NEXT_PUBLIC_ASSET_PREFIX || ''
-                # Older projects fall back to _patch_nextjs_base_path file injection.
+                # Next.js: picked up by next.config.mjs assetPrefix
                 "NEXT_PUBLIC_ASSET_PREFIX": f"/preview-{port}",
-                # Suppress the multi-line telemetry banner — it pushes the real
-                # error out of the stderr tail window when the dev server crashes
-                # during compilation, leaving the user with a misleading
-                # "crashed on startup: ✓ Starting..." message.
                 "NEXT_TELEMETRY_DISABLED": "1",
+                # CRA / webpack: sets the public base path for all asset URLs
+                "PUBLIC_URL": f"/preview-{port}",
+                # Prevent react-scripts from opening a browser window
+                "BROWSER": "none",
+                # Prevent react-scripts from treating warnings as errors in CI
+                "CI": "false",
             }
 
             with open(_stderr_path, "w") as _stderr_fh:
@@ -456,12 +456,20 @@ def _build_start_cmd(workspace_path: str, package_manager: str, port: int) -> st
     pkg_path = os.path.join(workspace_path, "package.json")
     is_next = False
     is_vite = False
+    is_cra = False
+    scripts: dict = {}
     try:
         with open(pkg_path) as f:
             pkg = json.load(f)
         deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+        scripts = pkg.get("scripts", {})
         is_next = "next" in deps
         is_vite = "vite" in deps
+        is_cra = (
+            "react-scripts" in deps
+            or "react-scripts" in str(scripts.get("start", ""))
+            or "react-scripts" in str(scripts.get("dev", ""))
+        )
     except Exception:
         pass
 
@@ -470,6 +478,7 @@ def _build_start_cmd(workspace_path: str, package_manager: str, port: int) -> st
     # Resolve binary paths relative to the workspace (works even if not in global PATH)
     next_bin = "./node_modules/.bin/next"
     vite_bin = "./node_modules/.bin/vite"
+    cra_bin  = "./node_modules/.bin/react-scripts"
 
     if is_next:
         # Direct Next.js invocation: no script wrapper, flags work correctly.
@@ -483,10 +492,19 @@ def _build_start_cmd(workspace_path: str, package_manager: str, port: int) -> st
         # path-proxy rule. Without this every asset request goes to the root
         # domain and gets a 404 from FastAPI.
         return f"PORT={port} {vite_bin} --port {port} --host 0.0.0.0 --base=/preview-{port}/"
+    elif is_cra:
+        # CRA uses react-scripts start (not 'dev'). PUBLIC_URL sets the asset
+        # base path through webpack so all /_next/-style URLs become
+        # /preview-{port}/static/... and match the nginx path-proxy rule.
+        # BROWSER=none prevents react-scripts from trying to open a browser.
+        # CI=false stops react-scripts from treating warnings as errors.
+        logger.info("local_preview: CRA detected — invoking %s directly", cra_bin)
+        return f"PORT={port} PUBLIC_URL=/preview-{port} HOST=0.0.0.0 BROWSER=none CI=false {cra_bin} start"
     else:
-        # Unknown framework — fall back to `pnpm run dev` with env vars only
-        logger.info("local_preview: unknown framework — running 'pnpm run dev' with PORT/HOSTNAME env")
-        return f"PORT={port} {pm} run dev"
+        # Unknown framework — prefer 'dev', fall back to 'start'
+        script_name = "dev" if "dev" in scripts else "start"
+        logger.info("local_preview: unknown framework — running '%s run %s' with PORT/HOST env", pm, script_name)
+        return f"PORT={port} HOST=0.0.0.0 {pm} run {script_name}"
 
 
 def _detect_pm(workspace_path: str) -> Optional[str]:
@@ -509,7 +527,8 @@ def _has_dev_script(workspace_path: str) -> bool:
     try:
         with open(pkg) as f:
             data = json.load(f)
-        return "dev" in data.get("scripts", {})
+        scripts = data.get("scripts", {})
+        return "dev" in scripts or "start" in scripts
     except Exception:
         return False
 
