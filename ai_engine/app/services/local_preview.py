@@ -247,12 +247,14 @@ async def start_local_preview(
                     start_new_session=True,
                 )
 
+            import time as _time
             _active_servers[conversation_id] = {
                 "port": port,
                 "process": proc,
                 "workspace_path": workspace_path,
                 "stderr_path": _stderr_path,
                 "url": "",
+                "started_at": _time.time(),
             }
 
             if _attempt == 0:
@@ -780,7 +782,9 @@ async def _watch_process_exit(
     """Fires exactly once when the dev server process exits.
 
     Event-driven — blocks on ``proc.wait()`` with zero CPU until the process
-    dies, then notifies the client if the exit was unexpected.
+    dies. On unexpected exit, attempts one auto-restart before surfacing
+    the failure. The restart picks a fresh port, so port-in-use crashes
+    self-heal silently.
 
     A stop via ``stop_local_preview`` cancels this task before sending SIGTERM,
     so intentional kills don't emit a spurious crash event.
@@ -805,12 +809,49 @@ async def _watch_process_exit(
         "local_preview: dev server for %s exited unexpectedly (code=%s): %s",
         conversation_id, proc.returncode, stderr_snippet[:300],
     )
+    workspace_path = entry.get("workspace_path", "")
+    started_at = entry.get("started_at", 0)
     _active_servers.pop(conversation_id, None)
+
+    # ── Restart-loop guard ────────────────────────────────────
+    # If the previous run died in under 30s, restarting will almost
+    # certainly fail the same way (compile error, missing dep). Surface
+    # the failure instead so the user can act on the stderr.
+    import time as _time
+    uptime = _time.time() - started_at if started_at else 0
+    short_lived = uptime > 0 and uptime < 30
+
+    # ── Auto-restart once before surfacing the error ──────────
+    # Most crashes we see in production are port collisions (another
+    # session grabbed the port) or transient Next.js boot failures that
+    # clear on a fresh attempt. Trying once before the user sees an error
+    # makes the preview self-heal in the common case.
+    if not short_lived and workspace_path and os.path.isdir(workspace_path):
+        await _emit(websocket, "preview_status", status="restarting",
+                    message="Dev server stopped — restarting…")
+        try:
+            restarted_url = await start_local_preview(
+                workspace_path=workspace_path,
+                conversation_id=conversation_id,
+                websocket=websocket,
+                package_manager=_detect_pm(workspace_path) or "npm",
+            )
+            if restarted_url:
+                logger.info("local_preview: auto-restart succeeded for %s → %s",
+                            conversation_id, restarted_url)
+                return
+        except Exception as exc:
+            logger.error("local_preview: auto-restart failed for %s: %s",
+                         conversation_id, exc, exc_info=True)
+            stderr_snippet = (
+                f"{stderr_snippet}\n\nAuto-restart also failed: {exc}"
+                if stderr_snippet else f"Auto-restart failed: {exc}"
+            )
 
     await _emit(
         websocket, "preview_error",
         error_stage="crashed",
-        message=f"Dev server crashed: {stderr_snippet[:200] or 'check terminal logs'}",
+        message=f"Dev server crashed: {stderr_snippet[:400] or 'check terminal logs'}",
     )
 
 
