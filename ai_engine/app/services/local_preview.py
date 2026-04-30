@@ -600,7 +600,7 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
     With basePath=/preview-{port}, Next.js prefixes every asset URL:
         <script src="/preview-4004/_next/static/chunks/main.js">
 
-    These now match the nginx location ~ ^/preview-(\d+) rule and are
+    These now match the nginx location ~ ^/preview-(\\d+) rule and are
     correctly proxied to localhost:{port}.
     """
     import re
@@ -632,7 +632,7 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
             # (Happens when the server restarts on a different port.)
             if "assetPrefix" in content:
                 content = re.sub(
-                    r'assetPrefix:\s*"[^"]*"',
+                    r"assetPrefix:\s*['\"][^'\"]*['\"]",
                     f'assetPrefix: "{base_path}"',
                     content,
                     count=1,
@@ -642,19 +642,23 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
                 logger.info("local_preview: updated %s assetPrefix → %s", fname, base_path)
                 return
 
-            # First time — inject right after the opening `{` of the config object.
-            # Handles the two most common patterns:
-            #   const nextConfig = { ...          (CommonJS / ESM with variable)
-            #   export default {                   (inline export)
-            #
-            # assetPrefix is injected at the top level.
-            # images.unoptimized is injected INSIDE the existing `images: {` block
-            # (not as a new top-level key) so it doesn't get overridden by the
-            # original images.remotePatterns block. JS keeps the last duplicate key.
+            # First time — inject assetPrefix right after the opening `{` of the
+            # config object. Tries multiple patterns to handle the wide variety of
+            # Next.js config formats found in user-imported repos.
             injected = False
             for pat in (
-                r"(const\s+nextConfig\s*=\s*\{)",
+                # ESM: const <varname> = {  (any variable name, no TS type)
+                r"(const\s+\w+\s*=\s*\{)",
+                # TypeScript: const <varname>: <Type> = {
+                r"(const\s+\w+\s*:\s*[^=\{]+\s*=\s*\{)",
+                # ESM inline export: export default {
                 r"(export\s+default\s+\{)",
+                # CJS: module.exports = {
+                r"(module\.exports\s*=\s*\{)",
+                # Wrapped ESM: export default withPlugin({
+                r"(export\s+default\s+\w+\s*\(\s*\{)",
+                # Wrapped CJS: module.exports = withPlugin({
+                r"(module\.exports\s*=\s*\w+\s*\(\s*\{)",
             ):
                 new_content = re.sub(
                     pat,
@@ -667,8 +671,43 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
                     injected = True
                     break
 
-            # Inject unoptimized: true inside the existing images: { block.
-            # If no images: block exists, add a standalone one.
+            if not injected:
+                # No recognised pattern — back up original and write a minimal
+                # standalone config so /_next/ assets load via the proxy prefix.
+                bak_path = config_path + ".bak"
+                try:
+                    with open(bak_path, "w") as _bak:
+                        _bak.write(content)
+                except Exception:
+                    pass
+                is_cjs = "module.exports" in content
+                if is_cjs:
+                    override = (
+                        f'/** Lucid AI preview patch — original at {fname}.bak */\n'
+                        f'module.exports = {{\n'
+                        f'  assetPrefix: "{base_path}",\n'
+                        f'  images: {{ unoptimized: true }},\n'
+                        f'}};\n'
+                    )
+                else:
+                    override = (
+                        f'/** Lucid AI preview patch — original at {fname}.bak */\n'
+                        f'const nextConfig = {{\n'
+                        f'  assetPrefix: "{base_path}",\n'
+                        f'  images: {{ unoptimized: true }},\n'
+                        f'}};\n'
+                        f'export default nextConfig;\n'
+                    )
+                with open(config_path, "w") as f:
+                    f.write(override)
+                logger.warning(
+                    "local_preview: unknown config format in %s — wrote minimal override, original at %s.bak",
+                    fname, fname,
+                )
+                return
+
+            # Inject images: { unoptimized: true } so Next.js doesn't reject
+            # external image URLs common in user-imported repos.
             if "images:" in content:
                 content = re.sub(
                     r"(images\s*:\s*\{)",
@@ -684,12 +723,6 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
                     count=1,
                 )
 
-            if not injected:
-                logger.warning(
-                    "local_preview: could not inject assetPrefix into %s — unknown format", fname
-                )
-                return
-
             with open(config_path, "w") as f:
                 f.write(content)
 
@@ -697,6 +730,27 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
         except Exception as exc:
             logger.warning("local_preview: failed to patch %s: %s", fname, exc)
         return  # only patch the first config file found
+
+    # No next.config.* file found — create a minimal one so /_next/ assets
+    # are prefixed by the proxy path and load correctly in production.
+    config_path = os.path.join(workspace_path, "next.config.mjs")
+    try:
+        minimal = (
+            f'/** Lucid AI preview patch */\n'
+            f'const nextConfig = {{\n'
+            f'  assetPrefix: "{base_path}",\n'
+            f'  images: {{ unoptimized: true }},\n'
+            f'}};\n'
+            f'export default nextConfig;\n'
+        )
+        with open(config_path, "w") as f:
+            f.write(minimal)
+        logger.info(
+            "local_preview: no next.config found — created next.config.mjs with assetPrefix=%s",
+            base_path,
+        )
+    except Exception as exc:
+        logger.warning("local_preview: failed to create next.config.mjs: %s", exc)
 
 
 class _ProcessExitedError(RuntimeError):
