@@ -28,7 +28,31 @@ jobs:
             git reset --hard origin/main
             mkdir -p workspaces
 
-            # ── Sync nginx config ────────────────────────────────────────────
+            # ── Write production env overrides ──────────────────────────────
+            # These variables are server-specific and override docker-compose defaults.
+            # PREVIEW_BASE_URL: tells local_preview.py to generate URLs like
+            #   https://lucid.shopsready.com/preview-4001/
+            # Without this it falls back to http://localhost:PORT (user's laptop).
+            grep -qxF 'PREVIEW_BASE_URL=https://lucid.shopsready.com' .env \
+              || echo 'PREVIEW_BASE_URL=https://lucid.shopsready.com' >> .env
+
+            # WebSocket URL for the browser to connect to the ai_engine.
+            grep -qxF 'NEXT_PUBLIC_AGENT_WS_URL=wss://lucid.shopsready.com/api/v1/ws' .env \
+              || echo 'NEXT_PUBLIC_AGENT_WS_URL=wss://lucid.shopsready.com/api/v1/ws' >> .env
+
+            # App URL for Stripe redirects and OAuth callbacks.
+            grep -qxF 'NEXT_PUBLIC_APP_URL=https://lucid.shopsready.com' .env \
+              || echo 'NEXT_PUBLIC_APP_URL=https://lucid.shopsready.com' >> .env
+
+            # Auth URL for NextAuth.
+            grep -qxF 'AUTH_URL=https://lucid.shopsready.com' .env \
+              || echo 'AUTH_URL=https://lucid.shopsready.com' >> .env
+
+            # Allow the production domain in CORS.
+            grep -q 'lucid.shopsready.com' .env \
+              || sed -i 's|ALLOWED_ORIGINS=.*|ALLOWED_ORIGINS=http://localhost:3000,http://frontend:3000,https://lucid.shopsready.com|' .env
+
+            # ── Sync nginx config ───────────────────────────────────────────
             # Copy versioned nginx config from repo into place, then reload.
             # This ensures the preview proxy block is never lost on rebuild.
             cp infra/nginx/lucid.shopsready.com.conf \
@@ -37,7 +61,7 @@ jobs:
                    /etc/nginx/sites-enabled/lucid.shopsready.com
             nginx -t && systemctl reload nginx
 
-            # ── Rebuild & restart ai_engine container ────────────────────────
-            docker compose up -d --build ai_engine
+            # ── Rebuild & restart all containers ────────────────────────────
+            # Build both ai_engine and frontend so code changes are always live.
+            docker compose up -d --build ai_engine frontend
             docker image prune -f
-
