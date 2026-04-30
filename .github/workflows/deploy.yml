@@ -17,11 +17,27 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
+            # ── Pull latest code ────────────────────────────────────────────
             if [ ! -d /opt/lucid-ai ]; then
               git clone https://github.com/${{ secrets.DEPLOY_REPO }}.git /opt/lucid-ai
             fi
             cd /opt/lucid-ai
-            git pull origin main
+            # Use fetch + reset --hard so this works regardless of local branch
+            # name (server may be on 'master' while GitHub remote is 'main').
+            git fetch origin main
+            git reset --hard origin/main
             mkdir -p workspaces
+
+            # ── Sync nginx config ────────────────────────────────────────────
+            # Copy versioned nginx config from repo into place, then reload.
+            # This ensures the preview proxy block is never lost on rebuild.
+            cp infra/nginx/lucid.shopsready.com.conf \
+               /etc/nginx/sites-available/lucid.shopsready.com
+            ln -sf /etc/nginx/sites-available/lucid.shopsready.com \
+                   /etc/nginx/sites-enabled/lucid.shopsready.com
+            nginx -t && systemctl reload nginx
+
+            # ── Rebuild & restart ai_engine container ────────────────────────
             docker compose up -d --build ai_engine
             docker image prune -f
+
