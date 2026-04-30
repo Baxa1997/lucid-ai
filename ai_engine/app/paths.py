@@ -19,6 +19,11 @@ import os
 # may override by setting ``LUCID_TMP_ROOT`` before import.
 TMP_ROOT: str = os.environ.get("LUCID_TMP_ROOT", "/tmp")
 
+# Preview workspaces are stored under /app/storage/preview_ws so they
+# survive container restarts (the /app/storage dir is volume-mounted).
+# Falls back to TMP_ROOT if LUCID_PREVIEW_WS_ROOT is overridden.
+PREVIEW_WS_ROOT: str = os.environ.get("LUCID_PREVIEW_WS_ROOT", "/app/storage/preview_ws")
+
 PREVIEW_WORKSPACE_PREFIX: str = "lucid_ws_"
 NEW_PROJECT_WORKSPACE_PREFIX: str = "lucid_new_"
 CONVERSATION_WORKSPACE_PREFIX: str = "lucid_conv_"
@@ -31,11 +36,13 @@ NODE_MODULES_CACHE_ROOT: str = os.path.join(TMP_ROOT, "lucid_nm_cache")
 def preview_workspace_path(conversation_id: str) -> str:
     """Stable path for the preview workspace of ``conversation_id``.
 
-    Identical across reconnects so the dev server + node_modules cache can
-    be reused without re-cloning or re-installing.
+    Stored under PREVIEW_WS_ROOT (/app/storage/preview_ws) which is
+    volume-mounted, so workspaces survive container restarts and the dev
+    server + node_modules cache can be reused without re-cloning.
     """
+    os.makedirs(PREVIEW_WS_ROOT, exist_ok=True)
     short = conversation_id.replace("-", "")[:12]
-    return os.path.join(TMP_ROOT, f"{PREVIEW_WORKSPACE_PREFIX}{short}")
+    return os.path.join(PREVIEW_WS_ROOT, f"{PREVIEW_WORKSPACE_PREFIX}{short}")
 
 
 def is_preview_workspace(path: str) -> bool:
