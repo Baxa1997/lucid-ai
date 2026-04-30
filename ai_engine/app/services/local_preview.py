@@ -987,11 +987,14 @@ async def _emit(websocket: WebSocket, msg_type: str, **kwargs) -> None:
 async def _save_preview_url(conversation_id: str, url: str) -> None:
     """Persist the preview URL to chat_sessions table.
 
-    localhost URLs are intentionally NOT saved — the frontend already filters
-    them out as ephemeral on page load (they don't survive a server restart).
-    Only production domain URLs (PREVIEW_DOMAIN set) are worth persisting.
+    Ephemeral URLs (localhost and path-proxy preview ports) are NOT saved —
+    they point at ports that die on container restart and cause 502s if restored.
+    Only stable deployment URLs (e.g. Vercel) are worth persisting.
     """
     if "localhost" in url or "127.0.0.1" in url:
+        return
+    import re as _re
+    if _re.search(r'/preview-\d+', url):
         return
     try:
         from app.supabase_client import db_client

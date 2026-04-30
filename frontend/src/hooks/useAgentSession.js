@@ -71,10 +71,13 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   // iframe instead of showing a blank panel — the backend only emits
   // `preview_ready` once per sandbox boot and does not re-emit on WS reconnect.
   const _previewStorageKey = projectId ? `ws_preview_${projectId}` : null;
-  const [previewUrl, setPreviewUrl] = useState(() => {
-    if (typeof window === 'undefined' || !_previewStorageKey) return null;
-    try { return sessionStorage.getItem(_previewStorageKey) || null; } catch { return null; }
-  });
+  // Never restore previewUrl from sessionStorage on mount — the stored URL
+  // points at an ephemeral dev-server port that may be dead (e.g. after a
+  // container restart). Restoring it causes the iframe to immediately load
+  // a 502 page. The backend re-emits preview_ready on reconnect within
+  // seconds if the server is still alive; otherwise the spinner stays until
+  // bg_preview restarts it — both are correct and non-jarring.
+  const [previewUrl, setPreviewUrl] = useState(null);
   const [previewTaskId, setPreviewTaskId] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewStatusMsg, setPreviewStatusMsg] = useState('');

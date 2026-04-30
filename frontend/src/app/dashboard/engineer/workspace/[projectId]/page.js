@@ -215,7 +215,10 @@ function ConversationPageInner({params}) {
                 storedUrl.includes(".loca.lt") ||
                 storedUrl.includes(".ngrok") ||
                 storedUrl.includes(".trycloudflare.com") ||
-                storedUrl.startsWith("http://localhost"));
+                storedUrl.startsWith("http://localhost") ||
+                // Path-proxy preview ports (e.g. /preview-4001/) are ephemeral —
+                // they die on container restart and must never be shown as a deployed URL.
+                /\/preview-\d+/.test(storedUrl));
             // Liveness probe (server-side — sees real HTTP status) so we
             // don't surface a dead Vercel deployment as "Open deployed
             // site". A fail-open strategy keeps the button when the probe
