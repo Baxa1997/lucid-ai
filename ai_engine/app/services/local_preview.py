@@ -235,6 +235,11 @@ async def start_local_preview(
                 #   assetPrefix: process.env.NEXT_PUBLIC_ASSET_PREFIX || ''
                 # Older projects fall back to _patch_nextjs_base_path file injection.
                 "NEXT_PUBLIC_ASSET_PREFIX": f"/preview-{port}",
+                # Suppress the multi-line telemetry banner — it pushes the real
+                # error out of the stderr tail window when the dev server crashes
+                # during compilation, leaving the user with a misleading
+                # "crashed on startup: ✓ Starting..." message.
+                "NEXT_TELEMETRY_DISABLED": "1",
             }
 
             with open(_stderr_path, "w") as _stderr_fh:
@@ -284,38 +289,41 @@ async def start_local_preview(
                 )
                 await _stop_by_conversation(conversation_id)
                 continue
+            summary = _summarize_dev_server_error(stderr_snippet)
             logger.error(
                 "local_preview: dev server exited early (port %d): %s",
-                port, stderr_snippet[:300],
+                port, summary[:500],
             )
             await _stop_by_conversation(conversation_id)
             await _emit(websocket, "preview_error",
                         error_stage="crashed",
-                        message=f"Dev server crashed on startup: {stderr_snippet[:200] or 'check terminal logs'}")
+                        message=f"Dev server crashed on startup:\n{summary[:1500]}")
             return None
 
         except asyncio.TimeoutError:
             stderr_snippet = _read_stderr(_stderr_path)
+            summary = _summarize_dev_server_error(stderr_snippet)
             logger.error(
                 "local_preview: timed out waiting for dev server on port %d. stderr: %s",
-                port, stderr_snippet[:300],
+                port, summary[:500],
             )
             await _stop_by_conversation(conversation_id)
             await _emit(websocket, "preview_error",
                         error_stage="timeout",
-                        message="Dev server didn't start in time — click Restart Preview to retry.")
+                        message=f"Dev server didn't start in time. Last output:\n{summary[:1500]}")
             return None
 
         except Exception as exc:
             stderr_snippet = _read_stderr(_stderr_path)
+            summary = _summarize_dev_server_error(stderr_snippet)
             logger.error(
                 "local_preview: start failed: %s | stderr: %s",
-                exc, stderr_snippet[:300], exc_info=True,
+                exc, summary[:500], exc_info=True,
             )
             await _stop_by_conversation(conversation_id)
             await _emit(websocket, "preview_error",
                         error_stage="start",
-                        message=f"Preview failed to start: {str(exc)[:200]}")
+                        message=f"Preview failed to start: {str(exc)[:200]}\n{summary[:1500]}")
             return None
 
     # All 3 attempts hit EADDRINUSE — extremely rare, surface to user
@@ -695,14 +703,58 @@ class _ProcessExitedError(RuntimeError):
     """Raised when the dev server process exits before the health check passes."""
 
 
-def _read_stderr(path: str) -> str:
-    """Read the last 500 chars of the dev server's stderr log."""
+def _read_stderr(path: str, *, tail: int = 4000) -> str:
+    """Read the tail of the dev server's stderr log.
+
+    Default 4 KB tail — large enough to keep the actual stack trace / module
+    resolution error after Next.js's startup banner + telemetry notice (which
+    together span ~600 chars). Bumping from 500 → 4000 fixed cases where the
+    UI showed only "✓ Starting..." instead of the real failure reason.
+    """
     try:
         with open(path, "r", errors="replace") as f:
             content = f.read()
-        return content[-500:].strip() if content else ""
+        return content[-tail:].strip() if content else ""
     except Exception:
         return ""
+
+
+def _summarize_dev_server_error(stderr: str) -> str:
+    """Extract the meaningful error from a Next.js dev-server stderr dump.
+
+    The raw tail contains startup chatter (`▲ Next.js x.y.z`, `Local: …`,
+    `✓ Starting…`) followed by the actual failure. We scan for known error
+    markers and return the first hit + a few lines of context. Falls back
+    to the last ~600 chars of the raw stream if no marker matches.
+    """
+    if not stderr:
+        return "check terminal logs"
+
+    markers = (
+        "Error:",
+        "SyntaxError",
+        "TypeError",
+        "ReferenceError",
+        "Module not found",
+        "Cannot find module",
+        "ENOENT",
+        "EADDRINUSE",
+        "FATAL",
+        "JavaScript heap out of memory",
+        "Failed to compile",
+        "Unhandled Runtime Error",
+    )
+    lines = stderr.splitlines()
+    for i, line in enumerate(lines):
+        for m in markers:
+            if m in line:
+                # Return the marker line + up to 8 following lines for context.
+                snippet = "\n".join(lines[i : i + 9]).strip()
+                if snippet:
+                    return snippet
+    # No structured marker — return the last few lines verbatim.
+    tail_lines = [l for l in lines[-12:] if l.strip()]
+    return "\n".join(tail_lines).strip() or "check terminal logs"
 
 
 async def _wait_for_server(port: int, proc=None, timeout: int = 90) -> None:
@@ -809,9 +861,10 @@ async def _watch_process_exit(
         return
 
     stderr_snippet = _read_stderr(stderr_path)
+    summary = _summarize_dev_server_error(stderr_snippet)
     logger.warning(
         "local_preview: dev server for %s exited unexpectedly (code=%s): %s",
-        conversation_id, proc.returncode, stderr_snippet[:300],
+        conversation_id, proc.returncode, summary[:500],
     )
     workspace_path = entry.get("workspace_path", "")
     started_at = entry.get("started_at", 0)
@@ -847,15 +900,15 @@ async def _watch_process_exit(
         except Exception as exc:
             logger.error("local_preview: auto-restart failed for %s: %s",
                          conversation_id, exc, exc_info=True)
-            stderr_snippet = (
-                f"{stderr_snippet}\n\nAuto-restart also failed: {exc}"
-                if stderr_snippet else f"Auto-restart failed: {exc}"
+            summary = (
+                f"{summary}\n\nAuto-restart also failed: {exc}"
+                if summary else f"Auto-restart failed: {exc}"
             )
 
     await _emit(
         websocket, "preview_error",
         error_stage="crashed",
-        message=f"Dev server crashed: {stderr_snippet[:400] or 'check terminal logs'}",
+        message=f"Dev server crashed:\n{summary[:1500] or 'check terminal logs'}",
     )
 
 

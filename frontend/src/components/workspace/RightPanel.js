@@ -633,16 +633,16 @@ export default function RightPanel() {
                         </div>
                       )}
                       {previewPhase === "live-with-error-overlay" && (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/90 dark:bg-[#0d1117]/90 backdrop-blur-sm z-30">
+                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/95 dark:bg-[#0d1117]/95 backdrop-blur-sm z-30 p-6">
                           <div className="w-12 h-12 rounded-2xl bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-800/30 flex items-center justify-center mb-3">
                             <TriangleAlert className="w-6 h-6 text-amber-400" />
                           </div>
-                          <p className="text-[14px] font-bold text-slate-800 dark:text-slate-200 mb-1">
+                          <p className="text-[14px] font-bold text-slate-800 dark:text-slate-200 mb-2">
                             Preview failed
                           </p>
-                          <p className="text-[12px] text-slate-500 dark:text-slate-400 max-w-md mb-4 text-center px-6 leading-relaxed">
+                          <pre className="text-[11px] font-mono text-slate-600 dark:text-slate-400 max-w-2xl max-h-48 overflow-auto mb-4 text-left whitespace-pre-wrap break-words bg-slate-50 dark:bg-slate-900/50 rounded-lg p-3 border border-slate-200 dark:border-slate-800">
                             {previewError?.message || "Dev server stopped responding."}
-                          </p>
+                          </pre>
                           <button
                             onClick={() => retry("preview")}
                             className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-[12px] font-semibold hover:bg-slate-800 dark:hover:bg-slate-100 transition-colors shadow-sm">
@@ -734,9 +734,9 @@ export default function RightPanel() {
                       <h3 className="text-base font-bold text-slate-800 dark:text-slate-200 mb-2">
                         Preview unavailable
                       </h3>
-                      <p className="text-[13px] text-slate-500 dark:text-slate-400 max-w-sm mb-5 leading-relaxed whitespace-pre-wrap">
+                      <pre className="text-[11px] font-mono text-slate-600 dark:text-slate-400 max-w-2xl max-h-56 overflow-auto mb-5 text-left whitespace-pre-wrap break-words bg-slate-50 dark:bg-slate-900/50 rounded-lg p-3 border border-slate-200 dark:border-slate-800">
                         {previewError?.message || "The preview server could not be started after several attempts."}
-                      </p>
+                      </pre>
                       <button
                         onClick={() => setRightPanel("code")}
                         className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-[13px] font-semibold hover:bg-slate-800 dark:hover:bg-slate-100 transition-colors shadow-sm">
@@ -752,9 +752,9 @@ export default function RightPanel() {
                       <h3 className="text-base font-bold text-slate-800 dark:text-slate-200 mb-2">
                         Preview failed
                       </h3>
-                      <p className="text-[13px] text-slate-500 dark:text-slate-400 max-w-md mb-5 leading-relaxed whitespace-pre-wrap">
+                      <pre className="text-[11px] font-mono text-slate-600 dark:text-slate-400 max-w-2xl max-h-56 overflow-auto mb-5 text-left whitespace-pre-wrap break-words bg-slate-50 dark:bg-slate-900/50 rounded-lg p-3 border border-slate-200 dark:border-slate-800">
                         {previewError?.message || "Dev server failed to start."}
-                      </p>
+                      </pre>
                       <button
                         onClick={() => retry("preview")}
                         className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-[13px] font-semibold hover:bg-slate-800 dark:hover:bg-slate-100 transition-colors shadow-sm">
