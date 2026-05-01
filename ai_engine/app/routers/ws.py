@@ -990,6 +990,17 @@ async def websocket_agent(websocket: WebSocket):
                         background_preview_task = asyncio.create_task(_reconnect_dev_restart())
                         logger.info("reconnect: restarting dev server for %s from cached workspace %s",
                                     _rc_conv, _recon_ws)
+                    else:
+                        # No live server AND no cached workspace to restart from.
+                        # Without this emit, the frontend keeps spinning forever
+                        # because the earlier "Restarting preview…" status has
+                        # no resolver. Surface a retry button instead.
+                        logger.info("reconnect: no cached workspace for %s — surfacing manual retry", _reconnect_conv_id)
+                        await websocket.send_json({
+                            "type": "preview_error",
+                            "error_stage": "no_workspace",
+                            "message": "Preview workspace was lost — click Restart Preview to rebuild it.",
+                        })
             except Exception as _rp_err:
                 logger.debug("reconnect: preview URL check failed (ok): %s", _rp_err)
 
@@ -1455,6 +1466,7 @@ async def websocket_agent(websocket: WebSocket):
                             workspace_path=workspace_path,
                             conversation_id=project_id or conversation_id,
                             websocket=websocket,
+                            force_restart=True,
                         )
                     except Exception as retry_preview_err:
                         logger.warning("retry_preview failed: %s", retry_preview_err)

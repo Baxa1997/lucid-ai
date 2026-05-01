@@ -40,6 +40,19 @@ _PORT_END   = int(os.environ.get("PREVIEW_PORT_END",   "4050"))
 # ── Registry: conversation_id → {port, process, workspace_path, url} ──
 _active_servers: dict[str, dict] = {}
 
+# ── Per-conversation start lock: serializes overlapping start_local_preview
+# calls (e.g. the exit-watcher's auto-restart racing the user's "Restart
+# Preview" click). Without it both can spawn dev servers on different ports.
+_start_locks: dict[str, asyncio.Lock] = {}
+
+
+def _start_lock(conversation_id: str) -> asyncio.Lock:
+    lock = _start_locks.get(conversation_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _start_locks[conversation_id] = lock
+    return lock
+
 # ── Skip list for package.json dev script detection ──────
 _NO_DEV_DIRS = frozenset({"node_modules", ".git", ".next", "dist", "build"})
 
@@ -54,12 +67,15 @@ async def start_local_preview(
     conversation_id: str,
     websocket: WebSocket,
     package_manager: str = "npm",
+    force_restart: bool = False,
 ) -> Optional[str]:
     """Start a dev server for the workspace, return its public URL.
 
-    If a server is already running for this conversation, returns
-    the existing URL immediately (no restart needed — HMR handles
-    incremental file changes automatically).
+    If a server is already running for this conversation and ``force_restart``
+    is False, returns the existing URL immediately (HMR handles incremental
+    file changes). When ``force_restart`` is True, any existing server is
+    killed first and a fresh one is started — used by the "Restart Preview"
+    button so a wedged-but-bound process doesn't get reused.
 
     Returns None if the workspace has no 'dev' script or startup fails.
     """
@@ -67,10 +83,46 @@ async def start_local_preview(
         logger.info("local_preview: no 'dev' script in package.json — skipping preview")
         return None
 
+    # Serialize concurrent starts for this conversation. The exit-watcher's
+    # auto-restart and a user-clicked "Restart Preview" can both call this
+    # function within milliseconds; without the lock they each spawn a
+    # dev server on a different port and the frontend gets two preview_ready
+    # events.
+    async with _start_lock(conversation_id):
+        return await _start_local_preview_locked(
+            workspace_path=workspace_path,
+            conversation_id=conversation_id,
+            websocket=websocket,
+            package_manager=package_manager,
+            force_restart=force_restart,
+        )
+
+
+async def _start_local_preview_locked(
+    *,
+    workspace_path: str,
+    conversation_id: str,
+    websocket: WebSocket,
+    package_manager: str,
+    force_restart: bool,
+) -> Optional[str]:
+    """The actual start logic — runs under _start_lock(conversation_id)."""
     # ── Re-use existing server if still alive AND same workspace ─
     existing = _active_servers.get(conversation_id)
     if existing and _process_alive(existing.get("process")):
-        if existing.get("workspace_path") == workspace_path:
+        if force_restart:
+            logger.info(
+                "local_preview: force_restart requested — killing existing server on port %d for %s",
+                existing.get("port", 0), conversation_id,
+            )
+            await _kill_server(existing)
+            _active_servers.pop(conversation_id, None)
+            # Wait for the port to be fully released so the next bind doesn't
+            # race the kernel's TIME_WAIT state.
+            stale_port = existing.get("port")
+            if isinstance(stale_port, int):
+                await _wait_port_released(stale_port, timeout=5)
+        elif existing.get("workspace_path") == workspace_path:
             # Same workspace — reuse (HMR handles file changes)
             logger.info("local_preview: reusing server on port %d for %s",
                         existing["port"], conversation_id)
@@ -83,6 +135,9 @@ async def start_local_preview(
             logger.info("local_preview: workspace changed, restarting server for %s", conversation_id)
             await _kill_server(existing)
             _active_servers.pop(conversation_id, None)
+            stale_port = existing.get("port")
+            if isinstance(stale_port, int):
+                await _wait_port_released(stale_port, timeout=5)
     elif existing:
         # Dead process — clean up stale entry
         await _kill_server(existing)
@@ -637,7 +692,8 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
 
         try:
             with open(config_path) as f:
-                content = f.read()
+                original_content = f.read()
+            content = original_content
 
             # New template reads NEXT_PUBLIC_ASSET_PREFIX from the environment —
             # we already set it in the spawn env, so no file edit is needed.
@@ -663,12 +719,14 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
                 # Strip any leftover basePath / trailingSlash injected by older code.
                 if "basePath" in content:
                     content = re.sub(r"\s*basePath:\s*['\"][^'\"]*['\"],?\n?", "", content)
-                    logger.info("local_preview: removed stale basePath from %s", fname)
                 if "trailingSlash" in content:
                     content = re.sub(r"\s*trailingSlash:\s*\w+,?\n?", "", content)
-                with open(config_path, "w") as f:
-                    f.write(content)
-                logger.info("local_preview: updated %s assetPrefix → %s", fname, base_path)
+                if content != original_content:
+                    with open(config_path, "w") as f:
+                        f.write(content)
+                    logger.info("local_preview: updated %s assetPrefix → %s", fname, base_path)
+                else:
+                    logger.debug("local_preview: %s already correct — skipping write", fname)
                 return
 
             # First time — inject assetPrefix right after the opening `{` of the
@@ -701,15 +759,17 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
                     break
 
             if not injected:
-                # No recognised pattern — back up original and write a minimal
-                # standalone config so /_next/ assets load via the proxy prefix.
+                # No recognised pattern — back up original (only on first write)
+                # and write a minimal standalone config so /_next/ assets load via
+                # the proxy prefix.
                 bak_path = config_path + ".bak"
-                try:
-                    with open(bak_path, "w") as _bak:
-                        _bak.write(content)
-                except Exception:
-                    pass
-                is_cjs = "module.exports" in content
+                if not os.path.isfile(bak_path):
+                    try:
+                        with open(bak_path, "w") as _bak:
+                            _bak.write(original_content)
+                    except Exception:
+                        pass
+                is_cjs = "module.exports" in original_content
                 if is_cjs:
                     override = (
                         f'/** Lucid AI preview patch — original at {fname}.bak */\n'
@@ -727,12 +787,13 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
                         f'}};\n'
                         f'export default nextConfig;\n'
                     )
-                with open(config_path, "w") as f:
-                    f.write(override)
-                logger.warning(
-                    "local_preview: unknown config format in %s — wrote minimal override, original at %s.bak",
-                    fname, fname,
-                )
+                if override != original_content:
+                    with open(config_path, "w") as f:
+                        f.write(override)
+                    logger.warning(
+                        "local_preview: unknown config format in %s — wrote minimal override, original at %s.bak",
+                        fname, fname,
+                    )
                 return
 
             # Inject images: { unoptimized: true } so Next.js doesn't reject
@@ -752,10 +813,12 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
                     count=1,
                 )
 
-            with open(config_path, "w") as f:
-                f.write(content)
-
-            logger.info("local_preview: patched %s with assetPrefix=%s", fname, base_path)
+            if content != original_content:
+                with open(config_path, "w") as f:
+                    f.write(content)
+                logger.info("local_preview: patched %s with assetPrefix=%s", fname, base_path)
+            else:
+                logger.debug("local_preview: %s unchanged — skipping write", fname)
         except Exception as exc:
             logger.warning("local_preview: failed to patch %s: %s", fname, exc)
         return  # only patch the first config file found
@@ -842,11 +905,12 @@ def _summarize_dev_server_error(stderr: str) -> str:
 
 
 async def _wait_for_server(port: int, proc=None, timeout: int = 90) -> None:
-    """Poll until the dev server responds to ANY HTTP request on the port.
+    """Poll until the dev server responds with a non-error HTTP status.
 
-    Accepts any valid HTTP status code (1xx–5xx) — we just want to know
-    the process is up and the port is bound.  A 404 from an empty Next.js
-    app is still a running server.
+    Accepts 1xx–4xx — a 404 from an empty Next.js app is still a running
+    server. Rejects 5xx because a server that's bound but throwing 500s
+    on every request is broken; reporting `preview_ready` for it would
+    show the user a Next.js error overlay instead of their app.
 
     If ``proc`` is provided, checks for early process exit on every loop
     iteration and raises _ProcessExitedError immediately instead of
@@ -854,6 +918,7 @@ async def _wait_for_server(port: int, proc=None, timeout: int = 90) -> None:
     """
     deadline = asyncio.get_event_loop().time() + timeout
     await asyncio.sleep(4)  # Grace period for process startup
+    last_5xx: Optional[int] = None
 
     while asyncio.get_event_loop().time() < deadline:
         # ── Process liveness check ────────────────────────
@@ -870,13 +935,40 @@ async def _wait_for_server(port: int, proc=None, timeout: int = 90) -> None:
         )
         stdout, _ = await curl.communicate()
         code = (stdout or b"").decode().strip()
-        # Any real HTTP status (100–599) means the server is up.
-        if code.isdigit() and 100 <= int(code) <= 599:
-            logger.info("local_preview: server on port %d responded with HTTP %s", port, code)
-            return
+        if code.isdigit():
+            n = int(code)
+            if 100 <= n < 500:
+                logger.info("local_preview: server on port %d responded with HTTP %s", port, code)
+                return
+            if 500 <= n <= 599:
+                # Keep polling — the dev server may still be compiling. Surface
+                # the persistent 5xx via TimeoutError if it never recovers.
+                last_5xx = n
         await asyncio.sleep(3)
 
+    if last_5xx is not None:
+        raise asyncio.TimeoutError(
+            f"Dev server on port {port} kept returning HTTP {last_5xx} — likely a compile error"
+        )
     raise asyncio.TimeoutError(f"Dev server on port {port} never responded")
+
+
+async def _wait_port_released(port: int, timeout: int = 5) -> None:
+    """Wait until *port* is no longer bound by any process.
+
+    Called after killing a dev server before allocating the next port, so
+    the new bind doesn't race the kernel's TIME_WAIT cleanup.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind(("0.0.0.0", port))
+                return
+        except OSError:
+            await asyncio.sleep(0.2)
+    logger.debug("local_preview: port %d still bound after %ds — proceeding anyway", port, timeout)
 
 
 async def _kill_server(entry: dict) -> None:
