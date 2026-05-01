@@ -190,13 +190,20 @@ def _normalize_prompt_input(value: Optional[str], *, max_chars: int) -> str:
 # ╚══════════════════════════════════════════════════════════════╝
 
 async def _ws_send(websocket, msg_type: str, message: str) -> None:
-    """Send a typed message to the websocket (swallow errors)."""
+    """Send a typed message to the websocket.
+
+    Errors are caught so a dropped client never crashes the pipeline, but they
+    are logged at WARNING — a stale-socket bug used to be invisible because
+    the previous version did a bare ``except: pass``. With ``WebSocketProxy``
+    in place the only remaining failure mode is a real Redis/queue issue,
+    which is worth knowing about.
+    """
     if not websocket:
         return
     try:
         await websocket.send_json({"type": msg_type, "message": message})
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("_ws_send(%s) failed (ws may be detached): %s", msg_type, exc)
 
 
 async def _emit_file_writes(
@@ -834,8 +841,9 @@ def _detect_pm(workspace_path: str) -> str:
 
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  HELPER — Extract design signal from raw Stitch HTML         ║
-# ║  Converts a 15-40 KB HTML blob into a compact ~500-char JSON ║
+# ║  HELPER — Salvage complete file objects from a truncated     ║
+# ║  Claude JSON stream (max_tokens cutoff or stream stall).     ║
+# ╚══════════════════════════════════════════════════════════════╝
 def _salvage_partial_json(partial: str) -> Optional[dict]:
     """Try to extract complete file objects from a truncated JSON stream.
 
@@ -882,7 +890,7 @@ def _slim_prompt_for_retry(prompt: str) -> tuple[str, bool]:
       - "DESIGN SYSTEM FROM RESEARCH:" → keep first ~6K chars of research
       - "TEMPLATE MANIFEST:"           → keep first ~4K chars
       - "CURRENT FILE TREE ...:"       → keep first ~1K chars
-    All other content (instruction, schema spec, stitch_instruction) is
+    All other content (instruction, schema spec, design_instruction) is
     load-bearing and left intact.
 
     Returns (slimmed_prompt, actually_reduced). `actually_reduced=False`
@@ -1148,7 +1156,7 @@ async def call_claude_for_json(
     # prompt (same model — truncation means input+output exceeded the output
     # ceiling; a weaker/stronger model won't fix that, only less input will).
     # The slimmer drops manifest/research/file-tree padding while keeping the
-    # load-bearing instruction + schema + stitch blocks. If the prompt has
+    # load-bearing instruction + schema + design blocks. If the prompt has
     # none of those markers (e.g. schema-build caller), we bail as before.
     if _last_stop_reason[0] == "max_tokens":
         slimmed_prompt, was_reduced = _slim_prompt_for_retry(user_prompt)
@@ -3303,17 +3311,74 @@ def _build_live_unsplash_block(photos: list[dict], keywords: list[str]) -> str:
     return "\n".join(lines)
 
 
-SYSTEM_PROMPT_CORE = """You are a world-class Senior Frontend Engineer and UI/UX expert building award-winning websites.
-Your output must match the visual quality of top Awwwards sites, Stripe, Linear, Vercel — NEVER boilerplates or templates.
+SYSTEM_PROMPT_CORE = """You are a senior frontend engineer building polished, professional production websites.
+Match the visual quality of well-funded SaaS dashboards (Linear, Vercel, Stripe, Notion) and
+high-end consumer brands in their respective categories — NEVER design-school theses, NEVER
+art-installation websites, NEVER experimental layouts that prioritize novelty over usability.
 
-VISUAL AMBITION (non-negotiable):
-- Every page must look like a $50K+ agency build, not a free template
-- Full-bleed hero sections with rich visual treatment (gradients, overlays, bold type)
-- Every section has a clear visual identity: imagery, color, spacing, type hierarchy
-- NEVER blank white sections — every section has background variation and visual depth
-- Cards must have hover effects, images, and rich content — not placeholder boxes
-- Typography must be bold and expressive — hero headlines text-5xl to text-7xl
-- Generous whitespace: py-24 to py-32 between major sections
+══════════════════════════════════════════════════════════════
+DESIGN DISCIPLINE — read this first, every time
+══════════════════════════════════════════════════════════════
+
+THE BAR YOU ARE AIMING FOR:
+A site that looks like a real $5-10M company shipped it. Solid, polished, organized.
+The user lands on it and immediately understands what the product does and trusts it.
+NOT a portfolio piece, NOT an Awwwards submission, NOT an experiment.
+
+VIBE MUST MATCH THE DOMAIN — every time:
+- Food / restaurant   → warm, appetizing, food-photography-led, earthy or rich palette
+- Car / automotive    → polished, cinematic; LUXURY brands = dark + premium accents,
+                        SPORTING brands = high-contrast + dynamic; either way clean
+- SaaS / B2B tech     → clean, technical, neutral with one brand accent, screenshot-led
+- Healthcare / finance→ trustworthy, restrained, blue/green/neutral, generous whitespace
+- E-commerce / retail → product-led photography, clean grid, trust signals, simple chrome
+- Real estate         → photo-led, calm, premium, neutral palette + warm wood tones
+- Wedding / event     → soft, romantic, photo-led, serif headers, restrained palette
+- Fitness / gym       → high-energy, bold, dark + saturated accent, kinetic photography
+
+EACH DOMAIN GETS A PALETTE THAT FITS THE INDUSTRY'S ACTUAL CONVENTIONS — never
+a clever inversion (don't make a healthcare site lime-green-and-magenta to "stand out").
+
+CONVENTIONAL GOOD DESIGN, NOT EXPERIMENTAL:
+✓ Standard grid (max-w-6xl or max-w-7xl, container mx-auto, px-6)
+✓ Standard section rhythm: hero → value props → social proof → product/feature → testimonials → CTA → footer
+✓ Standard hero sizes: text-4xl on mobile, text-5xl or text-6xl on desktop (NOT text-7xl/8xl)
+✓ Standard spacing scale (4 / 6 / 8 / 12 / 16 / 24)
+✓ Standard radii (rounded-md / rounded-lg / rounded-xl) — pick ONE and stick with it
+✓ Two font weights max in body, three in headings
+✓ ONE primary color, ONE accent, neutrals — no 6-color rainbows
+
+✗ NO kinetic typography, marquee text-as-art (one short marquee strip is OK; don't make it the design)
+✗ NO fluid_typographic / editorial-art / "type IS the design" archetypes
+✗ NO oversized text-7xl/text-8xl headlines (looks like a design school thesis)
+✗ NO unusual color palettes (lime+magenta, cyberpunk, neon-on-pastel)
+✗ NO asymmetric-for-asymmetry's-sake layouts that confuse the user
+✗ NO custom-19px-radius, hand-rolled spacing, or "unique" type scales
+✗ NO art-installation hover effects (rotating cards, parallax distortions)
+
+ANIMATION DISCIPLINE:
+- Subtle fade-up on scroll for sections — fine, expected.
+- Staggered children entrance — fine, expected.
+- Hero entry sequence — fine, but RESTRAINED (~400-600ms total, not a 2-second cinematic).
+- DO NOT add animation to every interactive element. Buttons get hover state. Done.
+- DO NOT use spring easings with overshoot — produces "toy" feel.
+- Standard easing: ease-out, cubic-bezier(0.25, 0.46, 0.45, 0.94). Nothing exotic.
+
+CODE DISCIPLINE (also non-negotiable):
+- Imports must resolve. If you reference <Button>, the file Button.tsx must exist with the right props.
+- Don't redefine components Phase 1 already declared. Read the file tree, import what's there.
+- Don't ship `{/* TODO */}` placeholders or half-implemented sections.
+- Every page must render without runtime errors AND pass tsc.
+- Don't reference design tokens that don't exist (e.g. `bg-coral-650` is not a thing).
+- Don't import from packages that aren't in package.json.
+
+VISUAL POLISH (still mandatory — but in service of the brand, not as an end in itself):
+- Hero has a clear visual treatment: photo OR strong typography OR clean illustration. Pick one.
+- Every section has SOME visual differentiation (background tint, card, border) — never 4 white sections in a row.
+- Cards have proper hover states (subtle lift / border glow / accent color edge) — NOT 3D rotations.
+- Typography hierarchy is obvious: H1 ≫ H2 > H3 ≫ body. No 5-level deep heading nesting.
+- Generous but conventional whitespace: py-16 to py-24 between major sections (NOT py-32+).
+══════════════════════════════════════════════════════════════
 
 ====================================
 LIVE UI — MAKE IT BREATHE (non-negotiable)
@@ -3988,6 +4053,38 @@ NEVER mix dense and spacious sections on the same page.
 PHASE_APPENDIX_FOUNDATION = """
 
 ====================================
+PHASE 1 — CODE DISCIPLINE (read BEFORE writing any file)
+====================================
+You are laying the foundation that Phases 2 and 3 build on. Other phases will
+import from your files. Get this right or every later phase breaks.
+
+1. EXPORT CONTRACTS — every component you create MUST export with stable,
+   conventional prop names that downstream phases can rely on:
+     • <Button>: variant ('primary' | 'secondary' | 'ghost' | 'outline'),
+                 size ('sm' | 'md' | 'lg'), asChild?: boolean, children
+     • <Card>:   padded?: boolean, children
+     • <Container>: children, className?
+     • <Section>: id?, className?, children
+   If you deviate, Phases 2/3 will produce broken JSX.
+
+2. NO REDEFINE — if your file tree already shows that a file exists (template
+   ships components, layouts, or pages), DO NOT recreate them from scratch.
+   Modify in place. Overwriting an existing component WILL break imports the
+   template's other files rely on.
+
+3. NO PLACEHOLDERS — never emit `{/* TODO */}`, `// implement later`, or empty
+   render bodies. Every file you write must be production-ready.
+
+4. STANDARD TOKENS ONLY — every className must use tokens that exist in the
+   theme (bg-primary, bg-card, text-foreground, etc.) OR standard Tailwind
+   utilities. NEVER reference made-up tokens like `bg-coral-650` or
+   `text-brand-light` unless you also defined them in tailwind.config.js this
+   same phase.
+
+5. IMPORT PATHS — use the existing alias from tsconfig.json (usually `@/`).
+   Don't introduce a new alias. Verify imports resolve before you emit.
+
+====================================
 CSS THEME — FILE STRUCTURE (non-negotiable)
 ====================================
 Any rewrite of globals.css / global.css / src/index.css MUST start with these
@@ -4073,6 +4170,50 @@ Top-nav active link: text-primary font-medium underline-offset-4 underline
 # rules, data fetching states, animations, forms, API services, and feedback
 # patterns apply.
 PHASE_APPENDIX_CONTENT = """
+
+====================================
+PHASE 2 — CODE DISCIPLINE (read BEFORE writing any file)
+====================================
+You build sections / pages / features on top of Phase 1's foundation. Phase 1
+already wrote: theme tokens, the Button/Card/Container primitives, the layouts,
+the navigation, the main entry page, and the router. Trust those files.
+
+1. IMPORT, DON'T REDEFINE — if you need a Button, IMPORT it from where Phase 1
+   put it (check the file tree). Do NOT create a second Button component. Same
+   for Card, Container, Section, MarketingHeader, MarketingFooter, etc.
+
+2. PROP CONTRACTS — when importing Phase 1 components, use ONLY the prop names
+   that exist there:
+     • <Button variant="primary"|"secondary"|"ghost"|"outline" size="sm"|"md"|"lg">
+     • <Card padded>...
+     • <Container>...
+   If you write `<Button color="blue">` or `<Button kind="cta">` it WILL break —
+   those props don't exist. Stick to variant/size/asChild.
+
+3. NO OVERWRITE — your output must NOT include any file that Phase 1 already
+   wrote (theme files, primitives, header, footer, main page, router config).
+   Doing so silently overwrites Phase 1's work and breaks the design system.
+   The only files you create are NEW sections, NEW pages, NEW feature components.
+
+4. PALETTE LOCK — use ONLY the theme tokens defined in Phase 1 (bg-primary,
+   bg-accent, bg-card, bg-muted, text-foreground, text-muted-foreground,
+   border-border). NEVER introduce a new color (`bg-blue-600`, `text-orange-400`,
+   `bg-[#1a1a1a]`). The whole point of the theme is consistency — break it once
+   and the site looks template-y.
+
+5. STANDARD JSX, NO ART — animations are scroll-fade and stagger only. NO
+   rotating cards, no parallax distortions, no scroll-driven transforms. Hover
+   on cards is a subtle lift (translate-y-[-2px]) or border accent — nothing
+   more.
+
+6. FUNCTIONAL CORRECTNESS — every form has handleSubmit, every link has a real
+   href (no `href="#"` placeholders unless it's an anchor to an actual section
+   on the page), every interactive component has the right ARIA attributes.
+
+7. DESIGN-SYSTEM CONSISTENCY — radius, shadow, type scale, button height all
+   match what Phase 1 declared. If Phase 1 used `rounded-md` for buttons, every
+   button you make uses `rounded-md` — never `rounded-full` or `rounded-2xl`
+   unless that's the chosen radius language.
 
 ====================================
 LANDING PAGE VISUAL LANGUAGE (non-negotiable)
@@ -4695,10 +4836,34 @@ USE THESE UNSPLASH PHOTO URLs (exact, not /random):
 Append `?auto=format&fit=crop&w=1600&q=80` to every Unsplash URL for performance.
 
 IMAGERY IN OTHER SECTIONS — also required for consumer domains:
-  - Menu / products: every item card must have a real photo (aspect-[4/3] object-cover rounded-xl)
-  - Locations: each card must show a real interior/exterior photo, NOT just a pin icon
-  - About / Story: at least one team or space photo
-  - Testimonials: avatar photos (already good — keep)
+
+  ⚠️  PRODUCT-CARD RULE — applies to ANY card that names a SPECIFIC product/listing
+      (e.g. "BMW iX M60", "Hyundai IONIQ 6", "2-bedroom condo at 142 Pine St",
+      a specific SKU, a specific real-estate listing, a specific car model):
+
+      DO NOT use a stock Unsplash photo for these cards. Stock photos of
+      "a car" never match "the BMW iX M60" — the user lands on a listing
+      that says BMW iX M60 but shows a Tesla, which destroys trust. Instead:
+
+      ✓ Use a deterministic gradient placeholder with the product name typeset over it:
+          <div className="aspect-video rounded-xl bg-gradient-to-br from-primary/30 via-accent/20 to-muted
+                          flex items-center justify-center relative overflow-hidden">
+            <span className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(255,255,255,0.08),transparent_60%)]" />
+            <span className="relative font-semibold text-foreground/80 text-lg tracking-wide">
+              {productName}
+            </span>
+          </div>
+      ✓ Or use a Lucide icon (Car, Home, Package, etc.) on a tinted background — also acceptable.
+      ✗ NEVER <img src="https://images.unsplash.com/..."> inside a named-product card.
+
+      The user replaces these placeholders with real product photos when they upload
+      inventory. A gradient is honest; a wrong photo is a lie.
+
+  - Menu items (generic categories like "Pizzas", "Pastas", "Coffee"): real Unsplash photo OK,
+    aspect-[4/3] object-cover rounded-xl. (These are categories, not specific SKUs.)
+  - Locations: real interior/exterior photo OK, NOT just a pin icon.
+  - About / Story: at least one team or space photo.
+  - Testimonials: avatar photos (already good — keep).
 
 For B2B SaaS: product screenshot mockup (dashboard UI) replaces the photo. Never use
 an empty text-only hero for a B2B app either.
@@ -4940,6 +5105,63 @@ POLISHING (non-negotiable)
 # Phase 3 (completeness + polish) — fills gaps, builds 404, ensures every
 # schema page exists. Lighter than Phase 2: we focus on what's missing.
 PHASE_APPENDIX_COMPLETENESS = """
+
+════════════════════════════════════════════════════════════════
+PRE-EMIT SELF-CHECK (run this BEFORE you produce the JSON output)
+════════════════════════════════════════════════════════════════
+Before emitting your tool call, mentally walk through this checklist for
+EVERY file you're about to write. If any answer is "no", fix it FIRST.
+
+A. IMPORTS RESOLVE
+   □ Every `import X from '@/components/...'` points to a file that exists
+     in the file tree (Phase 1 wrote it) OR a file you are writing in THIS
+     same response.
+   □ Every imported package is in package.json (no fictional packages).
+   □ The path uses the project's existing `@/` alias — never a new alias.
+
+B. PROP CONTRACTS MATCH
+   □ Every `<Button variant="X" size="Y">` uses values that exist on
+     Button: variant ∈ {{primary, secondary, ghost, outline, link}},
+     size ∈ {{sm, md, lg}}.
+   □ Every other Phase 1 component is called with the props it actually
+     declares — never invent new props.
+
+C. NO OVERWRITES
+   □ None of your output paths overwrite a file Phase 1 wrote (theme,
+     primitives, MarketingHeader, MarketingFooter, main page, router).
+   □ None of your output paths duplicate work done by another chunk in
+     this same phase (no two of your files have the same path).
+
+D. NO PLACEHOLDERS
+   □ Zero `{{/* TODO */}}`, `// implement`, `throw new Error('not impl')`,
+     `return null` placeholders. Every component has real JSX.
+   □ Every form has a real onSubmit handler (can call a stub API but the
+     wiring is real).
+   □ Every navigation link has a real href.
+
+E. THEME CONSISTENCY
+   □ Every color is a theme token (bg-primary, text-muted-foreground, etc.)
+     OR a standard Tailwind utility — NEVER a hardcoded `bg-[#...]`.
+   □ Every radius matches the theme's chosen language (one of rounded-sm,
+     rounded-md, rounded-lg, rounded-xl — pick ONE family and stick with it).
+   □ Every spacing value is on the standard scale (4, 6, 8, 12, 16, 24)
+     — no `gap-[17px]` or `p-[23px]`.
+
+F. ANIMATION DISCIPLINE
+   □ Animations are restrained: scroll-fade-up, staggered children, hover
+     lift. NO rotating cards, NO parallax distortions, NO long cinematic
+     hero sequences.
+   □ Easings are standard (ease-out, cubic-bezier(0.25, 0.46, 0.45, 0.94)).
+     NO spring overshoot, NO exotic easings.
+
+G. NO ART-SCHOOL DRIFT
+   □ No text-7xl/8xl headlines (text-5xl/6xl is the cap on hero H1).
+   □ No tight leading below 0.95 (leading-[0.85] etc).
+   □ No "design as the design" — type and color serve the brand, not the
+     other way around.
+
+If any check fails, REVISE before emitting. A failing self-check ships a
+broken site to the user.
 
 ====================================
 LOADING / EMPTY / ERROR (MANDATORY)
@@ -5349,6 +5571,23 @@ async def _generate_new_project_inner(
     user_jwt: str = "",
 ) -> bool:
     """Inner implementation of generate_new_project (wrapped in try/except above)."""
+    # ── TEMP timing instrumentation (do not commit) ──────────────────
+    import time as _perf_time
+    _t_total = _perf_time.perf_counter()
+    _phase_starts: dict[str, float] = {}
+
+    def _phase_begin(name: str) -> None:
+        _phase_starts[name] = _perf_time.perf_counter()
+        logger.info("⏱️  [TIMING] phase START: %s", name)
+
+    def _phase_end(name: str) -> None:
+        t0 = _phase_starts.pop(name, None)
+        if t0 is None:
+            return
+        dt = _perf_time.perf_counter() - t0
+        logger.info("⏱️  [TIMING] phase END:   %s  →  %.2fs", name, dt)
+    # ──────────────────────────────────────────────────────────────────
+
     api_key = validated["anthropic_api_key"]
     gemini_key = validated["gemini_api_key"]
 
@@ -5374,7 +5613,9 @@ async def _generate_new_project_inner(
     # ===ENTITIES===). A wrong initial type causes the research to output the
     # wrong schema structure even if ===CLASSIFICATION=== is later corrected.
     from knowledge.loader import classify_project_type_ai
+    _phase_begin("classify")
     _classification = await classify_project_type_ai(description, gemini_key)
+    _phase_end("classify")
     app_type = _classification["app_type"]
     _layout_archetype = _classification["layout_archetype"]
     _domain = _classification["domain"]
@@ -5492,9 +5733,11 @@ async def _generate_new_project_inner(
 
     if research is None:
         try:
+            _phase_begin("research_gemini")
             research = await gemini_deep_research(
                 description, _classification, stack, gemini_key, websocket,
             )
+            _phase_end("research_gemini")
             if len(research) < 200:
                 research_quality = "minimal"
                 logger.warning("Research returned minimal content (%d chars)", len(research))
@@ -5651,6 +5894,29 @@ async def _generate_new_project_inner(
                     "healthcare": ["healthcare professional", "medical clinic", "wellness"],
                     "law": ["law office", "professional meeting", "legal services"],
                     "finance": ["financial professional", "modern office", "business meeting"],
+                    # ── Mobility & vehicles ─────────────────────────────────
+                    "automotive":   ["luxury car detail", "modern car interior", "car showroom"],
+                    "car":          ["luxury car detail", "modern car interior", "car showroom"],
+                    "cars":         ["luxury car detail", "modern car interior", "car showroom"],
+                    "dealership":   ["car showroom", "luxury car detail", "auto interior"],
+                    "ev":           ["electric vehicle charging", "modern ev interior", "ev car detail"],
+                    "electric_vehicle": ["electric vehicle charging", "modern ev interior", "ev car detail"],
+                    "motorcycle":   ["motorcycle road", "motorcycle detail", "rider gear"],
+                    "bicycle":      ["road bicycle", "bicycle detail", "cycling lifestyle"],
+                    "rental":       ["car rental lot", "modern car lineup", "car keys"],
+                    # ── Tech / hardware product domains ─────────────────────
+                    "hardware":     ["product photography minimal", "industrial design", "studio product shot"],
+                    "consumer_electronics": ["consumer electronics product", "minimal product photography", "studio product"],
+                    "gadget":       ["consumer electronics product", "minimal product photography", "studio product"],
+                    # ── Lifestyle & sports ─────────────────────────────────
+                    "travel":       ["travel destination", "scenic landscape", "wanderlust"],
+                    "sports":       ["athletic action", "sports stadium", "team sport"],
+                    "outdoor":      ["outdoor adventure", "mountain landscape", "hiking trail"],
+                    "music":        ["live music concert", "musician portrait", "studio recording"],
+                    "art":          ["art gallery", "abstract painting", "artist studio"],
+                    "events":       ["event venue", "conference stage", "celebration crowd"],
+                    "wedding":      ["wedding ceremony", "bridal portrait", "wedding reception"],
+                    "pets":         ["pet portrait", "happy dog", "cat lifestyle"],
                 }
                 _d = _domain.lower().replace(" ", "_").replace("-", "_")
                 # Try exact match, then prefix match
@@ -5658,9 +5924,30 @@ async def _generate_new_project_inner(
                     (v for k, v in _DOMAIN_QUERIES.items() if k in _d or _d in k), None
                 )
                 if not _sig_keywords:
-                    # Last resort: use first 5 meaningful words from description
-                    _desc_words = [w for w in description.split() if len(w) > 4 and w.isalpha()]
-                    _sig_keywords = [" ".join(_desc_words[:3])] if _desc_words else ["business professional"]
+                    # Last resort: use noun-like words from description, but PREFIX
+                    # them with "{noun} product photography" so the Unsplash search
+                    # returns shots of the actual subject instead of generic
+                    # business/landscape filler. Old code searched raw "selling
+                    # landing website" and got telephone poles for a car site.
+                    _STOPWORDS = {
+                        "landing", "page", "website", "site", "app", "platform",
+                        "service", "company", "business", "online", "digital",
+                        "modern", "simple", "easy", "quick", "best", "this",
+                        "that", "with", "from", "into", "over", "selling",
+                        "buying", "create", "build",
+                    }
+                    _desc_words = [
+                        w.lower() for w in description.split()
+                        if len(w) > 3 and w.isalpha() and w.lower() not in _STOPWORDS
+                    ]
+                    if _desc_words:
+                        # Build 2 distinct queries from the top noun candidates
+                        _sig_keywords = [
+                            f"{_desc_words[0]} product photography",
+                            f"{_desc_words[0]} lifestyle",
+                        ]
+                    else:
+                        _sig_keywords = ["minimal product photography"]
 
             if _sig_keywords:
                 _unsplash_result = await _unsplash_fetch(
@@ -5732,15 +6019,22 @@ async def _generate_new_project_inner(
         schema_to_extra_pages_spec,
     )
 
+    _phase_begin("schema_build")
+    # NB: pass the specific layout_archetype, not the high-level app_type.
+    # build_project_schema's _python_fast_types / _admin_archetypes sets
+    # both contain layout_archetype values (e.g. "single_page_landing",
+    # "admin_dashboard"). Passing app_type ("landing_page", "admin_panel")
+    # silently misses every fast path → 100+ s of unnecessary Claude work.
     project_schema = await build_project_schema(
         research=research,
         description=description,
         stack=stack,
-        app_type=app_type,
+        app_type=_layout_archetype,
         api_key=api_key,
         websocket=websocket,
         original_description=original_description,
     )
+    _phase_end("schema_build")
 
     # Bridge the Director's motion_language onto schema.theme.motion so the
     # deterministic globals.css writer can emit --d-fast/--d-base/--d-slow/
@@ -6075,7 +6369,7 @@ async def _generate_new_project_inner(
     # ════════════════════════════════════════════════════════════
     #  STEP A — Emit rich plan to chat (before any design work)
     #  User sees the full structural plan (sections/pages/entities)
-    #  THEN Phase 4 (Stitch) runs, THEN coding starts.
+    #  THEN the design-spec injection runs, THEN coding starts.
     # ════════════════════════════════════════════════════════════
     try:
         _entities = project_schema.get("entities", [])
@@ -6594,7 +6888,11 @@ async def _generate_new_project_inner(
     await _send_phase(websocket, 3, "Researching project", f"Research complete ({research_quality})", "done")
     await asyncio.sleep(0.5)
     await _send_phase(websocket, 5, "Writing code", "Claude is generating project (3-phase)…", "active")
-    
+    # Immediate breadcrumb so the user sees movement the moment the gate
+    # unblocks — Phase 1 prompt assembly + first byte from Claude can take
+    # several seconds, and a silent gap there used to look like a hang.
+    await _ws_send(websocket, "progress", "🚀 Starting code generation — assembling Phase 1 prompt...")
+
     # ═══════════════════════════════════════════════════════
     #  CALL 1 — FOUNDATION
     #  Theme, config, navigation, layouts, main page, router
@@ -6681,7 +6979,7 @@ async def _generate_new_project_inner(
     _blog_key_ui, _blog_personality = _blog_subtype
 
     if _is_blog:
-        stitch_instruction = f"""
+        design_instruction = f"""
 ====================================
 DESIGN SPEC — "{_plan_design_system_name}" ({app_type.replace('_', ' ').title()})
 ====================================
@@ -6729,7 +7027,7 @@ DO NOT use CSS variable syntax. Tailwind utility classes only.
             _research_domain_must_haves
             or ""
         )
-        stitch_instruction = f"""
+        design_instruction = f"""
 ====================================
 DESIGN SPEC — "{_plan_design_system_name}" ({_layout_archetype.replace('_', ' ').title()} / {_domain.replace('_', ' ').title()})
 ====================================
@@ -6780,7 +7078,7 @@ DO NOT use CSS variable syntax. Tailwind utility classes only.
             for s in _landing_sections[:12]
         ) or "- Hero (value prop + CTA)\n- Features\n- Social proof\n- Pricing\n- FAQ\n- Final CTA"
 
-        stitch_instruction = f"""
+        design_instruction = f"""
 ====================================
 DESIGN SPEC — "{_plan_design_system_name}" (Landing Page)
 ====================================
@@ -6838,7 +7136,7 @@ When country_or_region is "none — modern global", skip cultural rules.
             if _research_cultural_atmosphere and _research_cultural_atmosphere.strip()
             else ""
         )
-        stitch_instruction = f"""
+        design_instruction = f"""
 ====================================
 DESIGN SPEC — "{_plan_design_system_name}"
 ====================================
@@ -6962,7 +7260,7 @@ UI DESIGN SPEC (from research)
     Only use this to improve: card styles, spacing ratios, color usage,
     typography hierarchy, button shapes, shadow/border patterns.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-{stitch_instruction}
+{design_instruction}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Call the write_project_files tool with ALL files.
@@ -6971,6 +7269,7 @@ Call the write_project_files tool with ALL files.
     PHASE1_MAX_TOKENS, PHASE1_EXTENDED = _phase_token_budget(project_schema, 1, _layout_archetype)
     logger.info("Phase 1 budget: max_tokens=%d extended=%s (archetype=%s, complexity score derived from schema)",
                 PHASE1_MAX_TOKENS, PHASE1_EXTENDED, _layout_archetype)
+    _phase_begin("claude_phase1")
     # Phase 1 is the critical path. Two-attempt strategy:
     #   • Attempt 1: 6-min wall-clock cap. Inner httpx read=60s already
     #     catches truly stalled connections; the wall-clock catches any
@@ -7046,8 +7345,9 @@ Call the write_project_files tool with ALL files.
         return False
     
     # Rebuild file tree for Phase 2
+    await _ws_send(websocket, "progress", "🔄 Preparing Phase 2 — indexing foundation files...")
     file_tree_2 = _build_file_tree(workspace_path)
-    
+
     # ═══════════════════════════════════════════════════════
     #  CALL 2 — CONTENT
     #  All sections (landing) OR all CRUD features (admin)
@@ -7104,7 +7404,7 @@ UI POLISH — CONTENT SITE PATTERNS
 - Images in article: w-full rounded-xl shadow-md my-8
 - Blockquote: border-l-4 border-primary pl-6 italic text-muted-foreground
 - Code blocks: bg-muted font-mono text-sm rounded-lg p-4
-{stitch_instruction}
+{design_instruction}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
 
     elif _is_consumer:
@@ -7144,7 +7444,7 @@ ALSO: Implement DOMAIN_MUST_HAVES from research:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 UI DESIGN SPEC (from research)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-{stitch_instruction}
+{design_instruction}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
 
     elif _is_admin:
@@ -7179,7 +7479,7 @@ ALSO: Create any domain-specific specialized views from DOMAIN_MUST_HAVES in the
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 UI DESIGN SPEC (from research)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-{stitch_instruction}
+{design_instruction}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
     else:
         # Build the UI polish block for landing sections
@@ -7259,9 +7559,11 @@ CURRENT FILE TREE (foundation already written):
 Call the write_project_files tool with ALL files.
 """
     
+    _phase_end("claude_phase1")
     # Phase 2 token budget.
     PHASE2_MAX_TOKENS, PHASE2_EXTENDED = _phase_token_budget(project_schema, 2, _layout_archetype)
     logger.info("Phase 2 budget: max_tokens=%d extended=%s", PHASE2_MAX_TOKENS, PHASE2_EXTENDED)
+    _phase_begin("claude_phase2")
 
     # ── Admin batching ─────────────────────────────────────────────────────
     # Heavy admin projects (>4 entities) reliably truncate a single 64K call.
@@ -7320,7 +7622,7 @@ IMPORTANT — DESIGN SYSTEM:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 UI DESIGN SPEC (from research)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-{stitch_instruction}
+{design_instruction}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
 
             batch_prompt = f"""PHASE 2 OF 3 — CONTENT FILES (batch {batch_idx + 1}/{len(batches)})
@@ -7699,11 +8001,13 @@ Call the write_project_files tool with ALL files.
 """
     
     # Landing pages are fully covered in Phase 2 (all sections + completeness).
+    _phase_end("claude_phase2")
     # Skipping Phase 3 saves 60–90s on the most common generation type.
     if _is_landing:
         await _ws_send(websocket, "progress", "⚡ Landing page complete — skipping extra-pages phase")
         logger.info("Phase 3 skipped for single_page_landing (saves ~60-90s)")
     else:
+        _phase_begin("claude_phase3")
         PHASE3_MAX_TOKENS, PHASE3_EXTENDED = _phase_token_budget(project_schema, 3, _layout_archetype)
         logger.info("Phase 3 budget: max_tokens=%d extended=%s", PHASE3_MAX_TOKENS, PHASE3_EXTENDED)
         # Phase 3 always uses Sonnet (MODEL). The previous Haiku downgrade on
@@ -7736,7 +8040,8 @@ Call the write_project_files tool with ALL files.
         else:
             logger.warning("Phase 3 (extra pages) returned no files (budget: %d)", PHASE3_MAX_TOKENS)
             await _ws_send(websocket, "progress", "⚠️ Phase 3 skipped — proceeding with build...")
-    
+        _phase_end("claude_phase3")
+
     if not total_files:
         await _ws_send(websocket, "error", "❌ No files were generated. Check API key and credits.")
         return False
@@ -7752,6 +8057,7 @@ Call the write_project_files tool with ALL files.
     #   1. Missing 'use client' directives
     #   2. Banned lucide-react icon imports
     #   3. Unresolved imports (create stub files)
+    _phase_begin("post_gen_fixers")
     try:
         from app.services.post_generation_fixer import run_all_fixers
         fix_results = await run_all_fixers(workspace_path, websocket)
@@ -7762,17 +8068,21 @@ Call the write_project_files tool with ALL files.
             )
     except Exception as pgf_err:
         logger.warning("Post-generation fixers failed (non-fatal): %s", pgf_err)
-    
+    _phase_end("post_gen_fixers")
+
     # ── Build verification ──
     # Landing pages: check-only (max_fix_attempts=0) — post-generation fixers already
     # catch the common issues, so skip the expensive Claude fix loop but still report errors.
     # Other projects: 1 fix attempt (Claude rewrites broken files once, then final build check).
+    _phase_begin("build_verify")
     build_ok = await verify_and_fix_build(
         workspace_path=workspace_path,
         api_key=api_key,
         websocket=websocket,
         max_fix_attempts=MAX_FIX_ATTEMPTS,
     )
+    _phase_end("build_verify")
+    logger.info("⏱️  [TIMING] TOTAL generation: %.2fs", _perf_time.perf_counter() - _t_total)
 
     # Signal actual build result so the orchestrator knows not to overwrite it.
     # The orchestrator sends phase 6 done/error based on this attribute.

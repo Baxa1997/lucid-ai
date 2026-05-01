@@ -32,6 +32,15 @@ class AgentWSManager {
     this.sessionId = null;
     /** @type {string|null} last Redis Stream event ID — sent on reconnect for delta replay */
     this._lastEventId = null;
+    /**
+     * Outbound queue for messages issued while the socket is not OPEN
+     * (mid-reconnect, in-flight close, etc.). Without this, a click on
+     * "Confirm Plan" between a disconnect and the next onopen is silently
+     * dropped → backend never receives the confirmation → UI shows
+     * confirmed but nothing happens.
+     * @type {Array<string>}
+     */
+    this._pendingSends = [];
 
     // ── Session snapshot — survives React component unmount/remount ──
     // When the workspace page navigates away and back, the new hook instance
@@ -164,6 +173,14 @@ class AgentWSManager {
         lastEventId: this._lastEventId || '',
       }));
 
+      // Flush any messages issued while the socket was reconnecting.
+      if (this._pendingSends.length > 0) {
+        const batch = this._pendingSends.splice(0);
+        for (const payload of batch) {
+          try { ws.send(payload); } catch (_) {}
+        }
+      }
+
       this._emit({ type: '_internal', event: 'connected' });
     };
 
@@ -196,11 +213,22 @@ class AgentWSManager {
     };
   }
 
-  /** Send a JSON message. */
+  /**
+   * Send a JSON message. If the socket is not OPEN (mid-reconnect, etc.)
+   * the payload is queued and flushed on the next onopen. Returns true if
+   * sent or queued — there is no silent drop for the caller to worry about.
+   */
   send(data) {
+    const payload = typeof data === 'string' ? data : JSON.stringify(data);
     if (this.isOpen) {
-      this.ws.send(typeof data === 'string' ? data : JSON.stringify(data));
+      this.ws.send(payload);
+      return true;
     }
+    // Cap the queue so a permanently-down socket can't grow it without bound.
+    if (this._pendingSends.length < 64) {
+      this._pendingSends.push(payload);
+    }
+    return false;
   }
 
   /** Explicitly close. */

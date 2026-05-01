@@ -666,28 +666,40 @@ async def run_pipeline(
 
             from app.services.project_generator import generate_new_project
 
+            # Pipeline-side WS reference must be the reconnect-safe proxy, not
+            # the raw FastAPI WebSocket. The plan-confirmation gate can park the
+            # generator coroutine for up to 30 minutes — if the browser drops and
+            # reconnects during that window, ws_proxy.attach() swaps in the new
+            # socket, but a captured raw `websocket` is left pointing at the dead
+            # one. Every post-confirm _ws_send then fails silently and the UI
+            # appears stuck on "researching". Use the proxy when available.
+            _ws_target = (session.ws_proxy if session and session.ws_proxy is not None else websocket)
+
             success = await generate_new_project(
                 description=task,
                 workspace_path=workspace_path,
                 validated=validated,
-                websocket=websocket,
+                websocket=_ws_target,
                 chat_session_id=chat_session_id,
                 user_jwt=user.get("user_jwt", ""),
             )
 
             if not success:
                 # Check if the user rejected the plan and provided a correction
-                _correction = getattr(websocket, "_plan_correction", None)
+                _correction = getattr(_ws_target, "_plan_correction", None)
                 if _correction:
                     # Clean up and retry with the corrected description
-                    delattr(websocket, "_plan_correction")
+                    try:
+                        delattr(_ws_target, "_plan_correction")
+                    except AttributeError:
+                        pass
                     logger.info("Retrying generation with corrected description: %s", _correction[:80])
                     task = _correction  # Use the correction as the new task
                     success = await generate_new_project(
                         description=task,
                         workspace_path=workspace_path,
                         validated=validated,
-                        websocket=websocket,
+                        websocket=_ws_target,
                         chat_session_id=chat_session_id,
                         user_jwt=user.get("user_jwt", ""),
                     )

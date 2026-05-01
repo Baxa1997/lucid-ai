@@ -353,7 +353,9 @@ class AgentOrchestrator:
         session.pipeline_task = pipeline_task
 
         # ── 4. Listen for stop messages ────────────────────────────
-        stopped = await self._listen_for_stop(pipeline_task, websocket, session)
+        stopped = await self._listen_for_stop(
+            pipeline_task, websocket, session, chat_session_id or "",
+        )
 
         # ── 5. Stopped path ────────────────────────────────────────
         if stopped:
@@ -446,6 +448,7 @@ class AgentOrchestrator:
         pipeline_task: asyncio.Task,
         websocket: Any,
         session: AgentSession,
+        chat_session_id: str = "",
     ) -> bool:
         """Listen for WS messages while the pipeline runs.
 
@@ -476,6 +479,69 @@ class AgentOrchestrator:
                             await websocket.send_json({"type": "pong"})
                         except Exception:
                             pass
+                    elif msg_type in ("plan_confirm", "plan_reject"):
+                        # The pipeline coroutine is parked on
+                        # ``asyncio.wait_for(_plan_future, ...)``. The ws.py
+                        # message loop that handles plan_confirm sits AFTER
+                        # ``await execute_task(...)`` and is unreachable while
+                        # the pipeline runs, so we must resolve the Future
+                        # here — otherwise the message is read off the socket
+                        # and silently discarded, the gate hangs for 30 min,
+                        # and the user sees a frozen "researching" UI.
+                        try:
+                            from app.services.project_generator import (
+                                resolve_plan_confirmation, _confirmation_key,
+                                pending_plan_confirmations, clear_persisted_plan,
+                            )
+                            # Mirror the keying used by the gate registration
+                            # (project_generator.py:6558) — chat_session_id
+                            # if present, else the proxy/socket id. Producer
+                            # side passes ``websocket=session.ws_proxy or
+                            # websocket`` so we use the same fallback here.
+                            _key_ws = session.ws_proxy or websocket
+                            _key = _confirmation_key(_key_ws, chat_session_id or "")
+                            if _key in pending_plan_confirmations:
+                                if msg_type == "plan_confirm":
+                                    logger.info(
+                                        "[%s] Plan confirmed by user (via _listen_for_stop)",
+                                        getattr(session, "session_id", "?"),
+                                    )
+                                    resolve_plan_confirmation(_key, {"confirmed": True})
+                                else:
+                                    correction = data.get("correction", "")
+                                    logger.info(
+                                        "[%s] Plan rejected by user (via _listen_for_stop) — correction: %s",
+                                        getattr(session, "session_id", "?"),
+                                        correction[:80],
+                                    )
+                                    resolve_plan_confirmation(_key, {
+                                        "confirmed": False,
+                                        "correction": correction,
+                                    })
+                            else:
+                                logger.warning(
+                                    "[%s] %s received but no pending Future for key=%s",
+                                    getattr(session, "session_id", "?"),
+                                    msg_type, _key,
+                                )
+                                if chat_session_id:
+                                    await clear_persisted_plan(chat_session_id)
+                                try:
+                                    await websocket.send_json({
+                                        "type": "warning",
+                                        "message": (
+                                            "This plan can no longer be resumed "
+                                            "(server restarted or plan expired). "
+                                            "Please send your task again."
+                                        ),
+                                    })
+                                except Exception:
+                                    pass
+                        except Exception as _plan_err:
+                            logger.error(
+                                "Failed to handle %s in _listen_for_stop: %s",
+                                msg_type, _plan_err, exc_info=True,
+                            )
                     elif msg_type in ("stop", "stop_task"):
                         # P0 #1 — always ACK the stop message on receipt
                         try:

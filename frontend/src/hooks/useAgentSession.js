@@ -1446,19 +1446,57 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     currentPlanData,
     planConfirmed,
     confirmPlan: useCallback(() => {
-      if (!manager?.isOpen) return;
-      manager.send({ type: 'plan_confirm' });
-      setPlanAwaiting(false);
-      setPlanConfirmed(true);
-      pushLog('Plan confirmed — starting code generation...', 'system');
+      if (!manager) return;
+      // If the WS dropped (e.g. MAX_RECONNECTS exhausted) the manager is
+      // idle — neither open nor connecting. send() would silently push the
+      // payload into _pendingSends where nothing flushes it, leaving the
+      // user staring at "starting code generation" while the backend
+      // never receives the confirm. Force a fresh connect first.
+      if (!manager.isOpen && !manager.isConnecting) {
+        pushLog('Connection lost — reconnecting before confirming plan...', 'system');
+        reconnectCount.current = 0;
+        manager.connect({
+          token: tokenRef.current,
+          projectId: projectIdRef.current,
+          repoUrl: repoUrlRef.current,
+          gitToken: gitTokenRef.current,
+          branch: branchRef.current,
+          task: '',
+        });
+      }
+      const sent = manager.send({ type: 'plan_confirm' });
+      // Queued sends flush on the next onopen — treat that as success.
+      if (sent || manager.isConnecting) {
+        setPlanAwaiting(false);
+        setPlanConfirmed(true);
+        pushLog('Plan confirmed — starting code generation...', 'system');
+      } else {
+        pushLog('Failed to send confirmation — please retry', 'error');
+      }
     }, [pushLog]),
     rejectPlan: useCallback((correction) => {
-      if (!manager?.isOpen) return;
-      manager.send({ type: 'plan_reject', correction });
-      setPlanAwaiting(false);
-      setPlanConfirmed(false);
-      setCurrentPlanData(null);
-      pushLog(`Plan rejected — re-researching: ${correction?.slice(0, 60)}...`, 'system');
+      if (!manager) return;
+      if (!manager.isOpen && !manager.isConnecting) {
+        pushLog('Connection lost — reconnecting before rejecting plan...', 'system');
+        reconnectCount.current = 0;
+        manager.connect({
+          token: tokenRef.current,
+          projectId: projectIdRef.current,
+          repoUrl: repoUrlRef.current,
+          gitToken: gitTokenRef.current,
+          branch: branchRef.current,
+          task: '',
+        });
+      }
+      const sent = manager.send({ type: 'plan_reject', correction });
+      if (sent || manager.isConnecting) {
+        setPlanAwaiting(false);
+        setPlanConfirmed(false);
+        setCurrentPlanData(null);
+        pushLog(`Plan rejected — re-researching: ${correction?.slice(0, 60)}...`, 'system');
+      } else {
+        pushLog('Failed to send rejection — please retry', 'error');
+      }
     }, [pushLog]),
   };
 }

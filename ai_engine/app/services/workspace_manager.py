@@ -349,10 +349,10 @@ class WorkspaceManager:
         if info is None:
             return
 
-        # Clean up any running E2B preview sandbox
+        # Clean up any running local preview dev server for this workspace
         try:
-            from app.services.dev_server import stop_dev_preview
-            await stop_dev_preview(workspace_path=info.path)
+            from app.services.local_preview import stop_local_preview
+            await stop_local_preview(workspace_path=info.path)
         except Exception:
             pass
 

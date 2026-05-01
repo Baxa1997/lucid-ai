@@ -30,7 +30,7 @@ from app.services.vcs.git import push_changes, get_git_status
 from app.services.pipeline import run_pipeline, PLATFORM_GITHUB_TOKEN
 from app.services.event_bus import WebSocketProxy
 from app.services.workspace_manager import workspace_manager
-from app.services.dev_server import stop_dev_preview
+from app.services.local_preview import stop_local_preview
 
 from app.services.local_preview import start_local_preview
 from app.paths import preview_workspace_path
@@ -725,7 +725,7 @@ async def websocket_agent(websocket: WebSocket):
                     project_id, _skip_reason,
                 )
                 task = ""   # clear task → pipeline won't auto-run
-                _skip_workspace_setup = True  # skip clone/install/E2B for returning project
+                _skip_workspace_setup = True  # skip clone/install for returning project
                 await ws_transition(
                     session, websocket, WorkspaceState.READY,
                     "Project loaded. Ask me to make changes.",
@@ -1041,10 +1041,9 @@ async def websocket_agent(websocket: WebSocket):
         # Only send the "ready" message for NEW sessions.
         # For reconnects we already sent it at step 2 above (reconnected=True).
         # If there is no task to execute, skip the whole workspace setup.
-        # Cloning, npm install, and launching E2B are only useful when the
-        # pipeline is about to run. Without a task they waste 3-5 min and
-        # overwrite the real Vercel URL with a temporary E2B URL.
-        # When the user submits a task later, run_pipeline does lazy setup.
+        # Cloning and npm install are only useful when the pipeline is about
+        # to run. Without a task they waste 3-5 min. When the user submits a
+        # task later, run_pipeline does lazy setup.
         if not existing and not task and not _skip_workspace_setup:
             logger.info("No task on new session for project %s — skipping workspace setup", project_id)
             _skip_workspace_setup = True
@@ -1423,9 +1422,9 @@ async def websocket_agent(websocket: WebSocket):
                         await background_preview_task
                     except (asyncio.CancelledError, Exception):
                         pass
-                await stop_dev_preview(chat_session_id=chat_session_id or "")
+                await stop_local_preview(conversation_id=conversation_id or "")
                 await websocket.send_json({"type": "preview_stopped"})
-                logger.info("Preview sandbox stopped on user request")
+                logger.info("Preview server stopped on user request")
                 continue
 
             # Stop must be checked BEFORE empty-content guard
@@ -1451,27 +1450,73 @@ async def websocket_agent(websocket: WebSocket):
             if msg_type == "plan_confirm":
                 from app.services.project_generator import (
                     resolve_plan_confirmation, _confirmation_key,
+                    pending_plan_confirmations, clear_persisted_plan,
                 )
-                logger.info("[%s] Plan confirmed by user", getattr(session, "session_id", "?"))
                 _key = _confirmation_key(websocket, chat_session_id or "")
-                resolve_plan_confirmation(_key, {"confirmed": True})
+                if _key in pending_plan_confirmations:
+                    logger.info("[%s] Plan confirmed by user", getattr(session, "session_id", "?"))
+                    resolve_plan_confirmation(_key, {"confirmed": True})
+                else:
+                    # No live Future — the generator coroutine that was awaiting
+                    # this confirmation is gone (ai_engine restarted, or the gate
+                    # already timed out). Persistence only stores the plan
+                    # envelope, not the inputs needed to resume generation, so
+                    # we can't transparently continue. Surface a clear message
+                    # and clear the stale plan so we don't keep re-emitting it.
+                    logger.warning(
+                        "[%s] plan_confirm received but no pending Future for key=%s — "
+                        "generator coroutine was likely terminated (restart/timeout)",
+                        getattr(session, "session_id", "?"), _key,
+                    )
+                    await clear_persisted_plan(chat_session_id or "")
+                    try:
+                        await websocket.send_json({
+                            "type": "warning",
+                            "message": (
+                                "This plan can no longer be resumed (the server "
+                                "restarted or the plan expired). Please send your "
+                                "task again — research is cached, so it will be quick."
+                            ),
+                        })
+                    except Exception:
+                        pass
                 continue
 
             if msg_type == "plan_reject":
                 from app.services.project_generator import (
                     resolve_plan_confirmation, _confirmation_key,
+                    pending_plan_confirmations, clear_persisted_plan,
                 )
                 correction = data.get("correction", "")
-                logger.info(
-                    "[%s] Plan rejected by user — correction: %s",
-                    getattr(session, "session_id", "?"),
-                    correction[:80],
-                )
                 _key = _confirmation_key(websocket, chat_session_id or "")
-                resolve_plan_confirmation(_key, {
-                    "confirmed": False,
-                    "correction": correction,
-                })
+                if _key in pending_plan_confirmations:
+                    logger.info(
+                        "[%s] Plan rejected by user — correction: %s",
+                        getattr(session, "session_id", "?"),
+                        correction[:80],
+                    )
+                    resolve_plan_confirmation(_key, {
+                        "confirmed": False,
+                        "correction": correction,
+                    })
+                else:
+                    logger.warning(
+                        "[%s] plan_reject received but no pending Future for key=%s — "
+                        "ignoring (generator coroutine is gone)",
+                        getattr(session, "session_id", "?"), _key,
+                    )
+                    await clear_persisted_plan(chat_session_id or "")
+                    try:
+                        await websocket.send_json({
+                            "type": "warning",
+                            "message": (
+                                "This plan can no longer be modified (the server "
+                                "restarted or the plan expired). Please send your "
+                                "task again with the correction included."
+                            ),
+                        })
+                    except Exception:
+                        pass
                 continue
 
             if not content and not followup_images:
@@ -1813,11 +1858,11 @@ async def websocket_agent(websocket: WebSocket):
                         "running in background until dev server is ready"
                     )
 
-            # Stop E2B preview sandbox
+            # Stop the local dev preview server (best-effort cleanup)
             try:
-                await stop_dev_preview(chat_session_id=chat_session_id or "")
+                await stop_local_preview(conversation_id=conversation_id or "")
             except Exception as exc:
-                logger.debug("Preview sandbox cleanup error (ok): %s", exc)
+                logger.debug("Preview server cleanup error (ok): %s", exc)
 
             try:
                 await workspace_manager.destroy_workspace(conversation_id)

@@ -581,6 +581,8 @@ async def build_copy_deck(
         "Copy Director attempt 1 had %d violations, retrying with feedback",
         len(violations),
     )
+    for _v in violations:
+        logger.info("Copy Director violation: %s", _v)
     # Attempt 2 with violations as feedback
     user2 = _build_user_prompt(
         description=description,

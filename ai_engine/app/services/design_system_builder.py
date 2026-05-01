@@ -190,9 +190,37 @@ _FONT_PAIRINGS: dict[str, dict] = {
 _SYSTEM_PROMPT = """You are a senior design director with the taste of teams
 behind Vercel, Linear, Stripe, Anthropic, Ramp, Attio, Notion, Mux, Framer.
 
-Your one job is to design a BESPOKE design system for ONE specific project.
-Not a template. Not a generic starter. A design system that feels crafted
-for THIS brand in THIS domain.
+YOUR JOB: design a polished, professional design system that fits THIS specific
+project's domain. The bar is "looks like a real $5-10M company shipped it" — solid,
+trustworthy, on-brand for the industry. NOT an Awwwards submission. NOT a portfolio
+piece. NOT an experimental art project.
+
+══════════════════════════════════════════════════════════════
+STAY CONVENTIONAL — read this first, every time
+══════════════════════════════════════════════════════════════
+
+✓ DO pick palettes that fit the industry's actual conventions:
+  - Coffee shop  → warm browns + cream + muted accent
+  - Car luxury   → deep charcoal/black + warm metallic + restrained accent
+  - Car sporting → high-contrast dark + saturated accent (electric blue / red)
+  - Healthcare   → calm blue/green + neutral + plenty of whitespace
+  - Finance      → trustworthy navy/charcoal + neutral + restrained accent
+  - SaaS B2B     → clean neutrals + ONE brand accent
+  - Wedding      → soft cream/sage/blush + serif headlines
+  - Fitness      → bold dark + saturated single accent
+  - E-commerce   → product-led neutrals + ONE accent for CTAs
+
+✓ DO use standard radii (0.375rem / 0.5rem / 0.75rem). Pick ONE and stick with it.
+✓ DO use standard type scales — body 16px, hero 48-64px (NOT 80px+).
+✓ DO use 2 fonts max with clear hierarchy (display + body).
+
+✗ DO NOT pick experimental/avant-garde archetypes when a conventional one fits.
+✗ DO NOT pick unusual palettes (lime+magenta, cyberpunk, neon-on-pastel) on a
+  business website. Save those for art-school portfolios.
+✗ DO NOT pick text-7xl/text-8xl heroes — solid 5xl/6xl is the right scale.
+✗ DO NOT pick ultra-tight leading like 0.85 — looks like a thesis project.
+✗ DO NOT use fluid_typographic / editorial-art / "type IS the design" archetypes
+  unless the user explicitly asked for an editorial publication.
 
 HARD RULES:
 
@@ -247,31 +275,106 @@ HARD RULES:
      + sage + one terracotta accent. Read the domain and vibe before
      picking ANY HSL value.
 
-5. COMMIT TO A PERSONALITY
-   - Pick one of these archetypes (or blend two):
-     editorial_serif_minimal, brutalist_mono, neo_swiss, dark_cinematic,
-     tech_noir_gradient, maximalist_collage, minimal_luxe, warm_artisan,
-     scandi_clean, japanese_ma, bauhaus_modern, magazine_editorial,
-     sharp_corporate, playful_retro, botanical_organic, high_contrast_brutalist,
-     spatial_functional, dark_editorial, fluid_typographic, quiet_luxury, dense_luxury.
-   - DO NOT pick soft_pastel_organic — banned as a dated 2020-era pattern.
-   - 2026 archetypes (prefer these for new projects where the domain fits):
-     • spatial_functional — pure utility + depth hierarchy without decoration.
-       Zero ornamentation. Typography and spacing ARE the design. Depth comes
-       from shadow hierarchy (shadow-xs / shadow-sm only), never kitsch 3D.
-       Reference: Vercel Dashboard, Linear, Ramp, Attio.
-     • dark_editorial — near-black backgrounds (hsl ~220 15% 6%), editorial
-       serif or high-contrast grotesque, minimal chrome, premium ink-on-paper
-       feel. One restrained accent color. Reference: The Atlantic, Are.na, iA.
-     • fluid_typographic — variable fonts + clamp() everywhere. Type IS the
-       design: oversized headlines, weight contrast, tight leading [0.88],
-       generous whitespace. Photography plays second fiddle to letterforms.
-     • quiet_luxury — tone-on-tone palettes, barely-there color, material
-       texture (grain at 3%, linen, stone). Expensive without shouting. Status
-       signal is restraint. Reference: The Row, Bottega Veneta, Loro Piana.
-     • dense_luxury — information density as aesthetic. Bloomberg Terminal
-       energy with premium materials. Compact type, hairline borders, every
-       pixel earns its place. Reference: Bloomberg, FT, Stripe Revenue dashboard.
+5. COMMIT TO A PERSONALITY (pick a CONVENTIONAL archetype that FITS the domain)
+
+   PRIMARY ARCHETYPE LIST — pick from THIS list first. These are conventional,
+   polished, production-grade. Each maps to specific industries:
+
+     • clean_modern         — neutral palette + ONE accent, sans-serif, generous
+                              whitespace, screenshot-led. SaaS / B2B / tech tools /
+                              startup landing pages. Reference: Linear, Vercel, Notion.
+     • minimalist_corporate — restrained palette (navy/charcoal/neutral), professional
+                              sans, conservative spacing, trust signals. Finance,
+                              law, consulting, B2B services. Reference: Stripe homepage.
+     • warm_inviting        — earthy/warm palette, friendly serif or rounded sans,
+                              photo-led, comfortable spacing. Coffee, restaurants,
+                              cafes, bakeries. Reference: Blue Bottle, Sweetgreen.
+     • luxury_minimal       — dark + premium accents (or cream + black), elegant serif
+                              display, restrained accent color, high-quality photography.
+                              Cars (luxury), watches, fashion, real estate, high-end
+                              hotels. Reference: Aesop, Range Rover, Bottega.
+     • editorial_classic    — magazine-style serif headlines + clean sans body,
+                              photo-led, calm rhythm. Wedding venues, lifestyle brands,
+                              cultural orgs, publications. Reference: Kinfolk, Cereal.
+     • bold_modern          — high-contrast palette + saturated accent, strong sans
+                              display, dynamic photography. Fitness, sports brands,
+                              EV/sport cars, energy drinks. Reference: Nike, Tesla,
+                              Strava.
+     • soft_modern          — soft neutrals + sage/blush/cream accent, gentle serifs
+                              or warm sans, comfortable spacing. Wellness, beauty,
+                              wedding, parenting, lifestyle. Reference: Glossier, Goop.
+     • product_focused      — pure-neutral chrome (white/black/gray) so the products
+                              do all the visual work, generous grid, photo-led.
+                              E-commerce, retail, marketplaces. Reference: Shopify
+                              merchants, Apple Store.
+
+   ADVANCED ARCHETYPES — only use when the domain genuinely requires it. NEVER pick
+   these on a business website "to make it stand out":
+
+     • dark_editorial       — near-black bg + editorial serif. Use ONLY for actual
+                              editorial publications (magazines, online-magazines).
+     • spatial_functional   — pure utility, zero ornament. Use ONLY for advanced
+                              dashboards / data-dense admin tools.
+     • magazine_editorial   — multi-column print-style. Use ONLY for actual
+                              long-form content publications.
+     • quiet_luxury         — tone-on-tone restraint. Use ONLY for actual high-end
+                              fashion / interior / hospitality brands.
+
+   BANNED ARCHETYPES (do NOT pick — they produce art-school output):
+     ✗ fluid_typographic    — "type IS the design" with oversized clamp() headlines
+                              and tight leading. Looks like a school thesis.
+     ✗ kinetic_typography   — text-as-motion. Belongs on Awwwards, not in production.
+     ✗ maximalist_collage   — chaotic layered visuals. User can't find anything.
+     ✗ brutalist_mono       — intentional ugly. Inappropriate for any business.
+     ✗ tech_noir_gradient   — neon-on-black. Overused 2024 cliché.
+     ✗ playful_retro        — 1970s nostalgia. Too narrow for most brands.
+     ✗ japanese_ma          — extreme negative space. Read as "broken layout".
+     ✗ high_contrast_brutalist — same as brutalist_mono.
+     ✗ soft_pastel_organic  — dated 2020-era pattern.
+     ✗ dense_luxury         — Bloomberg terminal energy. Wrong for landing pages.
+     ✗ bauhaus_modern       — geometric primary colors. Too costume-y.
+
+   You may blend TWO archetypes from the PRIMARY list (e.g.
+   "clean_modern + warm_inviting" for a friendly SaaS) but NEVER blend a banned
+   archetype in. The validator rejects any banned archetype.
+
+5b. PALETTE DEFAULTS PER ARCHETYPE (use these hue/tone ranges as the starting
+    point — vary saturation and exact lightness, but stay in these conventional
+    families). Each archetype gets ONE primary, ONE accent, neutrals.
+
+    • clean_modern         → primary: cool slate / charcoal (220-240° hue, 10-30% sat).
+                             accent: ONE saturated brand color (blue, teal, violet,
+                             or domain-tied — e.g. green for fintech, indigo for AI).
+                             bg: white or near-white. cards: neutral 50-100.
+    • minimalist_corporate → primary: deep navy (215-225° hue, 30-50% sat, 20-35% lite)
+                             OR charcoal (220° hue, 10% sat, 15% lite).
+                             accent: restrained — muted gold, deep teal, burgundy.
+                             bg: white. NEVER bright/saturated primary.
+    • warm_inviting        → primary: warm browns / terracotta (15-35° hue, 30-50% sat,
+                             25-45% lite). accent: cream + ONE deeper warm tone (sage,
+                             rust, mustard). bg: cream / warm-off-white.
+    • luxury_minimal       → DARK MODE: bg near-black (220-240° hue, 5-15% sat, 6-10% lite).
+                             primary: warm metallic feel (35-50° hue, 30-50% sat for muted
+                             gold) OR pure foreground white. accent: ONE restrained tone.
+                             OR LIGHT: bg cream + foreground charcoal + restrained accent.
+    • editorial_classic    → bg: warm off-white (40° hue, 20% sat, 96% lite).
+                             primary: ink-dark (220° hue, 10% sat, 12% lite).
+                             accent: ONE deeper saturated tone (deep red, navy, ochre).
+                             Text-led — accent is sparse.
+    • bold_modern          → DARK: bg near-black + ONE high-saturation accent (electric
+                             blue 215° hue 90% sat, hot red 0° 80%, lime 80° 70%).
+                             OR LIGHT: white bg + heavy black foreground + saturated accent.
+    • soft_modern          → bg: cream / blush / warm off-white (20-40° hue, 20-40% sat,
+                             92-96% lite). accent: sage (140° 25% 55%), terracotta
+                             (15° 40% 60%), or muted blush. Restrained throughout.
+    • product_focused      → bg: pure white. neutrals: gray 50-200. accent: ONE color
+                             ONLY for CTAs (often a brand color tied to the product itself).
+                             Lets product photography do the visual work.
+
+    CONTRAST RULES (always):
+    - foreground on background ≥ 4.5:1 (body text)
+    - primary_foreground on primary ≥ 4.5:1 (button readability)
+    - muted_foreground on muted ≥ 3.5:1 (caption readability)
 
 6. MUST BE INTERNALLY CONSISTENT
    - Signature motif appears 2-3x across the page.
@@ -834,51 +937,105 @@ Admin design rules:
   8. Brand mark: wordmark vs icon+wordmark vs monogram? Pick the font and exact case/tracking.
 """
 
-    # Variety nudge — pin a random seed into the prompt so two runs of the
-    # same domain produce DIFFERENT archetype/palette/motif choices. Without
-    # this even with temperature=0.75 the model converges on the obvious
-    # default for each domain (coffee → warm_artisan, candle → quiet_luxury,
-    # etc.) and the user gets identical-feeling sites across regenerations.
+    # Domain → recommended archetype mapping. We bias toward CONVENTIONAL,
+    # industry-appropriate choices instead of forcing the AI to "be different".
+    # Variety still happens — within an archetype the model picks different
+    # palettes / fonts / motifs each run — but the archetype itself is locked
+    # to what real designers would actually pick for this category.
+    _DOMAIN_ARCHETYPE_LOCK: dict[str, list[str]] = {
+        # Food & beverage
+        "restaurant":  ["warm_inviting", "editorial_classic"],
+        "cafe":        ["warm_inviting", "editorial_classic"],
+        "coffee":      ["warm_inviting", "editorial_classic"],
+        "bakery":      ["warm_inviting", "editorial_classic"],
+        "bar":         ["warm_inviting", "luxury_minimal"],
+        # Mobility
+        "automotive":  ["luxury_minimal", "bold_modern"],
+        "car":         ["luxury_minimal", "bold_modern"],
+        "cars":        ["luxury_minimal", "bold_modern"],
+        "dealership":  ["luxury_minimal", "bold_modern"],
+        "ev":          ["bold_modern", "luxury_minimal"],
+        "motorcycle":  ["bold_modern", "luxury_minimal"],
+        "rental":      ["clean_modern", "luxury_minimal"],
+        # B2B / SaaS
+        "saas":        ["clean_modern", "minimalist_corporate"],
+        "startup":     ["clean_modern", "minimalist_corporate"],
+        "agency":      ["clean_modern", "editorial_classic"],
+        "portfolio":   ["editorial_classic", "clean_modern"],
+        "developer":   ["clean_modern", "minimalist_corporate"],
+        # Trust-heavy
+        "healthcare":  ["minimalist_corporate", "clean_modern"],
+        "law":         ["minimalist_corporate", "editorial_classic"],
+        "finance":     ["minimalist_corporate", "clean_modern"],
+        "insurance":   ["minimalist_corporate", "clean_modern"],
+        # Lifestyle
+        "fitness":     ["bold_modern", "clean_modern"],
+        "yoga":        ["soft_modern", "warm_inviting"],
+        "spa":         ["soft_modern", "luxury_minimal"],
+        "salon":       ["soft_modern", "luxury_minimal"],
+        "wellness":    ["soft_modern", "warm_inviting"],
+        "wedding":     ["editorial_classic", "soft_modern"],
+        "events":      ["editorial_classic", "luxury_minimal"],
+        # Property / hospitality
+        "hotel":       ["luxury_minimal", "editorial_classic"],
+        "real_estate": ["luxury_minimal", "clean_modern"],
+        # Fashion / retail
+        "fashion":     ["luxury_minimal", "editorial_classic"],
+        "ecommerce":   ["product_focused", "clean_modern"],
+        # Education / culture
+        "education":   ["clean_modern", "editorial_classic"],
+        "art":         ["editorial_classic", "minimalist_corporate"],
+        "music":       ["bold_modern", "editorial_classic"],
+    }
+    _d_lower = (domain or "").lower().replace(" ", "_").replace("-", "_")
+    _allowed_archetypes = (
+        _DOMAIN_ARCHETYPE_LOCK.get(_d_lower)
+        or next(
+            (v for k, v in _DOMAIN_ARCHETYPE_LOCK.items() if k in _d_lower or _d_lower in k),
+            None,
+        )
+        or ["clean_modern", "minimalist_corporate", "editorial_classic"]
+    )
+
+    # Variety still matters — but as a tie-breaker between equally-fitting
+    # CONVENTIONAL choices, not as an excuse to ship art-school output.
     import random as _rand
     _variety_seed = _rand.randint(1000, 9999)
 
     variety_block = f"""
-DIVERSITY DIRECTIVE (variety_seed={_variety_seed}):
-  This is one of MANY generations for {domain}-domain projects. The OBVIOUS
-  archetype for "{domain}" (e.g. coffee → warm_artisan + editorial_serif_minimal,
-  candle studio → quiet_luxury, finance → sharp_corporate) is BANNED for
-  this run. Pick a tasteful but LESS expected archetype that still suits
-  the brand. Lean on a 2026 archetype where it fits:
-  spatial_functional / dark_editorial / fluid_typographic / quiet_luxury /
-  dense_luxury / brutalist_mono / magazine_editorial / minimal_luxe.
+ARCHETYPE LOCK (variety_seed={_variety_seed}):
+  Domain "{domain}" maps to these conventional, polished archetypes:
+    {", ".join(_allowed_archetypes)}
 
-  Same applies to palette (don't go straight to espresso+cream for coffee),
-  signature motif, hero archetype, and font pairing. Two consecutive runs
-  for the same domain should produce VISIBLY DIFFERENT sites — not just
-  re-shuffled accent values. The goal: a designer commissioned 5 different
-  studios for the same brief would get 5 different directions; you should
-  feel like ONE of those studios, not the average of all five.
+  Pick ONE of those (or blend two from the list). DO NOT pick anything
+  outside this list — it has been chosen to fit how real designers work
+  in this industry. The user wants a site that looks like a real $5-10M
+  company shipped it, NOT an experimental art project.
 
-BANNED DEFAULT — DO NOT PRODUCE THIS HERO RECIPE:
-  ✗ full-bleed Unsplash photo background (absolute inset-0 object-cover)
-  ✗ dark gradient scrim (from-black/75 via-black/35 to-transparent)
-  ✗ tiny uppercase tracking-widest eyebrow above H1
-  ✗ huge italic serif H1 in white
-  ✗ "min-h-screen flex items-center" wrapper
+  Variety happens INSIDE the chosen archetype — different palettes, fonts,
+  signature motifs, hero layouts within "{_allowed_archetypes[0]}" all count
+  as variety. Two runs for the same domain should differ in those details
+  but should NOT differ in archetype "personality" — both should still feel
+  conventionally professional for {domain}.
 
-  This exact recipe has shipped on the last 4 generations across coffee,
-  restaurant, school, and finance verticals — every site looks identical.
-  Pick a hero_archetype that produces a STRUCTURALLY different composition:
-    • split (text left + media right, light bg)        ← e-bike, product, B2B
-    • magazine (12-col grid, oversized H1, small img)  ← editorial brand
-    • product-showcase (device/product mockup focus)   ← consumer goods, audio
-    • typographic-hero (giant text, no photo)          ← agency, studio, manifesto
-    • bento (asymmetric tiled grid)                    ← saas, tools, dashboards
-    • editorial-offset (asymmetric, image bottom-right)← fashion, hospitality
-    • diagonal (clip-path split)                       ← bold, playful, sports
-  Use full-bleed-dark / cinematic-parallax ONLY when the brief explicitly
-  demands cinematic immersion (a luxury hotel, a film studio, a perfume
-  campaign) — never as the safe default.
+BANNED DEFAULT HERO RECIPE — DO NOT SHIP THIS:
+  ✗ full-bleed Unsplash photo + dark gradient scrim + tiny uppercase eyebrow
+    + giant italic serif H1 in white + "min-h-screen flex items-center"
+  This recipe has shipped on the last 4 generations across coffee, restaurant,
+  school, and finance — every site looks identical AND it's the lazy default.
+
+  Pick a hero_archetype that fits the chosen archetype:
+    • split           (text left + media right, light bg)  — clean_modern, warm_inviting,
+                                                              minimalist_corporate, luxury_minimal,
+                                                              soft_modern, editorial_classic
+    • product-showcase (device/product mockup focus)        — clean_modern, product_focused,
+                                                              bold_modern
+    • magazine        (12-col grid, oversized H1, small img)— editorial_classic only
+    • bento           (asymmetric tiled grid)               — clean_modern (saas dashboards),
+                                                              product_focused
+    • full-bleed-dark (cinematic photo + scrim)             — luxury_minimal, bold_modern
+                                                              ONLY (e.g. luxury car, sport car,
+                                                              hotel, fashion editorial)
 """
 
     cultural_block = ""
@@ -991,6 +1148,30 @@ def validate_design_system(design: dict, layout_archetype: str = "") -> list[str
                 f"Contrast too low for {label}: {fg_key} on {bg_key} = {ratio:.2f}:1 "
                 f"(need ≥{min_ratio}:1). Darken foreground or lighten background."
             )
+
+    # ── Archetype guard — reject experimental archetypes ─────────────────
+    # The user wants polished, conventional, on-brand-for-the-industry output.
+    # Even when the system prompt forbids these, the model occasionally drifts
+    # toward them (especially fluid_typographic for typography-driven domains).
+    # Hard validator catches it and forces a retry.
+    _BANNED_ARCHETYPES = {
+        "fluid_typographic", "kinetic_typography", "maximalist_collage",
+        "brutalist_mono", "tech_noir_gradient", "playful_retro",
+        "japanese_ma", "high_contrast_brutalist", "soft_pastel_organic",
+        "dense_luxury", "bauhaus_modern",
+    }
+    archetype_str = (design.get("archetype") or "").strip().lower()
+    if archetype_str:
+        # Split blends ("warm_artisan + editorial_serif_minimal") and check each.
+        parts = [p.strip() for p in archetype_str.replace(",", "+").split("+") if p.strip()]
+        for part in parts:
+            if part in _BANNED_ARCHETYPES:
+                violations.append(
+                    f"archetype '{part}' is banned — it produces art-school output. "
+                    f"Pick a conventional archetype from the PRIMARY list: clean_modern, "
+                    f"minimalist_corporate, warm_inviting, luxury_minimal, editorial_classic, "
+                    f"bold_modern, soft_modern, product_focused."
+                )
 
     # Generic-template bans
     def _is_default_blue(hsl: str) -> bool:
@@ -1347,6 +1528,8 @@ async def build_design_system(
         return design
 
     logger.info("Design Director attempt 1 had %d violations — retrying", len(violations))
+    for _v in violations:
+        logger.info("Design Director violation: %s", _v)
     feedback = "\n".join(f"- {v}" for v in violations)
 
     # Attempt 2

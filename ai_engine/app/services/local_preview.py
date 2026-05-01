@@ -414,15 +414,15 @@ async def sync_files_to_preview(
 ) -> None:
     """No-op — HMR watches disk files directly, no sync needed."""
     # With a local dev server, file changes on disk are picked up by HMR
-    # automatically.  This function exists only for API compatibility with
-    # the old E2B-based dev_server module.
+    # automatically. The function still exists because legacy callers expect
+    # the symbol to be importable.
     logger.debug("local_preview: sync_files_to_preview is a no-op (HMR handles it)")
 
 
 async def extend_sandbox_timeout(
     conversation_id: str = "", workspace_path: str = "", extra_seconds: int = 1800
 ) -> None:
-    """No-op — local processes don't time out like E2B sandboxes."""
+    """No-op — local processes don't time out the way cloud sandboxes do."""
     pass
 
 
