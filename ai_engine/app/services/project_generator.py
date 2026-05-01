@@ -63,30 +63,83 @@ def resolve_plan_confirmation(key: str, result: dict):
         fut.set_result(result)
 
 
-def save_persisted_plan(chat_session_id: str, plan_data: dict, task: str = "") -> None:
-    """Stash a plan so ws.py can re-emit it on reconnect."""
+async def save_persisted_plan(chat_session_id: str, plan_data: dict, task: str = "") -> None:
+    """Stash a plan so ws.py can re-emit it on reconnect.
+
+    Writes to both the in-memory cache (fast) and chat_sessions.pending_plan
+    (durable across ai_engine restarts). DB write is best-effort — if the
+    migration hasn't been applied, the in-memory store still works.
+    """
     if not chat_session_id:
         return
     import time as _t
-    _persisted_plans[chat_session_id] = {
+    envelope = {
         "plan_data": plan_data,
         "task": task,
         "saved_at": _t.time(),
     }
+    _persisted_plans[chat_session_id] = envelope
+    try:
+        from app.supabase_client import db_client
+        async with db_client(None) as sb:
+            await (
+                sb.table("chat_sessions")
+                .update({"pending_plan": envelope})
+                .eq("id", chat_session_id)
+                .execute()
+            )
+    except Exception as exc:
+        # Migration may not be applied yet, or column may not exist.
+        # In-memory store still works for the current ai_engine process.
+        logger.debug("save_persisted_plan: DB write failed (in-memory still set): %s", exc)
 
 
-def get_persisted_plan(chat_session_id: str) -> Optional[dict]:
-    """Return the persisted plan envelope for a chat session, or None."""
+async def get_persisted_plan(chat_session_id: str) -> Optional[dict]:
+    """Return the persisted plan envelope for a chat session, or None.
+
+    Checks the in-memory cache first; falls back to DB so a plan that
+    survived an ai_engine restart can be restored on the next reconnect.
+    """
     if not chat_session_id:
         return None
-    return _persisted_plans.get(chat_session_id)
+    cached = _persisted_plans.get(chat_session_id)
+    if cached:
+        return cached
+    try:
+        from app.supabase_client import db_client
+        async with db_client(None) as sb:
+            res = await (
+                sb.table("chat_sessions")
+                .select("pending_plan")
+                .eq("id", chat_session_id)
+                .single()
+                .execute()
+            )
+        envelope = (res.data or {}).get("pending_plan") if hasattr(res, "data") else None
+        if envelope:
+            _persisted_plans[chat_session_id] = envelope
+            return envelope
+    except Exception as exc:
+        logger.debug("get_persisted_plan: DB read failed: %s", exc)
+    return None
 
 
-def clear_persisted_plan(chat_session_id: str) -> None:
+async def clear_persisted_plan(chat_session_id: str) -> None:
     """Drop the persisted plan once it's been confirmed / rejected / timed out."""
     if not chat_session_id:
         return
     _persisted_plans.pop(chat_session_id, None)
+    try:
+        from app.supabase_client import db_client
+        async with db_client(None) as sb:
+            await (
+                sb.table("chat_sessions")
+                .update({"pending_plan": None})
+                .eq("id", chat_session_id)
+                .execute()
+            )
+    except Exception as exc:
+        logger.debug("clear_persisted_plan: DB write failed: %s", exc)
 
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -6448,8 +6501,9 @@ async def _generate_new_project_inner(
             })
             _plan_emitted_ok = True
             # Stash so ws.py can re-emit on reconnect — survives the 30-min
-            # confirmation window even if the user's tab refreshes mid-wait.
-            save_persisted_plan(chat_session_id, _plan_data, task=description)
+            # confirmation window even if the user's tab refreshes mid-wait,
+            # and survives ai_engine restarts via the chat_sessions DB row.
+            await save_persisted_plan(chat_session_id, _plan_data, task=description)
         except Exception as _emit_err:
             logger.warning("Plan emission failed: %s", _emit_err)
 
@@ -6486,23 +6540,23 @@ async def _generate_new_project_inner(
                     await _ws_send(websocket, "progress", f"🔄 Re-researching: {_correction[:60]}...")
                     logger.info("Plan rejected — re-researching with correction: %s", _correction[:100])
                     websocket._plan_correction = _correction
-                    clear_persisted_plan(chat_session_id)
+                    await clear_persisted_plan(chat_session_id)
                     return False
                 # Reject without correction → abort cleanly
                 logger.info("Plan rejected without correction — aborting generation")
                 await _ws_send(websocket, "warning", "❌ Plan rejected — generation aborted.")
-                clear_persisted_plan(chat_session_id)
+                await clear_persisted_plan(chat_session_id)
                 return False
             logger.info("Plan confirmed by user — proceeding to code generation")
             await _ws_send(websocket, "progress", "✅ Plan confirmed — starting code generation...")
-            clear_persisted_plan(chat_session_id)
+            await clear_persisted_plan(chat_session_id)
         except asyncio.TimeoutError:
             logger.info(
                 "Plan confirmation timed out after %ds — aborting (user did not confirm)",
                 PLAN_CONFIRM_TIMEOUT_SECONDS,
             )
             pending_plan_confirmations.pop(_gate_key, None)
-            clear_persisted_plan(chat_session_id)
+            await clear_persisted_plan(chat_session_id)
             try:
                 await _ws_send(
                     websocket, "warning",
@@ -6520,7 +6574,7 @@ async def _generate_new_project_inner(
                 "Plan confirmation aborted due to error: %s", _conf_err, exc_info=True,
             )
             pending_plan_confirmations.pop(_gate_key, None)
-            clear_persisted_plan(chat_session_id)
+            await clear_persisted_plan(chat_session_id)
             try:
                 await _ws_send(
                     websocket, "warning",

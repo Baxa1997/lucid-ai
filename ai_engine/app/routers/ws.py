@@ -443,7 +443,7 @@ async def websocket_agent(websocket: WebSocket):
             # without re-typing the task.
             try:
                 from app.services.project_generator import get_persisted_plan
-                _pending = get_persisted_plan(chat_session_id or "")
+                _pending = await get_persisted_plan(chat_session_id or "")
                 if _pending and _pending.get("plan_data"):
                     await websocket.send_json({
                         "type": "chat_message",
