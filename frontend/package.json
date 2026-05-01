@@ -28,6 +28,7 @@
     "@radix-ui/react-tooltip": "^1.2.8",
     "@supabase/mcp-server-supabase": "^0.7.0",
     "@supabase/supabase-js": "^2.98.0",
+    "@vercel/analytics": "^2.0.1",
     "@webcontainer/api": "^1.6.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.0",
