@@ -32,7 +32,7 @@ logger = logging.getLogger("lucid.project_generator")
 #   Future result: {"confirmed": True} or {"confirmed": False, "correction": "..."}
 pending_plan_confirmations: dict[str, asyncio.Future] = {}
 
-PLAN_CONFIRM_TIMEOUT_SECONDS = 300  # 5 minutes — auto-proceed after this
+PLAN_CONFIRM_TIMEOUT_SECONDS = 300  # 5 minutes — abort if user doesn't confirm
 
 
 def _confirmation_key(websocket, chat_session_id: str = "") -> str:
@@ -1255,7 +1255,19 @@ _DISTILL_SECTIONS: tuple[tuple[str, int], ...] = (
     # composition, card language, and motion cues.
     ("VISUAL_DNA", 1800),
     ("LIVE_UI_RESEARCH", 1200),  # scroll effects, counters, marquee, hover depth, ambient — from actual 2025-2026 site research
-    ("LAYOUT_BLUEPRINT", 5500),  # Design DNA: 25 creative variables per project (hero/features/rhythm/motif/mood/cards/type/motion/pattern/radius/color/hover/spacing + live_ui_recipe/scroll_reveal/counter/marquee/ambient)
+    # The system prompt at l.4705 declares VISUAL_DISTINCTIVENESS contents
+    # MANDATORY (anti_generic + visual_surprise + section_card_matrix). If the
+    # block is missing from the distilled research, the mandate silently
+    # becomes a no-op and the page comes out generic. Keep it in the allowlist.
+    ("VISUAL_DISTINCTIVENESS", 1500),
+    # CULTURAL_ATMOSPHERE.signature_imagery is consumed deterministically for
+    # Unsplash keywords, but the surrounding mood / sensory / spatial cues
+    # help Claude write copy and pick visual language that fits the domain.
+    ("CULTURAL_ATMOSPHERE", 1000),
+    # ERA_CALIBRATION carries era-specific tokens (deco, neon, brutalist…)
+    # that downstream styling rules reference.
+    ("ERA_CALIBRATION", 600),
+    ("LAYOUT_BLUEPRINT", 7000),  # Design DNA: 25 creative variables per project (hero/features/rhythm/motif/mood/cards/type/motion/pattern/radius/color/hover/spacing + live_ui_recipe/scroll_reveal/counter/marquee/ambient)
     # Admin/CRM/TMS visual language — table/form/sidebar/status/density recipe.
     # Only present when layout_archetype is admin-family.
     ("ADMIN_UI_LANGUAGE", 2200),
@@ -1268,7 +1280,7 @@ _DISTILL_SECTIONS: tuple[tuple[str, int], ...] = (
 )
 
 
-def _distill_research(research: str, max_total: int = 12000) -> str:
+def _distill_research(research: str, max_total: int = 16000) -> str:
     """Compress the raw Gemini research dump into a compact bullet plan.
 
     The raw research is typically 10–20K chars with many ===SECTION=== blocks
@@ -2274,6 +2286,110 @@ cultural_voice_overlay: [if cultural_atmosphere is set, override default copy to
   accents, not translation". Japanese izakaya: "quiet, precise, respectful, with
   small 'お' honorific touches in microcopy." If "none", output "n/a".]
 
+===VISUAL_DISTINCTIVENESS===
+anti_generic:
+  [3 SPECIFIC layout/visual choices that ensure this site looks NOTHING like a
+   generic AI-generated template. Be concrete and actionable for a developer.
+   BAD: "use unique colors" or "add animations" (too vague)
+   GOOD examples:
+     "hero: stagger headline words on 3 separate lines each offset-x by +40px,
+      creating a diagonal reading path instead of a left-aligned block"
+     "features: use a magazine-editorial numbered list (01. 02. 03.) with
+      text-8xl font-black numbers bleeding behind the card border"
+     "testimonials: single rotating full-bleed pull-quote with 5rem italic
+      serif text, no avatar cards — one voice at a time, auto-scrolling"
+     "menu section: horizontal scrolling film strip of dish photos with
+      parallax offset, not a static 3-col grid"]
+
+visual_surprise:
+  [ONE unexpected detail a senior designer would notice and appreciate.
+   This MUST appear somewhere on the rendered page — not be skipped.
+   Examples:
+     "a vintage receipt-paper SVG texture overlaid on the menu section at 6% opacity"
+     "hero stat cards (4.9★ / 2,400 subs / 12 origins) that count up with
+      IntersectionObserver when they scroll into view"
+     "a slowly rotating SVG quote mark (360° / 30s, opacity 8%) centered
+      behind the testimonials headline"
+     "the CTA button has a subtle shimmer sweep animation on hover
+      (background-position: 200% 0 → 0 0 over 600ms)"
+     "section dividers are hand-drawn wavy SVG paths instead of straight lines"
+   This is NOT optional — it must be implemented in the generated code.]
+
+section_card_matrix:
+  [For EACH section in ===SECTIONS===, assign which card style to use and WHY.
+   Rule: No two consecutive sections may use the same card style.
+   Rule: At most 2 sections total may use the same card style on the whole page.
+   Styles: soft | glass | featured | no-card (full-bleed layout, no card wrapper)
+   Format: section_name → style | reason (1 phrase)
+   Example:
+     hero         → no-card   | split layout, no wrapper needed
+     features     → featured  | bento hero tile needs premium gradient
+     story        → no-card   | full-bleed image section
+     menu         → soft      | clean item cards on light bg
+     testimonials → glass     | cards float on dark branded background
+     cta_final    → no-card   | full-width branded band, no card]
+
+section_spacing_rhythm:
+  [Override default py-20 for sections where it would create identical visual weight.
+   Only list sections that need a different rhythm. Format: section_name → padding | reason
+   Example:
+     hero         → min-h-[90vh] flex items-center | needs full viewport presence
+     menu         → py-32 | rich imagery needs breathing room
+     hours        → py-12 | compact info section, tight is intentional
+     cta_final    → py-24 | standard CTA band height]
+
+===HEADER_DESIGN===
+Study the top sites in this domain. Pick a header that feels native to THIS brand —
+not the generic SaaS sticky-nav template. Every field drives the actual rendered JSX.
+
+structure:
+  [ONE of:
+    logo_left_nav_right  — brand left, nav items right, CTA far right (classic horizontal)
+    centered_logo        — brand centered, nav splits evenly left and right of it
+    logo_left_hamburger  — brand left, single "Menu" trigger right, fullscreen overlay nav
+    floating_pill        — pill-shaped capsule floating 16px from top, max-w-3xl centered
+    two_row              — tall header: brand + tagline top row, nav bottom row (fashion/retail)
+  reasoning: [why this structure fits the brand — 1 sentence referencing real site]
+
+surface:
+  [ONE of:
+    light_blur           — bg-background/92 backdrop-blur border-b border-border (default)
+    dark_solid           — bg-foreground text-background (high-contrast editorial)
+    transparent_scroll   — transparent over hero, morphs to light_blur after 60px scroll
+    primary_tinted       — bg-primary/8 border-b border-primary/20 (subtle brand wash)
+    glass_dark           — bg-black/30 backdrop-blur-xl text-white (over dark/photo hero)
+  reasoning: [why — 1 sentence]
+
+nav_link_style:
+  [ONE of:
+    plain                — text-foreground/70 hover:text-foreground transition-colors
+    underline_slide      — underline animates left→right on hover (h-px bg-primary absolute)
+    uppercase_track      — text-[11px] uppercase tracking-[0.18em] text-foreground/55
+    pill_hover           — hover:bg-muted rounded-full px-3 py-1 (subtle pill on hover)
+    dot_left             — small dot (h-1.5 w-1.5 bg-primary rounded-full) appears left on hover
+
+cta_style:
+  [ONE of:
+    filled_pill          — rounded-full bg-primary px-6 shadow-sm (modern, friendly)
+    filled_sharp         — rounded-md bg-primary px-5 (standard, clean)
+    ghost_pill           — rounded-full border border-foreground/30 px-5 (elegant, minimal)
+    ghost_sharp          — rounded-md border border-border px-5 (subtle, serious)
+    text_arrow           — plain text + " →" no button wrapper (ultra-minimal)
+    inverted_pill        — rounded-full bg-background text-foreground px-5 (for dark surface)
+
+height:
+  [ONE of: slim (h-14) | standard (h-16) | tall (h-20) | masthead (h-24)]
+
+top_accent:
+  [ONE of:
+    none                 — no decorative top element
+    primary_bar          — 3px border-t border-primary above the header (signature stripe)
+    gradient_wash        — bg-gradient-to-r from-primary/20 via-transparent to-accent/20 as top strip
+
+mobile_menu:
+  [ONE of: slide_drawer | fullscreen_overlay | simple_dropdown]
+  reasoning: [why this fits the brand UX — 1 phrase]
+
 ===IMAGE_SOURCES===
 hero: [treatment from research]
 content_images: https://picsum.photos/seed/[descriptive_seed]/800/600
@@ -3036,6 +3152,67 @@ def _build_unsplash_pool_block() -> str:
         picked = _rand.choice(ids)
         # 22-char left-justified label keeps the visual alignment of the old block.
         lines.append(f"  {label:<22}→ https://images.unsplash.com/{picked}")
+    return "\n".join(lines)
+
+
+def _parse_signature_imagery(cultural_atmosphere: str) -> list[str]:
+    """Extract search terms from the signature_imagery field of ===CULTURAL_ATMOSPHERE===.
+
+    Handles multiple Gemini output styles:
+      - "term | mood"   (most common — pipe-separated)
+      - "- term"        (dash bullet)
+      - "term"          (bare phrase)
+      - n/a / none      (no imagery — returns [])
+    """
+    if not cultural_atmosphere:
+        return []
+    keywords: list[str] = []
+    in_block = False
+    for line in cultural_atmosphere.splitlines():
+        raw = line.strip()
+        # Detect the field start
+        if "signature_imagery:" in raw.lower():
+            in_block = True
+            # Inline value on the same line (unlikely but safe)
+            remainder = raw.split(":", 1)[1].strip().strip('"').strip("'")
+            if remainder and remainder.lower() not in ("n/a", "none", "na", ""):
+                term = remainder.split("|")[0].strip()
+                if len(term) > 3:
+                    keywords.append(term)
+            continue
+        if not in_block:
+            continue
+        # Stop when we hit the next top-level field (unindented word followed by colon)
+        if raw and not line.startswith((" ", "\t", "-", '"', "'")):
+            if ":" in raw and "|" not in raw:
+                break
+        # Skip empty lines and skip-markers
+        stripped = raw.lstrip("- •*").strip().strip('"').strip("'").strip(",")
+        if not stripped or stripped.lower() in ("n/a", "none", "na", "[]"):
+            continue
+        # Extract the search term (everything before the first "|")
+        term = stripped.split("|")[0].strip().strip('"').strip("'")
+        # Skip bracket placeholders like "[search_term: ...]"
+        if term.startswith("[") or len(term) < 4:
+            continue
+        keywords.append(term)
+
+    return keywords[:8]  # cap to avoid rate-limit bursts
+
+
+def _build_live_unsplash_block(photos: list[dict], keywords: list[str]) -> str:
+    """Format live Unsplash API results into the same pool-block shape the prompt expects.
+
+    Each line: "  <label>  → <url_hero>"
+    Labels come from the search keywords. Falls back to the static pool if photos is empty.
+    """
+    if not photos:
+        return _build_unsplash_pool_block()
+
+    lines = []
+    for i, photo in enumerate(photos):
+        label = keywords[i] if i < len(keywords) else f"photo {i + 1}"
+        lines.append(f"  {label[:28]:<28}→ {photo['url_hero']}")
     return "\n".join(lines)
 
 
@@ -4509,7 +4686,40 @@ FORBIDDEN:
   ✗ Cards with neither shadow nor border (they vanish into the bg)
 
 ------------------------------------------------------------
-6) LOCATIONS / CONTACT SECTION — never pin-icon-only
+6) SECTION DIFFERENTIATION MANDATE (self-check before every section)
+------------------------------------------------------------
+Before writing any section, run this checklist mentally:
+  □ Card style differs from the section directly above it?
+  □ Background treatment differs from both neighboring sections?
+  □ Column/layout count differs from the section directly above it?
+  □ At least ONE non-rectangular or non-uniform element present?
+
+If any answer is NO — redesign the section layout before writing JSX.
+
+ANTI-SAMENESS PATTERNS that guarantee a generic-looking page:
+  ✗  3+ identical cards in a row — same padding, same icon size, same text length
+  ✗  Two consecutive sections with bg-background (zero rotation)
+  ✗  Features as 3-column grid with icon-above + title + body text (THE most common AI output)
+  ✗  Testimonials as 3 identical white cards with avatar circle + name + stars
+  ✗  CTA section as centered H2 + subtext + one button on bg-primary — zero texture
+  ✗  About section as text-left + team photo-grid right (seen on every template)
+  ✗  Footer as 4 symmetric columns with identical visual weight
+
+WHAT TO DO INSTEAD (pick one variation per section that breaks the template):
+  Features  → numbered-editorial (text-8xl font-black "01") | bento-mixed (hero tile col-span-2)
+              | zigzag (image alternates left/right) | tilt-stack (rotated hover cards)
+  Testimonials → single rotating pull-quote (auto-scroll, no grid) | masonry columns
+                 | horizontal scroll strip | one featured + 2 small
+  CTA       → full-bleed image with dark overlay + one bold verb | split (text left, visual right)
+              | animated counter stat row above the CTA button
+  About     → timeline vertical | editorial 2-column with large pull-quote | full-bleed with motif
+
+VISUAL SURPRISE (from ===VISUAL_DISTINCTIVENESS=== in research) — MANDATORY:
+  The research block contains a visual_surprise field. That element MUST be implemented.
+  Do NOT skip it. It is the ONE thing that makes the page memorable.
+
+------------------------------------------------------------
+7) LOCATIONS / CONTACT SECTION — never pin-icon-only
 ------------------------------------------------------------
 If the project has multiple physical locations or a contact section with an address,
 each location card MUST show either:
@@ -4690,21 +4900,26 @@ def _system_prompt_for_phase(phase: int) -> str:
     return SYSTEM_PROMPT_CORE
 
 
-def _phase_rules_prefix(phase: int) -> str:
+def _phase_rules_prefix(phase: int, unsplash_block: str | None = None) -> str:
     """Return the phase-specific rules block to prepend to the user prompt.
 
     Goes in the user message (not system) so the system prompt stays stable
     for caching. Still gives the model focused rules for the phase:
     Phase 1 sees CSS/theme/nav, Phase 2 sees content/API/feedback patterns,
     Phase 3 sees the lighter completeness checklist.
+
+    unsplash_block: pre-fetched live Unsplash URLs for this project's keywords.
+    When provided, these real photos replace the static pool. Falls back to the
+    static pool when None (recovery calls, cached paths, legacy code).
     """
     if phase == 1:
         return PHASE_APPENDIX_FOUNDATION
     if phase == 3:
         return PHASE_APPENDIX_COMPLETENESS
-    # Phase 2 (CONTENT) — substitute the rotating Unsplash pool fresh each call
-    # so two generations of the same domain don't ship identical photos.
-    return PHASE_APPENDIX_CONTENT.replace("<<UNSPLASH_POOL_BLOCK>>", _build_unsplash_pool_block())
+    # Phase 2 (CONTENT) — substitute live Unsplash URLs when available,
+    # otherwise fall back to the rotating static pool.
+    block = unsplash_block if unsplash_block is not None else _build_unsplash_pool_block()
+    return PHASE_APPENDIX_CONTENT.replace("<<UNSPLASH_POOL_BLOCK>>", block)
 
 
 # Back-compat alias — any legacy reference to SYSTEM_PROMPT gets a reasonable
@@ -5310,11 +5525,91 @@ async def _generate_new_project_inner(
     _research_design_system_name = _extract_research_section(research, "===DESIGN_SYSTEM_NAME===", max_chars=100).strip().strip('"').strip("'")
     _research_cultural_atmosphere = _extract_research_section(research, "===CULTURAL_ATMOSPHERE===", max_chars=2400)
 
+    # ── Live Unsplash image fetch ──────────────────────────────────────────────
+    # Parse signature_imagery keywords from the cultural atmosphere block and fetch
+    # real matching photos via the Unsplash API. The resulting URL block replaces
+    # the hardcoded _UNSPLASH_POOLS in Phase 2 so every project gets photos that
+    # actually match its content, not random coffee/gym pool IDs.
+    # FAIL-SOFT: falls back to the static pool on any error (missing key, rate
+    # limit, network failure) so generation always proceeds.
+    _live_unsplash_block: str | None = None
+    _unsplash_key = os.environ.get("UNSPLASH_ACCESS_KEY", "")
+    if _unsplash_key:
+        try:
+            from app.services.unsplash import fetch_project_images as _unsplash_fetch
+
+            # 1. Try to pull specific imagery from cultural atmosphere block
+            _sig_keywords = _parse_signature_imagery(_research_cultural_atmosphere)
+
+            # 2. Fallback: build meaningful queries from domain + description noun phrases
+            if not _sig_keywords:
+                _DOMAIN_QUERIES: dict[str, list[str]] = {
+                    "restaurant": ["restaurant interior", "plated food", "dining table"],
+                    "cafe": ["coffee shop", "latte art", "cozy cafe"],
+                    "coffee": ["espresso coffee", "coffee shop interior", "barista"],
+                    "bakery": ["bakery pastry", "fresh bread", "patisserie"],
+                    "fitness": ["gym workout", "fitness weights", "training session"],
+                    "yoga": ["yoga studio", "meditation", "pilates class"],
+                    "salon": ["hair salon", "beauty treatment", "hairdresser"],
+                    "spa": ["spa wellness", "massage therapy", "relaxation"],
+                    "hotel": ["hotel lobby", "luxury room", "travel destination"],
+                    "real_estate": ["modern house exterior", "interior design", "architecture"],
+                    "fashion": ["fashion clothing", "model editorial", "apparel lookbook"],
+                    "ecommerce": ["product photography", "shopping lifestyle", "retail"],
+                    "saas": ["technology workspace", "software team", "modern office"],
+                    "startup": ["startup team", "modern workspace", "technology"],
+                    "agency": ["creative agency", "design studio", "team collaboration"],
+                    "portfolio": ["creative work", "design portfolio", "photography"],
+                    "education": ["students learning", "classroom", "education technology"],
+                    "healthcare": ["healthcare professional", "medical clinic", "wellness"],
+                    "law": ["law office", "professional meeting", "legal services"],
+                    "finance": ["financial professional", "modern office", "business meeting"],
+                }
+                _d = _domain.lower().replace(" ", "_").replace("-", "_")
+                # Try exact match, then prefix match
+                _sig_keywords = _DOMAIN_QUERIES.get(_d) or next(
+                    (v for k, v in _DOMAIN_QUERIES.items() if k in _d or _d in k), None
+                )
+                if not _sig_keywords:
+                    # Last resort: use first 5 meaningful words from description
+                    _desc_words = [w for w in description.split() if len(w) > 4 and w.isalpha()]
+                    _sig_keywords = [" ".join(_desc_words[:3])] if _desc_words else ["business professional"]
+
+            if _sig_keywords:
+                _unsplash_result = await _unsplash_fetch(
+                    keywords=_sig_keywords,
+                    hero_count=2,
+                    supporting_count=6,
+                )
+                _all_photos = _unsplash_result["photos"]
+                if _all_photos:
+                    _live_unsplash_block = _build_live_unsplash_block(_all_photos, _sig_keywords)
+                    logger.info(
+                        "Unsplash live fetch: %d photos for keywords %s",
+                        len(_all_photos), _sig_keywords[:3],
+                    )
+                    await _ws_send(websocket, "progress", f"🖼️ Fetched {len(_all_photos)} real Unsplash photos")
+        except Exception as _unsplash_exc:
+            logger.warning("Unsplash fetch failed (non-fatal, using static pool): %s", _unsplash_exc)
+
     # Re-derive layout archetype from Gemini's confirmed classification in research
     _classification = _extract_layout_archetype(research, _classification)
     _layout_archetype = _classification["layout_archetype"]
     app_type = _classification["app_type"]
     _domain = _classification["domain"]
+
+    # ── Parse Gemini header design spec ───────────────────────────────────────
+    # Gemini emits ===HEADER_DESIGN=== with 7 design axes. We parse it here and
+    # pass it to build_marketing_header_jsx so the JSX is composed from Gemini's
+    # explicit decisions rather than our preset variant pool.
+    _header_spec: dict = {}
+    try:
+        from app.services.marketing_header_builder import parse_header_spec_from_research as _parse_hspec
+        _header_spec = _parse_hspec(research or "")
+        if _header_spec:
+            logger.info("Header spec from Gemini: %s", _header_spec)
+    except Exception as _hspec_exc:
+        logger.warning("Header spec parse failed (non-fatal): %s", _hspec_exc)
 
     # ── Archetype-sliced manifest ──
     # The raw manifest covers every layout type the template supports (admin +
@@ -5631,9 +5926,9 @@ async def _generate_new_project_inner(
                     or "Brand"
                 )
                 if _brand_mark and _nav_groups:
-                    # Header variant is picked from Design Director's
-                    # brand_mark.placement, image_composition, hero_archetype
-                    # and spacing.rhythm — no hash, no random, no preset pool.
+                    # When Gemini emitted ===HEADER_DESIGN===, use its spec for
+                    # a fully compositional render. Otherwise fall back to the
+                    # preset variant pool (Design Director placement signals).
                     _header_jsx, _header_variant = build_marketing_header_jsx(
                         brand_name=_schema_brand_name,
                         brand_mark=_brand_mark,
@@ -5641,6 +5936,7 @@ async def _generate_new_project_inner(
                         domain=_domain,
                         archetype=_layout_archetype,
                         design=_design,
+                        header_spec=_header_spec or None,
                     )
                     with open(_header_abs, "w", encoding="utf-8") as _hf:
                         _hf.write(_header_jsx)
@@ -6127,7 +6423,7 @@ async def _generate_new_project_inner(
     #   - User confirmed                      → proceed
     #   - User rejected WITH correction       → return False (orchestrator retries)
     #   - User rejected WITHOUT correction    → return False (abort cleanly)
-    #   - 5-minute timeout                    → auto-proceed (existing behavior)
+    #   - 5-minute timeout                    → abort (user did not confirm)
     #   - Any other exception during the wait → return False (abort, do NOT
     #     silently bill the user for code they never approved)
     #   - Plan was never emitted              → skip gate (no UI to confirm with)
@@ -6162,14 +6458,19 @@ async def _generate_new_project_inner(
             await _ws_send(websocket, "progress", "✅ Plan confirmed — starting code generation...")
         except asyncio.TimeoutError:
             logger.info(
-                "Plan confirmation timed out after %ds — auto-proceeding",
+                "Plan confirmation timed out after %ds — aborting (user did not confirm)",
                 PLAN_CONFIRM_TIMEOUT_SECONDS,
             )
-            await _ws_send(
-                websocket, "progress",
-                "⏱️ Auto-proceeding with plan (no response after 5 min)...",
-            )
             pending_plan_confirmations.pop(_gate_key, None)
+            try:
+                await _ws_send(
+                    websocket, "warning",
+                    "⏱️ Plan expired — generation was not started. "
+                    "Send your message again to get a new plan.",
+                )
+            except Exception:
+                pass
+            return False
         except Exception as _conf_err:
             # Non-Timeout error during the wait (e.g. ws error, future cancelled
             # by some unexpected path). Abort instead of silently proceeding to
@@ -6954,7 +7255,7 @@ Call the write_project_files tool with ALL files for THIS batch only.
             # Smaller ceiling also means the model returns sooner when done.
             return await call_claude_for_json(
                 system_prompt=_system_prompt_for_phase(2),
-                user_prompt=_phase_rules_prefix(2) + "\n" + batch_prompt,
+                user_prompt=_phase_rules_prefix(2, _live_unsplash_block) + "\n" + batch_prompt,
                 api_key=api_key,
                 websocket=websocket,
                 max_tokens=40000,
@@ -7058,7 +7359,7 @@ Call the write_project_files tool with ALL files for THIS batch only.
             result2 = await asyncio.wait_for(
                 call_claude_for_json(
                     system_prompt=_system_prompt_for_phase(2),
-                    user_prompt=_phase_rules_prefix(2) + "\n" + phase2_prompt,
+                    user_prompt=_phase_rules_prefix(2, _live_unsplash_block) + "\n" + phase2_prompt,
                     api_key=api_key,
                     websocket=websocket,
                     max_tokens=PHASE2_MAX_TOKENS,

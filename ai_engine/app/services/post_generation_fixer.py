@@ -1853,6 +1853,123 @@ def fix_next_config_build_ignore(workspace_path: str) -> bool:
 
 
 # ╔══════════════════════════════════════════════════════════════╗
+# ║  FIXER — Inject Next.js App Router error boundaries         ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+_ERROR_JS = '''\
+'use client'
+import { useEffect } from 'react'
+
+export default function Error({ error, reset }) {
+  useEffect(() => { console.error(error) }, [error])
+  return (
+    <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 p-8 text-center">
+      <div className="rounded-full bg-destructive/10 p-4">
+        <svg className="h-8 w-8 text-destructive" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+        </svg>
+      </div>
+      <h2 className="text-xl font-semibold">Something went wrong</h2>
+      <p className="max-w-sm text-sm text-muted-foreground">
+        An unexpected error occurred. Try refreshing — if the problem persists, contact support.
+      </p>
+      <button
+        onClick={() => reset()}
+        className="rounded-lg bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+      >
+        Try again
+      </button>
+    </div>
+  )
+}
+'''
+
+_GLOBAL_ERROR_JS = '''\
+'use client'
+export default function GlobalError({ error, reset }) {
+  return (
+    <html>
+      <body style={{ margin: 0, fontFamily: 'system-ui, sans-serif', background: '#fafafa' }}>
+        <div style={{ display: 'flex', minHeight: '100vh', flexDirection: 'column',
+                      alignItems: 'center', justifyContent: 'center', gap: '1rem', padding: '2rem', textAlign: 'center' }}>
+          <h2 style={{ fontSize: '1.25rem', fontWeight: 600, margin: 0 }}>Something went wrong</h2>
+          <p style={{ color: '#666', fontSize: '0.875rem', margin: 0 }}>
+            A critical error occurred. Please try again.
+          </p>
+          <button
+            onClick={() => reset()}
+            style={{ background: '#171717', color: '#fff', border: 'none', borderRadius: '8px',
+                     padding: '0.5rem 1.25rem', fontSize: '0.875rem', cursor: 'pointer' }}
+          >
+            Try again
+          </button>
+        </div>
+      </body>
+    </html>
+  )
+}
+'''
+
+_NOT_FOUND_JS = '''\
+import Link from 'next/link'
+
+export default function NotFound() {
+  return (
+    <div className="flex min-h-[70vh] flex-col items-center justify-center gap-4 p-8 text-center">
+      <p className="text-6xl font-black text-muted-foreground/30">404</p>
+      <h2 className="text-xl font-semibold">Page not found</h2>
+      <p className="max-w-sm text-sm text-muted-foreground">
+        The page you&apos;re looking for doesn&apos;t exist or has been moved.
+      </p>
+      <Link
+        href="/"
+        className="rounded-lg bg-primary px-5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+      >
+        Go home
+      </Link>
+    </div>
+  )
+}
+'''
+
+
+def inject_error_boundaries(workspace_path: str) -> list[str]:
+    """Inject Next.js App Router error boundary files if they don't already exist.
+
+    error.js      — catches segment-level render errors, shows try-again UI
+    global-error.js — catches root layout crashes (last resort fallback)
+    not-found.js  — handles 404s with a graceful page instead of blank screen
+
+    Without these, ANY runtime error (undefined component, bad import) shows a
+    completely blank white page in production with no recovery path.
+
+    Returns list of files written.
+    """
+    app_dir = os.path.join(workspace_path, "src", "app")
+    if not os.path.isdir(app_dir):
+        app_dir = os.path.join(workspace_path, "app")
+    if not os.path.isdir(app_dir):
+        return []
+
+    written = []
+    for filename, content in [
+        ("error.js", _ERROR_JS),
+        ("global-error.js", _GLOBAL_ERROR_JS),
+        ("not-found.js", _NOT_FOUND_JS),
+    ]:
+        dest = os.path.join(app_dir, filename)
+        if not os.path.exists(dest):
+            try:
+                with open(dest, "w", encoding="utf-8") as f:
+                    f.write(content)
+                written.append(filename)
+            except Exception as exc:
+                logger.warning("inject_error_boundaries: failed to write %s: %s", filename, exc)
+    return written
+
+
+# ╔══════════════════════════════════════════════════════════════╗
 # ║  FIXER — Restore template UI components from git            ║
 # ╚══════════════════════════════════════════════════════════════╝
 
@@ -2102,6 +2219,19 @@ async def run_all_fixers(
         "next_config_patched": False,
         "total_fixes": 0,
     }
+
+    # -2. Inject error.js / global-error.js / not-found.js if missing.
+    #     These are Next.js App Router error boundaries — without them ANY
+    #     runtime crash shows a blank white screen with no recovery UI.
+    try:
+        injected = inject_error_boundaries(workspace_path)
+        if injected:
+            await _ws_send(
+                websocket, "progress",
+                f"🔧 Injected error boundaries: {', '.join(injected)}",
+            )
+    except Exception as e:
+        logger.warning("Error boundary injector failed (non-fatal): %s", e)
 
     # -1. Restore src/components/ui/ from git HEAD — undoes any AI overwrites of
     #     shadcn/ui template files (parse errors, wrong imports, etc.)

@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     LLM_API_KEY: str = ""
     LLM_BASE_URL: str | None = None
 
+    # ── Image services ───────────────────────────────────────
+    UNSPLASH_ACCESS_KEY: str = ""
+
     # DEFAULT_MODEL_PROVIDER env var maps to DEFAULT_PROVIDER attribute
     DEFAULT_PROVIDER: str = Field("google", validation_alias="DEFAULT_MODEL_PROVIDER")
 

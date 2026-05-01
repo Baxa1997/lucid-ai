@@ -349,28 +349,30 @@ def pick_header_variant(
         or any(kw in hero_arch for kw in _FULL_BLEED_KEYWORDS)
     )
 
-    # Full-bleed hero — `transparent_overlay` is the obvious fit but
-    # `split_action_bar` (Aesop / The Row pattern) and `floating_capsule`
-    # both work above cinematic photography too. Pick across all three so
-    # cinematic projects don't all collapse to the translucent-nav cliché.
+    # Full-bleed hero — transparent_overlay, split_action_bar, floating_capsule,
+    # dark_band (all work over photography). Rotate so cinematic projects don't
+    # always get the same translucent-nav cliché.
     if _is_full_bleed:
         return _random.choice((
             "transparent_overlay",
             "split_action_bar",
             "floating_capsule",
-            "solid_bordered",
+            "dark_band",
         ))
 
-    # Tight + portfolio family — luxury / editorial brands. minimal and
-    # split_action_bar both fit this register.
-    if a == "portfolio" and "tight" in spacing_rhythm:
-        return _random.choice(("minimal", "split_action_bar", "solid_bordered"))
+    # Editorial / luxury feel (portfolio, agency, fashion, hospitality)
+    # — editorial_border (magazine masthead) and split_action_bar (Aesop) fit best.
+    _is_editorial = a in ("portfolio", "agency", "fashion") or "luxury" in spacing_rhythm
+    if _is_editorial:
+        return _random.choice((
+            "editorial_border",
+            "split_action_bar",
+            "minimal",
+            "dark_band",
+        ))
 
-    # General consumer / landing case — rotate across all 6 variants with
-    # roughly even weights. Prior 3:1:1 weighting on solid_bordered made
-    # every consumer site ship the same generic horizontal nav even when
-    # the design system explicitly varied. Equal-ish weights force the
-    # picker to actually use the structural alternatives we built.
+    # General consumer / landing — rotate evenly across all 8 variants.
+    # Equal-ish weights so two coffee-shop generations don't produce the same nav.
     return _random.choices(
         (
             "solid_bordered",
@@ -378,8 +380,10 @@ def pick_header_variant(
             "minimal",
             "floating_capsule",
             "split_action_bar",
+            "dark_band",
+            "editorial_border",
         ),
-        weights=(2, 2, 2, 2, 1),
+        weights=(2, 2, 2, 2, 1, 2, 2),
         k=1,
     )[0]
 
@@ -439,9 +443,10 @@ export default function MarketingHeader() {{
             <Link
               key={{link.href}}
               href={{link.href}}
-              className="text-sm font-medium text-foreground/80 transition-colors hover:text-foreground"
+              className="group relative text-sm font-medium text-foreground/70 transition-colors hover:text-foreground"
             >
               {{link.label}}
+              <span className="absolute -bottom-0.5 left-0 h-px w-0 bg-primary transition-all duration-300 group-hover:w-full" />
             </Link>
           ))}}
         </nav>
@@ -449,7 +454,7 @@ export default function MarketingHeader() {{
         <div className="hidden md:flex md:items-center md:gap-3">
           <Link
             href={cta_href_attr}
-            className="inline-flex h-10 items-center rounded-md bg-primary px-5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
+            className="inline-flex h-10 items-center rounded-full bg-primary px-6 text-sm font-medium text-primary-foreground shadow-sm transition-all hover:bg-primary/90 hover:shadow-md"
           >
             {{{cta_text_jsx}}}
           </Link>
@@ -482,7 +487,7 @@ export default function MarketingHeader() {{
             <Link
               href={cta_href_attr}
               onClick={{() => setMobileOpen(false)}}
-              className="mt-2 inline-flex h-11 items-center justify-center rounded-md bg-primary px-5 text-sm font-medium text-primary-foreground shadow-sm"
+              className="mt-2 inline-flex h-11 items-center justify-center rounded-full bg-primary px-5 text-sm font-medium text-primary-foreground shadow-sm"
             >
               {{{cta_text_jsx}}}
             </Link>
@@ -1000,6 +1005,196 @@ export default function MarketingHeader() {{
 """
 
 
+# ───────────────────────────────────────────────────────────────
+#  Variant 7: dark_band
+#  Inverted header — bg-foreground, text-background. High-contrast
+#  editorial feel (The Row, COS, Bottega Veneta). Works with any
+#  brand because it uses CSS variables, not hex. CTA is ghost-white.
+# ───────────────────────────────────────────────────────────────
+def _render_dark_band(
+    brand_block: str,
+    nav_array: str,
+    cta_text_jsx: str,
+    cta_href_attr: str,
+    lucide_imports: str,
+) -> str:
+    # Rewrite brand_block color to be background-safe (white on dark)
+    dark_brand_block = brand_block.replace("text-foreground", "text-background").replace(
+        "text-primary", "text-background"
+    )
+    return f"""'use client';
+
+import Link from 'next/link';
+import {{ useState }} from 'react';
+import {{ {lucide_imports} }} from 'lucide-react';
+
+const navLinks = [
+  {nav_array}
+];
+
+export default function MarketingHeader() {{
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  return (
+    <header className="sticky top-0 z-50 w-full bg-foreground text-background">
+      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+        {dark_brand_block}
+
+        <nav className="hidden items-center gap-8 md:flex" aria-label="Primary">
+          {{navLinks.map((link) => (
+            <Link
+              key={{link.href}}
+              href={{link.href}}
+              className="text-xs font-medium uppercase tracking-[0.15em] text-background/60 transition-colors hover:text-background"
+            >
+              {{link.label}}
+            </Link>
+          ))}}
+        </nav>
+
+        <div className="hidden md:flex md:items-center md:gap-3">
+          <Link
+            href={cta_href_attr}
+            className="inline-flex h-9 items-center rounded-md border border-background/30 bg-transparent px-5 text-sm font-medium text-background transition-colors hover:bg-background hover:text-foreground"
+          >
+            {{{cta_text_jsx}}}
+          </Link>
+        </div>
+
+        <button
+          type="button"
+          onClick={{() => setMobileOpen(!mobileOpen)}}
+          className="inline-flex h-10 w-10 items-center justify-center rounded-md text-background md:hidden"
+          aria-label={{mobileOpen ? 'Close menu' : 'Open menu'}}
+          aria-expanded={{mobileOpen}}
+        >
+          {{mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}}
+        </button>
+      </div>
+
+      {{mobileOpen && (
+        <nav className="border-t border-background/15 bg-foreground text-background md:hidden" aria-label="Mobile">
+          <div className="mx-auto flex max-w-7xl flex-col gap-1 px-4 py-4 sm:px-6">
+            {{navLinks.map((link) => (
+              <Link
+                key={{link.href}}
+                href={{link.href}}
+                onClick={{() => setMobileOpen(false)}}
+                className="rounded-md px-3 py-2 text-base font-medium text-background/70 hover:bg-background/10 hover:text-background"
+              >
+                {{link.label}}
+              </Link>
+            ))}}
+            <Link
+              href={cta_href_attr}
+              onClick={{() => setMobileOpen(false)}}
+              className="mt-2 inline-flex h-11 items-center justify-center rounded-md border border-background/30 px-5 text-sm font-medium text-background hover:bg-background hover:text-foreground"
+            >
+              {{{cta_text_jsx}}}
+            </Link>
+          </div>
+        </nav>
+      )}}
+    </header>
+  );
+}}
+"""
+
+
+# ───────────────────────────────────────────────────────────────
+#  Variant 8: editorial_border
+#  Tall header (h-24) with an oversized brand mark, uppercase tiny
+#  tracking nav, and a full-width hairline border separating it from
+#  the hero. Reads like a magazine masthead (Kinfolk, Monocle, T Magazine).
+#  CTA is a ghost pill — no fill, border only.
+# ───────────────────────────────────────────────────────────────
+def _render_editorial_border(
+    brand_block: str,
+    nav_array: str,
+    cta_text_jsx: str,
+    cta_href_attr: str,
+    lucide_imports: str,
+) -> str:
+    return f"""'use client';
+
+import Link from 'next/link';
+import {{ useState }} from 'react';
+import {{ {lucide_imports} }} from 'lucide-react';
+
+const navLinks = [
+  {nav_array}
+];
+
+export default function MarketingHeader() {{
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  return (
+    <header className="sticky top-0 z-50 w-full border-b border-foreground/15 bg-background">
+      <div className="mx-auto flex h-20 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+        {brand_block}
+
+        <nav className="hidden items-center gap-10 md:flex" aria-label="Primary">
+          {{navLinks.map((link) => (
+            <Link
+              key={{link.href}}
+              href={{link.href}}
+              className="group relative text-[11px] font-medium uppercase tracking-[0.2em] text-foreground/50 transition-colors hover:text-foreground"
+            >
+              {{link.label}}
+              <span className="absolute -bottom-1 left-0 h-px w-0 bg-foreground transition-all duration-300 group-hover:w-full" />
+            </Link>
+          ))}}
+        </nav>
+
+        <div className="hidden md:flex md:items-center md:gap-3">
+          <Link
+            href={cta_href_attr}
+            className="inline-flex h-9 items-center rounded-full border border-foreground/30 px-5 text-[11px] font-medium uppercase tracking-[0.12em] text-foreground transition-colors hover:border-foreground hover:bg-foreground hover:text-background"
+          >
+            {{{cta_text_jsx}}}
+          </Link>
+        </div>
+
+        <button
+          type="button"
+          onClick={{() => setMobileOpen(!mobileOpen)}}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md text-foreground md:hidden"
+          aria-label={{mobileOpen ? 'Close menu' : 'Open menu'}}
+          aria-expanded={{mobileOpen}}
+        >
+          {{mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}}
+        </button>
+      </div>
+
+      {{mobileOpen && (
+        <nav className="border-t border-foreground/10 bg-background md:hidden" aria-label="Mobile">
+          <div className="mx-auto flex max-w-7xl flex-col gap-0 px-4 py-2 sm:px-6">
+            {{navLinks.map((link) => (
+              <Link
+                key={{link.href}}
+                href={{link.href}}
+                onClick={{() => setMobileOpen(false)}}
+                className="border-b border-foreground/8 py-3 text-sm font-medium uppercase tracking-[0.12em] text-foreground/60 hover:text-foreground"
+              >
+                {{link.label}}
+              </Link>
+            ))}}
+            <Link
+              href={cta_href_attr}
+              onClick={{() => setMobileOpen(false)}}
+              className="mt-3 mb-1 inline-flex h-11 items-center justify-center rounded-full border border-foreground/30 px-5 text-xs font-medium uppercase tracking-[0.12em] text-foreground hover:bg-foreground hover:text-background"
+            >
+              {{{cta_text_jsx}}}
+            </Link>
+          </div>
+        </nav>
+      )}}
+    </header>
+  );
+}}
+"""
+
+
 _VARIANT_RENDERERS = {
     "solid_bordered":      _render_solid_bordered,
     "transparent_overlay": _render_transparent_overlay,
@@ -1007,7 +1202,502 @@ _VARIANT_RENDERERS = {
     "minimal":             _render_minimal,
     "floating_capsule":    _render_floating_capsule,
     "split_action_bar":    _render_split_action_bar,
+    "dark_band":           _render_dark_band,
+    "editorial_border":    _render_editorial_border,
 }
+
+
+# ═══════════════════════════════════════════════════════════════
+#  SPEC-DRIVEN COMPOSITIONAL RENDERER
+#  Reads ===HEADER_DESIGN=== that Gemini emits in research and
+#  composes JSX from declared axes (structure, surface, etc.)
+#  rather than from a preset variant name.
+# ═══════════════════════════════════════════════════════════════
+
+_HEADER_SPEC_VALID: dict[str, frozenset] = {
+    "structure":      frozenset({"logo_left_nav_right", "centered_logo", "logo_left_hamburger", "floating_pill", "two_row"}),
+    "surface":        frozenset({"light_blur", "dark_solid", "transparent_scroll", "primary_tinted", "glass_dark"}),
+    "nav_link_style": frozenset({"plain", "underline_slide", "uppercase_track", "pill_hover", "dot_left"}),
+    "cta_style":      frozenset({"filled_pill", "filled_sharp", "ghost_pill", "ghost_sharp", "text_arrow", "inverted_pill"}),
+    "height":         frozenset({"slim", "standard", "tall", "masthead"}),
+    "top_accent":     frozenset({"none", "primary_bar", "gradient_wash"}),
+    "mobile_menu":    frozenset({"slide_drawer", "fullscreen_overlay", "simple_dropdown"}),
+}
+
+_HEIGHT_CLS_MAP: dict[str, str] = {
+    "slim": "h-14", "standard": "h-16", "tall": "h-20", "masthead": "h-24",
+}
+
+_OUTER_CLS_MAP: dict[str, str] = {
+    "light_blur":     "sticky top-0 z-50 w-full border-b border-border bg-background/92 backdrop-blur supports-[backdrop-filter]:bg-background/75",
+    "dark_solid":     "sticky top-0 z-50 w-full bg-foreground text-background",
+    "primary_tinted": "sticky top-0 z-50 w-full border-b border-primary/20 bg-primary/10 backdrop-blur",
+    "glass_dark":     "fixed top-0 z-50 w-full bg-black/30 backdrop-blur-xl text-white",
+}
+
+_NAV_CLS_MAP: dict[str, str] = {
+    "plain":          "text-sm font-medium text-foreground/70 transition-colors hover:text-foreground",
+    "underline_slide":"group relative text-sm font-medium text-foreground/70 transition-colors hover:text-foreground",
+    "uppercase_track":"text-[11px] font-medium uppercase tracking-[0.18em] text-foreground/55 transition-colors hover:text-foreground",
+    "pill_hover":     "rounded-full px-3 py-1.5 text-sm font-medium text-foreground/70 transition-colors hover:bg-muted hover:text-foreground",
+    "dot_left":       "group flex items-center gap-2 text-sm font-medium text-foreground/70 transition-colors hover:text-foreground",
+}
+
+_NAV_CLS_INV_MAP: dict[str, str] = {
+    "plain":          "text-sm font-medium text-background/70 transition-colors hover:text-background",
+    "underline_slide":"group relative text-sm font-medium text-background/70 transition-colors hover:text-background",
+    "uppercase_track":"text-[11px] font-medium uppercase tracking-[0.18em] text-background/55 transition-colors hover:text-background",
+    "pill_hover":     "rounded-full px-3 py-1.5 text-sm font-medium text-background/70 transition-colors hover:bg-background/15 hover:text-background",
+    "dot_left":       "group flex items-center gap-2 text-sm font-medium text-background/70 transition-colors hover:text-background",
+}
+
+_CTA_CLS_MAP: dict[str, str] = {
+    "filled_pill":   "inline-flex h-10 items-center rounded-full bg-primary px-6 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90",
+    "filled_sharp":  "inline-flex h-10 items-center rounded-md bg-primary px-5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90",
+    "ghost_pill":    "inline-flex h-10 items-center rounded-full border border-foreground/30 px-5 text-sm font-medium text-foreground transition-colors hover:border-foreground hover:bg-foreground hover:text-background",
+    "ghost_sharp":   "inline-flex h-10 items-center rounded-md border border-border px-5 text-sm font-medium text-foreground transition-colors hover:bg-muted",
+    "text_arrow":    "text-[13px] font-semibold text-foreground transition-colors hover:text-primary",
+    "inverted_pill": "inline-flex h-10 items-center rounded-full bg-background px-5 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-background/90",
+}
+
+
+def parse_header_spec_from_research(research: str) -> dict:
+    """Parse ===HEADER_DESIGN=== block from Gemini research output.
+
+    Returns validated spec dict; empty dict if block is missing/unparseable.
+    Caller falls back to pick_header_variant() when this returns {}.
+    """
+    if not research:
+        return {}
+    m = re.search(r"===HEADER_DESIGN===\s*\n(.*?)(?=\n===[A-Z_]+===|\Z)", research, flags=re.DOTALL)
+    if not m:
+        return {}
+    block = m.group(1)
+    out: dict[str, str] = {}
+    for line in block.splitlines():
+        if ":" not in line:
+            continue
+        k, _, rest = line.partition(":")
+        k = k.strip().lower()
+        if k not in _HEADER_SPEC_VALID:
+            continue
+        v = rest.strip().split()[0].lower().rstrip(".,;") if rest.strip() else ""
+        v = re.sub(r"\s*\(.*?\)$", "", v).strip()
+        if v in _HEADER_SPEC_VALID[k]:
+            out[k] = v
+    return out
+
+
+def _spec_accent_strip(accent: str) -> str:
+    if accent == "primary_bar":
+        return '      <div className="h-[3px] w-full bg-primary" />\n'
+    if accent == "gradient_wash":
+        return '      <div className="h-1 w-full bg-gradient-to-r from-primary/20 via-transparent to-accent/20" />\n'
+    return ""
+
+
+def _spec_nav_map_jsx(style: str, inv: bool) -> str:
+    """Return {navLinks.map(...)} JSX string (no surrounding tags)."""
+    cls = (_NAV_CLS_INV_MAP if inv else _NAV_CLS_MAP).get(style, _NAV_CLS_MAP["plain"])
+    dot_c = "bg-background" if inv else "bg-primary"
+    if style == "underline_slide":
+        inner = (
+            "{link.label}\n"
+            f'              <span className="absolute -bottom-0.5 left-0 h-px w-0 {dot_c} transition-all duration-300 group-hover:w-full" />'
+        )
+    elif style == "dot_left":
+        inner = (
+            f'<span className="h-1.5 w-1.5 shrink-0 rounded-full {dot_c} opacity-0 transition-opacity group-hover:opacity-100" />\n'
+            "              {link.label}"
+        )
+    else:
+        inner = "{link.label}"
+    return (
+        "{navLinks.map((link) => (\n"
+        f'            <Link key={{link.href}} href={{link.href}} className="{cls}">\n'
+        f"              {inner}\n"
+        "            </Link>\n"
+        "          ))}"
+    )
+
+
+def _spec_cta_jsx(style: str, text_jsx: str, href_attr: str, extra_cls: str = "") -> str:
+    cls = _CTA_CLS_MAP.get(style, _CTA_CLS_MAP["filled_pill"])
+    if extra_cls:
+        cls = f"{cls} {extra_cls}"
+    arrow = " →" if style == "text_arrow" else ""
+    return f'<Link href={href_attr} className="{cls}">{{{text_jsx}}}{arrow}</Link>'
+
+
+def _spec_mobile_menu_jsx(menu_style: str, cta_text_jsx: str, cta_href_attr: str, cta_style: str) -> str:
+    """Build mobile-menu JSX block (rendered when mobileOpen is true)."""
+    mob_cls = _CTA_CLS_MAP.get(cta_style, _CTA_CLS_MAP["filled_pill"]).replace("h-10 ", "h-11 ")
+    arrow = " →" if cta_style == "text_arrow" else ""
+    cta_mob = (
+        f'<Link href={cta_href_attr} onClick={{() => setMobileOpen(false)}} '
+        f'className="{mob_cls} mt-2 w-full justify-center">'
+        f'{{{cta_text_jsx}}}{arrow}</Link>'
+    )
+    mob_link = (
+        "{navLinks.map((link) => (\n"
+        '            <Link\n'
+        '              key={link.href}\n'
+        '              href={link.href}\n'
+        '              onClick={() => setMobileOpen(false)}\n'
+        '              className="rounded-md px-3 py-2 text-base font-medium text-foreground/80 hover:bg-muted hover:text-foreground"\n'
+        "            >\n"
+        "              {link.label}\n"
+        "            </Link>\n"
+        "          ))}"
+    )
+
+    if menu_style == "fullscreen_overlay":
+        return (
+            "      {mobileOpen && (\n"
+            '        <div className="fixed inset-0 z-[60] flex flex-col bg-background" role="dialog" aria-modal="true">\n'
+            '          <div className="flex items-center justify-end p-4">\n'
+            '            <button type="button" onClick={() => setMobileOpen(false)} className="inline-flex h-10 w-10 items-center justify-center rounded-full text-foreground hover:bg-muted" aria-label="Close menu">\n'
+            '              <X className="h-5 w-5" />\n'
+            "            </button>\n"
+            "          </div>\n"
+            '          <nav className="flex flex-1 flex-col items-center justify-center gap-6 px-6 pb-24" aria-label="Mobile">\n'
+            f"            {mob_link}\n"
+            f"            {cta_mob}\n"
+            "          </nav>\n"
+            "        </div>\n"
+            "      )}"
+        )
+
+    if menu_style == "slide_drawer":
+        return (
+            "      {mobileOpen && (\n"
+            '        <div className="fixed inset-y-0 right-0 z-[60] flex w-72 flex-col bg-background shadow-xl" role="dialog" aria-modal="true">\n'
+            '          <div className="flex items-center justify-end p-4">\n'
+            '            <button type="button" onClick={() => setMobileOpen(false)} className="inline-flex h-9 w-9 items-center justify-center rounded-md text-foreground hover:bg-muted" aria-label="Close">\n'
+            '              <X className="h-5 w-5" />\n'
+            "            </button>\n"
+            "          </div>\n"
+            '          <nav className="flex flex-col gap-1 px-4 py-2" aria-label="Mobile">\n'
+            f"            {mob_link}\n"
+            f"            {cta_mob}\n"
+            "          </nav>\n"
+            "        </div>\n"
+            "      )}"
+        )
+
+    # simple_dropdown (default)
+    return (
+        '      {mobileOpen && (\n'
+        '        <nav className="border-t border-border bg-background md:hidden" aria-label="Mobile">\n'
+        '          <div className="mx-auto flex max-w-7xl flex-col gap-1 px-4 py-4 sm:px-6">\n'
+        f"            {mob_link}\n"
+        f"            {cta_mob}\n"
+        "          </div>\n"
+        "        </nav>\n"
+        "      )}"
+    )
+
+
+def render_from_spec(
+    spec: dict,
+    brand_block: str,
+    nav_array: str,
+    cta_text_jsx: str,
+    cta_href_attr: str,
+    lucide_imports: str,
+) -> str:
+    """Compose MarketingHeader.jsx from Gemini-specified design axes.
+
+    Falls back gracefully: any missing spec key uses a sensible default.
+    """
+    structure  = spec.get("structure",      "logo_left_nav_right")
+    surface    = spec.get("surface",        "light_blur")
+    nav_style  = spec.get("nav_link_style", "plain")
+    cta_style  = spec.get("cta_style",      "filled_pill")
+    height     = spec.get("height",         "standard")
+    top_accent = spec.get("top_accent",     "none")
+    mobile     = spec.get("mobile_menu",    "simple_dropdown")
+
+    is_inv    = surface in ("dark_solid", "glass_dark")
+    is_scroll = surface == "transparent_scroll"
+
+    height_cls = _HEIGHT_CLS_MAP.get(height, "h-16")
+    accent     = _spec_accent_strip(top_accent)
+
+    brand = (
+        brand_block
+        .replace("text-foreground", "text-background")
+        .replace("text-primary", "text-background")
+        if is_inv else brand_block
+    )
+
+    nav_map     = _spec_nav_map_jsx(nav_style, is_inv)
+    desktop_cta = _spec_cta_jsx(cta_style, cta_text_jsx, cta_href_attr)
+    mobile_nav  = _spec_mobile_menu_jsx(mobile, cta_text_jsx, cta_href_attr, cta_style)
+
+    if is_scroll:
+        light_cls = "border-b border-border bg-background/95 backdrop-blur text-foreground"
+        dark_cls  = "border-b border-transparent bg-transparent text-white"
+        header_cls_attr = f'{{`fixed top-0 z-50 w-full transition-colors duration-300 ${{scrolled ? \'{light_cls}\' : \'{dark_cls}\'}}`}}'
+        scroll_state  = "\n  const [scrolled, setScrolled] = useState(false);"
+        scroll_effect = """
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 60);
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+"""
+        extra_import = ", useEffect"
+    else:
+        outer_cls = _OUTER_CLS_MAP.get(surface, _OUTER_CLS_MAP["light_blur"])
+        header_cls_attr = f'"{outer_cls}"'
+        scroll_state  = ""
+        scroll_effect = ""
+        extra_import  = ""
+
+    # ── structure: logo_left_hamburger ────────────────────────
+    if structure == "logo_left_hamburger":
+        cta_overlay = _spec_cta_jsx(cta_style, cta_text_jsx, cta_href_attr, "mt-8 h-12 px-8 text-base")
+        return f"""'use client';
+
+import Link from 'next/link';
+import {{ useState, useEffect }} from 'react';
+import {{ {lucide_imports} }} from 'lucide-react';
+
+const navLinks = [
+  {nav_array}
+];
+
+export default function MarketingHeader() {{
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {{
+    if (open) {{
+      document.body.style.overflow = 'hidden';
+      return () => {{ document.body.style.overflow = ''; }};
+    }}
+  }}, [open]);
+
+  return (
+    <>
+      {accent}<header className={header_cls_attr}>
+        <div className="mx-auto flex {height_cls} max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+          {brand}
+          <button
+            type="button"
+            onClick={{() => setOpen(true)}}
+            className="inline-flex items-center gap-2 rounded-full border border-border bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+            aria-label="Open menu"
+            aria-expanded={{open}}
+          >
+            <span className="hidden sm:inline">Menu</span>
+            <Menu className="h-4 w-4" />
+          </button>
+        </div>
+      </header>
+
+      {{open && (
+        <div className="fixed inset-0 z-[60] flex flex-col bg-background" role="dialog" aria-modal="true" aria-label="Site navigation">
+          <div className="mx-auto flex h-16 w-full max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+            {brand}
+            <button type="button" onClick={{() => setOpen(false)}} className="inline-flex h-10 w-10 items-center justify-center rounded-full text-foreground hover:bg-muted" aria-label="Close menu">
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+          <nav className="flex flex-1 flex-col items-center justify-center gap-6 px-6 pb-24" aria-label="Primary">
+            {{navLinks.map((link, i) => (
+              <Link
+                key={{link.href}}
+                href={{link.href}}
+                onClick={{() => setOpen(false)}}
+                className="text-4xl font-semibold tracking-tight text-foreground/85 transition-colors hover:text-foreground sm:text-5xl"
+                style={{{{ animation: `fadeUp 0.5s ease-out ${{i * 60}}ms both` }}}}
+              >
+                {{link.label}}
+              </Link>
+            ))}}
+            {cta_overlay}
+          </nav>
+          <style>{{`
+            @keyframes fadeUp {{ from {{ opacity: 0; transform: translateY(12px); }} to {{ opacity: 1; transform: translateY(0); }} }}
+          `}}</style>
+        </div>
+      )}}
+    </>
+  );
+}}
+"""
+
+    # ── structure: floating_pill ──────────────────────────────
+    if structure == "floating_pill":
+        return f"""'use client';
+
+import Link from 'next/link';
+import {{ useState }} from 'react';
+import {{ {lucide_imports} }} from 'lucide-react';
+
+const navLinks = [
+  {nav_array}
+];
+
+export default function MarketingHeader() {{
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  return (
+    <header className="sticky top-4 z-50 w-full px-4">
+      {accent}<div className="mx-auto flex {height_cls} w-full max-w-4xl items-center justify-between rounded-full border border-border bg-background/85 px-3 pl-6 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-background/65">
+        {brand}
+        <nav className="hidden items-center gap-7 md:flex" aria-label="Primary">
+          {nav_map}
+        </nav>
+        <div className="hidden md:block">{desktop_cta}</div>
+        <button
+          type="button"
+          onClick={{() => setMobileOpen(!mobileOpen)}}
+          className="inline-flex h-10 w-10 items-center justify-center rounded-full text-foreground md:hidden"
+          aria-label={{mobileOpen ? 'Close menu' : 'Open menu'}}
+          aria-expanded={{mobileOpen}}
+        >
+          {{mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}}
+        </button>
+      </div>
+      {mobile_nav}
+    </header>
+  );
+}}
+"""
+
+    # ── structure: centered_logo ──────────────────────────────
+    if structure == "centered_logo":
+        # Centered layout always uses uppercase small-caps nav (editorial feel)
+        cnav_cls = (
+            "text-xs font-medium uppercase tracking-[0.18em] text-background/70 transition-colors hover:text-background"
+            if is_inv else
+            "text-xs font-medium uppercase tracking-[0.18em] text-foreground/70 transition-colors hover:text-foreground"
+        )
+        return f"""'use client';
+
+import Link from 'next/link';
+import {{ useState{extra_import} }} from 'react';
+import {{ {lucide_imports} }} from 'lucide-react';
+
+const navLinks = [
+  {nav_array}
+];
+
+export default function MarketingHeader() {{
+  const [mobileOpen, setMobileOpen] = useState(false);{scroll_state}{scroll_effect}
+  return (
+    <>
+      {accent}<header className={header_cls_attr}>
+        <div className="mx-auto grid {height_cls} max-w-7xl grid-cols-[1fr_auto_1fr] items-center gap-6 px-4 sm:px-6 lg:px-8">
+          <nav className="hidden items-center justify-end gap-8 md:flex" aria-label="Primary left">
+            {{navLinks.slice(0, Math.ceil(navLinks.length / 2)).map((link) => (
+              <Link key={{link.href}} href={{link.href}} className="{cnav_cls}">{{link.label}}</Link>
+            ))}}
+          </nav>
+          <div className="flex justify-center">{brand}</div>
+          <div className="hidden items-center justify-start gap-8 md:flex">
+            <nav className="flex items-center gap-8" aria-label="Primary right">
+              {{navLinks.slice(Math.ceil(navLinks.length / 2)).map((link) => (
+                <Link key={{link.href}} href={{link.href}} className="{cnav_cls}">{{link.label}}</Link>
+              ))}}
+            </nav>
+            {desktop_cta}
+          </div>
+          <div className="md:hidden col-start-3 justify-self-end">
+            <button type="button" onClick={{() => setMobileOpen(!mobileOpen)}} className="inline-flex h-10 w-10 items-center justify-center rounded-md" aria-label={{mobileOpen ? 'Close menu' : 'Open menu'}} aria-expanded={{mobileOpen}}>
+              {{mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}}
+            </button>
+          </div>
+        </div>
+      </header>
+      {mobile_nav}
+    </>
+  );
+}}
+"""
+
+    # ── structure: two_row ────────────────────────────────────
+    if structure == "two_row":
+        row_nav_cls = (_NAV_CLS_INV_MAP if is_inv else _NAV_CLS_MAP).get(nav_style, _NAV_CLS_MAP["plain"])
+        return f"""'use client';
+
+import Link from 'next/link';
+import {{ useState{extra_import} }} from 'react';
+import {{ {lucide_imports} }} from 'lucide-react';
+
+const navLinks = [
+  {nav_array}
+];
+
+export default function MarketingHeader() {{
+  const [mobileOpen, setMobileOpen] = useState(false);{scroll_state}{scroll_effect}
+  return (
+    <>
+      {accent}<header className={header_cls_attr}>
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="flex h-14 items-center justify-between">
+            {brand}
+            <div className="hidden md:block">{desktop_cta}</div>
+            <button type="button" onClick={{() => setMobileOpen(!mobileOpen)}} className="inline-flex h-9 w-9 items-center justify-center rounded-md text-foreground md:hidden" aria-label={{mobileOpen ? 'Close' : 'Menu'}} aria-expanded={{mobileOpen}}>
+              {{mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}}
+            </button>
+          </div>
+          <nav className="hidden items-center gap-8 border-t border-border/40 py-2.5 md:flex" aria-label="Primary">
+            {{navLinks.map((link) => (
+              <Link key={{link.href}} href={{link.href}} className="{row_nav_cls}">{{link.label}}</Link>
+            ))}}
+          </nav>
+        </div>
+      </header>
+      {mobile_nav}
+    </>
+  );
+}}
+"""
+
+    # ── default: logo_left_nav_right ──────────────────────────
+    return f"""'use client';
+
+import Link from 'next/link';
+import {{ useState{extra_import} }} from 'react';
+import {{ {lucide_imports} }} from 'lucide-react';
+
+const navLinks = [
+  {nav_array}
+];
+
+export default function MarketingHeader() {{
+  const [mobileOpen, setMobileOpen] = useState(false);{scroll_state}{scroll_effect}
+  return (
+    <>
+      {accent}<header className={header_cls_attr}>
+        <div className="mx-auto flex {height_cls} max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+          {brand}
+          <nav className="hidden items-center gap-8 md:flex" aria-label="Primary">
+            {nav_map}
+          </nav>
+          <div className="hidden md:flex md:items-center md:gap-3">
+            {desktop_cta}
+          </div>
+          <button
+            type="button"
+            onClick={{() => setMobileOpen(!mobileOpen)}}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-md md:hidden"
+            aria-label={{mobileOpen ? 'Close menu' : 'Open menu'}}
+            aria-expanded={{mobileOpen}}
+          >
+            {{mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}}
+          </button>
+        </div>
+      </header>
+      {mobile_nav}
+    </>
+  );
+}}
+"""
 
 
 # ───────────────────────────────────────────────────────────────
@@ -1020,15 +1710,14 @@ def build_marketing_header_jsx(
     domain: str,
     archetype: str,
     design: dict | None = None,
+    header_spec: dict | None = None,
 ) -> tuple[str, str]:
     """Return ``(jsx_source, variant_name)`` for the project's header.
 
-    Pure function. Caller handles the file write. ``variant_name`` is
-    returned so the caller can log + surface the choice in the plan / progress.
-
-    ``design`` is the Design Director's full output dict — the variant is
-    chosen from its ``brand_mark.placement``, ``image_composition``,
-    ``hero_archetype`` and ``spacing.rhythm`` fields. No hash, no random.
+    When ``header_spec`` is provided (parsed from ===HEADER_DESIGN=== in Gemini
+    research), the compositional renderer is used and the returned variant_name
+    is ``"spec:<structure>/<surface>"``. Otherwise falls back to
+    ``pick_header_variant()`` and the preset renderers.
     """
     brand_mark = brand_mark or {}
     navigation = navigation or []
@@ -1039,12 +1728,27 @@ def build_marketing_header_jsx(
     nav_array = _nav_array_literal(nav_items)
 
     treatment = (brand_mark.get("treatment") or "wordmark").lower()
-    variant = pick_header_variant(archetype, design)
-    lucide = _lucide_imports(treatment, variant)
+    lucide = _lucide_imports(treatment, "spec" if header_spec else "solid_bordered")
 
     cta_text_jsx = json.dumps(cta_text)
     cta_href_attr = json.dumps(cta_href)
 
+    if header_spec:
+        try:
+            jsx = render_from_spec(
+                spec=header_spec,
+                brand_block=brand_block,
+                nav_array=nav_array,
+                cta_text_jsx=cta_text_jsx,
+                cta_href_attr=cta_href_attr,
+                lucide_imports=lucide,
+            )
+            variant_name = f"spec:{header_spec.get('structure', '?')}/{header_spec.get('surface', '?')}"
+            return jsx, variant_name
+        except Exception as _spec_exc:
+            logger.warning("render_from_spec failed (%s), falling back to preset", _spec_exc)
+
+    variant = pick_header_variant(archetype, design)
     renderer = _VARIANT_RENDERERS.get(variant, _render_solid_bordered)
     jsx = renderer(
         brand_block=brand_block,
