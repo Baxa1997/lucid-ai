@@ -32,7 +32,15 @@ logger = logging.getLogger("lucid.project_generator")
 #   Future result: {"confirmed": True} or {"confirmed": False, "correction": "..."}
 pending_plan_confirmations: dict[str, asyncio.Future] = {}
 
-PLAN_CONFIRM_TIMEOUT_SECONDS = 300  # 5 minutes — abort if user doesn't confirm
+PLAN_CONFIRM_TIMEOUT_SECONDS = 1800  # 30 minutes — abort if user doesn't confirm
+
+# ── Persisted plan store ─────────────────────────────────────
+# Keyed by chat_session_id, holds the most recent emitted plan envelope so
+# the ws.py reconnect path can re-emit it when the user's tab refreshes
+# during the confirmation gate. Cleared on confirm/reject/timeout. Lost on
+# ai_engine restart — acceptable since (a) restarts are rare and (b) the
+# research cache makes a re-send fast.
+_persisted_plans: dict[str, dict] = {}
 
 
 def _confirmation_key(websocket, chat_session_id: str = "") -> str:
@@ -53,6 +61,32 @@ def resolve_plan_confirmation(key: str, result: dict):
     fut = pending_plan_confirmations.pop(key, None)
     if fut and not fut.done():
         fut.set_result(result)
+
+
+def save_persisted_plan(chat_session_id: str, plan_data: dict, task: str = "") -> None:
+    """Stash a plan so ws.py can re-emit it on reconnect."""
+    if not chat_session_id:
+        return
+    import time as _t
+    _persisted_plans[chat_session_id] = {
+        "plan_data": plan_data,
+        "task": task,
+        "saved_at": _t.time(),
+    }
+
+
+def get_persisted_plan(chat_session_id: str) -> Optional[dict]:
+    """Return the persisted plan envelope for a chat session, or None."""
+    if not chat_session_id:
+        return None
+    return _persisted_plans.get(chat_session_id)
+
+
+def clear_persisted_plan(chat_session_id: str) -> None:
+    """Drop the persisted plan once it's been confirmed / rejected / timed out."""
+    if not chat_session_id:
+        return
+    _persisted_plans.pop(chat_session_id, None)
 
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -6413,6 +6447,9 @@ async def _generate_new_project_inner(
                 "planData": _plan_data,
             })
             _plan_emitted_ok = True
+            # Stash so ws.py can re-emit on reconnect — survives the 30-min
+            # confirmation window even if the user's tab refreshes mid-wait.
+            save_persisted_plan(chat_session_id, _plan_data, task=description)
         except Exception as _emit_err:
             logger.warning("Plan emission failed: %s", _emit_err)
 
@@ -6449,24 +6486,28 @@ async def _generate_new_project_inner(
                     await _ws_send(websocket, "progress", f"🔄 Re-researching: {_correction[:60]}...")
                     logger.info("Plan rejected — re-researching with correction: %s", _correction[:100])
                     websocket._plan_correction = _correction
+                    clear_persisted_plan(chat_session_id)
                     return False
                 # Reject without correction → abort cleanly
                 logger.info("Plan rejected without correction — aborting generation")
                 await _ws_send(websocket, "warning", "❌ Plan rejected — generation aborted.")
+                clear_persisted_plan(chat_session_id)
                 return False
             logger.info("Plan confirmed by user — proceeding to code generation")
             await _ws_send(websocket, "progress", "✅ Plan confirmed — starting code generation...")
+            clear_persisted_plan(chat_session_id)
         except asyncio.TimeoutError:
             logger.info(
                 "Plan confirmation timed out after %ds — aborting (user did not confirm)",
                 PLAN_CONFIRM_TIMEOUT_SECONDS,
             )
             pending_plan_confirmations.pop(_gate_key, None)
+            clear_persisted_plan(chat_session_id)
             try:
                 await _ws_send(
                     websocket, "warning",
-                    "⏱️ Plan expired — generation was not started. "
-                    "Send your message again to get a new plan.",
+                    "⏱️ Plan expired after 30 minutes — send your message again to "
+                    "rebuild the plan (research is cached, so it will be quick).",
                 )
             except Exception:
                 pass
@@ -6479,6 +6520,7 @@ async def _generate_new_project_inner(
                 "Plan confirmation aborted due to error: %s", _conf_err, exc_info=True,
             )
             pending_plan_confirmations.pop(_gate_key, None)
+            clear_persisted_plan(chat_session_id)
             try:
                 await _ws_send(
                     websocket, "warning",

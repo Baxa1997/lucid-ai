@@ -435,6 +435,32 @@ async def websocket_agent(websocket: WebSocket):
                     )
             except Exception as pv_err:
                 logger.warning("Failed to re-emit preview_ready on reconnect: %s", pv_err)
+
+            # ── Re-emit pending plan on reconnect ─────────────────────
+            # If the user disconnected during the plan-confirmation gate,
+            # the pipeline is still waiting on the future and the frontend
+            # has lost the plan card. Re-send it so they can confirm
+            # without re-typing the task.
+            try:
+                from app.services.project_generator import get_persisted_plan
+                _pending = get_persisted_plan(chat_session_id or "")
+                if _pending and _pending.get("plan_data"):
+                    await websocket.send_json({
+                        "type": "chat_message",
+                        "role": "agent",
+                        "messageType": "plan",
+                        "planData": _pending["plan_data"],
+                    })
+                    await websocket.send_json({
+                        "type": "plan_awaiting_confirmation",
+                        "message": "Welcome back — your plan is still waiting. Click 'Looks Good' to start.",
+                    })
+                    logger.info(
+                        "Re-emitted pending plan on reconnect for chat %s",
+                        chat_session_id,
+                    )
+            except Exception as plan_err:
+                logger.warning("Failed to re-emit pending plan on reconnect: %s", plan_err)
         else:
             # ── Create new session (no clone — workspace_manager handles it) ──
             try:
