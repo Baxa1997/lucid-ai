@@ -48,6 +48,23 @@ from app.services.agent_orchestrator import (
 router = APIRouter()
 
 
+def _is_jwt_expired_error(exc: Exception) -> bool:
+    """True if a Supabase / DB exception was caused by an expired JWT.
+
+    Supabase Python client raises with PostgREST error code ``PGRST303`` and
+    message containing ``JWT expired``. The python-jose library raises
+    ``ExpiredSignatureError`` whose message contains ``Signature has expired``.
+    Any of these means we should close the WS with code 4010 and let the
+    frontend prompt re-auth instead of degrading silently.
+    """
+    msg = str(exc).lower()
+    return (
+        "jwt expired" in msg
+        or "pgrst303" in msg
+        or "signature has expired" in msg
+    )
+
+
 async def _validate_git_pat(token: str, repo_url: str) -> tuple[bool, str]:
     """Validate a git provider PAT against the relevant API (single call).
 
@@ -111,8 +128,11 @@ async def websocket_agent(websocket: WebSocket):
 
     # Authenticate from query param (if present)
     ws_user: Optional[AuthenticatedUser] = await authenticate_websocket(websocket)
-    if ws_user is None and websocket.client_state.name == "DISCONNECTED":
-        return  # closed by authenticate_websocket due to invalid token
+    if ws_user is None and (
+        websocket.application_state.name == "DISCONNECTED"
+        or websocket.client_state.name == "DISCONNECTED"
+    ):
+        return  # closed by authenticate_websocket (e.g. expired/invalid JWT)
 
     session: Optional[AgentSession] = None
     streaming_task: Optional[asyncio.Task] = None
@@ -208,6 +228,18 @@ async def websocket_agent(websocket: WebSocket):
                     # Always read package manager preference
                     user_package_manager = res.data.get("package_manager") or "npm"
         except Exception as db_err:
+            # JWT-expired safety net — even though decode_jwt now raises on
+            # expiry at the handshake, a token that expires AFTER handshake
+            # but BEFORE the first DB call still slips through. Surface it
+            # so the frontend can prompt re-auth instead of degrading silently
+            # to "Workspace ready" with no project data.
+            if _is_jwt_expired_error(db_err):
+                logger.info("[%s] JWT expired during user-settings fetch — closing WS for re-auth", user_id)
+                try:
+                    await websocket.close(code=4010, reason="Authentication expired")
+                except Exception:
+                    pass
+                return
             logger.warning("Failed to fetch user settings from Supabase: %s", db_err)
 
         if not model_provider:
@@ -638,6 +670,13 @@ async def websocket_agent(websocket: WebSocket):
                         bool(platform_repo_url),
                     )
             except Exception as _prev_err:
+                if _is_jwt_expired_error(_prev_err):
+                    logger.info("[%s] JWT expired during previous-session lookup — closing WS for re-auth", user_id)
+                    try:
+                        await websocket.close(code=4010, reason="Authentication expired")
+                    except Exception:
+                        pass
+                    return
                 logger.warning("Failed to load previous session for project %s: %s", project_id, _prev_err)
 
         if not existing:
@@ -730,12 +769,26 @@ async def websocket_agent(websocket: WebSocket):
                     session, websocket, WorkspaceState.READY,
                     "Project loaded. Ask me to make changes.",
                 )
-                await websocket.send_json({
-                    "type": "status",
-                    "status": "ready",
-                    "sessionId": session.session_id,
-                    "message": "Project loaded. Ask me to make changes.",
-                })
+                # Wrap raw send — the WS can disconnect between the two awaits
+                # (browser hard-refresh races the workspace-setup awaits). Without
+                # this guard, an in-flight close turns the entire session into
+                # an "internal error" exception that aborts the auto-launch.
+                try:
+                    await websocket.send_json({
+                        "type": "status",
+                        "status": "ready",
+                        "sessionId": session.session_id,
+                        "message": "Project loaded. Ask me to make changes.",
+                    })
+                except Exception as _ready_send_err:
+                    logger.info(
+                        "[%s] ready-status send failed (client likely "
+                        "disconnected mid-setup): %s",
+                        session.session_id, _ready_send_err,
+                    )
+                    # Stop here — no point launching the bg_preview task on a
+                    # dead WS (it'll just emit into the void).
+                    return
 
                 # ── Start local dev server in background for returning projects ──
                 # Clone the platform repo (or user's repo as fallback) into a
@@ -813,8 +866,19 @@ async def websocket_agent(websocket: WebSocket):
                             # Same path across reconnects — avoids re-clone + re-install
                             # every time the user returns to the workspace page.
                             # (_tmp already computed above)
+                            # Cache check must mirror local_preview's strict criterion
+                            # (look for the framework binary), not "any files in node_modules".
+                            # A loose check false-positives on PARTIAL installs left over
+                            # from a prior timeout — bg_preview then says "cache hit", skips
+                            # install, hands off to local_preview which independently re-checks,
+                            # decides node_modules is incomplete, and runs ANOTHER install
+                            # (now during dev-server startup, when the user is waiting).
                             _nm = os.path.join(_tmp, "node_modules")
-                            _already_installed = os.path.isdir(_nm) and any(os.scandir(_nm))
+                            _next_bin = os.path.join(_nm, ".bin", "next")
+                            _vite_bin = os.path.join(_nm, ".bin", "vite")
+                            _already_installed = os.path.isdir(_nm) and (
+                                os.path.isfile(_next_bin) or os.path.isfile(_vite_bin)
+                            )
 
                             if _already_installed:
                                 # node_modules already present — skip clone + install entirely.
@@ -829,15 +893,40 @@ async def websocket_agent(websocket: WebSocket):
                                                            "status": "cloning",
                                                            "message": "Cloning repository for preview…"})
 
-                                # Clean stale partial-clone directory so git doesn't
-                                # refuse to clone into a non-empty target.
-                                if os.path.isdir(_tmp) and os.listdir(_tmp):
-                                    import shutil as _shutil
+                                # Preserve node_modules across the re-clone so the
+                                # follow-up `pnpm install --prefer-offline` validates
+                                # an existing tree (~30s) instead of rebuilding it from
+                                # scratch (~8 min). Skipped if no node_modules existed.
+                                _preserved_nm: Optional[str] = None
+                                import time as _time, threading as _threading, shutil as _shutil
+                                if os.path.isdir(_nm):
                                     try:
-                                        _shutil.rmtree(_tmp)
-                                        logger.info("bg_preview: cleared stale directory %s before re-clone", _tmp)
+                                        _preserved_nm = f"{_tmp}.nm-{int(_time.time() * 1000)}"
+                                        os.rename(_nm, _preserved_nm)
+                                        logger.info("bg_preview: preserved node_modules → %s", _preserved_nm)
+                                    except Exception as _pres_err:
+                                        logger.warning("bg_preview: could not preserve node_modules: %s", _pres_err)
+                                        _preserved_nm = None
+
+                                # Clean stale partial-clone directory so git doesn't
+                                # refuse to clone into a non-empty target. Use atomic
+                                # rename + async rmtree — `shutil.rmtree` on a half-
+                                # populated node_modules can take a minute and, if
+                                # interrupted, leaves a dir that breaks the next clone
+                                # ("destination path already exists and is not empty").
+                                # The rename is O(1); cleanup happens in a daemon thread.
+                                # Orphan `.trash-*` dirs are swept on engine startup.
+                                if os.path.isdir(_tmp) and os.listdir(_tmp):
+                                    try:
+                                        _trash = f"{_tmp}.trash-{int(_time.time() * 1000)}"
+                                        os.rename(_tmp, _trash)
+                                        _threading.Thread(
+                                            target=lambda p=_trash: _shutil.rmtree(p, ignore_errors=True),
+                                            daemon=True,
+                                        ).start()
+                                        logger.info("bg_preview: moved stale dir %s → %s (async cleanup)", _tmp, _trash)
                                     except Exception as _rm_err:
-                                        logger.warning("bg_preview: could not clear stale dir %s: %s", _tmp, _rm_err)
+                                        logger.warning("bg_preview: could not move stale dir %s: %s", _tmp, _rm_err)
 
                                 os.makedirs(_tmp, exist_ok=True)
                                 # Token priority matters:
@@ -885,10 +974,37 @@ async def websocket_agent(websocket: WebSocket):
                                 if _clone_r.returncode != 0:
                                     _clone_err = (_clone_r.stderr or b"").decode()[:200]
                                     logger.warning("bg_preview: clone failed for %s: %s", _repo_to_clone, _clone_err)
+                                    # Preserved node_modules is now orphaned — schedule
+                                    # async cleanup so it doesn't leak.
+                                    if _preserved_nm and os.path.isdir(_preserved_nm):
+                                        _threading.Thread(
+                                            target=lambda p=_preserved_nm: _shutil.rmtree(p, ignore_errors=True),
+                                            daemon=True,
+                                        ).start()
                                     await websocket.send_json({"type": "preview_error",
                                                                "error_stage": "clone",
                                                                "message": f"Could not clone repository: {_clone_err or 'check token/URL'}"})
                                     return
+
+                                # Restore preserved node_modules into the freshly
+                                # cloned workspace. The follow-up `pnpm install
+                                # --prefer-offline` will validate the tree against
+                                # the new lockfile and patch any drift — much faster
+                                # than installing from scratch.
+                                if _preserved_nm and os.path.isdir(_preserved_nm):
+                                    try:
+                                        if not os.path.exists(_nm):
+                                            os.rename(_preserved_nm, _nm)
+                                            logger.info("bg_preview: restored node_modules from %s", _preserved_nm)
+                                        else:
+                                            # Shouldn't happen (clone wouldn't succeed
+                                            # into a dir with node_modules), but be safe.
+                                            _threading.Thread(
+                                                target=lambda p=_preserved_nm: _shutil.rmtree(p, ignore_errors=True),
+                                                daemon=True,
+                                            ).start()
+                                    except Exception as _rest_err:
+                                        logger.warning("bg_preview: could not restore node_modules: %s", _rest_err)
 
                             # Point session workspace to the preview dir so the
                             # /api/files/read endpoint can serve file content when
@@ -924,14 +1040,22 @@ async def websocket_agent(websocket: WebSocket):
                                             "npm_config_cache": "/tmp/npm_cache",
                                         }
                                         _install_cmd = _pm_install_bg(_bg_pm)
-                                        # Append --store-dir for pnpm so packages are cached globally
+                                        # Append --store-dir + --prefer-offline for pnpm so packages
+                                        # are cached globally and repeat installs hit the cache.
                                         if _bg_pm == "pnpm":
-                                            _install_cmd = _install_cmd + ["--store-dir", "/tmp/pnpm_store"]
+                                            _install_cmd = _install_cmd + [
+                                                "--store-dir", "/tmp/pnpm_store",
+                                                "--prefer-offline",
+                                            ]
+                                        elif _bg_pm == "npm":
+                                            _install_cmd = _install_cmd + ["--prefer-offline"]
+                                        # 10-min cap (was 300s). Cold installs of Next.js + Tailwind +
+                                        # shadcn routinely take 4-6 min on a fresh workspace.
                                         _bg_install = await asyncio.to_thread(
                                             _sp.run,
                                             _install_cmd,
                                             cwd=_tmp, capture_output=True, text=True,
-                                            timeout=300, env=_install_env,
+                                            timeout=600, env=_install_env,
                                         )
                                         if _bg_install.returncode != 0:
                                             logger.warning("bg_preview: %s install failed: %s", _bg_pm, (_bg_install.stderr or "")[:200])

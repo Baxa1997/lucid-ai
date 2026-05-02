@@ -114,6 +114,47 @@ export async function POST(req, { params }) {
     );
   }
 
+  // ── Sync the live workspace into staging FIRST ──────────────────────────
+  // Without this step, "publish" only fast-forwards main → staging SHA, so any
+  // edits in the live preview workspace (e.g. our next.config.mjs assetPrefix
+  // hot-fix, or anything the user changed via the chat agent without
+  // committing) never reach Vercel. We call the ai_engine sync-workspace
+  // endpoint which runs `git add -A && git commit && git push origin staging`
+  // against the live workspace. Best-effort — if it fails (no workspace yet,
+  // nothing changed, network blip), the SHA promotion below still runs so
+  // the existing publish flow keeps working.
+  let syncResult = { changed: false, filesPushed: 0 };
+  try {
+    const syncRes = await fetch(
+      `${AI_SERVICE_URL}/api/v1/projects/${projectId}/sync-workspace`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${ctx.accessToken}`,
+        },
+        signal: AbortSignal.timeout(240000),
+      }
+    );
+    if (syncRes.ok) {
+      const syncData = await syncRes.json().catch(() => ({}));
+      syncResult = {
+        changed: !!syncData.changed,
+        filesPushed: syncData.filesPushed || 0,
+      };
+      if (syncResult.changed) {
+        console.log(`[publish] synced ${syncResult.filesPushed} workspace file(s) to staging`);
+      }
+    } else {
+      // 404 (no workspace yet) and similar are expected in some cases — don't
+      // surface as a publish failure, just log so the SHA promotion still runs.
+      const errTxt = await syncRes.text().catch(() => '');
+      console.warn(`[publish] sync-workspace skipped (${syncRes.status}): ${errTxt.slice(0, 200)}`);
+    }
+  } catch (syncErr) {
+    console.warn(`[publish] sync-workspace request failed (non-fatal): ${syncErr?.message || syncErr}`);
+  }
+
   // Parse owner/repo from html URL — e.g. "https://github.com/LucidSoftware-tech/foo-frontend"
   const match = session.platform_repo_url.match(/github\.com\/([^/]+)\/([^/]+)/);
   if (!match) {
@@ -279,7 +320,11 @@ export async function POST(req, { params }) {
       repoUrl: session.platform_repo_url,
       vercelUrl: resolvedVercelUrl,
       visibility,
-      message: 'Published! Your code is live on main. Vercel is building in the background — check back in a minute.',
+      synced: syncResult.changed,
+      filesPushed: syncResult.filesPushed,
+      message: syncResult.changed
+        ? `Published! ${syncResult.filesPushed} workspace file change${syncResult.filesPushed === 1 ? '' : 's'} pushed and Vercel is rebuilding — check back in a minute.`
+        : 'Published! Your code is live on main. Vercel is building in the background — check back in a minute.',
     });
   } catch (err) {
     console.error('[publish] error:', err);

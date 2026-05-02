@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from contextvars import ContextVar
 from typing import Optional
 
 import httpx
@@ -30,6 +31,17 @@ logger = logging.getLogger("lucid.ai_engine.billing")
 # Set explicitly via env when running outside Docker.
 _FRONTEND_URL = os.environ.get("LUCID_FRONTEND_URL", "http://frontend:3000")
 _INTERNAL_KEY = os.environ.get("INTERNAL_API_KEY", "")
+
+# Ambient user_id for the current generation. Set by the entry point
+# (e.g. generate_new_project) so deep call sites — Claude phase calls,
+# Gemini research — can report tokens without the caller needing to
+# plumb user_id through 14 layers of helpers.
+current_user_id: ContextVar[Optional[str]] = ContextVar("lucid_billing_user_id", default=None)
+
+
+def set_current_user_id(user_id: Optional[str]) -> None:
+    """Set the ambient user_id for billing reports inside this task tree."""
+    current_user_id.set(user_id or None)
 
 
 async def _post_usage(
@@ -83,7 +95,14 @@ def report_token_usage(
     source: str = "unknown",
 ) -> None:
     """Schedule a usage report. Returns immediately; the POST happens in the
-    background. Safe to call from any async context."""
+    background. Safe to call from any async context.
+
+    If ``user_id`` is None/empty, falls back to the ambient ``current_user_id``
+    contextvar — set once at the top of generate_new_project so deep helpers
+    don't need to thread user_id through the call stack.
+    """
+    if not user_id:
+        user_id = current_user_id.get()
     if not user_id or (input_tokens <= 0 and output_tokens <= 0):
         return
     try:

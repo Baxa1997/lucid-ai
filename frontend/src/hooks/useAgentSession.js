@@ -14,8 +14,13 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import manager from '@/lib/agentWSManager';
+import { getSupabaseBrowserClient } from '@/lib/supabase/client';
 
-const MAX_RECONNECTS = 3;
+const MAX_RECONNECTS = 8;
+// Exponential backoff in ms — 8 attempts spread over ~6 minutes covers
+// laptop sleep, browser tab throttling, transient network drops, and
+// short backend restarts without exhausting retries on the user.
+const RECONNECT_BACKOFF_MS = [2000, 5000, 10000, 20000, 30000, 60000, 60000, 60000];
 
 /**
  * useAgentSession — manages the full lifecycle of an AI agent session.
@@ -81,6 +86,15 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   const [previewTaskId, setPreviewTaskId] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewStatusMsg, setPreviewStatusMsg] = useState('');
+  // Raw stage from backend's preview_status events (cloning / installing /
+  // starting / health_check / install_done / restarting / etc.). Drives the
+  // stepper UI in RightPanel so the user sees "Step 2 of 4" instead of just
+  // a static "Setting up preview…" label.
+  const [previewStage, setPreviewStage] = useState('');
+  // Wall-clock timestamp of when preview loading started (first preview_status
+  // or auto-launch). Used to show elapsed time so the user can tell that
+  // something is actually progressing during a multi-minute install.
+  const [previewStartedAt, setPreviewStartedAt] = useState(null);
   // Latches true on the first `preview_ready` event. Lets the UI tell apart
   // "preview hasn't started yet" (show preparing) from "preview was running
   // and stopped" (show restart). Reset only by stopPreview.
@@ -157,6 +171,20 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   repoUrlRef.current = repoUrl;
   gitTokenRef.current = gitToken;
   branchRef.current = branch;
+
+  // Supabase auto-refreshes the access token in the background, but the
+  // `token` prop captured at hook mount goes stale on long sessions. Always
+  // ask the client for the latest session before reconnecting so a tab that
+  // sat idle past the 1h JWT TTL doesn't loop on AUTH_EXPIRED.
+  const getFreshToken = useCallback(async () => {
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const { data } = await supabase.auth.getSession();
+      return data?.session?.access_token || tokenRef.current;
+    } catch {
+      return tokenRef.current;
+    }
+  }, []);
 
   useEffect(() => { initialTaskRef.current = task; }, [task]);
 
@@ -352,6 +380,28 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
           // previewError is cleared by: preview_ready, manual retry, or stopPreview.
           setErrorCode(null);
           pushLog('Connected — preparing workspace…', 'system');
+        } else if (msg.event === 'visibility_resume') {
+          // Tab became visible after being backgrounded. agentWSManager
+          // already detected the WS is dead — reset the retry counter and
+          // trigger an immediate reconnect (no backoff — user is actively
+          // waiting). This fixes "I switched tabs and came back, no preview".
+          reconnectCount.current = 0;
+          setState('reconnecting');
+          pushLog('Tab resumed — reconnecting…', 'system');
+          if (manager && !manager.isOpen && !manager.isConnecting) {
+            getFreshToken().then((freshToken) => {
+              if (!manager.isOpen && !manager.isConnecting) {
+                manager.connect({
+                  token: freshToken,
+                  projectId: projectIdRef.current,
+                  repoUrl: repoUrlRef.current,
+                  gitToken: gitTokenRef.current,
+                  branch: branchRef.current,
+                  task: '',
+                });
+              }
+            });
+          }
         } else if (msg.event === 'error') {
           // ws.onerror is always followed by ws.onclose — the close handler
           // below owns the retry/fail logic so it sees the close code. We
@@ -373,21 +423,30 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
             // Page leaving — keep state as-is
           } else {
             if (reconnectCount.current < MAX_RECONNECTS) {
+              const attempt = reconnectCount.current; // 0-indexed for backoff lookup
+              const delay = RECONNECT_BACKOFF_MS[attempt] ?? 60000;
               reconnectCount.current += 1;
               setState('reconnecting');
-              pushLog(`Reconnecting (${reconnectCount.current}/${MAX_RECONNECTS})…`, 'system');
+              pushLog(
+                `Reconnecting (${reconnectCount.current}/${MAX_RECONNECTS}) in ${Math.round(delay / 1000)}s…`,
+                'system',
+              );
               setTimeout(() => {
                 if (manager && !manager.isOpen && !manager.isConnecting) {
-                  manager.connect({
-                    token: tokenRef.current,
-                    projectId: projectIdRef.current,
-                    repoUrl: repoUrlRef.current,
-                    gitToken: gitTokenRef.current,
-                    branch: branchRef.current,
-                    task: '',
+                  getFreshToken().then((freshToken) => {
+                    if (!manager.isOpen && !manager.isConnecting) {
+                      manager.connect({
+                        token: freshToken,
+                        projectId: projectIdRef.current,
+                        repoUrl: repoUrlRef.current,
+                        gitToken: gitTokenRef.current,
+                        branch: branchRef.current,
+                        task: '',
+                      });
+                    }
                   });
                 }
-              }, 2000);
+              }, delay);
             } else {
               setState('error');
               setErrorCode('RECONNECT_FAILED');
@@ -736,6 +795,10 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       if (msg.type === 'preview_status') {
         setPreviewLoading(true);
         setPreviewStatusMsg(msg.message || msg.status || 'Setting up preview…');
+        if (msg.status) setPreviewStage(msg.status);
+        // Stamp the start time on the FIRST preview_status of a fresh load
+        // (don't reset it on subsequent stage updates — we want elapsed-since-start).
+        setPreviewStartedAt((prev) => prev || Date.now());
         pushLog(`[Preview] ${msg.message || msg.status || ''}`, 'system');
         return;
       }
@@ -750,6 +813,8 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         setPreviewError(null);
         setPreviewLoading(false);
         setPreviewStatusMsg('');
+        setPreviewStage('');
+        setPreviewStartedAt(null);
         setPreviewEverReady(true);
         pushLog(`[Preview] ${msg.message || 'Preview ready'}`, 'system');
         return;
@@ -1049,13 +1114,15 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       setError(null);
       pushLog('Connecting to AI Engine…', 'system');
 
-      manager.connect({
-        token: tokenRef.current,
-        projectId: projectIdRef.current,
-        repoUrl: repoUrlRef.current,
-        gitToken: gitTokenRef.current,
-        branch: branchRef.current,
-        task: taskToSend || '',
+      getFreshToken().then((freshToken) => {
+        manager.connect({
+          token: freshToken,
+          projectId: projectIdRef.current,
+          repoUrl: repoUrlRef.current,
+          gitToken: gitTokenRef.current,
+          branch: branchRef.current,
+          task: taskToSend || '',
+        });
       });
 
       if (taskToSend) {
@@ -1288,13 +1355,15 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       if (manager) {
         manager.close(1000, 'User retry');
         setTimeout(() => {
-          manager.connect({
-            token: tokenRef.current,
-            projectId: projectIdRef.current,
-            repoUrl: repoUrlRef.current,
-            gitToken: gitTokenRef.current,
-            branch: branchRef.current,
-            task: '',
+          getFreshToken().then((freshToken) => {
+            manager.connect({
+              token: freshToken,
+              projectId: projectIdRef.current,
+              repoUrl: repoUrlRef.current,
+              gitToken: gitTokenRef.current,
+              branch: branchRef.current,
+              task: '',
+            });
           });
         }, 500);
       }
@@ -1418,6 +1487,8 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     previewTaskId,
     previewLoading,
     previewStatusMsg,
+    previewStage,
+    previewStartedAt,
     previewEverReady,
     clearPreview: () => { setPreviewUrl(null); setPreviewTaskId(null); setPreviewLoading(false); setPreviewStatusMsg(''); setPreviewEverReady(false); },
     stopPreview,
@@ -1455,13 +1526,17 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       if (!manager.isOpen && !manager.isConnecting) {
         pushLog('Connection lost — reconnecting before confirming plan...', 'system');
         reconnectCount.current = 0;
-        manager.connect({
-          token: tokenRef.current,
-          projectId: projectIdRef.current,
-          repoUrl: repoUrlRef.current,
-          gitToken: gitTokenRef.current,
-          branch: branchRef.current,
-          task: '',
+        getFreshToken().then((freshToken) => {
+          if (!manager.isOpen && !manager.isConnecting) {
+            manager.connect({
+              token: freshToken,
+              projectId: projectIdRef.current,
+              repoUrl: repoUrlRef.current,
+              gitToken: gitTokenRef.current,
+              branch: branchRef.current,
+              task: '',
+            });
+          }
         });
       }
       const sent = manager.send({ type: 'plan_confirm' });
@@ -1479,13 +1554,17 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       if (!manager.isOpen && !manager.isConnecting) {
         pushLog('Connection lost — reconnecting before rejecting plan...', 'system');
         reconnectCount.current = 0;
-        manager.connect({
-          token: tokenRef.current,
-          projectId: projectIdRef.current,
-          repoUrl: repoUrlRef.current,
-          gitToken: gitTokenRef.current,
-          branch: branchRef.current,
-          task: '',
+        getFreshToken().then((freshToken) => {
+          if (!manager.isOpen && !manager.isConnecting) {
+            manager.connect({
+              token: freshToken,
+              projectId: projectIdRef.current,
+              repoUrl: repoUrlRef.current,
+              gitToken: gitTokenRef.current,
+              branch: branchRef.current,
+              task: '',
+            });
+          }
         });
       }
       const sent = manager.send({ type: 'plan_reject', correction });

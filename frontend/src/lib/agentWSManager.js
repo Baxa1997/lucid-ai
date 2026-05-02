@@ -57,6 +57,30 @@ class AgentWSManager {
       window.addEventListener('beforeunload', () => {
         this.close(4100, 'Page leaving');
       });
+
+      // Tab-visibility healing — when the user comes back to the workspace
+      // tab after backgrounding it (switched browsers, slept laptop, etc.),
+      // verify the WS is alive. If it's dead, fire `_internal: visibility_resume`
+      // so useAgentSession can reset its retry counter and trigger a fresh
+      // connect. Without this, a backgrounded tab that lost its WS while
+      // hidden is stuck — the manager never knows to reconnect, so the
+      // user sees a frozen UI with no preview/chat updates.
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'visible') return;
+        // Tab is now visible. Two interesting cases:
+        //   1. WS already OPEN — the backend's existing connection is fine,
+        //      just nudge with a ping so any zombie TCP state surfaces.
+        //   2. WS dead/closing — emit visibility_resume so useAgentSession
+        //      reconnects with a fresh counter (the existing reconnect
+        //      logic uses the same WS event loop, so this just kicks it).
+        if (this.isOpen) {
+          try { this.ws.send(JSON.stringify({ type: 'ping' })); } catch (_) {}
+          return;
+        }
+        if (!this._connecting) {
+          this._emit({ type: '_internal', event: 'visibility_resume' });
+        }
+      });
     }
   }
 

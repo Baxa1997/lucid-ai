@@ -675,6 +675,14 @@ async def run_pipeline(
             # appears stuck on "researching". Use the proxy when available.
             _ws_target = (session.ws_proxy if session and session.ws_proxy is not None else websocket)
 
+            # Resolve user_id once for billing — Claude phase calls and Gemini
+            # research inside generate_new_project read it from a contextvar.
+            _user_id_for_billing = (
+                (session.user_id if session else None)
+                or (user.get("user_id") if isinstance(user, dict) else None)
+                or ""
+            )
+
             success = await generate_new_project(
                 description=task,
                 workspace_path=workspace_path,
@@ -682,6 +690,7 @@ async def run_pipeline(
                 websocket=_ws_target,
                 chat_session_id=chat_session_id,
                 user_jwt=user.get("user_jwt", ""),
+                user_id=_user_id_for_billing,
             )
 
             if not success:
@@ -702,6 +711,7 @@ async def run_pipeline(
                         websocket=_ws_target,
                         chat_session_id=chat_session_id,
                         user_jwt=user.get("user_jwt", ""),
+                        user_id=_user_id_for_billing,
                     )
                     if not success:
                         await _send_phase(5, "Writing code", "Generation failed", "error")

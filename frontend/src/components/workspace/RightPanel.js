@@ -281,6 +281,131 @@ function PlanReviewPanel({planData, onConfirm, onReject}) {
   );
 }
 
+// ── Preview "booting" panel ────────────────────────────────────────────────
+// Shown in the preview pane while the dev server is being prepared. Replaces
+// the previous static spinner+message with a real stepper, elapsed-time
+// counter, and per-stage time estimate so the user can tell something is
+// actually happening during a 2-5 minute install.
+const PREVIEW_STAGES = [
+  { id: "cloning",      label: "Cloning repo",          estimateSec: 15 },
+  { id: "installing",   label: "Installing deps",       estimateSec: 90 },
+  { id: "starting",     label: "Starting dev server",   estimateSec: 30 },
+  { id: "health_check", label: "Waiting for response",  estimateSec: 30 },
+];
+
+// Map the various raw `status` strings the backend emits to one of the four
+// canonical stage ids above. Anything unknown is treated as "starting".
+function _normalizeStage(raw) {
+  if (!raw) return "starting";
+  const s = String(raw).toLowerCase();
+  if (s.includes("clon"))                                 return "cloning";
+  if (s.includes("install_done"))                         return "starting";
+  if (s.includes("install"))                              return "installing";
+  if (s.includes("health"))                               return "health_check";
+  if (s.includes("restart"))                              return "starting";
+  if (s.includes("start"))                                return "starting";
+  return "starting";
+}
+
+function PreviewBootingPanel({
+  previewPhase,
+  previewStage,
+  previewStatusMsg,
+  previewStartedAt,
+  workspaceStatus,
+}) {
+  // 1-second tick so the elapsed counter updates live without re-mounting.
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!previewStartedAt) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [previewStartedAt]);
+
+  const currentStage = _normalizeStage(previewStage || workspaceStatus);
+  const currentIndex = Math.max(0, PREVIEW_STAGES.findIndex((s) => s.id === currentStage));
+  const elapsedSec = previewStartedAt
+    ? Math.floor((now - previewStartedAt) / 1000)
+    : 0;
+  const elapsedLabel = elapsedSec >= 60
+    ? `${Math.floor(elapsedSec / 60)}m ${String(elapsedSec % 60).padStart(2, "0")}s`
+    : `${elapsedSec}s`;
+
+  // Total estimate = sum of all stage estimates. Used to show "~X min total".
+  const totalEstimateSec = PREVIEW_STAGES.reduce((acc, s) => acc + s.estimateSec, 0);
+  const totalEstimateLabel = `${Math.ceil(totalEstimateSec / 60)} min`;
+
+  const fallbackMsg =
+    workspaceStatus === "connecting" ? "Connecting to the agent…" :
+    workspaceStatus === "cloning"    ? "Cloning the repository…" :
+    workspaceStatus === "installing" ? "Installing dependencies…" :
+    workspaceStatus === "starting"   ? "Starting the dev server…" :
+    workspaceStatus === "health_check" ? "Waiting for the dev server to come up…" :
+    workspaceStatus === "running"    ? "Generating your project — preview will start shortly." :
+    "Booting workspace — the preview will appear here as soon as the dev server is ready.";
+
+  return (
+    <div className="flex flex-col items-center justify-center h-full text-center p-8 bg-white dark:bg-[#0d1117]">
+      {/* Spinner badge */}
+      <div className="w-14 h-14 rounded-2xl bg-blue-50 dark:bg-blue-950/30 flex items-center justify-center mb-5">
+        <Loader2 className="w-7 h-7 text-blue-500 animate-spin" />
+      </div>
+
+      {/* Title + status message */}
+      <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-1">
+        {previewPhase === "booting" ? "Setting up preview" : "Preparing workspace"}
+      </h3>
+      <p className="text-[13px] text-slate-500 dark:text-slate-400 max-w-sm mb-6">
+        {previewStatusMsg || fallbackMsg}
+      </p>
+
+      {/* Stage stepper */}
+      <div className="w-full max-w-md mb-4">
+        <div className="flex items-center justify-between gap-2">
+          {PREVIEW_STAGES.map((stage, idx) => {
+            const done = idx < currentIndex;
+            const active = idx === currentIndex;
+            return (
+              <div key={stage.id} className="flex-1 flex flex-col items-center">
+                <div
+                  className={cn(
+                    "w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-semibold border-2 transition-colors",
+                    done && "bg-emerald-500 text-white border-emerald-500",
+                    active && "bg-blue-500 text-white border-blue-500",
+                    !done && !active && "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-700",
+                  )}
+                >
+                  {done ? "✓" : idx + 1}
+                </div>
+                <span
+                  className={cn(
+                    "mt-1.5 text-[11px] tracking-wide",
+                    active && "text-slate-800 dark:text-slate-200 font-semibold",
+                    !active && "text-slate-400 dark:text-slate-500",
+                  )}
+                >
+                  {stage.label}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Elapsed + estimate row */}
+      <div className="flex items-center gap-4 text-[12px] text-slate-500 dark:text-slate-400 mt-1">
+        <div className="flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+          <span>Elapsed: <span className="font-mono text-slate-700 dark:text-slate-300">{elapsedLabel}</span></span>
+        </div>
+        <div className="w-px h-3 bg-slate-200 dark:bg-slate-700" />
+        <div>Typical: <span className="font-mono">~{totalEstimateLabel}</span></div>
+      </div>
+    </div>
+  );
+}
+
+
 export default function RightPanel() {
   const {
     rightPanel,
@@ -304,6 +429,8 @@ export default function RightPanel() {
     previewError,
     previewLoading,
     previewStatusMsg,
+    previewStage,
+    previewStartedAt,
     previewEverReady,
     stopPreview,
     completionSummary,
@@ -817,24 +944,13 @@ export default function RightPanel() {
                 {/* "preparing" + "booting" share the same UI — the only difference
                      is the sub-text source. Single block, no flicker between them. */}
                 {!latchedPreviewUrl && (previewPhase === "preparing" || previewPhase === "booting") && (
-                  <div className="flex flex-col items-center justify-center h-full text-center p-8 bg-white dark:bg-[#0d1117]">
-                    <div className="w-16 h-16 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center mb-5">
-                      <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
-                    </div>
-                    <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-2">
-                      {previewPhase === "booting" ? "Setting up preview…" : "Preparing workspace…"}
-                    </h3>
-                    <p className="text-[14px] text-slate-500 dark:text-slate-400 max-w-sm">
-                      {previewStatusMsg
-                        || (status === "connecting" && "Connecting to the agent…")
-                        || (status === "cloning" && "Cloning the repository…")
-                        || (status === "installing" && "Installing dependencies…")
-                        || (status === "starting" && "Starting the dev server…")
-                        || (status === "health_check" && "Waiting for the dev server to come up…")
-                        || (status === "running" && "Generating your project — preview will start shortly.")
-                        || "Booting workspace — the preview will appear here as soon as the dev server is ready."}
-                    </p>
-                  </div>
+                  <PreviewBootingPanel
+                    previewPhase={previewPhase}
+                    previewStage={previewStage}
+                    previewStatusMsg={previewStatusMsg}
+                    previewStartedAt={previewStartedAt}
+                    workspaceStatus={status}
+                  />
                 )}
               </div>
 

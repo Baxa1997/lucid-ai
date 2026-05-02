@@ -622,7 +622,14 @@ async def _ensure_node_modules(workspace_path: str, websocket) -> None:
 
     pm = _detect_pm(workspace_path) or "pnpm"
     # Always try pnpm first (fastest), fall back to npm then yarn.
-    install_cmd = "pnpm install || npm install || yarn install"
+    # --prefer-offline + shared store lets repeat installs hit the cache and
+    # finish in seconds instead of minutes. The store dir matches bg_preview
+    # in ws.py so they share packages across all preview workspaces.
+    install_cmd = (
+        "pnpm install --prefer-offline --store-dir /tmp/pnpm_store "
+        "|| npm install --prefer-offline "
+        "|| yarn install"
+    )
 
     logger.info("local_preview: running [%s] in %s", install_cmd, workspace_path)
     await _emit(websocket, "preview_status", status="installing",
@@ -633,6 +640,8 @@ async def _ensure_node_modules(workspace_path: str, websocket) -> None:
             **os.environ,
             "PATH": f"{os.environ.get('PATH', _node_paths)}:{_node_paths}",
             "CI": "1",  # suppress interactive prompts
+            "PNPM_HOME": "/tmp/pnpm_global",
+            "npm_config_cache": "/tmp/npm_cache",
         }
         proc = await asyncio.create_subprocess_shell(
             install_cmd,
@@ -641,14 +650,22 @@ async def _ensure_node_modules(workspace_path: str, websocket) -> None:
             stderr=asyncio.subprocess.STDOUT,
             env=env,
         )
+        # 10-min cap (was 300s). Cold installs of Next.js + Tailwind + shadcn
+        # routinely take 4-6 min on a fresh container; 5-min was too tight and
+        # consistently produced the "next: not found" downstream failure.
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=300)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=600)
         except asyncio.TimeoutError:
             try:
                 proc.kill()
             except Exception:
                 pass
-            logger.error("local_preview: dependency install timed out after 300s")
+            logger.error("local_preview: dependency install timed out after 600s")
+            # Wipe the partially-installed node_modules so the next attempt
+            # starts from a clean slate. Without this, a half-installed dir
+            # poisons every subsequent cache check (looks "present" but is
+            # missing the framework binary).
+            _wipe_partial_node_modules(workspace_path)
             await _emit(websocket, "preview_status", status="install_timeout",
                         message="⚠️ Dependency install timed out — preview may be unstyled")
             return
@@ -656,6 +673,7 @@ async def _ensure_node_modules(workspace_path: str, websocket) -> None:
         if proc.returncode != 0:
             snippet = (stdout or b"").decode(errors="replace")[-400:]
             logger.error("local_preview: install failed (rc=%d): %s", proc.returncode, snippet)
+            _wipe_partial_node_modules(workspace_path)
             await _emit(websocket, "preview_status", status="install_failed",
                         message=f"⚠️ Dependency install failed — preview may be unstyled\n{snippet[:200]}")
         else:
@@ -664,10 +682,33 @@ async def _ensure_node_modules(workspace_path: str, websocket) -> None:
                         message="✅ Dependencies installed")
     except Exception as exc:
         logger.warning("local_preview: install error (non-fatal): %s", exc)
+        _wipe_partial_node_modules(workspace_path)
+
+
+def _wipe_partial_node_modules(workspace_path: str) -> None:
+    """Remove a partial node_modules so the next install starts clean.
+
+    Only fires when the framework binary (next/vite) is MISSING — never
+    delete a healthy install. Logs but does not raise; cleanup is best-effort.
+    """
+    nm = os.path.join(workspace_path, "node_modules")
+    if not os.path.isdir(nm):
+        return
+    next_bin = os.path.join(nm, ".bin", "next")
+    vite_bin = os.path.join(nm, ".bin", "vite")
+    if os.path.isfile(next_bin) or os.path.isfile(vite_bin):
+        # The binary is present — install is intact, don't touch it.
+        return
+    try:
+        import shutil as _shutil
+        _shutil.rmtree(nm, ignore_errors=True)
+        logger.info("local_preview: wiped partial node_modules at %s", nm)
+    except Exception as exc:
+        logger.debug("local_preview: node_modules wipe failed (ok): %s", exc)
 
 
 async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
-    """Inject basePath + assetPrefix into next.config.mjs before starting dev server.
+    """Inject env-driven assetPrefix into next.config.mjs before starting dev server.
 
     Without this, Next.js generates HTML with absolute asset URLs like:
         <script src="/_next/static/chunks/main.js">
@@ -675,15 +716,21 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
     When served through the nginx path-proxy at /preview-{port}/*, the browser
     requests /_next/... from the root domain — which hits FastAPI (404).
 
-    With basePath=/preview-{port}, Next.js prefixes every asset URL:
-        <script src="/preview-4004/_next/static/chunks/main.js">
-
-    These now match the nginx location ~ ^/preview-(\\d+) rule and are
-    correctly proxied to localhost:{port}.
+    PRODUCTION-SAFE FORM: we write
+        assetPrefix: process.env.NEXT_PUBLIC_ASSET_PREFIX || undefined,
+    instead of a literal "/preview-4000" string. The local preview spawn env
+    sets NEXT_PUBLIC_ASSET_PREFIX so dev gets the prefix, but when this same
+    file is pushed to GitHub and built on Vercel (env var unset), assetPrefix
+    becomes undefined and assets are served from the root — which is what
+    production needs. A literal would be SHIPPED to production and 404 every
+    CSS/JS file there ("preview works, vercel has no styles" symptom).
     """
     import re
 
-    base_path = f"/preview-{port}"
+    # Env-driven form — production-safe. Vercel doesn't set this env var, so
+    # `assetPrefix` evaluates to undefined and assets serve from root.
+    asset_prefix_expr = "process.env.NEXT_PUBLIC_ASSET_PREFIX || undefined"
+    asset_prefix_line = f"assetPrefix: {asset_prefix_expr},"
 
     for fname in ("next.config.mjs", "next.config.js", "next.config.ts"):
         config_path = os.path.join(workspace_path, fname)
@@ -695,24 +742,24 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
                 original_content = f.read()
             content = original_content
 
-            # New template reads NEXT_PUBLIC_ASSET_PREFIX from the environment —
-            # we already set it in the spawn env, so no file edit is needed.
-            # Skipping the write avoids a Next.js config-change restart on first load.
+            # Already env-driven? Nothing to do.
+            if asset_prefix_expr in content:
+                logger.debug("local_preview: %s already env-driven — skipping patch", fname)
+                return
+
+            # Legacy template that reads NEXT_PUBLIC_ASSET_PREFIX with `unoptimized` —
+            # also nothing to do (older check kept for safety).
             if "NEXT_PUBLIC_ASSET_PREFIX" in content and "unoptimized" in content:
                 logger.debug("local_preview: %s reads NEXT_PUBLIC_ASSET_PREFIX from env — skipping patch", fname)
                 return
 
-            # If correct assetPrefix already set AND no stale basePath — nothing to do.
-            if f'assetPrefix: "{base_path}"' in content and "basePath" not in content:
-                logger.debug("local_preview: %s already has assetPrefix=%s — skipping", fname, base_path)
-                return
-
-            # If a stale assetPrefix from a previous port exists (or correct
-            # assetPrefix but stale basePath from reverted code), clean it up.
+            # Found a literal assetPrefix (e.g. "/preview-4000" from old patcher
+            # OR an unrelated user-set value). Replace with the env-driven form so
+            # production builds don't ship the literal preview path.
             if "assetPrefix" in content:
                 content = re.sub(
-                    r"assetPrefix:\s*['\"][^'\"]*['\"]",
-                    f'assetPrefix: "{base_path}"',
+                    r"assetPrefix:\s*[^,\n}]+,?",
+                    f"{asset_prefix_line}",
                     content,
                     count=1,
                 )
@@ -724,7 +771,7 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
                 if content != original_content:
                     with open(config_path, "w") as f:
                         f.write(content)
-                    logger.info("local_preview: updated %s assetPrefix → %s", fname, base_path)
+                    logger.info("local_preview: rewrote %s assetPrefix → env-driven", fname)
                 else:
                     logger.debug("local_preview: %s already correct — skipping write", fname)
                 return
@@ -749,7 +796,7 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
             ):
                 new_content = re.sub(
                     pat,
-                    rf'\1\n  assetPrefix: "{base_path}",',
+                    rf'\1\n  {asset_prefix_line}',
                     content,
                     count=1,
                 )
@@ -774,7 +821,7 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
                     override = (
                         f'/** Lucid AI preview patch — original at {fname}.bak */\n'
                         f'module.exports = {{\n'
-                        f'  assetPrefix: "{base_path}",\n'
+                        f'  {asset_prefix_line}\n'
                         f'  images: {{ unoptimized: true }},\n'
                         f'}};\n'
                     )
@@ -782,7 +829,7 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
                     override = (
                         f'/** Lucid AI preview patch — original at {fname}.bak */\n'
                         f'const nextConfig = {{\n'
-                        f'  assetPrefix: "{base_path}",\n'
+                        f'  {asset_prefix_line}\n'
                         f'  images: {{ unoptimized: true }},\n'
                         f'}};\n'
                         f'export default nextConfig;\n'

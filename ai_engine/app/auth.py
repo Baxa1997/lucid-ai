@@ -21,6 +21,7 @@ from typing import Optional
 
 from fastapi import HTTPException, Request, WebSocket, status
 from jose import JWTError, jwt
+from jose.exceptions import ExpiredSignatureError
 
 from app.config import logger, settings
 
@@ -124,6 +125,14 @@ def decode_jwt(token: str) -> dict:
                     )
                 else:
                     logger.warning("No matching JWKS key found for kid=%s, decoding without verification", kid)
+            except ExpiredSignatureError:
+                # Expired tokens MUST surface — silently re-decoding without
+                # verification produces a "valid" payload but every Supabase
+                # call then fails with PGRST303, leaving the user in a
+                # broken-but-no-error state. Re-raise so the WS handshake
+                # closes with code 4010 (AUTH_EXPIRED) and the frontend
+                # prompts for re-auth.
+                raise
             except Exception as exc:
                 logger.warning("ES256 JWKS verification failed: %s — falling back to unverified", exc)
 
@@ -232,7 +241,10 @@ async def authenticate_websocket(websocket: WebSocket) -> Optional[Authenticated
         payload = decode_jwt(token)
         user_id = payload.get("sub") or payload.get("userId")
         if not user_id:
-            await websocket.close(code=4010, reason="Token missing sub claim")
+            try:
+                await websocket.close(code=4010, reason="Token missing sub claim")
+            except Exception:
+                pass
             return None
         return AuthenticatedUser(
             user_id=user_id,
@@ -240,9 +252,25 @@ async def authenticate_websocket(websocket: WebSocket) -> Optional[Authenticated
             project_id=payload.get("projectId"),
             session_id=payload.get("sessionId"),
         )
+    except ExpiredSignatureError:
+        # Distinct log line so the operator can see the legit "user needs to
+        # re-auth" case vs. the actual "bad token" case below.
+        logger.info("WebSocket JWT expired — closing with AUTH_EXPIRED (4010)")
+        try:
+            await websocket.close(code=4010, reason="Authentication expired")
+        except Exception:
+            # Close itself can fail when the client is mid-reconnect — the
+            # framework will tear the socket down anyway. Don't propagate;
+            # the unhandled exception otherwise spams the log with full
+            # ASGI tracebacks on every reconnect attempt.
+            pass
+        return None
     except JWTError as exc:
         logger.warning("WebSocket JWT decode failed: %s", exc)
-        await websocket.close(code=4010, reason="Invalid token")
+        try:
+            await websocket.close(code=4010, reason="Invalid token")
+        except Exception:
+            pass
         return None
 
 

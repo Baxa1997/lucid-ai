@@ -71,6 +71,12 @@ services:
       # Bind-mount (not named volume) so the Docker daemon can resolve
       # the host-side path when creating per-session sandbox containers.
       - ${PWD}/workspaces:/app/storage
+      # Persist the pnpm content-addressable store across container restarts so
+      # the second/third preview install hits the cache instead of re-downloading
+      # ~600MB of Next.js + Tailwind + shadcn deps. Without this, every fresh
+      # container loses the warm cache and installs blow past 5 min.
+      - pnpm_store:/tmp/pnpm_store
+      - npm_cache:/tmp/npm_cache
     env_file:
       - ./.env
     environment:
@@ -123,3 +129,5 @@ services:
 
 volumes:
   frontend_node_modules:
+  pnpm_store:
+  npm_cache:

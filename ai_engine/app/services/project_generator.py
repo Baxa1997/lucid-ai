@@ -482,15 +482,132 @@ def _build_file_tree(workspace_path: str, max_depth: int = 4) -> str:
 # ╚══════════════════════════════════════════════════════════════╝
 
 def _read_manifest(workspace_path: str) -> str:
-    """Read TEMPLATE_MANIFEST.md from the workspace root. Return '' if missing."""
+    """Read TEMPLATE_MANIFEST.md from the workspace root, augmented with the
+    actual shadcn primitives present in src/components/ui/.
+
+    The upstream TEMPLATE_MANIFEST.md (shipped with the template repo) tends
+    to list only the CUSTOM components (Button, Input, Card, ...) and omits
+    the shadcn/ui primitives that are also installed (Select, Accordion,
+    Checkbox, DropdownMenu, ...). Without explicit knowledge that Select is
+    available, Claude falls back to a native <select> — which renders with
+    the OS-default ↕ chevron and looks broken next to the styled Input.
+
+    To prevent this, we scan the actual src/components/ui/ directory and
+    append a "Detected shadcn primitives" block to the manifest before it
+    flows into the prompt. This is purely additive — never overwrites the
+    upstream manifest content.
+    """
     manifest_path = os.path.join(workspace_path, "TEMPLATE_MANIFEST.md")
+    base_manifest = ""
     if os.path.isfile(manifest_path):
         try:
             with open(manifest_path, "r", encoding="utf-8") as f:
-                return f.read()
+                base_manifest = f.read()
         except Exception:
             pass
-    return ""
+
+    # Detect shadcn primitives by scanning the ui directory and listing every
+    # lowercase-named .jsx/.tsx file (custom components are PascalCase like
+    # Button.jsx; shadcn primitives are kebab-case like select.jsx).
+    ui_dir = os.path.join(workspace_path, "src", "components", "ui")
+    primitives: list[str] = []
+    if os.path.isdir(ui_dir):
+        try:
+            for fname in sorted(os.listdir(ui_dir)):
+                if not (fname.endswith(".jsx") or fname.endswith(".tsx")):
+                    continue
+                stem = fname.rsplit(".", 1)[0]
+                # kebab-case OR all-lowercase = shadcn primitive
+                if "-" in stem or stem.islower():
+                    primitives.append(stem)
+        except Exception:
+            pass
+
+    if not primitives:
+        return base_manifest
+
+    # Build augmentation block — explicit imports + USE-DON'T-RECREATE rule.
+    aug_lines = [
+        "",
+        "---",
+        "",
+        "## Detected shadcn/ui Primitives — USE THESE, do not recreate",
+        "",
+        "These primitives exist in `src/components/ui/` and are barrel-exported",
+        "from `src/components/ui/index.js`. ALWAYS import from these files —",
+        "never roll your own dropdown / accordion / dialog / etc.",
+        "",
+    ]
+    # Standard shadcn export-names mapping for the most common primitives.
+    # Anything not in this map is listed by file stem alone.
+    _EXPORTS = {
+        "select":         ["Select", "SelectContent", "SelectGroup", "SelectItem",
+                           "SelectLabel", "SelectSeparator", "SelectTrigger", "SelectValue"],
+        "accordion":      ["Accordion", "AccordionItem", "AccordionTrigger", "AccordionContent"],
+        "alert-dialog":   ["AlertDialog", "AlertDialogTrigger", "AlertDialogContent",
+                           "AlertDialogHeader", "AlertDialogTitle", "AlertDialogDescription",
+                           "AlertDialogFooter", "AlertDialogCancel", "AlertDialogAction"],
+        "checkbox":       ["Checkbox"],
+        "dropdown-menu":  ["DropdownMenu", "DropdownMenuTrigger", "DropdownMenuContent",
+                           "DropdownMenuItem", "DropdownMenuLabel", "DropdownMenuSeparator",
+                           "DropdownMenuGroup", "DropdownMenuSub", "DropdownMenuSubTrigger",
+                           "DropdownMenuSubContent"],
+        "label":          ["Label"],
+        "scroll-area":    ["ScrollArea", "ScrollBar"],
+        "separator":      ["Separator"],
+        "sheet":          ["Sheet", "SheetTrigger", "SheetContent", "SheetHeader",
+                           "SheetTitle", "SheetDescription", "SheetFooter", "SheetClose"],
+        "skeleton":       ["Skeleton"],
+        "switch":         ["Switch"],
+        "tabs":           ["Tabs", "TabsList", "TabsTrigger", "TabsContent"],
+        "tooltip":        ["Tooltip", "TooltipProvider", "TooltipTrigger", "TooltipContent"],
+        "popover":        ["Popover", "PopoverTrigger", "PopoverContent"],
+        "dialog":         ["Dialog", "DialogTrigger", "DialogContent", "DialogHeader",
+                           "DialogTitle", "DialogDescription", "DialogFooter", "DialogClose"],
+        "command":        ["Command", "CommandInput", "CommandList", "CommandItem",
+                           "CommandGroup", "CommandSeparator", "CommandEmpty"],
+        "calendar":       ["Calendar"],
+        "date-picker":    ["DatePicker"],
+        "radio-group":    ["RadioGroup", "RadioGroupItem"],
+        "slider":         ["Slider"],
+        "toggle":         ["Toggle"],
+        "toggle-group":   ["ToggleGroup", "ToggleGroupItem"],
+        "progress":       ["Progress"],
+        "alert":          ["Alert", "AlertTitle", "AlertDescription"],
+        "menubar":        ["Menubar", "MenubarMenu", "MenubarTrigger", "MenubarContent",
+                           "MenubarItem", "MenubarSeparator"],
+        "navigation-menu": ["NavigationMenu", "NavigationMenuList", "NavigationMenuItem",
+                            "NavigationMenuTrigger", "NavigationMenuContent", "NavigationMenuLink"],
+        "context-menu":   ["ContextMenu", "ContextMenuTrigger", "ContextMenuContent",
+                           "ContextMenuItem", "ContextMenuSeparator"],
+        "hover-card":     ["HoverCard", "HoverCardTrigger", "HoverCardContent"],
+        "collapsible":    ["Collapsible", "CollapsibleTrigger", "CollapsibleContent"],
+        "carousel":       ["Carousel", "CarouselContent", "CarouselItem",
+                           "CarouselPrevious", "CarouselNext"],
+        "form":           ["Form", "FormField", "FormItem", "FormLabel", "FormControl",
+                           "FormDescription", "FormMessage"],
+    }
+    for stem in primitives:
+        exports = _EXPORTS.get(stem)
+        if exports:
+            aug_lines.append(
+                f"- **{stem}** — `import {{ {', '.join(exports)} }} "
+                f"from '@/components/ui/{stem}';`"
+            )
+        else:
+            aug_lines.append(
+                f"- **{stem}** — see `src/components/ui/{stem}.jsx` for exports."
+            )
+
+    aug_lines += [
+        "",
+        "**HARD RULE**: every dropdown/select/listbox MUST use `<Select>` from above.",
+        "Native `<select>` is BANNED — it renders with the OS-default ↕ chevron",
+        "and looks broken next to a styled `<Input>`. Same applies to popovers,",
+        "tooltips, modals — use the listed primitives, never roll your own.",
+        "",
+    ]
+    return base_manifest + "\n".join(aug_lines)
 
 
 # A legitimate manifest lists components, import paths, and conventions —
@@ -1075,6 +1192,10 @@ async def call_claude_for_json(
             response_data: dict = {}
             tool_input_parts: list[str] = []
             stop_reason = ""
+            _in_tok = 0
+            _cache_read_tok = 0
+            _cache_create_tok = 0
+            _out_tok = 0
             for chunk_str in raw_chunks:
                 if chunk_str == "[DONE]":
                     break
@@ -1084,13 +1205,35 @@ async def call_claude_for_json(
                     continue
                 ctype = chunk.get("type", "")
                 if ctype == "message_start":
-                    pass
+                    _msg_usage = (chunk.get("message") or {}).get("usage") or {}
+                    _in_tok = int(_msg_usage.get("input_tokens", 0) or 0)
+                    _cache_read_tok = int(_msg_usage.get("cache_read_input_tokens", 0) or 0)
+                    _cache_create_tok = int(_msg_usage.get("cache_creation_input_tokens", 0) or 0)
                 elif ctype == "content_block_delta":
                     delta = chunk.get("delta", {})
                     if delta.get("type") == "input_json_delta":
                         tool_input_parts.append(delta.get("partial_json", ""))
                 elif ctype == "message_delta":
                     stop_reason = chunk.get("delta", {}).get("stop_reason", "")
+                    # message_delta carries the final cumulative output_tokens
+                    _delta_usage = chunk.get("usage") or {}
+                    if _delta_usage:
+                        _out_tok = int(_delta_usage.get("output_tokens", _out_tok) or _out_tok)
+
+            # Report token usage to the billing meter (fire-and-forget).
+            # user_id resolves from the ambient contextvar set by
+            # generate_new_project, so we don't have to plumb it here.
+            if _in_tok > 0 or _out_tok > 0:
+                try:
+                    from app.services.billing_meter import report_token_usage
+                    report_token_usage(
+                        None,
+                        _in_tok + _cache_read_tok + _cache_create_tok,
+                        _out_tok,
+                        source=f"phase_{use_model.split('-')[0] if use_model else 'claude'}",
+                    )
+                except Exception:
+                    pass
 
             _last_stop_reason[0] = stop_reason
             is_truncated = stop_reason == "max_tokens"
@@ -1715,6 +1858,23 @@ async def _call_gemini_single(
         data = response.json()
     except Exception as exc:
         raise RuntimeError(f"Gemini {label} returned non-JSON body: {exc}")
+
+    # Report token usage to the billing meter (fire-and-forget).
+    # user_id resolves from the ambient contextvar set at the entry point.
+    try:
+        _usage = data.get("usageMetadata") or {}
+        _in_tok = int(_usage.get("promptTokenCount", 0) or 0)
+        _out_tok = int(_usage.get("candidatesTokenCount", 0) or 0)
+        if _in_tok > 0 or _out_tok > 0:
+            from app.services.billing_meter import report_token_usage
+            report_token_usage(
+                None,
+                _in_tok,
+                _out_tok,
+                source=f"gemini_{label}",
+            )
+    except Exception:
+        pass
 
     from knowledge.loader import safe_gemini_text
     text = safe_gemini_text(data)
@@ -2631,6 +2791,46 @@ marquee_strip:
 ambient_motion:
   [gradient-mesh / floating-orbs / grain-noise / subtle-scan / none.
    Include CSS keyframe snippet and JSX element placement.]
+
+design_interactions:
+  [CRITICAL self-audit. Your fields above are independent decisions, but they
+   COLLIDE in the rendered DOM. Walk through these dependencies and commit to
+   resolutions. Output as 7 numbered lines — one decision per line. Do NOT
+   write paragraphs; write enforceable rules Claude will follow verbatim.]
+
+  1. NAV-OVER-HERO CONTRAST — given your hero_archetype + hero_image_strategy:
+     does the global header sit OVER an image at any horizontal slice (full-bleed
+     OR split-hero where image touches viewport edge)? If yes, commit to ONE:
+     (a) backdrop-blur-md + bg-background/70 + border-b border-border/30,
+     (b) constrain header max-width to text-side column only,
+     (c) solid-bg header with subtle shadow.
+     ✗ NEVER: raw transparent header over imagery. State your pick.
+
+  2. EDGE-TO-EDGE BLEED — list every section/card/hero that touches viewport
+     edge with no padding. For each: what visually separates it from the
+     element above (border, shadow, gradient, height step)?
+
+  3. CARD INTERNAL LAYOUT — if cards carry MULTIPLE badges/tags/floating
+     labels: they MUST live in ONE flex container (`flex gap-2 items-center`),
+     never as independent `absolute` siblings. State this for product/listing/
+     vehicle cards if your domain uses them. ✗ Two `absolute top-4 left-4`
+     siblings will overlap — banned.
+
+  4. SECTION TRANSITIONS — given section_rhythm: where do two adjacent sections
+     share the same background color? Each such pair needs an explicit visual
+     separator (top border, gradient transition, shape divider, or anchor band).
+
+  5. FORM TREATMENT — if any page contains a form with a select/dropdown/combobox:
+     declare "USE shadcn Select primitive (SelectTrigger/SelectContent/SelectItem),
+     NEVER native <select>." State which pages have forms.
+
+  6. TYPOGRAPHY CEILING — given your typography_pairing + hero_archetype: state
+     max display size on desktop. Hero h1 ≤ text-6xl unless typographic-hero
+     archetype (then ≤ text-7xl). No text-8xl/9xl.
+
+  7. OVERLAP & Z-LAYERS — list every `absolute` / `fixed` / `sticky` element
+     across the page. For each: what sits beneath it, what guarantees contrast,
+     what is its z-index? If two elements overlap, the rule must be written here.
 
 novelty_check:
   [One sentence: what makes YOUR design visibly different from any other designer's version of this site?]
@@ -3845,26 +4045,109 @@ Rule of thumb: entities (&apos; &quot;) go INSIDE text between tags. Attribute
 values always use literal " or ' as the delimiter — never an HTML entity.
 
 ====================================
-SELECT INPUTS — HARD BAN on native <select> (non-negotiable)
+FORM INPUT DISCIPLINE — solid, consistent, professional (non-negotiable)
 ====================================
-NEVER use a native HTML `<select>` element — it is un-styled and breaks visual
-consistency with the shadcn/ui Input components around it.
+The #1 visual giveaway of an AI-generated landing page is INCONSISTENT FORM
+ELEMENTS — a styled <Input> sitting next to a raw native <select> with the
+browser's default ↕ chevron. It instantly screams "template" and destroys trust.
 
-✅ ALWAYS use the shadcn/ui Select primitives:
-  import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+──────────────────────────────────────────────────────────────────
+RULE 1 — HARD BAN on native <select> (no exceptions, ever)
+──────────────────────────────────────────────────────────────────
+The native HTML <select> renders with the OS default chevron (↕ on macOS, ▼ on
+Windows). It cannot be styled to match a shadcn Input. Banned everywhere.
 
-  <Select value={val} onValueChange={setVal}>
-    <SelectTrigger>
-      <SelectValue placeholder="Choose an option" />
-    </SelectTrigger>
-    <SelectContent>
-      <SelectItem value="a">Option A</SelectItem>
-      <SelectItem value="b">Option B</SelectItem>
-    </SelectContent>
-  </Select>
+✗ FORBIDDEN — produces broken-looking forms:
+    <select className="..."><option>A</option></select>
 
-This rule applies to EVERY form on EVERY page type — admin, landing page, consumer website,
-contact form, registration form, booking form, filter bar. No exceptions.
+✓ REQUIRED — use the shadcn Select primitive:
+    import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue }
+      from '@/components/ui/select'
+
+    <Select value={val} onValueChange={setVal}>
+      <SelectTrigger className="h-11">
+        <SelectValue placeholder="Choose an option" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="a">Option A</SelectItem>
+        <SelectItem value="b">Option B</SelectItem>
+      </SelectContent>
+    </Select>
+
+If shadcn's Select is unavailable in this template, build a custom one using
+appearance-none + an absolute Lucide ChevronDown — NEVER ship a raw select:
+
+    <div className="relative">
+      <select className="appearance-none w-full h-11 pl-3 pr-10 rounded-lg
+                          border border-border bg-background text-foreground">
+        <option>...</option>
+      </select>
+      <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2
+                              h-4 w-4 text-muted-foreground pointer-events-none" />
+    </div>
+
+──────────────────────────────────────────────────────────────────
+RULE 2 — FORM ROW CONSISTENCY (input + select + button on the same row)
+──────────────────────────────────────────────────────────────────
+When multiple form elements sit ON THE SAME LINE (search bar, filter row,
+inline form), they MUST share these properties EXACTLY:
+
+  height        → all elements use the SAME height (h-11 = 44px is the standard;
+                  h-10 = 40px or h-12 = 48px also fine — pick ONE per form)
+  border        → border border-border (same color, same width — never some
+                  bordered, others borderless)
+  border-radius → rounded-lg (or whatever the design system token says — all
+                  elements identical)
+  background    → bg-background (NEVER mix bg-background with bg-card or
+                  bg-transparent on adjacent elements)
+  font-size     → text-sm or text-base — same across the whole row
+  padding-x     → px-3 or px-4 — same across the row
+  icon size     → h-4 w-4 (when icons are inline)
+
+✓ CORRECT — all three elements visually identical, only content differs:
+    <div className="flex gap-2">
+      <Input className="h-11 flex-1" placeholder="Neighborhood or city" />
+      <Select>
+        <SelectTrigger className="h-11 w-[160px]">
+          <SelectValue placeholder="Any Type" />
+        </SelectTrigger>
+        ...
+      </Select>
+      <Button className="h-11 px-6">Search Homes</Button>
+    </div>
+
+✗ FORBIDDEN — different heights / borders / chevrons:
+    <input className="h-10 border" />
+    <select className="h-12 rounded-md">...</select>     ← native ↕ chevron
+    <Button size="lg">Search</Button>                    ← different height
+
+──────────────────────────────────────────────────────────────────
+RULE 3 — ICON PREFIX PATTERN (when an input has a leading icon)
+──────────────────────────────────────────────────────────────────
+The icon must be ABSOLUTELY positioned inside the input's padding-left zone —
+NEVER as a sibling div that pushes the input sideways.
+
+✓ CORRECT:
+    <div className="relative">
+      <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+      <Input className="h-11 pl-10" placeholder="Neighborhood or city" />
+    </div>
+
+✗ FORBIDDEN — icon as sibling:
+    <div className="flex items-center"><MapPin /><Input /></div>
+
+──────────────────────────────────────────────────────────────────
+RULE 4 — FOCUS / HOVER / DISABLED STATES (always present)
+──────────────────────────────────────────────────────────────────
+Every form element must have:
+  - focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2
+  - disabled:opacity-50 disabled:cursor-not-allowed
+  - hover:border-ring on inputs/selects (subtle accent)
+
+These are baked into the shadcn primitives — using shadcn = automatic correctness.
+
+This applies to EVERY form on EVERY page type — landing search bars, contact
+forms, booking flows, filter bars, admin tables, registration. No exceptions.
 
 ====================================
 BACKGROUND-IMAGE SECTIONS — min-h required (non-negotiable)
@@ -4178,6 +4461,17 @@ You build sections / pages / features on top of Phase 1's foundation. Phase 1
 already wrote: theme tokens, the Button/Card/Container primitives, the layouts,
 the navigation, the main entry page, and the router. Trust those files.
 
+0. DESIGN_INTERACTIONS IS BINDING — before writing ANY section, re-read the
+   `design_interactions:` block in LAYOUT_BLUEPRINT. It contains 7 numbered
+   resolutions for collisions between design choices (nav-over-hero contrast,
+   edge-bleed separation, card badge stacking, section transitions, form
+   primitive choice, type ceiling, z-layer overlaps). Each rule overrides any
+   conflicting default in this prompt. After writing each section, mentally
+   verify ALL 7 rules apply. If you wrote two `absolute` badges on a card,
+   stop and rewrite as a single `flex gap-2` row. If you wrote a transparent
+   nav over a hero image, stop and add `backdrop-blur-md bg-background/70
+   border-b border-border/30`. No exceptions.
+
 1. IMPORT, DON'T REDEFINE — if you need a Button, IMPORT it from where Phase 1
    put it (check the file tree). Do NOT create a second Button component. Same
    for Card, Container, Section, MarketingHeader, MarketingFooter, etc.
@@ -4380,6 +4674,8 @@ Fields you will see in LAYOUT_BLUEPRINT:
   hover_interaction_style       → lift-and-shadow / tilt-3d / reveal-content / glow-ring / morph-shape / invert-colors / magnetic-cursor
   spacing_rhythm                → tight-editorial / standard-modern / airy-luxury / asymmetric / dense-information + gutter tightness
   design_dna_summary            → the ONE-SENTENCE recipe Claude should keep in mind per section
+
+  design_interactions           → 7 numbered self-audit rules resolving collisions between the fields above (nav-over-hero contrast, edge-bleed separation, card badge stacking, section transitions, form treatment, type ceiling, z-layer overlaps). THESE ARE BINDING — implement every rule exactly as written.
 
   novelty_check                 → what makes this design visibly different
 
@@ -5160,6 +5456,18 @@ G. NO ART-SCHOOL DRIFT
    □ No "design as the design" — type and color serve the brand, not the
      other way around.
 
+H. FORM INPUTS — solid + consistent (the #1 AI-template tell)
+   □ ZERO native <select> elements anywhere in your output. Use shadcn
+     <Select> + <SelectTrigger> + <SelectContent> + <SelectItem>. If shadcn
+     unavailable, custom <select className="appearance-none ..."> with an
+     absolute Lucide ChevronDown overlay — NEVER a raw <select>.
+   □ When inputs/selects/buttons sit on the SAME ROW (search bar, filter
+     row), they share the SAME h-* (h-10 / h-11 / h-12 — pick ONE),
+     border, rounded-*, bg-*, text size, padding-x. NO mismatched heights.
+   □ Icon prefixes are ABSOLUTELY POSITIONED inside the input
+     (left-3 + pl-10 padding) — never sibling divs that push the input.
+   □ Every form field has focus-visible ring + disabled state.
+
 If any check fails, REVISE before emitting. A failing self-check ships a
 broken site to the user.
 
@@ -5254,6 +5562,7 @@ async def generate_new_project(
     websocket,
     chat_session_id: str = "",
     user_jwt: str = "",
+    user_id: str = "",
 ) -> bool:
     """3-phase multi-call orchestrator for new project generation.
 
@@ -5273,6 +5582,17 @@ async def generate_new_project(
     if not description:
         await _ws_send(websocket, "error", "❌ Project description is empty.")
         return False
+
+    # Ambient user_id for billing — Claude phase calls and Gemini research
+    # report tokens via this contextvar so we don't have to plumb user_id
+    # through 14 helper layers.
+    if user_id:
+        try:
+            from app.services.billing_meter import set_current_user_id
+            set_current_user_id(user_id)
+        except Exception:
+            pass
+
     try:
         return await _generate_new_project_inner(
             description, workspace_path, validated, websocket,

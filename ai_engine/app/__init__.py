@@ -89,6 +89,29 @@ async def lifespan(_app: FastAPI):
     # Start the workspace reaper (cleans up workspaces unused for 2h)
     await workspace_manager.start_reaper()
 
+    # Sweep orphan preview-trash directories left over from a previous
+    # process crashing mid-rmtree. bg_preview moves stale dirs to
+    # `<path>.trash-<ts>` and rmtrees them in a daemon thread; if the
+    # engine dies before the thread finishes, the trash leaks.
+    async def _sweep_preview_trash() -> None:
+        import os, shutil
+        from app.paths import PREVIEW_WS_ROOT
+        try:
+            if not os.path.isdir(PREVIEW_WS_ROOT):
+                return
+            swept = 0
+            for entry in os.listdir(PREVIEW_WS_ROOT):
+                if ".trash-" in entry or ".nm-" in entry:
+                    path = os.path.join(PREVIEW_WS_ROOT, entry)
+                    await asyncio.to_thread(shutil.rmtree, path, True)
+                    swept += 1
+            if swept:
+                logger.info("Swept %d orphan preview-trash dirs from %s", swept, PREVIEW_WS_ROOT)
+        except Exception as exc:
+            logger.warning("preview-trash sweep failed: %s", exc)
+
+    asyncio.create_task(_sweep_preview_trash())
+
     yield
 
     logger.info("Shutting down — cleaning up sessions …")
