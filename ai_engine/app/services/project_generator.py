@@ -3340,12 +3340,11 @@ _UNSPLASH_POOLS: dict[str, list[str]] = {
         "photo-1509042239860-f550ce710b93", "photo-1497935586351-b67a49e012bf",
         "photo-1495474472287-4d71bcdd2085", "photo-1485808191679-5f86510681a2",
         "photo-1494314671902-399b18174975", "photo-1442550528053-c431ecb55509",
-        "photo-1521488756137-bce62c6e3ce6",
     ],
     "Coffee shop interior": [
         "photo-1554118811-1e0d58224f24", "photo-1453614512568-c4024d13c247",
         "photo-1559056199-641a0ac8b55e", "photo-1521017432531-fbd92d768814",
-        "photo-1525629722858-bccd4f88491e", "photo-1559925393-8be0ec4767c8",
+        "photo-1559925393-8be0ec4767c8",
     ],
     "Latte art": [
         "photo-1517231925375-bf2cb42917a5", "photo-1572442388796-11668a67e53d",
@@ -3365,8 +3364,7 @@ _UNSPLASH_POOLS: dict[str, list[str]] = {
     ],
     "Italian / pasta": [
         "photo-1551183053-bf91a1d81141", "photo-1473093295043-cdd812d0e601",
-        "photo-1565299624946-b28f40a0ae38", "photo-1574484184081-afea8a62f9ab",
-        "photo-1572441713132-51c75654db73", "photo-1551892589-865f69869476",
+        "photo-1565299624946-b28f40a0ae38", "photo-1551892589-865f69869476",
     ],
     "Pizza / wood-fired oven": [
         "photo-1513104890138-7c749659a591", "photo-1604382354936-07c5d9983bd3",
@@ -3380,7 +3378,7 @@ _UNSPLASH_POOLS: dict[str, list[str]] = {
     ],
     "Mexican / tacos / mezcal": [
         "photo-1565299585323-38d6b0865b47", "photo-1551504734-5ee1c4a1479b",
-        "photo-1542528180-a1208c5169a5", "photo-1604847658149-a1c50d2c4d3c",
+        "photo-1542528180-a1208c5169a5",
     ],
     "Bakery": [
         "photo-1509440159596-0249088772ff", "photo-1555507036-ab1f4038808a",
@@ -3399,14 +3397,14 @@ _UNSPLASH_POOLS: dict[str, list[str]] = {
     ],
     "Salon / hair": [
         "photo-1560066984-138dadb4c035", "photo-1522337360788-8b13dee7a37e",
-        "photo-1599387737420-2af44f5ab51d", "photo-1521590832167-7bcbfaa6381f",
+        "photo-1521590832167-7bcbfaa6381f",
     ],
     "Spa": [
         "photo-1540555700478-4be289fbecef", "photo-1544161515-4ab6ce6db874",
         "photo-1571019613454-1cb2f99b2d8b", "photo-1519823551278-64ac92734fb1",
     ],
     "Hotel / travel": [
-        "photo-1488085061387-422e29b40080", "photo-1501117716987-c8e1ecb210bc",
+        "photo-1488085061387-422e29b40080",
         "photo-1564501049412-61c2a3083791", "photo-1542314831-068cd1dbfeeb",
         "photo-1444201983204-c43cbd584d93",
     ],
@@ -3419,12 +3417,12 @@ _UNSPLASH_POOLS: dict[str, list[str]] = {
         "photo-1583511655857-d19b40a7a54e", "photo-1561037404-61cd46aa615b",
     ],
     "Wedding": [
-        "photo-1519741497674-611481863552", "photo-1465495976277-4387d4b0e4a6",
+        "photo-1519741497674-611481863552",
         "photo-1511285560929-80b456fea0bc", "photo-1583939003579-730e3918a45a",
     ],
     "Car / automotive": [
-        "photo-1492144534655-ae79c964c9d7", "photo-1492144534655-ae79c964c9d7",
-        "photo-1503376780353-7e6692767b70", "photo-1580273916550-e323be2ae537",
+        "photo-1492144534655-ae79c964c9d7", "photo-1503376780353-7e6692767b70",
+        "photo-1580273916550-e323be2ae537",
     ],
     "Fashion / apparel": [
         "photo-1483985988355-763728e1935b", "photo-1490481651871-ab68de25d43d",
@@ -8372,6 +8370,24 @@ Call the write_project_files tool with ALL files.
     await _send_phase(websocket, 5, "Writing code", f"Code complete — {len(total_files)} files", "done")
     await _send_phase(websocket, 6, "Verifying build", "Running build checks…", "active")
     
+    # ── Per-product image rebinding ──
+    # Walk generated JSX, find <img alt="Named Entity"> tags, do a focused
+    # Unsplash search per name, swap the src. Fixes the "Bugatti card shows
+    # a HOUSE photo" class of bug where the generic pool URL Claude picked
+    # has nothing to do with the product card it landed on.
+    _phase_begin("image_rebind")
+    try:
+        from app.services.image_binder import rebind_named_images
+        # Build a domain qualifier from the classification — biases search
+        # toward the right vertical (e.g. "luxury car" for automotive).
+        _qualifier = (_domain or "").lower().replace("_", " ").strip()
+        _rebound = await rebind_named_images(workspace_path, domain_qualifier=_qualifier)
+        if _rebound > 0:
+            await _ws_send(websocket, "progress", f"🖼️ Rebound {_rebound} product images to specific photos")
+    except Exception as _rebind_exc:
+        logger.warning("image rebind failed (non-fatal): %s", _rebind_exc)
+    _phase_end("image_rebind")
+
     # ── Post-generation fixers (before build) ──
     # Automatically fix the 3 most common build error causes:
     #   1. Missing 'use client' directives

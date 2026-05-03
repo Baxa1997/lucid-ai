@@ -327,6 +327,9 @@ async def _start_local_preview_locked(
             _active_servers[conversation_id]["watcher"] = asyncio.create_task(
                 _watch_process_exit(conversation_id, proc, _stderr_path, websocket)
             )
+            _active_servers[conversation_id]["health_watcher"] = asyncio.create_task(
+                _watch_http_health(conversation_id, port, websocket)
+            )
 
             logger.info("local_preview: ready at %s", preview_url)
             await _emit(websocket, "preview_ready",
@@ -1019,13 +1022,22 @@ async def _wait_port_released(port: int, timeout: int = 5) -> None:
 
 
 async def _kill_server(entry: dict) -> None:
-    # Cancel the exit watcher first so it doesn't fire a spurious
+    # Cancel the exit + health watchers first so neither fires a spurious
     # "preview crashed" event when we intentionally kill the process.
-    watcher = entry.get("watcher")
-    if watcher is not None and not watcher.done():
-        watcher.cancel()
+    # Skip the current task — calling `cancel()` then `await` on yourself
+    # either raises RuntimeError or hangs. The triggering task is expected
+    # to return on its own immediately after handing work off.
+    try:
+        current = asyncio.current_task()
+    except RuntimeError:
+        current = None
+    for key in ("watcher", "health_watcher"):
+        task = entry.get(key)
+        if task is None or task.done() or task is current:
+            continue
+        task.cancel()
         try:
-            await watcher
+            await task
         except (asyncio.CancelledError, Exception):
             pass
 
@@ -1133,6 +1145,186 @@ async def _watch_process_exit(
         error_stage="crashed",
         message=f"Dev server crashed:\n{summary[:1500] or 'check terminal logs'}",
     )
+
+
+# ── HTTP health watcher ──────────────────────────────────────────────────
+# `_watch_process_exit` only fires when the dev-server PROCESS dies. A
+# process that is still running but hung — bound port, no responses, or a
+# 5xx storm from a corrupted route — keeps that watcher silent and the user
+# sees a blank iframe forever. This loop probes the server over HTTP every
+# `_HEALTH_INTERVAL` seconds and reacts to two distinct failure modes:
+#
+#   * Connection-level failure (refused / timeout) for `_HEALTH_FAIL_THRESHOLD`
+#     consecutive checks → server is wedged. Force-restart it (the auto-
+#     restart inside `start_local_preview` picks a fresh port).
+#   * 5xx response for `_HEALTH_FAIL_THRESHOLD` consecutive checks → server is
+#     up but the app is broken (compile error, runtime crash on root route).
+#     Surface a `preview_error` so the UI shows the existing crash overlay
+#     with its "Restart Preview" button. We do NOT auto-restart — restarting
+#     won't fix the underlying app code, and looping would burn CPU.
+
+_HEALTH_INTERVAL = float(os.environ.get("PREVIEW_HEALTH_INTERVAL_SECS", "60"))
+_HEALTH_FAIL_THRESHOLD = int(os.environ.get("PREVIEW_HEALTH_FAIL_THRESHOLD", "3"))
+_HEALTH_REQUEST_TIMEOUT = 5.0
+# Don't restart from the health watcher unless the server has been alive at
+# least this long — same protection `_watch_process_exit` uses against tight
+# crash-restart loops on a server that's broken at startup.
+_HEALTH_MIN_UPTIME_FOR_RESTART = 90.0
+
+
+async def _watch_http_health(
+    conversation_id: str,
+    port: int,
+    websocket,
+) -> None:
+    """Per-preview HTTP probe. Cancelled by `_kill_server` (when not self).
+
+    Two failure modes, two reactions:
+      * Connection-level (refused/timeout) for `_HEALTH_FAIL_THRESHOLD`
+        consecutive checks → server is wedged, schedule a force-restart and
+        exit. Restart guarded by `_HEALTH_MIN_UPTIME_FOR_RESTART` so we don't
+        loop on a server that's broken at boot.
+      * 5xx for the same threshold → app code is broken; surface once via
+        `preview_error` and keep probing. We don't auto-restart because
+        restarting won't fix the user's code.
+    """
+    import httpx  # local import — keeps cold-start time low
+
+    probe_url = f"http://127.0.0.1:{port}/"
+    conn_failures = 0
+    http5xx_failures = 0
+    surfaced_5xx = False  # latched: stop spamming preview_error on each tick
+
+    # Wait one full interval before first probe — gives Next.js time to
+    # finish its first compile after `preview_ready`.
+    try:
+        await asyncio.sleep(_HEALTH_INTERVAL)
+    except asyncio.CancelledError:
+        return
+
+    while True:
+        # Bail if the entry was rotated out (kill, restart, new port).
+        entry = _active_servers.get(conversation_id)
+        if not entry or entry.get("port") != port:
+            return
+
+        try:
+            async with httpx.AsyncClient(timeout=_HEALTH_REQUEST_TIMEOUT) as client:
+                resp = await client.get(probe_url)
+            status = resp.status_code
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, OSError):
+            status = None  # connection-level failure
+        except Exception as exc:
+            logger.debug("local_preview: health probe %s raised %s", conversation_id, exc)
+            status = None
+
+        if status is None:
+            conn_failures += 1
+            http5xx_failures = 0  # reset the other counter
+            logger.debug(
+                "local_preview: health probe failed (%d/%d) for %s on port %d",
+                conn_failures, _HEALTH_FAIL_THRESHOLD, conversation_id, port,
+            )
+            if conn_failures >= _HEALTH_FAIL_THRESHOLD:
+                # Restart-loop guard — give the server time to prove itself
+                # before assuming "wedged". A server crash-looping every 30s
+                # would otherwise pile up restarts indefinitely.
+                import time as _time
+                started_at = entry.get("started_at", 0)
+                uptime = _time.time() - started_at if started_at else 0
+                if uptime < _HEALTH_MIN_UPTIME_FOR_RESTART:
+                    logger.warning(
+                        "local_preview: %s wedged but uptime %.0fs < %.0fs guard — "
+                        "surfacing as crash, no restart",
+                        conversation_id, uptime, _HEALTH_MIN_UPTIME_FOR_RESTART,
+                    )
+                    if not surfaced_5xx:
+                        surfaced_5xx = True
+                        await _emit(
+                            websocket, "preview_error",
+                            error_stage="crashed",
+                            message=(
+                                "Dev server stopped responding shortly after startup. "
+                                "Click Restart Preview to retry."
+                            ),
+                        )
+                    # Fall through to the sleep + next probe rather than restart.
+                    conn_failures = 0
+                else:
+                    logger.warning(
+                        "local_preview: health watcher scheduling force-restart of "
+                        "wedged server %s on port %d (uptime %.0fs)",
+                        conversation_id, port, uptime,
+                    )
+                    workspace_path = entry.get("workspace_path", "")
+                    if workspace_path and os.path.isdir(workspace_path):
+                        await _emit(
+                            websocket, "preview_status", status="restarting",
+                            message="Dev server is unresponsive — restarting…",
+                        )
+                        # Schedule the restart as a separate task so this
+                        # watcher can return cleanly first. `_kill_server`
+                        # would otherwise try to cancel + await *us*, the
+                        # current task, which deadlocks.
+                        asyncio.create_task(
+                            _restart_from_health_watcher(
+                                workspace_path, conversation_id, websocket,
+                            )
+                        )
+                    return
+        elif 500 <= status < 600:
+            conn_failures = 0
+            http5xx_failures += 1
+            if http5xx_failures >= _HEALTH_FAIL_THRESHOLD and not surfaced_5xx:
+                surfaced_5xx = True
+                logger.warning(
+                    "local_preview: server %s returning %d on root for %d consecutive checks",
+                    conversation_id, status, http5xx_failures,
+                )
+                await _emit(
+                    websocket, "preview_error",
+                    error_stage="crashed",
+                    message=(
+                        f"Dev server is up but the app is returning HTTP {status}. "
+                        "Click Restart Preview to retry; if the error persists, the "
+                        "generated code likely has a runtime error on the root route."
+                    ),
+                )
+        else:
+            # Any 2xx/3xx/4xx response means the server is responsive enough
+            # to count as healthy. Clear both counters and re-arm the 5xx
+            # surface so a future bout can be reported.
+            conn_failures = 0
+            http5xx_failures = 0
+            surfaced_5xx = False
+
+        try:
+            await asyncio.sleep(_HEALTH_INTERVAL)
+        except asyncio.CancelledError:
+            return
+
+
+async def _restart_from_health_watcher(
+    workspace_path: str,
+    conversation_id: str,
+    websocket,
+) -> None:
+    """Run a force-restart in a fresh task so the calling health watcher can
+    return before `_kill_server` tries to cancel-and-await it.
+    """
+    try:
+        await start_local_preview(
+            workspace_path=workspace_path,
+            conversation_id=conversation_id,
+            websocket=websocket,
+            package_manager=_detect_pm(workspace_path) or "npm",
+            force_restart=True,
+        )
+    except Exception as exc:
+        logger.error(
+            "local_preview: health-watcher restart failed for %s: %s",
+            conversation_id, exc,
+        )
 
 
 async def _stop_by_conversation(conversation_id: str) -> None:

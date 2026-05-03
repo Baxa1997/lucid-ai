@@ -163,6 +163,112 @@ def _strip_strings_and_comments(src: str) -> str:
     return "".join(out)
 
 
+# ── <img onError> fallback injector ──────────────────────────────────────
+# When a generated image URL 404s in the browser, the default behavior is a
+# broken-image icon. We rewrite every `<img>` tag in generated JSX/TSX to
+# carry an `onError` handler that swaps the src to a muted-grey SVG
+# placeholder, so a dead Unsplash / OG / product photo degrades to a tasteful
+# blank tile instead of a broken icon. Only injected when the tag doesn't
+# already define its own onError.
+
+# Base64-encoded so the data URL contains zero `>` characters. A raw `<svg>`
+# data URL would carry literal `>` chars which trip downstream regex tools
+# that scan JSX with `[\s\S]*?(?:/>|>)` — they stop at the first `>` they
+# see, which lands inside our handler and corrupts the tag. base64 sidesteps
+# that entire class of bug. Decoded payload is the same gray 4:3 SVG:
+#   <svg xmlns="..." viewBox="0 0 4 3"><rect width="4" height="3" fill="#e5e7eb"/></svg>
+_IMG_FALLBACK_SRC = (
+    "data:image/svg+xml;base64,"
+    "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0IDMi"
+    "PjxyZWN0IHdpZHRoPSI0IiBoZWlnaHQ9IjMiIGZpbGw9IiNlNWU3ZWIiLz48L3N2Zz4="
+)
+_IMG_FALLBACK_HANDLER = (
+    " onError={(e)=>{const t=e.currentTarget;t.onerror=null;"
+    f"t.src='{_IMG_FALLBACK_SRC}';}}}}"
+)
+
+
+def _inject_img_onerror(content: str) -> str:
+    """Add an `onError` fallback to every `<img>` tag that lacks one.
+
+    Tokenizer-style scan: tracks JSX `{}` depth and string quotes so that
+    a `>` inside `style={{...}}` or `src={a > b ? x : y}` doesn't fool us
+    into ending the tag early. Skips tags that already define `onError` /
+    `onerror` (Claude sometimes writes its own).
+    """
+    if "<img" not in content:
+        return content
+
+    out: list[str] = []
+    i, n = 0, len(content)
+    while i < n:
+        idx = content.find("<img", i)
+        if idx < 0:
+            out.append(content[i:])
+            break
+        # Make sure this is actually a tag, not a substring of <imgs or similar
+        nxt = content[idx + 4] if idx + 4 < n else ""
+        if nxt and nxt not in (" ", "\t", "\n", "\r", "/", ">"):
+            out.append(content[i:idx + 4])
+            i = idx + 4
+            continue
+        out.append(content[i:idx])
+
+        # Walk forward to the closing `>`, respecting JSX braces and strings
+        j = idx + 4
+        depth = 0
+        in_str: Optional[str] = None
+        while j < n:
+            c = content[j]
+            if in_str:
+                if c == "\\" and j + 1 < n:
+                    j += 2
+                    continue
+                if c == in_str:
+                    in_str = None
+                j += 1
+                continue
+            if c in ("'", '"', "`"):
+                in_str = c
+                j += 1
+                continue
+            if c == "{":
+                depth += 1
+                j += 1
+                continue
+            if c == "}":
+                depth -= 1
+                j += 1
+                continue
+            if c == ">" and depth <= 0:
+                break
+            j += 1
+        if j >= n:
+            # Unterminated tag — emit the rest verbatim and bail
+            out.append(content[idx:])
+            i = n
+            break
+
+        tag = content[idx:j + 1]
+        if "onError" in tag or "onerror" in tag:
+            out.append(tag)
+            i = j + 1
+            continue
+
+        # Insert the handler just before the closing `>` (or `/>` for self-close)
+        k = j - 1
+        while k > idx and content[k] in (" ", "\t", "\n", "\r"):
+            k -= 1
+        if content[k] == "/":
+            new_tag = content[idx:k] + _IMG_FALLBACK_HANDLER + " " + content[k:j + 1]
+        else:
+            new_tag = content[idx:j] + _IMG_FALLBACK_HANDLER + content[j:j + 1]
+        out.append(new_tag)
+        i = j + 1
+
+    return "".join(out)
+
+
 # ── Write path ───────────────────────────────────────────────────────────
 
 def write_files_from_json(
@@ -292,6 +398,11 @@ def write_files_from_json(
                 rel_path,
             )
             continue
+
+        # Universal <img onError> fallback. Runs before sanity check so any
+        # syntax we accidentally introduce gets caught here, not at build time.
+        if rel_path.lower().endswith((".jsx", ".tsx", ".js", ".ts")):
+            content = _inject_img_onerror(content)
 
         # Pre-write structural sanity check — catches merge-conflict markers,
         # truncation placeholders, and unbalanced braces in JS-like files

@@ -1416,10 +1416,12 @@ def fix_mis_escaped_entities_in_js(workspace_path: str) -> list[str]:
 # ║  FIXER 6 — <img> → <Image /> (Next.js)                     ║
 # ╚══════════════════════════════════════════════════════════════╝
 
-# Matches <img ...> or <img ... /> tags. The attribute body uses [\s\S] (not
-# [^>]) so a stray `>` inside a JSX expression (e.g. {a > b ? x : y}) doesn't
-# end the tag prematurely. Non-greedy keeps the match short for normal cases.
-_IMG_TAG_RE = re.compile(r"<img\b([\s\S]*?)(?:/>|>)", re.IGNORECASE)
+# Locate the start of an <img …> tag. Finding the *end* of the tag is done
+# by `_scan_img_tag` below — a regex can't do it safely because attribute
+# values can contain `>` (data URLs, `{a > b ? x : y}`, JSX handlers with
+# closing braces, etc.) and any `[\s\S]*?(?:/>|>)` form will stop at the
+# wrong character.
+_IMG_TAG_OPEN_RE = re.compile(r"<img\b", re.IGNORECASE)
 
 _ATTR_KEYS = {"src", "alt", "classname", "class", "width", "height", "style"}
 
@@ -1436,7 +1438,7 @@ def _parse_jsx_attrs(attrs_str: str) -> dict[str, str]:
 
     Returns a dict mapping lowercased attribute name → raw value text
     (including the wrapping ``"..."`` or ``{...}``). Unknown attrs are
-    skipped to keep the dict focused on what _img_to_image consumes.
+    skipped to keep the dict focused on what _render_image_tag consumes.
     """
     attrs: dict[str, str] = {}
     n = len(attrs_str)
@@ -1535,7 +1537,7 @@ def _parse_jsx_attrs(attrs_str: str) -> dict[str, str]:
         if name in _ATTR_KEYS:
             attrs[name] = attrs_str[value_start:i]
 
-    # Normalize 'class' → 'classname' (matches the existing _img_to_image keys)
+    # Normalize 'class' → 'classname' (matches the existing _render_image_tag keys)
     if "class" in attrs and "classname" not in attrs:
         attrs["classname"] = attrs.pop("class")
     elif "class" in attrs:
@@ -1544,8 +1546,79 @@ def _parse_jsx_attrs(attrs_str: str) -> dict[str, str]:
     return attrs
 
 
-def _img_to_image(match: re.Match) -> str:
-    attrs_str = match.group(1)
+def _scan_img_tag(content: str, start: int) -> int:
+    """Return the exclusive end index of the `<img …>` tag that begins at `start`.
+
+    Walks forward respecting JSX `{}` depth, plus `'`/`"`/backtick string
+    literals (with backslash escapes and template `${…}` interpolation).
+    A `>` is only treated as the tag terminator when we're outside every
+    string and at brace-depth 0. Returns -1 if the tag is unterminated.
+    """
+    n = len(content)
+    i = start
+    depth = 0
+    in_str: Optional[str] = None
+    while i < n:
+        c = content[i]
+        if in_str:
+            if c == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if c == in_str:
+                in_str = None
+            i += 1
+            continue
+        if c in ("'", '"', "`"):
+            in_str = c
+            i += 1
+            continue
+        if c == "{":
+            depth += 1
+            i += 1
+            continue
+        if c == "}":
+            depth -= 1
+            i += 1
+            continue
+        if c == ">" and depth <= 0:
+            return i + 1
+        i += 1
+    return -1
+
+
+def _replace_img_tags(content: str) -> str:
+    """Find every `<img …>` (or `<img … />`) tag and rewrite to `<Image … />`.
+
+    Uses `_scan_img_tag` for the tag-end so attribute values containing `>`
+    (data URLs, JSX comparisons, onError handler bodies) can't fool us.
+    """
+    out: list[str] = []
+    cursor = 0
+    for m in _IMG_TAG_OPEN_RE.finditer(content):
+        idx = m.start()
+        # Make sure this is `<img` followed by a tag-boundary char, not a
+        # substring like `<images>`.
+        nxt_pos = m.end()
+        nxt = content[nxt_pos] if nxt_pos < len(content) else ""
+        if nxt and nxt not in (" ", "\t", "\n", "\r", "/", ">"):
+            continue
+        end = _scan_img_tag(content, m.end())
+        if end < 0:
+            continue
+        # Strip the trailing `>` (and any preceding `/`) to isolate the attrs
+        attrs_end = end - 1
+        attrs_start = m.end()
+        attrs_str = content[attrs_start:attrs_end]
+        if attrs_str.rstrip().endswith("/"):
+            attrs_str = attrs_str.rstrip()[:-1]
+        out.append(content[cursor:idx])
+        out.append(_render_image_tag(attrs_str))
+        cursor = end
+    out.append(content[cursor:])
+    return "".join(out)
+
+
+def _render_image_tag(attrs_str: str) -> str:
     attrs = _parse_jsx_attrs(attrs_str)
 
     # Build Next.js <Image> props
@@ -1609,7 +1682,7 @@ def fix_img_tags(workspace_path: str) -> list[str]:
             if "<img" not in content.lower():
                 continue
 
-            new_content = _IMG_TAG_RE.sub(_img_to_image, content)
+            new_content = _replace_img_tags(content)
             if new_content == content:
                 continue
 
