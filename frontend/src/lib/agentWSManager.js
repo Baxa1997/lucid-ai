@@ -121,6 +121,16 @@ class AgentWSManager {
    * when navigating between projects.
    */
   connect({ token, projectId, repoUrl, gitToken, branch, task, modelProvider }) {
+    // [DIAG] handshake-bug — confirm task reaches the manager
+    console.log("[DIAG/manager.connect]", {
+      projectId,
+      taskLen: (task || "").length,
+      taskHead: (task || "").slice(0, 80),
+      isOpen: this.isOpen,
+      isConnecting: this._connecting,
+      currentProjectId: this._projectId,
+    });
+
     // If already open to the SAME project — do nothing
     if (this.isOpen && this._projectId === projectId) return;
 
@@ -186,6 +196,12 @@ class AgentWSManager {
       this._clearConnectTimeout();
       this._startHeartbeat();
 
+      // [DIAG] handshake-bug — confirm task is actually on the wire
+      console.log("[DIAG/handshake.send]", {
+        projectId,
+        taskLen: (task || "").length,
+        taskHead: (task || "").slice(0, 80),
+      });
       ws.send(JSON.stringify({
         token: token || '',
         projectId: projectId || '',

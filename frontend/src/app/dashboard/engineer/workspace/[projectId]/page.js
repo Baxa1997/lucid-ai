@@ -92,6 +92,13 @@ function ConversationPageInner({params}) {
     try {
       const key = `wizard_prompt_${decodeURIComponent(projectId || "unknown")}`;
       const prompt = sessionStorage.getItem(key);
+      // [DIAG] handshake-bug — confirm sessionStorage state at workspace mount
+      console.log("[DIAG/wizardTask]", {
+        projectId,
+        key,
+        promptLen: prompt ? prompt.length : 0,
+        allWizardKeys: Object.keys(sessionStorage).filter(k => k.startsWith("wizard_")),
+      });
       if (!prompt) return "";
 
       const cid = decodeURIComponent(projectId || "unknown");

@@ -1199,6 +1199,15 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     // Fresh connection (new project or cold start)
     if (state === 'idle' || (manager.isOpen && manager.projectId !== projectIdRef.current)) {
       const taskToSend = initialTaskRef.current || '';
+      // [DIAG] handshake-bug — confirm task reaches the auto-connect path
+      console.log("[DIAG/auto-connect]", {
+        projectId: projectIdRef.current,
+        taskLen: taskToSend.length,
+        taskHead: taskToSend.slice(0, 80),
+        managerProjectId: manager.projectId,
+        managerIsOpen: manager.isOpen,
+        state,
+      });
       if (taskToSend) {
         // Show user message in chat ONCE. Strip the [LUCID_PROJECT] header for display.
         const displayText = taskToSend.includes('\n\n')
