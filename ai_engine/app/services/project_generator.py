@@ -19,6 +19,7 @@ import os
 import random
 import re
 import subprocess
+import time
 from typing import Optional
 
 logger = logging.getLogger("lucid.project_generator")
@@ -169,6 +170,158 @@ from app.services.project_writer import (
 _MAX_DESCRIPTION_CHARS = 10_000
 
 
+# ── Phase 2 page-batching tunables ──────────────────────────────────────
+# Off by default while we land the plumbing in stages. Flip to "1" to enable
+# parallel page batching for multi-page consumer / portfolio / blog projects.
+# Landing pages and admin paths are unaffected by this flag.
+# Default ON for multi-page websites — single call would generate 5-8 pages
+# in series and reliably hit the 64K out-token cap mid-page. Set
+# PHASE2_PAGE_BATCHING=0 in env to disable as an escape hatch.
+_PHASE2_PAGE_BATCHING_ENABLED = os.environ.get("PHASE2_PAGE_BATCHING", "1") == "1"
+# Threshold: only batch when there are at least this many real pages to
+# distribute. Below 4 pages, _compute_batch_plan returns a single batch
+# anyway (no parallelism gain from the orchestration overhead).
+_PHASE2_PAGE_BATCHING_MIN_PAGES = 4
+# Concurrency cap for parallel page batches. Keep aligned with the admin
+# path's effective parallelism so we never blow past the Anthropic tier
+# concurrency budget when both could be in flight (e.g., chat-driven re-runs).
+_PHASE2_PAGE_BATCHING_MAX_PARALLEL = 4
+
+
+def _should_batch_pages(layout_archetype: str, pages: list) -> bool:
+    """Gate for parallel page batching.
+
+    True only when ALL hold:
+      • PHASE2_PAGE_BATCHING != "0" (default ON; set to "0" to disable)
+      • Archetype is multi-page non-admin (consumer / marketplace / portfolio / blog)
+      • Page count meets the minimum threshold
+
+    Landing pages are explicitly excluded — their narrative is one cohesive
+    artifact and parallelism would fracture brand voice. Admin uses its own
+    entity-batched path. Single-page archetypes also skip.
+    """
+    if not _PHASE2_PAGE_BATCHING_ENABLED:
+        return False
+    archetype = (layout_archetype or "").lower()
+    if archetype in {"single_page_landing", "landing"}:
+        return False
+    if archetype not in _MULTIPAGE_CONSUMER_ARCHETYPES:
+        return False
+    return isinstance(pages, list) and len(pages) >= _PHASE2_PAGE_BATCHING_MIN_PAGES
+
+
+def _compute_batch_plan(
+    items: list,
+    *,
+    max_parallel: int = _PHASE2_PAGE_BATCHING_MAX_PARALLEL,
+    min_per_batch: int = 2,
+    max_per_batch: int = 4,
+) -> list[list]:
+    """Split a unit list into balanced batches for parallel Phase 2 generation.
+
+    Generic over the unit type — used for both pages (consumer / blog batching)
+    and entities (admin batching). Caller picks ``max_per_batch`` based on what
+    fits per-batch token budget for that unit type:
+      • pages: 4 fits comfortably in 40K out-tokens (typical page ≈ 8K tokens)
+      • entities: 3 fits 40K (entity ≈ 4 files × ~3K each ≈ 12K)
+
+    Examples (max_parallel=4, max_per_batch=4):
+      • 3 items   → [[i1, i2, i3]]                        (1 batch — below parallelism threshold)
+      • 5 items   → [[i1, i2, i3], [i4, i5]]              (2 batches)
+      • 8 items   → [[i1,i2], [i3,i4], [i5,i6], [i7,i8]]  (4 batches)
+      • 12 items  → 4 batches × 3 (saturates parallelism, balanced)
+      • 20 items  → 5 batches × 4 (clamped to max_per_batch)
+
+    Why these defaults:
+      • min_per_batch=2: a 1-item batch's per-call overhead beats the parallelism win.
+      • max_per_batch=4: keeps each per-batch prompt + output well under Claude's
+        64K out-token cap. Larger batches reintroduce the truncation risk that
+        motivated batching in the first place.
+      • max_parallel=4: sized for typical Anthropic tier concurrency without
+        crowding out chat-driven re-runs that may be in flight at the same time.
+    """
+    n = len(items)
+    if n == 0:
+        return []
+    # Target enough batches to hit max_parallel, but never with batches smaller
+    # than min_per_batch. Then enforce max_per_batch as a hard ceiling.
+    import math
+    parallelism = max(1, min(max_parallel, n // min_per_batch or 1))
+    per_batch = max(min_per_batch, math.ceil(n / parallelism))
+    if per_batch > max_per_batch:
+        per_batch = max_per_batch
+    return [items[i:i + per_batch] for i in range(0, n, per_batch)]
+
+
+# ── Phase D: parallel deep-research tunables ────────────────────────────
+# Off by default. When enabled, projects with many entities or many pages
+# get a *second* research pass: one focused Gemini call per entity (admin)
+# or per page (multi-page consumer/portfolio/blog). Output is appended to
+# the existing research blob as ``===ENTITY_DEEP::X===`` / ``===PAGE_DEEP::Y===``
+# blocks, which Phase 2 prompts can pluck for richer per-unit content.
+#
+# Why optional + thresholded:
+#   • Each call costs a Gemini API hit and ~10–60 s wall time.
+#   • Small projects (3 pages, 2 entities) already get enough depth from
+#     the single original research pass — extra calls are pure cost.
+#   • Landing pages NEVER trigger this (already gated by archetype).
+# Default ON: the wiring gap is closed. build_project_schema now plucks each
+# ===ENTITY_DEEP::Name=== / ===PAGE_DEEP::Name=== block from the raw research
+# blob and attaches it to the matching schema entity/page as
+# ``deep_research``, which schema_to_entity_screens_spec /
+# schema_to_pages_spec render directly into Phase 2 prompts. Set
+# PHASE_D_DEEP_RESEARCH=0 to disable (e.g. when debugging cost).
+_PHASE_D_DEEP_RESEARCH_ENABLED = os.environ.get("PHASE_D_DEEP_RESEARCH", "1") == "1"
+# Below these counts, the original single-pass research is enough depth.
+_PHASE_D_MIN_ENTITIES = 4
+_PHASE_D_MIN_PAGES = 5
+# Hard cap on concurrent Gemini calls inside a single project. The shared
+# ``_gemini_semaphore`` (= 2) is the global ceiling; this is the per-project
+# ceiling so one big project can't starve other in-flight projects.
+_PHASE_D_MAX_PARALLEL = 4
+# One focused per-unit research call should never take longer than this.
+# A timeout here just means that unit falls back to the base research blob,
+# which is fail-soft (the Phase 2 prompt simply gets less per-unit context).
+_PHASE_D_PER_CALL_TIMEOUT = 60.0
+
+
+# Layout archetypes that route through the entity-driven admin code path.
+# Used by Phase D, Phase 2 admin batching, and _is_admin checks downstream.
+_ADMIN_LAYOUT_ARCHETYPES = frozenset({
+    "admin_dashboard", "crm", "tms", "saas_dashboard", "ecommerce",
+})
+_MULTIPAGE_CONSUMER_ARCHETYPES = frozenset({
+    "consumer_website", "marketplace", "portfolio", "blog",
+})
+
+
+def _should_run_deep_research(
+    layout_archetype: str,
+    entities: list | None,
+    pages: list | None,
+) -> bool:
+    """Gate for Phase D parallel per-unit deep research.
+
+    True only when ALL hold:
+      • PHASE_D_DEEP_RESEARCH != "0" (default ON)
+      • Archetype is a multi-unit one (admin OR multi-page consumer/blog/portfolio)
+      • Unit count meets threshold (≥ entities for admin, ≥ pages for consumer)
+
+    Single-page landings always return False — they are one cohesive narrative
+    and the original research already has full depth for that one page.
+    """
+    if not _PHASE_D_DEEP_RESEARCH_ENABLED:
+        return False
+    archetype = (layout_archetype or "").lower()
+    if archetype in {"single_page_landing", "landing"}:
+        return False
+    if archetype in _ADMIN_LAYOUT_ARCHETYPES:
+        return isinstance(entities, list) and len(entities) >= _PHASE_D_MIN_ENTITIES
+    if archetype in _MULTIPAGE_CONSUMER_ARCHETYPES:
+        return isinstance(pages, list) and len(pages) >= _PHASE_D_MIN_PAGES
+    return False
+
+
 def _normalize_prompt_input(value: Optional[str], *, max_chars: int) -> str:
     """Safe normalization for user-controlled prompt variables.
 
@@ -214,6 +367,7 @@ async def _emit_file_writes(
     workspace_dir: str | None = None,
     phase: str | None = None,
     phase_elapsed_ms: int | None = None,
+    batch_index: int | None = None,
 ) -> None:
     """Emit one ``file_write_event`` per written path.
 
@@ -224,6 +378,8 @@ async def _emit_file_writes(
       • ``phase`` / ``phase_elapsed_ms`` — provenance + timing so the UI
         can show "this file took N ms (part of step5)"
       • ``size`` — byte count even when content is omitted
+      • ``batch_index`` — present only for parallel Phase 2 batches so the
+        UI can group files by which batch produced them
     """
     if not websocket or not paths:
         return
@@ -239,6 +395,8 @@ async def _emit_file_writes(
             payload["phase"] = phase
         if phase_elapsed_ms is not None:
             payload["phase_elapsed_ms"] = int(phase_elapsed_ms)
+        if batch_index is not None:
+            payload["batch_index"] = int(batch_index)
 
         # Best-effort file content read — never block the pipeline on IO errors.
         if workspace_dir:
@@ -260,6 +418,191 @@ async def _emit_file_writes(
         except Exception:
             # Disconnection during a big batch shouldn't abort the pipeline
             return
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  HELPER — Generic Phase-2 parallel batch runner             ║
+# ║                                                              ║
+# ║  Today only admin generation fans out (3 entities/batch).    ║
+# ║  This helper generalizes that pattern so multi-page consumer ║
+# ║  / portfolio Phase 2 can adopt the same batching with no     ║
+# ║  duplicated retry / dedupe / WS-event code.                  ║
+# ║                                                              ║
+# ║  The caller supplies opaque batch payloads + an async runner ║
+# ║  that turns one payload into a `{"files": [...]}` dict. The  ║
+# ║  helper does:                                                ║
+# ║    • parallel gather() with hard timeout                     ║
+# ║    • one retry pass for failed batches (transient errors)    ║
+# ║    • per-batch WS events (`phase2_batch_started/complete`)   ║
+# ║    • per-file write + emit with `batch_index` attribution    ║
+# ║    • path-level dedupe so two batches can't clobber each     ║
+# ║      other if Claude accidentally generated the same file    ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+async def _run_phase2_parallel_batches(
+    *,
+    websocket,
+    workspace_path: str,
+    batches: list,
+    batch_runner,
+    initial_timeout: float = 600.0,
+    retry_timeout: float = 300.0,
+    authoritative_paths: set[str] | None = None,
+) -> tuple[list[str], int, int]:
+    """Run Phase-2 batches in parallel; return (written_paths, failed_batches, total).
+
+    Args:
+      websocket:         The session WS (used for batch lifecycle events).
+      workspace_path:    Workspace root passed to ``write_files_from_json``.
+      batches:           Opaque payloads — meaning is up to the caller.
+      batch_runner:      ``async (idx, payload, total_batches) -> dict | None``
+                         A single batch's call to Claude. Should return
+                         ``{"files": [...]}`` on success, anything else on
+                         failure. Exceptions are caught by the helper.
+      initial_timeout:   Hard cap (seconds) across all parallel batches.
+      retry_timeout:     Hard cap (seconds) for the retry pass.
+      authoritative_paths: paths owned by deterministic builders. Any file
+                         a batch emits that overlaps these is dropped before
+                         the write — Phase 2 cannot overwrite shells.
+
+    Returns ``(written_paths, failed_batches, total_batches)``. The caller
+    typically extends its ``total_files`` accumulator with ``written_paths``
+    and sends a final progress message using the counts.
+    """
+    total = len(batches)
+    if total == 0:
+        return [], 0, 0
+
+    def _failed(res) -> bool:
+        return (
+            isinstance(res, Exception)
+            or not isinstance(res, dict)
+            or not res.get("files")
+        )
+
+    async def _wrapped(idx: int, payload) -> object:
+        try:
+            await websocket.send_json({
+                "type": "phase2_batch_started",
+                "batch_index": idx,
+                "total_batches": total,
+            })
+        except Exception:
+            pass
+        try:
+            res = await batch_runner(idx, payload, total)
+        except Exception as exc:
+            try:
+                await websocket.send_json({
+                    "type": "phase2_batch_complete",
+                    "batch_index": idx,
+                    "total_batches": total,
+                    "ok": False,
+                    "error": str(exc)[:300],
+                })
+            except Exception:
+                pass
+            raise
+        ok = not _failed(res)
+        try:
+            await websocket.send_json({
+                "type": "phase2_batch_complete",
+                "batch_index": idx,
+                "total_batches": total,
+                "ok": ok,
+                "files": len(res.get("files", [])) if isinstance(res, dict) else 0,
+            })
+        except Exception:
+            pass
+        return res
+
+    try:
+        batch_results = await asyncio.wait_for(
+            asyncio.gather(
+                *[_wrapped(i, b) for i, b in enumerate(batches)],
+                return_exceptions=True,
+            ),
+            timeout=initial_timeout,
+        )
+    except asyncio.TimeoutError:
+        logger.error(
+            "Phase 2 (batched) hit %ds hard timeout — proceeding with no results",
+            int(initial_timeout),
+        )
+        batch_results = []
+
+    batch_results = list(batch_results)
+
+    # Retry pass: re-run only the batches that failed, capped so Phase 3 still has time.
+    retry_indices = [i for i, r in enumerate(batch_results) if _failed(r)]
+    if retry_indices and len(retry_indices) < total:
+        logger.info(
+            "Phase 2 retrying %d failed batch(es): %s",
+            len(retry_indices), retry_indices,
+        )
+        await _ws_send(
+            websocket,
+            "progress",
+            f"🔁 Retrying {len(retry_indices)} failed batch(es)...",
+        )
+        try:
+            retry_results = await asyncio.wait_for(
+                asyncio.gather(
+                    *[_wrapped(i, batches[i]) for i in retry_indices],
+                    return_exceptions=True,
+                ),
+                timeout=retry_timeout,
+            )
+            for pos, idx in enumerate(retry_indices):
+                batch_results[idx] = retry_results[pos]
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Phase 2 retry hit %ds cap — proceeding with partial results",
+                int(retry_timeout),
+            )
+
+    # Write each successful batch separately so file_write_event carries
+    # batch_index. Path-level dedupe across batches: first-batch-wins, so
+    # accidental duplicates from a second batch are silently dropped.
+    # Authoritative-path filter: deterministic builders own these files;
+    # any Phase 2 emission for them is dropped before the write so the
+    # shells from Step 3* survive intact.
+    written_paths: list[str] = []
+    failed_count = 0
+    seen_paths: set[str] = set()
+    auth_paths = authoritative_paths or set()
+    auth_dropped = 0
+    for idx, res in enumerate(batch_results):
+        if _failed(res):
+            if isinstance(res, Exception):
+                logger.error("Phase 2 batch %d raised: %s", idx + 1, res)
+            failed_count += 1
+            continue
+        new_files = []
+        for f in res["files"]:
+            if not isinstance(f, dict):
+                continue
+            path = f.get("path") or f.get("filename")
+            if not path or path in seen_paths:
+                continue
+            if path in auth_paths:
+                auth_dropped += 1
+                continue
+            new_files.append(f)
+            seen_paths.add(path)
+        if not new_files:
+            continue
+        written = write_files_from_json({"files": new_files}, workspace_path)
+        await _emit_file_writes(websocket, written, batch_index=idx)
+        written_paths.extend(written)
+
+    if auth_dropped:
+        logger.info(
+            "Phase 2 batches: dropped %d Claude file(s) overlapping authoritative shells",
+            auth_dropped,
+        )
+
+    return written_paths, failed_count, total
 
 
 # Domain keyword → evocative design-system name. Used by
@@ -1473,6 +1816,15 @@ def _extract_research_section(text: str, header: str, max_chars: int = 2000) -> 
 _DISTILL_SECTIONS: tuple[tuple[str, int], ...] = (
     ("DESIGN_SYSTEM_NAME", 100),
     ("CLASSIFICATION", 300),
+    # PAGE_INTENT defines the conversion goal + must-have sections derived from
+    # the user's prompt. Phase 1/2 prompts treat must_have_sections as
+    # non-negotiable, so this MUST survive distillation. Placed before
+    # USER_REQUIREMENTS because the goal frames the rest of the brief.
+    ("PAGE_INTENT", 1200),
+    # User-stated requirements (loader, cursor, animations, copy specifics, …) —
+    # MUST survive distillation; Phase 1/2/3 prompts treat this as non-negotiable.
+    # Placed early so even an extreme truncation keeps it.
+    ("USER_REQUIREMENTS", 1500),
     ("DOMAIN", 250),
     ("VIBE", 300),
     ("PALETTE", 700),
@@ -1512,6 +1864,11 @@ _DISTILL_SECTIONS: tuple[tuple[str, int], ...] = (
     ("PAGES", 1400),
     ("SECTIONS", 1400),
     ("ENTITIES", 1200),
+    # ENTITY_SCREENS holds per-entity list/detail/create UI spec (admin only).
+    # 4000 cap fits ~4 entities of full detail; remaining entities still flow
+    # through schema_to_entity_screens_spec which reads parsed schema, not the
+    # truncated distilled blob. Symmetric to how PAGES is rendered.
+    ("ENTITY_SCREENS", 4000),
     ("KEY_COMPONENTS", 1400),
     ("DOMAIN_MUST_HAVES", 900),
     ("UI_PATTERNS", 500),
@@ -1625,6 +1982,96 @@ def _extract_layout_archetype(research: str, fallback_classification: dict) -> d
 
 
 # ╔══════════════════════════════════════════════════════════════╗
+# ║  STEP 2.0 — _validate_project_intent()                       ║
+# ║  Cheap pre-flight check. Catches "asdfasdf", "hi", "test"   ║
+# ║  before we burn 3-5 minutes generating nonsense.            ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+async def _validate_project_intent(description: str, gemini_key: str) -> dict:
+    """Score whether the input is a real project description.
+
+    Returns ``{"is_project": bool, "score": int, "ask_user": str}``.
+      • ``score`` 0–10. Below 5 = clearly not a project.
+      • ``ask_user`` is a one-sentence clarifying prompt the caller can
+        send straight to the chat when ``is_project`` is False.
+
+    Fail-soft: any error (no key, Gemini down, malformed reply) returns
+    ``is_project=True`` so the existing pipeline keeps working — we only
+    BLOCK on a confident "no", never on uncertainty.
+    """
+    text = (description or "").strip()
+    # Trivial fast path — anything below 6 chars after strip is almost
+    # certainly not a project description and saves an API call.
+    if len(text) < 6:
+        return {
+            "is_project": False,
+            "score": 0,
+            "ask_user": "Could you describe what you'd like to build? "
+                        "Try: \"a [type of site/app] for [audience] that [main feature]\".",
+        }
+    if not gemini_key:
+        return {"is_project": True, "score": 10, "ask_user": ""}
+
+    prompt = f"""You are a triage assistant for a website-generation tool.
+
+Input from the user: \"\"\"{text[:2000]}\"\"\"
+
+Decide whether this is a coherent description of a website / app / admin tool the user
+wants built. Score 0–10 where:
+  10 = clear project ("a CRM for solo realtors with kanban deals and email logs")
+  6–9 = workable but thin ("yoga studio", "coffee landing page")
+  3–5 = ambiguous ("something cool", "make a thing")
+  0–2 = noise ("asdfasdf", "hello", "test", "what can you do")
+
+Return ONLY this JSON, no markdown:
+{{
+  "is_project": <true if score ≥ 5 else false>,
+  "score": <int 0-10>,
+  "ask_user": "<one short sentence asking what they want — empty string if score ≥ 5>"
+}}"""
+
+    try:
+        import httpx, json as _json, re as _re
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"gemini-2.5-flash:generateContent?key={gemini_key}",
+                json={"contents": [{"parts": [{"text": prompt}]}]},
+            )
+        if resp.status_code != 200:
+            logger.debug("intent_gate: HTTP %d — passing input through", resp.status_code)
+            return {"is_project": True, "score": 10, "ask_user": ""}
+        _resp_json = resp.json()
+        try:
+            _u = _resp_json.get("usageMetadata") or {}
+            _in = int(_u.get("promptTokenCount", 0) or 0)
+            _out = int(_u.get("candidatesTokenCount", 0) or 0) + int(_u.get("thoughtsTokenCount", 0) or 0)
+            if _in or _out:
+                from app.services.billing_meter import report_token_usage
+                report_token_usage(None, _in, _out, source="gemini_intent_gate")
+        except Exception:
+            pass
+        from knowledge.loader import safe_gemini_text
+        raw = safe_gemini_text(_resp_json).strip()
+        if "```" in raw:
+            raw = _re.sub(r"```(?:json)?", "", raw).strip("`").strip()
+        parsed = _json.loads(raw)
+        score = int(parsed.get("score", 10))
+        is_project = bool(parsed.get("is_project", score >= 5))
+        ask_user = str(parsed.get("ask_user", "") or "")
+        if not is_project and not ask_user:
+            ask_user = (
+                "I couldn't tell what you'd like to build — could you describe it like "
+                "\"a [type of site/app] for [audience] that [main feature]\"?"
+            )
+        logger.info("intent_gate: score=%d is_project=%s", score, is_project)
+        return {"is_project": is_project, "score": score, "ask_user": ask_user}
+    except Exception as exc:
+        logger.debug("intent_gate: skipped due to error (%s) — passing input through", exc)
+        return {"is_project": True, "score": 10, "ask_user": ""}
+
+
+# ╔══════════════════════════════════════════════════════════════╗
 # ║  STEP 2.5 — _expand_short_prompt()                          ║
 # ║  Expand 1-3 word prompts via Gemini Flash before research   ║
 # ╚══════════════════════════════════════════════════════════════╝
@@ -1696,6 +2143,15 @@ async def _expand_short_prompt(
             logger.warning("Prompt expansion API %d: %s", r.status_code, r.text[:200])
             return description
         data = r.json()
+        try:
+            _u = data.get("usageMetadata") or {}
+            _in = int(_u.get("promptTokenCount", 0) or 0)
+            _out = int(_u.get("candidatesTokenCount", 0) or 0) + int(_u.get("thoughtsTokenCount", 0) or 0)
+            if _in or _out:
+                from app.services.billing_meter import report_token_usage
+                report_token_usage(None, _in, _out, source="gemini_expand_prompt")
+        except Exception:
+            pass
         expanded = ""
         for cand in data.get("candidates", []):
             for part in cand.get("content", {}).get("parts", []):
@@ -1783,8 +2239,13 @@ async def _call_gemini_single(
     a third concurrent project waits, keeping us inside Gemini rate limits.
     """
     import httpx
+    # Pro thinkingBudget bumped from 2048 → 8192 for deeper reasoning on
+    # PAGE_INTENT extraction, slug-rename judgment, and ENTITY_SCREENS
+    # structure. Cost delta is ~$0.05/call, well worth it on the foundational
+    # research step. Flash stays at 0 (it's used for short structured calls
+    # where extra thinking adds no value).
     _thinking_config = (
-        {"thinkingBudget": 2048} if is_pro else {"thinkingBudget": 0}
+        {"thinkingBudget": 8192} if is_pro else {"thinkingBudget": 0}
     )
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -1813,10 +2274,14 @@ async def _call_gemini_single(
     async with _gemini_semaphore:
         for _attempt in range(1, _max_attempts + 1):
             try:
-                async with httpx.AsyncClient(timeout=120.0) as client:
+                # Timeouts bumped 120s/130s → 280s/300s. With thinkingBudget
+                # 8192 + bigger maxOutputTokens, admin/multi-page calls can
+                # legitimately need 200+ s. Timing out at 130s drops valid
+                # research and forces a retry (which re-runs all the thinking).
+                async with httpx.AsyncClient(timeout=280.0) as client:
                     response = await asyncio.wait_for(
                         client.post(gemini_url, json=payload),
-                        timeout=130.0,
+                        timeout=300.0,
                     )
             except asyncio.TimeoutError:
                 logger.warning("Gemini %s timed out (attempt %d/%d)", label, _attempt, _max_attempts)
@@ -1861,10 +2326,15 @@ async def _call_gemini_single(
 
     # Report token usage to the billing meter (fire-and-forget).
     # user_id resolves from the ambient contextvar set at the entry point.
+    # thoughtsTokenCount is reasoning tokens emitted by thinking-enabled models
+    # (e.g. gemini-3.1-pro with thinkingBudget>0) — Google bills these at the
+    # OUTPUT rate, so they must be added to _out_tok or we under-bill the user.
     try:
         _usage = data.get("usageMetadata") or {}
         _in_tok = int(_usage.get("promptTokenCount", 0) or 0)
-        _out_tok = int(_usage.get("candidatesTokenCount", 0) or 0)
+        _cand_tok = int(_usage.get("candidatesTokenCount", 0) or 0)
+        _think_tok = int(_usage.get("thoughtsTokenCount", 0) or 0)
+        _out_tok = _cand_tok + _think_tok
         if _in_tok > 0 or _out_tok > 0:
             from app.services.billing_meter import report_token_usage
             report_token_usage(
@@ -1881,6 +2351,240 @@ async def _call_gemini_single(
     if not text:
         raise RuntimeError(f"Gemini {label} returned empty text")
     return text
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  PHASE D — per-unit deep research                            ║
+# ║                                                              ║
+# ║  After schema build, fan out one focused Gemini call per     ║
+# ║  entity (admin) or per page (multi-page consumer). Each call ║
+# ║  returns a tight block (3–5 paragraphs of concrete UX/visual ║
+# ║  detail for that one unit) which we append to the research   ║
+# ║  blob as ===ENTITY_DEEP::Name=== / ===PAGE_DEEP::Name===.    ║
+# ║  Phase 2 prompts can then pull these blocks for richer       ║
+# ║  per-unit content without enlarging the original research    ║
+# ║  prompt's output budget.                                     ║
+# ║                                                              ║
+# ║  Fail-soft: any per-unit failure just leaves that block out  ║
+# ║  of the blob; a total failure returns the original research  ║
+# ║  blob unchanged. Phase 2 prompts never *require* these       ║
+# ║  blocks — they are pure depth bonus.                         ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+
+def _build_entity_deep_research_prompt(
+    entity: dict,
+    *,
+    domain: str,
+    brand_name: str,
+) -> str:
+    """Focused per-entity research prompt for an admin-panel CRUD entity.
+
+    Output is a tight block (3–5 paragraphs, ~600-1000 tokens) covering:
+      • Real-world domain field semantics (what each field means in this industry)
+      • Standard validation rules and edge cases
+      • Common workflow / status transitions
+      • Industry-leader reference patterns for this entity's CRUD UI
+    """
+    name = (entity or {}).get("name") or "Entity"
+    fields = (entity or {}).get("fields") or []
+    field_names = ", ".join(
+        f.get("name", "?") for f in fields if isinstance(f, dict)
+    )[:600]
+    return f"""You are researching ONE specific admin-panel entity for a {domain} product called "{brand_name}".
+
+ENTITY: {name}
+FIELDS: {field_names or '(unspecified)'}
+
+Output a tight, concrete research block. Use real industry references (Stripe Dashboard, Linear, Shopify Admin, Salesforce, Notion, etc. — pick whichever is most relevant for this entity in this domain).
+
+Cover, in 3–5 short paragraphs:
+
+1. DOMAIN SEMANTICS — What does each field actually mean to a {domain} operator? Which fields are user-facing vs. internal? Which are sensitive?
+
+2. VALIDATION & EDGE CASES — Real-world validation rules (formats, ranges, uniqueness), edge cases that bite in production (timezone, currency, soft-delete, archival).
+
+3. WORKFLOW & STATUS — Typical lifecycle transitions for this entity. What states does it move through? What triggers each transition?
+
+4. UI PATTERNS — How does the industry-leading {domain} admin tool present this entity's list view, detail view, and create/edit form? Name the actual product and pattern.
+
+5. ACTIONS & BULK OPS — Most-used row actions and bulk operations for this entity in real {domain} admin tools.
+
+Be specific. Name real products, real field formats, real status values. No platitudes ("important to consider…"). No bullet outlines — flowing paragraphs.
+"""
+
+
+def _build_page_deep_research_prompt(
+    page: dict,
+    *,
+    domain: str,
+    brand_name: str,
+) -> str:
+    """Focused per-page research prompt for a multi-page consumer/portfolio/blog site.
+
+    Output is a tight block (3–5 paragraphs, ~600-1000 tokens) covering:
+      • What this specific page exists to do (job-to-be-done)
+      • Industry-leader reference patterns for this page type in this domain
+      • Section order and content beats unique to this page
+      • Conversion / engagement levers specific to this page
+    """
+    name = (page or {}).get("name") or (page or {}).get("path") or "Page"
+    purpose = (page or {}).get("purpose") or (page or {}).get("description") or ""
+    sections_hint = ", ".join(
+        (s.get("type") or s.get("name") or "?")
+        for s in (page or {}).get("sections", []) or []
+        if isinstance(s, dict)
+    )[:400]
+    return f"""You are researching ONE specific page of a {domain} website for a brand called "{brand_name}".
+
+PAGE: {name}
+STATED PURPOSE: {purpose or '(unspecified)'}
+PLANNED SECTIONS: {sections_hint or '(open)'}
+
+Output a tight, concrete research block. Reference real {domain} websites by name (e.g. Apple, Patagonia, The Wirecutter, Linear, Stripe — pick whichever is most relevant for THIS page type in THIS domain).
+
+Cover, in 3–5 short paragraphs:
+
+1. JOB-TO-BE-DONE — Why does this page exist for a real {domain} visitor? What question or task brings them here? What state are they in (cold/warm/hot)?
+
+2. CONTENT BEATS — Specific section order industry leaders use for this page type, and what unique content lives in each. Be concrete: "above the fold: hero with [specific element]; then [specific section] because…".
+
+3. VISUAL & MOTION CUES — Distinctive visual or interaction patterns that signal quality on this page in this domain (e.g. sticky comparison table, scroll-driven product reveal, embedded video case study).
+
+4. CONVERSION / ENGAGEMENT — The 1–2 actions this page must drive, and the proven patterns industry leaders use to drive them.
+
+5. PITFALLS — Common mistakes that make this page feel generic in {domain}.
+
+Be specific. Name real sites, real section orderings, real interactions. No platitudes. Flowing paragraphs, no bullet lists.
+"""
+
+
+async def enrich_research_with_deep_dives(
+    research: str,
+    *,
+    schema: dict,
+    layout_archetype: str,
+    domain: str,
+    brand_name: str,
+    websocket,
+    gemini_key: str,
+) -> str:
+    """Fan out per-unit Gemini calls; append ===ENTITY_DEEP=== / ===PAGE_DEEP=== blocks.
+
+    Returns the enriched research blob (or the original blob unchanged on any
+    catastrophic failure). Per-unit failures just omit that one block — the
+    rest of the blob is unaffected.
+
+    Why a flat ``===NAME===`` append rather than mutating the schema:
+      • Phase 2 prompts already read research with `_extract_research_section`.
+      • Schema stays a clean structural artifact; research stays the source of
+        narrative depth. No new schema field to migrate.
+      • Frontend code that pretty-prints the schema doesn't need to handle
+        a new "deep_research" property.
+    """
+    if not research or not isinstance(schema, dict):
+        return research or ""
+    if not gemini_key:
+        return research
+
+    archetype = (layout_archetype or "").lower()
+    units: list[tuple[str, str, str]] = []  # (kind, name, prompt)
+
+    if archetype in _ADMIN_LAYOUT_ARCHETYPES:
+        entities = schema.get("entities") or []
+        for ent in entities:
+            if not isinstance(ent, dict):
+                continue
+            name = (ent.get("name") or "").strip()
+            if not name:
+                continue
+            units.append((
+                "ENTITY_DEEP",
+                name,
+                _build_entity_deep_research_prompt(ent, domain=domain, brand_name=brand_name),
+            ))
+    elif archetype in _MULTIPAGE_CONSUMER_ARCHETYPES:
+        pages = schema.get("pages") or []
+        for pg in pages:
+            if not isinstance(pg, dict):
+                continue
+            name = (pg.get("name") or pg.get("path") or "").strip()
+            if not name:
+                continue
+            units.append((
+                "PAGE_DEEP",
+                name,
+                _build_page_deep_research_prompt(pg, domain=domain, brand_name=brand_name),
+            ))
+    else:
+        return research
+
+    if not units:
+        return research
+
+    _research_model = os.environ.get("GEMINI_RESEARCH_MODEL", "gemini-3.1-pro-preview")
+    gemini_url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{_research_model}:generateContent?key={gemini_key}"
+    )
+    _is_pro = "pro" in _research_model.lower()
+
+    # Per-project parallelism cap. The shared _gemini_semaphore (=2) is the
+    # global ceiling; this throttle ensures one big project can't queue 30
+    # calls and starve concurrent projects sitting behind it.
+    _project_sem = asyncio.Semaphore(_PHASE_D_MAX_PARALLEL)
+
+    async def _run_one(kind: str, name: str, prompt: str) -> tuple[str, str, str | None]:
+        async with _project_sem:
+            try:
+                text = await asyncio.wait_for(
+                    _call_gemini_single(
+                        prompt,
+                        gemini_url,
+                        _is_pro,
+                        websocket,
+                        f"deep_{kind.lower()}_{name[:24]}",
+                        max_tokens=2000,
+                    ),
+                    timeout=_PHASE_D_PER_CALL_TIMEOUT,
+                )
+                return kind, name, text.strip() if text else None
+            except Exception as exc:
+                logger.warning("Phase D deep-research %s/%s failed: %s", kind, name, exc)
+                return kind, name, None
+
+    await _ws_send(
+        websocket,
+        "progress",
+        f"🔬 Deep research — {len(units)} focused passes in parallel...",
+    )
+
+    results = await asyncio.gather(
+        *(_run_one(k, n, p) for k, n, p in units),
+        return_exceptions=False,
+    )
+
+    blocks: list[str] = []
+    succeeded = 0
+    for kind, name, text in results:
+        if not text:
+            continue
+        # Defensive: strip any accidental ===… markers in the body so they
+        # can't confuse _extract_research_section's first-occurrence scan.
+        body = text.replace("===", "==")
+        blocks.append(f"==={kind}::{name}===\n{body}")
+        succeeded += 1
+
+    if not blocks:
+        await _ws_send(websocket, "progress", "⚠️ Deep research yielded nothing — continuing with base research.")
+        return research
+
+    await _ws_send(
+        websocket,
+        "progress",
+        f"✅ Deep research — {succeeded}/{len(units)} units enriched.",
+    )
+    return research.rstrip() + "\n\n" + "\n\n".join(blocks) + "\n"
 
 
 # ── Cultural anchor pool — used when prompt is ambiguous ───────────────────
@@ -2137,6 +2841,207 @@ reasoning: [confirm or explain any correction in 1 sentence]
 
 {"⚠️ LOCKED: The user explicitly requested this layout type. Output layout_archetype EXACTLY as shown above — do NOT change it." if is_locked else "(Correct the layout_archetype line above ONLY if clearly wrong — keep others matching)"}
 
+===PAGE_INTENT===
+⚠️  CRITICAL — READ THE USER PROMPT LIKE A PRODUCT MANAGER, NOT LIKE A DOMAIN
+CLASSIFIER. The user's prompt almost always names a SPECIFIC GOAL the page must
+serve, and that goal is what drives section selection — NOT the industry the
+business operates in. Past failure: user wrote "landing page for logistics
+company hiring drivers and operators" and the research returned a generic
+logistics site (services / fleet / coverage / contact) with NO open-positions
+section, NO driver-benefits section, NO application form. The page failed at
+its single job because the research treated "logistics" as the brief and
+"hiring" as a flavor word.
+
+Extract THREE things from the original PROJECT description above:
+
+primary_goal:
+  [ONE sentence in the form "<verb> <target audience> to <action>".
+   Examples that show how to read the prompt CORRECTLY:
+     prompt: "landing page for a logistics company for hiring drivers and operators"
+       → "Recruit truck drivers and fleet operators to apply for open positions"
+       (NOT: "Promote logistics services to potential customers" — wrong audience.)
+
+     prompt: "landing page for our coffee shop that just opened in SoHo"
+       → "Convert nearby pedestrians and locals to visit the café for coffee"
+
+     prompt: "fundraising page for our nonprofit's clean-water campaign"
+       → "Convert visitors into one-time or recurring donors for the campaign"
+
+     prompt: "beta signup page for our AI note-taking app"
+       → "Capture beta-list emails from prosumer knowledge workers"
+
+     prompt: "landing page for a yoga studio that does outdoor retreats in Costa Rica"
+       → "Convert wellness-curious visitors to book a Costa Rica retreat slot"
+   The verb is the conversion action. The target audience is WHO clicks. If you
+   write "promote" or "showcase" or "introduce" you have FAILED — those are not
+   conversion verbs. Rewrite until the verb is concrete (apply / book / donate /
+   sign up / order / reserve / visit / enroll / inquire / hire).]
+
+target_audience:
+  [WHO is on this page? Be specific. Not "potential customers" — name them.
+   Recruitment page → "experienced CDL-A truck drivers in the southeast US,
+   age 25-55, currently employed but open to switching".
+   Beta signup → "knowledge workers, ICs at SaaS companies, currently using
+   Notion/Obsidian and frustrated by manual organization".
+   Yoga retreat → "women 28-45 with disposable income, urban professionals
+   seeking burnout reset, mid-to-advanced practice level".
+   This audience drives copy tone, imagery, social proof, and which objections
+   the sections must address.]
+
+must_have_sections:
+  [The 3-7 sections WITHOUT WHICH this page fails its primary_goal. Derive
+   these from the goal, not from the industry. Format: section_slug — why
+   it is non-negotiable for THIS goal.
+
+   Example for "Recruit truck drivers and fleet operators":
+     - hero_role_focused — headline/CTA must speak to drivers, not shippers
+       ("Drive with us. Home weekly." NOT "Logistics solutions for your business")
+     - open_positions — current job openings with location/route/pay range
+       (without this, no application happens; this is THE conversion section)
+     - driver_benefits — pay structure, home time, equipment, health insurance
+       (drivers compare offers on these specifics; missing this loses them)
+     - day_in_the_life — typical route/schedule/equipment with real photos
+       (answers "what's actually different about this company")
+     - driver_testimonials — quotes from current drivers (NOT customer testimonials)
+     - apply_now_form — short form: name, CDL class, years experience, location,
+       phone (long forms kill mobile applications)
+     - faq_for_drivers — pay frequency, hometime guarantee, dispatch style,
+       truck assignment policy
+
+   Example for "Convert visitors to book a Costa Rica yoga retreat":
+     - hero_with_retreat_imagery — single hero image of the actual retreat
+       location, NOT a yoga studio interior
+     - what_is_included — daily schedule + meals + accommodation + excursions
+     - dates_and_pricing — specific upcoming retreat weeks with prices/openings
+     - lead_teacher_bio — credentials, photo, teaching style
+     - what_past_attendees_said — testimonials with photos from real retreats
+     - location_and_accommodation — gallery of the property + room types
+     - book_now_cta — date selection + deposit info + booking form
+
+   Example for "Capture beta-list emails from prosumer knowledge workers":
+     - hero_with_demo_screenshot — actual product UI, not abstract gradient
+     - problem_resonance — the specific frustration the user has TODAY
+     - how_it_works — 3-step flow showing the product in action
+     - feature_proof — specific UX moments that win the comparison vs Notion
+     - waitlist_count_or_social_proof — numbers that signal momentum
+     - email_signup_form — the conversion section, prominent twice
+     - faq_for_skeptics — "is my data private", "when will I get access"
+
+   Counter-example showing what NOT to do:
+   ✗ For the recruitment prompt above, "services / industries we serve / our
+     fleet / contact us" — those serve customer-acquisition, not driver-recruitment.
+     They are LITERALLY the wrong page for the user's stated goal.]
+
+conversion_amplifiers:
+  [3-5 ADDITIONAL sections that a domain EXPERT would put ON TOP of the
+   must_haves to maximize conversion. The page WORKS without them — but a
+   real practitioner who has run conversion experiments in this space would
+   always add 2-4 of these. Format: section_slug — why a pro adds this.
+
+   The difference from must_have_sections:
+     • must_have = page fails its job without it (e.g. apply_now_form on a
+       recruitment page)
+     • conversion_amplifier = page works without it, but with it the conversion
+       rate jumps because it removes a specific objection or adds momentum
+
+   Example for "Recruit truck drivers":
+     - referral_bonus_callout — drivers refer drivers; a $1-3K referral bonus
+       banner converts existing-driver visitors into a recruiting channel
+     - meet_your_recruiter_card — photo + name + direct phone of the actual
+       recruiter; reduces "is this a real company" hesitation
+     - paid_orientation_promise — "$1,000 paid orientation, hotel + meals
+       covered" addresses the "I can't afford to start a new job" objection
+     - day_in_the_life_video — short loom-style video of a real route /
+       dispatch interaction; outperforms text testimonials 2-3x
+     - live_chat_or_text_recruiter — sticky widget with "text us at 555-…";
+       captures applicants who won't fill the form
+
+   Example for "Capture beta-list emails":
+     - waitlist_count_ticker — "join 12,847 others on the list" — momentum
+       social proof; works even when count is mid-thousands
+     - who_else_signed_up_logos — company logos of beta users; signals
+       legitimacy in 1 second
+     - founder_loom_video — 90s personal video; converts the "is this real"
+       skeptic into believer
+     - early_access_perks — "first 100 get free annual plan"; urgency without
+       a fake countdown
+     - last_signup_ticker — "Sarah from London signed up 4 minutes ago";
+       live-ish feed under the form
+
+   Example for "Convert visitors to book a Costa Rica yoga retreat":
+     - tonight_availability_or_remaining_spots — "Only 3 spots left for
+       March 18 retreat"; scarcity that's real, not fake
+     - whats_not_included_for_clarity — pre-empts the "do I need flights"
+       worry that makes 30% bounce
+     - financing_or_payment_plan_card — "$500 deposit holds your spot,
+       balance due 30 days before"; lowers the activation barrier
+     - past_attendee_photo_wall — instagram-style grid of real retreat
+       photos with captions from attendees
+     - custom_retreat_inquiry — a smaller form for "I want a private group
+       retreat"; captures B2B/group leads alongside individuals
+
+   Example for "Donations for clean-water campaign":
+     - live_donation_counter — "$84,231 raised toward $100k goal" with a
+       progress bar; momentum social proof
+     - where_your_money_goes_breakdown — "$25 = 1 family clean for a year";
+       concretizes the impact-per-dollar
+     - recurring_giving_upsell — "$10/mo over 1 year does 3x what $30 once
+       does"; nudges from one-time to recurring
+     - corporate_match_lookup — input "your employer name"; instantly shows
+       2x match availability
+     - legacy_giving_card — for older audiences; "include us in your will"
+       captures a demographic the main flow misses
+
+   Pick amplifiers that match THIS specific primary_goal — do not list generic
+   items. The point is to think like a domain practitioner who has watched
+   real users convert (or not) on pages like this.]
+
+intent_self_check:
+  [In ONE sentence, state how the section list above will rank #1 on the
+   primary_goal conversion. If you can't, your sections are wrong — rewrite.]
+
+═══════════════════════════════════════════════════════════════
+
+===USER_REQUIREMENTS===
+Re-read the original PROJECT description above. Extract every CONCRETE, USER-STATED
+requirement — anything the user explicitly named or asked for. These are NON-NEGOTIABLE
+and must be implemented by the code generator EXACTLY, not summarised away by your
+research output.
+
+Cover all of these axes when relevant:
+  • Loader / preloader specifics (e.g. "noise-overlay loader", "rotating logo loader",
+    "skeleton loader with shimmer")
+  • Cursor / pointer behaviour ("magnetic cursor", "custom dot cursor", "trail cursor")
+  • Specific animations / transitions ("hero text scrambles in", "image stack flips on
+    scroll", "marquee logo strip")
+  • Layout / structural choices ("split-screen hero", "horizontal scroll testimonials",
+    "magazine-style features grid")
+  • Brand / copy specifics (exact taglines, named sections, named features, mascots,
+    icons, named colours, named fonts)
+  • Interaction quirks ("no scroll", "single-page reveal-on-scroll", "no header on
+    scroll", "sticky CTA")
+  • Integrations or external services the user named ("Stripe checkout", "Calendly
+    embed", "MapBox map")
+  • Accessibility / language ("RTL Arabic version", "Spanish copy", "high-contrast
+    mode")
+  • Performance / mobile constraints ("mobile-first", "no JS animations", "60fps")
+
+Output as a JSON array of strings, one short imperative per item. Empty array `[]` if
+the user gave NO specific requirements (just described the type of site).
+
+Example for input "fitness landing page with magnetic cursor and a rotating donut
+loader, dark mode default, swipe-card testimonials":
+[
+  "magnetic cursor effect on all interactive elements (buttons, nav, CTA)",
+  "rotating donut loader on initial page load (svg circle stroke animation, 1.2s loop)",
+  "dark mode is the DEFAULT theme (light mode optional, controlled by toggle)",
+  "testimonials section uses swipe-card stack, not a static grid (drag to reveal next)"
+]
+
+⚠️  CRITICAL — DO NOT invent requirements the user did not state. Only extract what is
+literally implied or named by the description. Empty array is the correct answer for
+generic requests.
+
 ═══════════════════════════════════════════════════════════════
 STEP 2 — INTERNET RESEARCH (MUST use google_search grounding)
 ═══════════════════════════════════════════════════════════════
@@ -2237,12 +3142,67 @@ cta: "[CTA text — use the domain-appropriate verb: Reserve a Table / Book a Cl
 sticky: yes | blur_bg: yes
 
 ===SECTIONS===
-Invent the section list that THIS domain actually needs — do NOT default to the
-generic "hero / features / pricing / faq / cta" stack. Study what real top
-{domain} sites put on their landing page and pick 7-12 sections that flow in a
-domain-appropriate order. The list below is a menu of POSSIBLE sections; pick
-what fits this domain, skip what doesn't, and INVENT sections unique to the
-domain if needed.
+⚠️  HARDEST RULE — INTENT BEATS DOMAIN:
+The section list MUST serve the primary_goal you wrote in ===PAGE_INTENT===,
+NOT the generic "what a {domain} site usually has" stack.
+
+TWO-TIER REQUIREMENT — both tiers are mandatory:
+
+TIER 1 — Must-haves (page FAILS without them):
+  Every section_slug listed in ===PAGE_INTENT===.must_have_sections MUST
+  appear here, by the SAME section_slug name, and must come EARLY in the
+  page (before any generic domain-flavor sections).
+
+TIER 2 — Conversion amplifiers (separates 7/10 from 10/10):
+  Pick AT LEAST 2 (preferably 3-4) section_slugs from
+  ===PAGE_INTENT===.conversion_amplifiers and include them here, by the SAME
+  section_slug name. These are what a domain expert would always add — the
+  difference between "the page is complete" and "the page converts at the
+  ceiling for this goal".
+
+Concretely:
+  • Recruitment → must-have: open_positions, driver_benefits, apply_now_form;
+    amplifier picks: referral_bonus_callout, meet_your_recruiter_card,
+    paid_orientation_promise, day_in_the_life_video.
+  • Donation → must-have: impact_proof, donation_tiers, donate_now_cta;
+    amplifier picks: live_donation_counter, where_your_money_goes_breakdown,
+    recurring_giving_upsell.
+  • Beta-signup → must-have: email_signup_form (twice), problem_resonance,
+    product_demo; amplifier picks: waitlist_count_ticker, founder_loom_video,
+    early_access_perks.
+  • Reservation/booking → must-have: booking_widget visible above-the-fold;
+    amplifier picks: scarcity_or_remaining_spots, financing_or_deposit_card,
+    past_attendee_photo_wall.
+
+SELF-CHECK — run ALL THREE before continuing:
+  1. Re-read each section_slug in ===PAGE_INTENT===.must_have_sections.
+     If ANY is missing from the list below → ADD it now.
+  2. Count sections matching ===PAGE_INTENT===.conversion_amplifiers slugs.
+     If fewer than 2 → ADD until you have at least 2 (preferably 3-4).
+  3. Scan every section_slug for GENERIC names: `how_it_works`, `features`,
+     `testimonials`, `cta`, `cta_final`, `about`, `about_us`, `faq`,
+     `newsletter`, `pricing`. If a section's CONTENT is custom and goal-
+     specific, RENAME the slug to match what it actually shows. Examples:
+       • `how_it_works` with content "Prompt → Preview → Publish"
+            → `prompt_preview_publish_flow`
+       • `features` for a sailing charter with content "sunset sails,
+          multi-day cruises, private skipper"
+            → `charter_experiences`
+       • `testimonials` for a dental hygienist recruitment page with
+          content "what our hygienists say about working here"
+            → `hygienist_voices`
+       • `cta_final` for a reforestation donation page with content
+          "Sponsor your first tree today"
+            → `sponsor_a_tree_cta`
+     Keep `hero` and `footer` as-is (they are universal anchors). Keep a
+     generic slug ONLY if the content is genuinely generic (e.g. a vanilla
+     FAQ that could appear on any site).
+
+Total page length: 8-12 sections. The mix is must-haves + amplifiers + a
+small number of domain-flavor sections that genuinely strengthen the
+conversion path. Study what real top {domain} sites put on their landing page;
+the list below is a menu of POSSIBLE sections; pick what fits, skip what
+doesn't, INVENT sections unique to the goal if needed.
 
 Possible section types (not all apply — pick what THIS domain needs):
   Universal: hero, social_proof (logos / ratings / user count), cta_final, footer
@@ -2305,24 +3265,112 @@ cta: "[optional primary CTA text — domain verb: Reserve / Book Now / Visit / O
 sticky: yes | blur_bg: yes
 
 ===PAGES===
-Study REAL {domain} sites and list EVERY page their sites have (minimum 5-6 pages).
+Study REAL {domain} sites and list EVERY page they have (MINIMUM 5-6 pages, most have 7-9).
 
-[page: home]
-path: /
-hero_headline: "[compelling headline]"
-hero_subheadline: "[supporting text]"
-sections: [comma-separated list of sections on this page]
-purpose: [what this page achieves]
+⚠️  CRITICAL — DEPTH REQUIREMENT (this is the #1 failure mode of past runs):
+Every page MUST be enumerated section-by-section with the SAME depth as the
+single-page landing format. A page with only `sections: hero, services, cta`
+is NOT acceptable — it gives the codegen nothing to render and produces
+identical-looking pages across the site.
 
-[page: about]
-path: /about
-sections: [team, story, values, mission, stats]
-purpose: [...]
+For EACH page, output this EXACT structure (DO NOT collapse, DO NOT abbreviate,
+DO NOT use "etc." — list every section as a [section: name] block):
 
-[ADD every page this type of site needs — each with: path, hero_headline, sections, purpose]
-[For blog: add /articles, /articles/:slug, /write, /categories, /authors/:username, /search]
-[For marketplace: add /listings, /listings/:id, /sell, /categories/:slug, /profile/:id]
-[For portfolio: add /work, /work/:slug, /about, /contact]
+[page: <page_slug>]
+path: <route — / for home, /about, /services, /work/:slug, /articles/:slug, etc.>
+purpose: <what this page achieves for the user — 1 sentence>
+hero_headline: "<page-specific headline, NOT the homepage headline>"
+hero_subheadline: "<1-2 supporting sentences>"
+hero_imagery: <what the page hero shows — be specific about subject + treatment>
+sections:
+  [section: <section_slug>]
+    headline: "<ORIGINAL copy specific to THIS page on THIS domain — no placeholders>"
+    subheadline: "<1-2 supporting sentences with real specificity>"
+    layout: <1 sentence describing spatial structure — e.g. "asymmetric 2-col with tall portrait left, stacked stats right, divider line at 60% width">
+    background: <Tailwind treatment — e.g. "bg-muted/40 with faint dot-matrix overlay at 4%">
+    imagery: <what photos/icons/illustrations appear and where — be specific, NOT "an image of services">
+    content: <real domain-specific items the section contains — list rows/cards/copy as concrete strings, no lorem ipsum>
+    animation: <how content enters on scroll — e.g. "stagger-fade-up at 80ms intervals">
+  [section: <next_section_slug>]
+    headline: "..."
+    ...
+  [section: <…>]
+    ...
+
+PAGE-LEVEL REQUIREMENTS:
+  • Home (/) MUST have 6-9 sections — same depth as a landing page; this is
+    where most visitors land. Do NOT make Home thinner than the rest of the site.
+  • Every NON-HOME page must have 4-6 distinct sections — never just hero + cta.
+  • Section TYPES across pages must NOT all be the same. Do not put a generic
+    "hero / features-grid / testimonials / cta" stack on every single page —
+    each page exists for a different reason and needs a section list that
+    serves THAT reason. About has team/story/values; Services has process/
+    outcomes/case-studies; Contact has form/locations/hours/socials.
+  • Section CONTENT must be page-relevant. The "team" section on /about lists
+    real role names + bios; on /services it does NOT appear at all.
+
+REQUIRED PAGES BY ARCHETYPE (build EVERY page listed for your archetype, plus
+any additional ones the domain calls for):
+
+  consumer_website (5-7 pages):
+    /, /about, /services (or /menu, /rooms, /classes — domain noun for the offering),
+    /contact, plus any of: /pricing, /locations, /gallery, /testimonials, /faq,
+    /careers, /press. Pick what THIS domain truly needs.
+
+  portfolio (5-6 pages):
+    /, /work, /work/:slug, /about, /contact, plus optional: /journal, /services,
+    /process, /clients.
+
+  blog (6-8 pages):
+    /, /articles, /articles/:slug, /categories, /categories/:slug, /authors/:username,
+    /about, /search.
+
+  marketplace (6-8 pages):
+    /, /browse (or /listings), /listings/:id, /sell (or /list-your-X), /categories/:slug,
+    /profile/:id, /about, /how-it-works.
+
+DOMAIN-SPECIFIC SECTION VOCABULARIES — pick from these for relevant pages, do
+NOT reuse the SaaS "features / pricing / faq" stack on physical-business pages:
+
+  Restaurant /menu      → menu_categories, dish_grid, chef_specials,
+                          dietary_filters, wine_pairings, private_dining_cta
+  Restaurant /about     → chef_bio, restaurant_story, sourcing_philosophy,
+                          press_mentions, awards
+  Hotel /rooms          → room_categories, room_carousel, amenities_grid,
+                          floor_plan, rate_cards, check_availability
+  Hotel /experiences    → curated_packages, seasonal_offers, partner_excursions
+  Real estate /buy      → search_form, featured_listings, neighborhood_picks,
+                          mortgage_calculator, recent_sales
+  Real estate /agents   → agent_grid, agent_specialties, contact_an_agent_cta
+  Agency /work          → project_grid, case_study_filter, before_after_strip,
+                          client_logo_marquee, awards_strip
+  Agency /process       → numbered_phase_list, deliverables_per_phase,
+                          tool_stack_strip, sample_timeline
+  Blog /articles        → featured_post, category_pills, post_grid,
+                          editor_picks, popular_tags, newsletter_signup
+  Blog /:slug           → article_hero, table_of_contents, body_with_pullquotes,
+                          author_bio_card, related_posts, comments_or_cta
+  Portfolio /work/:slug → project_hero, problem_brief, process_journey,
+                          outcome_stats, gallery_strip, next_project_link
+  Marketplace /browse   → filter_sidebar, sort_bar, listing_grid, pagination,
+                          recommended_strip, recent_searches
+  Marketplace /:id      → listing_gallery, key_specs, seller_card, location_map,
+                          similar_listings, contact_seller_cta
+
+CROSS-PAGE COHESION RULES (enforce these — do not output a site that violates them):
+  • The header nav_items from ===HEADER=== MUST match a real page in this list
+    (or a section anchor on /). No nav link with no page behind it.
+  • Every CTA verb used on Home (`Reserve a Table`, `Book a Stay`, `View Listing`,
+    `Read More`) MUST land on a real page that supports that action.
+  • Footer columns from ===FOOTER=== should reuse this page list — do not invent
+    footer-only pages that don't exist here.
+
+HARD BANS:
+  ✗ Pages with only `sections: hero, cta` or `sections: hero, content, cta`.
+  ✗ Generic copy like "Our amazing services" / "Welcome to our company".
+  ✗ Lorem ipsum or "[placeholder]" anywhere in headline/subheadline/content.
+  ✗ Same section list on /about and /services and /contact.
+  ✗ Pages whose only difference from Home is a header swap.
 
 ===FOOTER===
 columns: [3-4 columns]
@@ -2385,6 +3433,92 @@ fields:
 mock_data: [12-15 rows of realistic domain-specific data — real names, real statuses, real values]
 
 [REPEAT for every sidebar CRUD item AND every domain noun]
+
+===ENTITY_SCREENS===
+For EACH entity in ===ENTITIES===, specify the THREE screens operators
+will use: LIST, DETAIL, and CREATE/EDIT. This is the admin equivalent of
+"per-page section spec" for multi-page sites — without explicit per-screen
+structure, Phase 2 falls back to generic CRUD scaffolding (Name, Created,
+Actions) and the product feels like a Bootstrap admin template.
+
+Reference REAL {domain} {layout_archetype.replace("_", " ")} products
+(Stripe Dashboard, Linear, Shopify Admin, Salesforce, Notion, Retool,
+HubSpot, Intercom — pick the closest analogue for THIS domain) to
+determine each screen's actual structure.
+
+For EACH entity, output:
+
+[entity: EntityName]
+
+  [screen: list]
+  layout: [one sentence — e.g. "left filter sidebar + sortable data table
+           right + sticky bulk-action toolbar at top of table"]
+  filter_bar: [actual filter chips/dropdowns this domain needs — e.g.
+               "Status (Pending, In Transit, Delivered) | Carrier
+               (multi-select) | Date range | Origin city"]
+  table_columns: [the 6-9 columns operators ACTUALLY scan — not every
+                  field, just the high-signal ones with their display
+                  format. Domain-specific. e.g. "Tracking # (mono),
+                  Customer (avatar+name), Origin → Destination, ETA
+                  (relative), Status (badge), Carrier (logo), Value
+                  ($USD)"]
+  row_actions: [per-row quick actions — e.g. "View, Edit, Print Label,
+                Mark Delivered, Cancel"]
+  bulk_actions: [actions on selected rows — e.g. "Assign Carrier,
+                 Export CSV, Send Status Update"]
+  empty_state: [what to show when there are no results — e.g.
+                "illustration + 'No shipments yet' + 'Create your first
+                shipment' CTA"]
+  pagination: [pattern — e.g. "numbered + page-size selector (25/50/100),
+               showing 1-25 of 1,432"]
+
+  [screen: detail]
+  layout: [one sentence — e.g. "two-column split: 65% main content + 35%
+           activity sidebar; tabs at top for Overview/Timeline/Documents/
+           Notes"]
+  hero_strip: [top status/identity strip — e.g. "tracking # + status
+               badge + key timestamps + primary action button"]
+  primary_panels: [3-5 named panels with what they contain — e.g.
+                   "Customer Info: name/email/phone/address; Shipment
+                   Details: dimensions/weight/value/insurance; Route:
+                   origin/destination/waypoints with map embed;
+                   Documents: BOL/invoice/POD as downloadable cards"]
+  side_rails: [what's in the activity sidebar — e.g. "activity timeline
+               (status changes, comments, system events) with author +
+               timestamp; Notes tab for internal team comments"]
+  contextual_actions: [domain-specific header buttons — e.g. "Print
+                       Label, Email Customer, Add Note, Cancel
+                       Shipment, Reroute"]
+
+  [screen: create]
+  layout: [one sentence — e.g. "single-page form, NOT modal — 2-column
+           grid with logical field groups; sticky save bar at bottom"]
+  field_groups: [name + ordered fields per group — e.g. "Customer Info:
+                 customer (combobox), pickup_address, delivery_address,
+                 contact_phone; Shipment Details: weight, dimensions,
+                 declared_value, insurance_required; Routing:
+                 origin_terminal, destination_terminal, carrier,
+                 expected_pickup, expected_delivery"]
+  smart_defaults: [what the form pre-fills — e.g. "pickup address from
+                   customer's default; carrier from last 3 used;
+                   terminal from current user's region"]
+  validation_quirks: [domain-specific rules — e.g. "hazmat cargo blocks
+                      ground carriers; weight > 150lb requires LTL flag;
+                      international destinations require customs forms"]
+  primary_cta: [submit button + what happens — e.g. "Create Shipment &
+                Generate Label → opens label preview"]
+
+[REPEAT for every entity from ===ENTITIES===]
+
+HARD BANS for ENTITY_SCREENS:
+  ✗ Generic table_columns like "Name, Created, Updated, Actions" — every
+    column MUST be domain-specific.
+  ✗ Empty filter_bar — even simple entities have 2-3 filters.
+  ✗ Detail views with no side_rails or contextual_actions — that is a
+    glorified read-only form, not a real admin screen.
+  ✗ Create forms with all fields in one ungrouped flat list — operators
+    expect logical groups.
+  ✗ Placeholder text like "[field]" or "TBD" anywhere in this block.
 
 ===STATUS_BADGES===
 [status_value]: bg-[color]-100 text-[color]-800 dark:bg-[color]-900/30 dark:text-[color]-400
@@ -2987,8 +4121,13 @@ Output ONLY ERA_CALIBRATION, LIVE_UI_RESEARCH, and LAYOUT_BLUEPRINT blocks.
     # _gemini_semaphore(2) lets both slots proceed in parallel for a single project
     # while a second concurrent project waits, keeping inside Gemini rate limits.
     _results = await asyncio.gather(
-        _call_gemini_single(research_prompt, gemini_url, _is_pro, websocket, "structure", max_tokens=14000),
-        _call_gemini_single(_design_prompt, gemini_url, _is_pro, websocket, "design", max_tokens=8000),
+        # Structure call bumped 14K → 32K so admin projects with 6-10
+        # entities × 3 screens × rich ENTITY_SCREENS spec don't get
+        # truncated mid-block. Multi-page sites with 6-8 pages × rich
+        # per-section spec also benefit. We pay only for what's used —
+        # this is a CEILING, not a target.
+        _call_gemini_single(research_prompt, gemini_url, _is_pro, websocket, "structure", max_tokens=32000),
+        _call_gemini_single(_design_prompt, gemini_url, _is_pro, websocket, "design", max_tokens=12000),
         return_exceptions=True,
     )
 
@@ -3061,6 +4200,90 @@ Output ONLY ERA_CALIBRATION, LIVE_UI_RESEARCH, and LAYOUT_BLUEPRINT blocks.
 # ║  Run build, read errors, call Opus for surgical fixes        ║
 # ╚══════════════════════════════════════════════════════════════╝
 
+async def _ensure_node_modules(
+    workspace_path: str,
+    pm: str,
+    websocket,
+) -> bool:
+    """Install dependencies if node_modules is missing.
+
+    The template clone brings package.json + lockfile but NOT node_modules,
+    so the very first build attempt fails with "Command 'next' / 'vite'
+    not found" until we install. Detect "node_modules is missing or empty",
+    run install with the workspace's preferred package manager, fall back
+    to npm if pnpm/yarn/bun aren't available.
+
+    Template-agnostic: triggers on any project (Next.js, Vite, etc.) by
+    checking node_modules itself rather than a specific binary, so the
+    react-admin / vue-admin paths get the install too.
+
+    Returns True if node_modules looks usable (or install succeeded),
+    False on install failure. Caller still tries to build — some failures
+    (e.g. network blips on a transitive dep) don't block the actual build
+    binary from existing.
+    """
+    nm_dir = os.path.join(workspace_path, "node_modules")
+    bin_dir = os.path.join(nm_dir, ".bin")
+    # Skip install when node_modules has actual contents — `os.listdir`
+    # check is cheap and avoids a 8-15s no-op install on subsequent runs.
+    try:
+        if os.path.isdir(bin_dir) and os.listdir(bin_dir):
+            return True
+    except OSError:
+        pass
+
+    import shutil
+    install_pm = pm if shutil.which(pm) else "npm"
+    if install_pm == "pnpm":
+        install_cmd = ["pnpm", "install", "--frozen-lockfile=false", "--reporter=silent"]
+    elif install_pm == "yarn":
+        install_cmd = ["yarn", "install", "--silent"]
+    elif install_pm == "bun":
+        install_cmd = ["bun", "install"]
+    else:
+        install_cmd = ["npm", "install", "--no-audit", "--no-fund", "--loglevel=error"]
+
+    await _ws_send(websocket, "progress", f"📦 Installing dependencies ({install_pm})…")
+    logger.info("Build verify: running '%s' in %s", " ".join(install_cmd), workspace_path)
+    t0 = time.perf_counter()
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            install_cmd,
+            cwd=workspace_path,
+            capture_output=True,
+            text=True,
+            timeout=240,
+            env={**os.environ, "CI": "true", "ADBLOCK": "true",
+                 "DISABLE_OPENCOLLECTIVE": "true", "OPEN_SOURCE_CONTRIBUTOR": "true"},
+        )
+    except subprocess.TimeoutExpired:
+        await _ws_send(websocket, "progress", "⚠️ Dependency install timed out (4 min)")
+        logger.error("Dependency install timed out after 240s")
+        return False
+    except FileNotFoundError as exc:
+        logger.error("Install command not found: %s", exc)
+        return False
+
+    elapsed = time.perf_counter() - t0
+    if result.returncode != 0:
+        tail = ((result.stderr or "") + (result.stdout or ""))[-800:]
+        logger.error("Dependency install failed (exit=%d, %.1fs):\n%s",
+                     result.returncode, elapsed, tail)
+        await _ws_send(websocket, "progress",
+                       f"⚠️ {install_pm} install exited {result.returncode} after {elapsed:.0f}s")
+        # Even on non-zero exit, node_modules may be sufficiently populated to
+        # build — fall through and let the build attempt prove it.
+    else:
+        await _ws_send(websocket, "progress", f"✅ Dependencies installed in {elapsed:.0f}s")
+        logger.info("Dependencies installed via %s in %.1fs", install_pm, elapsed)
+
+    try:
+        return os.path.isdir(bin_dir) and bool(os.listdir(bin_dir))
+    except OSError:
+        return False
+
+
 async def verify_and_fix_build(
     workspace_path: str,
     api_key: str,
@@ -3081,6 +4304,11 @@ async def verify_and_fix_build(
         os.path.exists(os.path.join(workspace_path, "next.config.mjs"))
         or os.path.exists(os.path.join(workspace_path, "next.config.js"))
     )
+    # Install node_modules once per workspace if missing. Template-agnostic
+    # so Vite/admin templates (react-admin, vue-admin) get deps installed
+    # too — otherwise their `vite build` fails with "command not found".
+    await _ensure_node_modules(workspace_path, pm, websocket)
+
     build_cmd = ([pm, "exec", "next", "build", "--no-lint"] if _is_nextjs_project
                  else [pm, "run", "build"])
 
@@ -3173,23 +4401,25 @@ NEXTJS_WEBSITE_RULES = """
 
 ### What ALREADY EXISTS (DO NOT create these):
 - Layout: src/app/layout.js (root), src/app/(marketing)/layout.js
-- Navigation: src/components/layout/MarketingHeader.jsx, MarketingFooter.jsx
 - Auth pages: src/app/(auth)/login/page.js, register/page.js
 - Providers: src/components/Providers.jsx (QueryClient + TooltipProvider)
 - UI Components: 25+ shadcn/ui components in src/components/ui/
-- Config: src/config/site.js, navigation.js, icons.js
 - API client: src/lib/api-client.js
 - Hooks: useDebounce, useLocalStorage, usePagination
 
+### Already written DETERMINISTICALLY with project-specific content (DO NOT regenerate):
+- src/app/globals.css — palette + Google Fonts, project-specific
+- src/lib/design-system.js — design tokens (spacing, radius, motion)
+- src/config/site.js — project name, description, URL, logoText
+- src/config/navigation.js — mainNav + footerNav from schema
+- src/components/layout/MarketingHeader.jsx — brand-marked, schema-driven
+- src/components/layout/MarketingFooter.jsx — brand + footer columns from schema
+- src/app/<route>/page.js for every non-home schema route — thin shells importing the page component
+
 ### What YOU generate:
-- src/app/globals.css — UPDATE the :root CSS variables for the project theme
-  IMPORTANT: Keep `@import "tw-animate-css"` at the top — NEVER replace with tailwindcss-animate
-- src/config/site.js — REWRITE with the project name, description, URL
-- src/config/navigation.js — REWRITE with the project's nav items
-- src/app/(marketing)/page.js — REWRITE with section component imports
+- src/app/(marketing)/page.js — REWRITE with section component imports (HOME PAGE ONLY)
 - src/components/sections/*.jsx — CREATE all section components (Hero, Features, Pricing, etc.)
-- Additional pages (src/app/(marketing)/about/page.js, pricing/page.js, contact/page.js) — CREATE
-- src/app/(marketing)/blog/page.js — CREATE if blog is in the spec
+- src/components/pages/*.jsx — CREATE the page components imported by the deterministic route shells
 
 ### File naming (sections):
 - src/components/sections/HeroSection.jsx
@@ -5260,6 +6490,39 @@ WHAT TO DO INSTEAD (pick one variation per section that breaks the template):
               | animated counter stat row above the CTA button
   About     → timeline vertical | editorial 2-column with large pull-quote | full-bleed with motif
 
+PAGE INTENT (from ===PAGE_INTENT=== in research) — TOP PRIORITY:
+  Gemini extracted four fields: primary_goal, target_audience,
+  must_have_sections, and conversion_amplifiers. Two-tier rule:
+
+    Tier 1 — must_have_sections (page FAILS without them):
+      Every section_slug listed in must_have_sections MUST be built as its own
+      component, with copy that speaks to the named target_audience — NOT the
+      industry's usual customers. A logistics recruitment landing builds
+      open_positions / driver_benefits / apply_now_form — NOT services /
+      fleet / contact.
+
+    Tier 2 — conversion_amplifiers (separates 7/10 from 10/10):
+      Build AT LEAST 2 (preferably 3-4) of the section_slugs listed in
+      conversion_amplifiers as their own components. These are what a domain
+      expert adds on top of the must-haves to maximize conversion (e.g.
+      referral_bonus_callout for recruitment, live_donation_counter for
+      fundraising, waitlist_count_ticker for beta signup). Without them the
+      page is "complete"; with them it converts at the ceiling for the goal.
+
+  If you find yourself generating a section that does not serve the
+  primary_goal AND is not in must_have_sections OR conversion_amplifiers,
+  delete it.
+
+USER REQUIREMENTS (from ===USER_REQUIREMENTS=== in research) — HIGHEST PRIORITY:
+  The user wrote things in their description that they explicitly want. Gemini extracted
+  them into a JSON array under ===USER_REQUIREMENTS===. EVERY item MUST be implemented
+  exactly as written. These outrank archetype defaults, design DNA, and your own creative
+  preferences. If the user said "magnetic cursor" — there must be a magnetic cursor. If
+  they said "rotating donut loader" — there must be a rotating donut loader on initial
+  load, not a generic spinner.
+  An empty array (`[]`) means the user gave no specific quirks — proceed with research-
+  driven defaults. A NON-empty array is non-negotiable.
+
 VISUAL SURPRISE (from ===VISUAL_DISTINCTIVENESS=== in research) — MANDATORY:
   The research block contains a visual_surprise field. That element MUST be implemented.
   Do NOT skip it. It is the ONE thing that makes the page memorable.
@@ -5797,6 +7060,210 @@ Call the write_project_files tool with the recovery files only.
     return len(written)
 
 
+# Framework boilerplate / deterministic-builder paths that don't need design-system imports.
+_DS_AUDIT_SKIP_REL_PREFIXES = (
+    "src/components/ui/",        # shadcn template (restored from git)
+    "src/lib/",                  # utility files (incl. design-system.js itself)
+    "src/types/",                # type defs
+    "src/components/layout/",    # deterministic builders (MarketingHeader/Footer)
+)
+_DS_AUDIT_SKIP_BASENAMES = frozenset({
+    # Next.js framework files that don't render content
+    "layout.js", "layout.jsx", "layout.tsx",
+    "error.js", "error.jsx", "error.tsx",
+    "global-error.js", "global-error.jsx", "global-error.tsx",
+    "not-found.js", "not-found.jsx", "not-found.tsx",
+    "loading.js", "loading.jsx", "loading.tsx",
+    "template.js", "template.jsx", "template.tsx",
+    # Common context-only wrappers
+    "Providers.jsx", "Providers.tsx", "providers.jsx", "providers.tsx",
+})
+
+
+def _audit_design_system_imports(workspace_path: str) -> tuple[list[str], int]:
+    """Find component/page files that should import {{ ds }} but don't.
+
+    Phase 2's prompt requires every Claude-generated component to import from
+    @/lib/design-system. In practice Claude skips it in most files even with
+    a 🚨 hard requirement (measured: 5/32 imports on a landing). This audit
+    walks src/ and returns (paths_missing_import, total_scanned) so the
+    caller can fire a focused retry when the gap is too large.
+
+    Scope = scorer scope: any .jsx/.tsx/.js/.ts under src/ that exports a
+    default component, EXCLUDING:
+      - src/components/ui/* (shadcn template)
+      - src/lib/, src/types/ (utilities, type defs)
+      - src/components/layout/* (deterministic builders we control directly)
+      - Next.js framework files (layout.*, error.*, not-found.*, loading.*,
+        global-error.*, template.*)
+      - Provider/context wrappers (Providers.*)
+    """
+    if not workspace_path or not os.path.isdir(workspace_path):
+        return [], 0
+    src_dir = os.path.join(workspace_path, "src")
+    if not os.path.isdir(src_dir):
+        return [], 0
+
+    candidates: list[str] = []
+    for root, dirs, files in os.walk(src_dir):
+        dirs[:] = [d for d in dirs if d not in ("node_modules", ".next", ".git", "dist", "build")]
+        for fname in files:
+            if not fname.endswith((".jsx", ".tsx", ".js", ".ts")):
+                continue
+            if fname in _DS_AUDIT_SKIP_BASENAMES:
+                continue
+            abs_path = os.path.join(root, fname)
+            rel = os.path.relpath(abs_path, workspace_path).replace(os.sep, "/")
+            if any(rel.startswith(prefix) for prefix in _DS_AUDIT_SKIP_REL_PREFIXES):
+                continue
+            candidates.append(abs_path)
+
+    if not candidates:
+        return [], 0
+
+    needle_sq = "from '@/lib/design-system'"
+    needle_dq = 'from "@/lib/design-system"'
+    missing: list[str] = []
+    total = 0
+    for path in candidates:
+        try:
+            with open(path, encoding="utf-8") as f:
+                src = f.read()
+        except Exception:
+            continue
+        # Only count files that export a component (heuristic). Skips pure
+        # config / data / barrel modules that wouldn't sensibly import ds.
+        if "export default" not in src and "export {" not in src:
+            continue
+        ext = os.path.splitext(path)[1].lower()
+        if ext in {".js", ".ts"} and ("<" not in src or "return " not in src):
+            # .js/.ts file with no JSX or return statement — not a component
+            continue
+        total += 1
+        if needle_sq not in src and needle_dq not in src:
+            missing.append(os.path.relpath(path, workspace_path).replace(os.sep, "/"))
+    return missing, total
+
+
+async def _recover_design_system_imports(
+    workspace_path: str,
+    missing_files: list[str],
+    api_key: str,
+    websocket,
+) -> list:
+    """Re-emit listed files with the design-system import added.
+
+    Trades ~20-60s for guaranteed design-system adherence. Caps the batch
+    at 20 files to avoid token blowup; if more are missing, the worst gap
+    still gets fixed and the rest can be addressed in a future iteration.
+    Failure is non-fatal — caller proceeds to Phase 3 / build.
+    Returns the list of written file paths (same shape as write_files_from_json).
+    """
+    if not missing_files:
+        return []
+
+    BATCH_CAP = 20
+    batch = missing_files[:BATCH_CAP]
+    file_blocks: list[str] = []
+    for rel in batch:
+        abs_path = os.path.join(workspace_path, rel)
+        try:
+            with open(abs_path, encoding="utf-8") as f:
+                content = f.read()
+        except Exception as exc:
+            logger.warning("Skipping %s in design-system retry: %s", rel, exc)
+            continue
+        file_blocks.append(f"=== {rel} ===\n{content}\n=== END {rel} ===\n")
+    if not file_blocks:
+        return []
+
+    files_listed = "\n".join(file_blocks)
+    paths_listed = "\n".join(f"  - {rel}" for rel in batch)
+
+    await _ws_send(
+        websocket,
+        "progress",
+        f"🔁 Quality gate — re-emitting {len(batch)} file(s) with design-system imports…",
+    )
+    logger.info(
+        "Phase 2.6 design-system retry: rewriting %d files (of %d total missing)",
+        len(batch), len(missing_files),
+    )
+
+    retry_prompt = f"""PHASE 2.6 — DESIGN SYSTEM IMPORT RECOVERY
+
+The following {len(batch)} component/page file(s) were generated WITHOUT the
+required `import {{ ds }} from '@/lib/design-system'` statement at the top:
+
+{paths_listed}
+
+Rewrite EACH file to:
+  1. Add `import {{ ds }} from '@/lib/design-system';` at the top of the file
+     (after a 'use client' directive if present, before other imports).
+  2. Replace inline equivalents with ds.* tokens where natural:
+       py-24 / py-20 / py-16        → ds.sectionSpacing
+       max-w-7xl mx-auto px-*       → ds.maxWidth
+       rounded-lg border bg-card *  → ds.card
+  3. Keep ALL other behavior, copy, JSX structure, and className strings
+     EXACTLY as they were. Only add the import + swap matching tokens.
+
+Do NOT regenerate any file not listed above.
+Do NOT change props, hooks, copy, or component logic.
+Do NOT remove any existing className entries — only swap matching ones.
+
+ORIGINAL FILE CONTENTS (rewrite each in place):
+
+{files_listed}
+
+Call the write_project_files tool with one entry per file above. The "path"
+field MUST EXACTLY match the path in the === FILENAME === marker.
+"""
+
+    try:
+        result = await asyncio.wait_for(
+            call_claude_for_json(
+                system_prompt=_system_prompt_for_phase(2),
+                user_prompt=retry_prompt,
+                api_key=api_key,
+                websocket=websocket,
+                max_tokens=min(48000, 6000 * len(batch)),
+                model=DEFAULT_MODEL,
+                extended_output=True,
+            ),
+            timeout=180.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Phase 2.6 design-system retry timed out")
+        return []
+    except Exception as exc:
+        logger.warning("Phase 2.6 design-system retry failed: %s", exc)
+        return []
+
+    if not result or not isinstance(result, dict) or not result.get("files"):
+        logger.warning("Phase 2.6 design-system retry returned no files")
+        return []
+
+    asked_set = set(batch)
+    filtered = [
+        f for f in (result.get("files") or [])
+        if (f.get("path") or f.get("filename") or "") in asked_set
+    ]
+    if not filtered:
+        logger.warning("Phase 2.6 retry: no returned files matched expected paths")
+        return []
+
+    written = write_files_from_json({"files": filtered}, workspace_path)
+    if written:
+        await _emit_file_writes(websocket, written, action="recover")
+        await _ws_send(
+            websocket,
+            "progress",
+            f"✅ Quality gate — rewrote {len(written)} file(s) with design-system imports",
+        )
+        logger.info("Phase 2.6 rewrote %d files with design-system imports", len(written))
+    return written if isinstance(written, list) else []
+
+
 def _validate_plan_data(plan_data: dict, archetype: str) -> list[str]:
     """Sanity-check the plan-card payload before emitting it to the user.
 
@@ -5924,6 +7391,32 @@ async def _generate_new_project_inner(
     
     MODEL = DEFAULT_MODEL
     MAX_TOKENS = MAX_TOKENS_PER_CALL
+
+    # ── Step 0: Intent gate ──
+    # Cheap Gemini Flash pre-check — catches "asdfasdf", "hi", "test" before
+    # we burn 3-5 minutes generating plausible-sounding nonsense. Returns
+    # {"is_project": False, ...} only on a CONFIDENT no; any uncertainty or
+    # API error passes through, so we don't block legitimate edge cases.
+    _phase_begin("intent_gate")
+    _intent = await _validate_project_intent(description, gemini_key)
+    _phase_end("intent_gate")
+    if not _intent.get("is_project", True):
+        ask = _intent.get("ask_user") or (
+            "Could you describe what you'd like to build? "
+            "Try: \"a [type of site/app] for [audience] that [main feature]\"."
+        )
+        logger.info("intent_gate: rejecting input (score=%d) — %s",
+                    _intent.get("score", 0), description[:60])
+        # Send the clarification straight to the chat panel; no plan, no pipeline.
+        try:
+            await websocket.send_json({
+                "type": "chat_message",
+                "role": "agent",
+                "content": ask,
+            })
+        except Exception:
+            pass
+        return False
 
     # ── Step 1: Classify app type (AI-powered) ──
     # Gemini Flash classifies the description accurately so the research prompt
@@ -6105,9 +7598,11 @@ async def _generate_new_project_inner(
                     _cultural_atmosphere = _extract_research_section(research, "===CULTURAL_ATMOSPHERE===", max_chars=2400)
                     # Brand name: Claude can infer it from description inside the call;
                     # passing description as-is avoids brittle regex extraction here.
-                    # Outer cap (220s): two Claude attempts × ~90s httpx timeout +
-                    # network latency. If Anthropic stalls, we bail and use the
-                    # original research rather than holding up the pipeline.
+                    # Outer cap (260s): up to three Claude attempts × ~90s
+                    # httpx timeout (initial + structural retry + Gemini-critic
+                    # taste retry) plus the ~30s critic call. If Anthropic
+                    # stalls we bail and use the original research rather than
+                    # holding up the pipeline.
                     _design = await asyncio.wait_for(
                         build_design_system(
                             description=description,
@@ -6118,9 +7613,10 @@ async def _generate_new_project_inner(
                             vibe=_vibe_from_research,
                             cultural_atmosphere=_cultural_atmosphere,
                             api_key=api_key,
+                            gemini_key=gemini_key,
                             websocket=websocket,
                         ),
-                        timeout=220.0,
+                        timeout=260.0,
                     )
                     if _design:
                         research = inject_design_blocks(research, _design)
@@ -6326,6 +7822,7 @@ async def _generate_new_project_inner(
     from app.services.project_schema import (
         build_project_schema,
         schema_to_entity_spec,
+        schema_to_entity_screens_spec,
         schema_to_navigation_spec,
         schema_to_dashboard_spec,
         schema_to_theme_spec,
@@ -6354,6 +7851,16 @@ async def _generate_new_project_inner(
     )
     _phase_end("schema_build")
 
+    # Fold the Design Director output and classification into the schema so it
+    # becomes the single source of truth. Builders downstream can read
+    # project_schema["design"] / ["archetype"] / ["domain_kind"] instead of
+    # taking parallel pipeline-local args. (_parse_schema_from_research already
+    # set archetype/domain_kind during schema build; this re-asserts them in
+    # case build_project_schema took a path that bypasses the parser.)
+    project_schema["archetype"] = _layout_archetype
+    project_schema["domain_kind"] = _domain
+    project_schema["design"] = _design if isinstance(_design, dict) else {}
+
     # Bridge the Director's motion_language onto schema.theme.motion so the
     # deterministic globals.css writer can emit --d-fast/--d-base/--d-slow/
     # --ease-sig variables. Without this the CSS reveal utilities fall back
@@ -6375,6 +7882,47 @@ async def _generate_new_project_inner(
                 project_schema["theme"]["motion"]["signature_transition"],
                 project_schema["theme"]["motion"]["cursor_treatment"],
             )
+
+    # ── Step 3b0: Phase D — parallel per-unit deep research ──
+    # For multi-unit projects (admin with many entities, multi-page consumer
+    # sites), fan out one focused Gemini call per entity / page and append
+    # the results to the research blob as ===ENTITY_DEEP::Name=== /
+    # ===PAGE_DEEP::Name=== blocks. Phase 2 prompts pluck them for richer
+    # per-unit content. Landing pages and small projects skip — gated by
+    # _should_run_deep_research(). Off by default behind PHASE_D_DEEP_RESEARCH=1.
+    # FAIL-SOFT: any failure leaves `research` unchanged.
+    if _should_run_deep_research(
+        _layout_archetype,
+        project_schema.get("entities"),
+        project_schema.get("pages"),
+    ):
+        try:
+            _brand_name_for_deep = (
+                (project_schema.get("brand") or {}).get("name")
+                or (description[:60].strip() if description else "")
+            )
+            _phase_begin("deep_research")
+            research = await enrich_research_with_deep_dives(
+                research,
+                schema=project_schema,
+                layout_archetype=_layout_archetype,
+                domain=_domain,
+                brand_name=_brand_name_for_deep,
+                websocket=websocket,
+                gemini_key=gemini_key,
+            )
+            # Now that Phase D appended ===ENTITY_DEEP::Name=== / ===PAGE_DEEP::Name===
+            # blocks, attach each block to its schema entity/page so the per-unit
+            # spec renderers (schema_to_entity_screens_spec / schema_to_pages_spec)
+            # can surface this depth into Phase 2 prompts.
+            try:
+                from app.services.project_schema import attach_deep_research_to_schema
+                attach_deep_research_to_schema(project_schema, research)
+            except Exception as _attach_exc:
+                logger.warning("attach_deep_research_to_schema failed (non-fatal): %s", _attach_exc)
+            _phase_end("deep_research")
+        except Exception as _dr_exc:
+            logger.warning("Phase D deep research failed (non-fatal): %s", _dr_exc)
 
     # ── Step 3b1: Generate Supabase backend schema (admin/CRM only) ──
     # For data-driven projects (admin panels, CRMs, dashboards), turn the
@@ -6485,6 +8033,10 @@ async def _generate_new_project_inner(
 
     # Build schema-derived prompt sections (used in all 3 phases)
     schema_entity_spec = schema_to_entity_spec(project_schema)
+    # Per-entity UI screens (admin only): list/detail/create rich spec.
+    # Empty for non-admin archetypes — schema_to_entity_screens_spec returns
+    # "" when no entity has screens attached.
+    schema_entity_screens_spec = schema_to_entity_screens_spec(project_schema)
     schema_nav_spec = schema_to_navigation_spec(project_schema)
     schema_dashboard_spec = schema_to_dashboard_spec(project_schema)
     schema_theme_spec = schema_to_theme_spec(project_schema)
@@ -6663,6 +8215,235 @@ async def _generate_new_project_inner(
                     "Deterministic MarketingHeader write failed (non-fatal): %s",
                     _hdr_exc,
                 )
+
+    # ── Step 3e: Deterministic src/config/site.js write ──
+    # Removes one file group from Phase 1's output budget (~30-50s wall
+    # clock on a 5-page consumer project). Only runs for Next.js, where
+    # src/config/site.js is the canonical metadata file.
+    # FAIL-SOFT: on any error the LLM still writes it in Phase 1.
+    _det_site_config_written = False
+    _site_config_rel = "src/config/site.js"
+    if "next" in _stack_lower or "nextjs" in _stack_lower:
+        try:
+            from app.services.site_config_builder import build_site_config
+            _site_abs = os.path.join(workspace_path, _site_config_rel)
+            # Only overwrite when the template actually has the file —
+            # otherwise we'd create a stray file the rest of the pipeline
+            # doesn't expect.
+            if os.path.isfile(_site_abs):
+                _site_js = build_site_config(project_schema, fallback_description=description)
+                with open(_site_abs, "w", encoding="utf-8") as _sf:
+                    _sf.write(_site_js)
+                _det_site_config_written = True
+                logger.info(
+                    "Deterministic site.js written (%d chars, brand=%s)",
+                    len(_site_js),
+                    (project_schema.get("brand") or {}).get("name", ""),
+                )
+                await _ws_send(
+                    websocket, "progress",
+                    f"📇 Wrote site.js (brand: {(project_schema.get('brand') or {}).get('name', 'project')})",
+                )
+        except Exception as _site_exc:
+            logger.warning(
+                "Deterministic site.js write failed (non-fatal): %s", _site_exc,
+            )
+
+    # ── Step 3f: Deterministic src/config/navigation.js write ──
+    # Emits mainNav + footerNav + navigationConfig from the schema's
+    # already-grouped navigation. Removes one more file group from
+    # Phase 1's output budget. Only runs when the schema actually has
+    # navigation entries — otherwise we'd emit an empty module that
+    # silently breaks any template-stock component still importing
+    # navigationConfig with non-empty items.
+    # FAIL-SOFT: on any error the LLM still writes it in Phase 1.
+    _det_navigation_written = False
+    _navigation_rel = "src/config/navigation.js"
+    if "next" in _stack_lower or "nextjs" in _stack_lower:
+        _nav_groups_for_builder = project_schema.get("navigation") or []
+        # Require at least one group with at least one item before we
+        # commit to the deterministic write — otherwise let Phase 1 fall
+        # back to its own derivation.
+        _has_nav_items = any(
+            isinstance(g, dict) and (g.get("items") or [])
+            for g in _nav_groups_for_builder
+        )
+        if _has_nav_items:
+            try:
+                from app.services.navigation_config_builder import build_navigation_config
+                _nav_abs = os.path.join(workspace_path, _navigation_rel)
+                if os.path.isfile(_nav_abs):
+                    _nav_js = build_navigation_config(project_schema)
+                    with open(_nav_abs, "w", encoding="utf-8") as _nf:
+                        _nf.write(_nav_js)
+                    _det_navigation_written = True
+                    _flat_count = sum(
+                        len(g.get("items") or [])
+                        for g in _nav_groups_for_builder
+                        if isinstance(g, dict)
+                    )
+                    logger.info(
+                        "Deterministic navigation.js written (%d chars, %d items across %d groups)",
+                        len(_nav_js), _flat_count, len(_nav_groups_for_builder),
+                    )
+                    await _ws_send(
+                        websocket, "progress",
+                        f"🧭 Wrote navigation.js ({_flat_count} nav items)",
+                    )
+            except Exception as _nav_exc:
+                logger.warning(
+                    "Deterministic navigation.js write failed (non-fatal): %s", _nav_exc,
+                )
+
+    # ── Step 3f-admin: Deterministic admin navigation.js write ──
+    # react-admin / vue-admin templates ship a navigation.js that exports
+    # `navigation`, `modules`, and `appConfig`. Phase 1/2 LLM regularly
+    # rewrites the file in its own shape and drops `appConfig`, breaking
+    # every consumer (Sidebar, Header, LoginPage) with a missing-export
+    # error at build. The deterministic write preserves the template
+    # contract from the schema's grouped navigation. Authoritative-paths
+    # filter then keeps Phase 1/2 from clobbering it.
+    # FAIL-SOFT: on any error the LLM still writes it in Phase 1.
+    _is_admin_stack = (
+        "react-admin" in _stack_lower
+        or "vue-admin" in _stack_lower
+        or os.path.exists(os.path.join(workspace_path, "vite.config.js"))
+        or os.path.exists(os.path.join(workspace_path, "vite.config.mjs"))
+        or os.path.exists(os.path.join(workspace_path, "vite.config.ts"))
+    ) and not ("next" in _stack_lower or "nextjs" in _stack_lower)
+    if _is_admin_stack and not _det_navigation_written:
+        _nav_groups_for_builder = project_schema.get("navigation") or []
+        _has_nav_items = any(
+            isinstance(g, dict) and (g.get("items") or [])
+            for g in _nav_groups_for_builder
+        )
+        if _has_nav_items:
+            try:
+                from app.services.admin_navigation_config_builder import (
+                    build_admin_navigation_config,
+                )
+                _nav_abs = os.path.join(workspace_path, _navigation_rel)
+                if os.path.isfile(_nav_abs):
+                    _nav_js = build_admin_navigation_config(project_schema)
+                    with open(_nav_abs, "w", encoding="utf-8") as _nf:
+                        _nf.write(_nav_js)
+                    _det_navigation_written = True
+                    _flat_count = sum(
+                        len(g.get("items") or [])
+                        for g in _nav_groups_for_builder
+                        if isinstance(g, dict)
+                    )
+                    logger.info(
+                        "Deterministic admin navigation.js written (%d chars, %d items across %d groups)",
+                        len(_nav_js), _flat_count, len(_nav_groups_for_builder),
+                    )
+                    await _ws_send(
+                        websocket, "progress",
+                        f"🧭 Wrote admin navigation.js ({_flat_count} nav items, +appConfig)",
+                    )
+            except Exception as _nav_exc:
+                logger.warning(
+                    "Deterministic admin navigation.js write failed (non-fatal): %s", _nav_exc,
+                )
+
+    # ── Step 3g: Deterministic MarketingFooter.jsx write ──
+    # Pairs with the deterministic MarketingHeader. Removes the Footer
+    # half of the Layout Components group from Phase 1's output budget.
+    # Standard 4-column layout (brand + nav columns + © bar) — visual
+    # variety comes from typography / colors / radius already baked in
+    # by globals.css and design-system.js.
+    # FAIL-SOFT: on any error the LLM still writes it in Phase 1.
+    _det_footer_written = False
+    _marketing_footer_rel = "src/components/layout/MarketingFooter.jsx"
+    if "next" in _stack_lower or "nextjs" in _stack_lower:
+        _footer_abs = os.path.join(workspace_path, _marketing_footer_rel)
+        if os.path.isfile(_footer_abs):
+            try:
+                from app.services.marketing_footer_builder import build_marketing_footer_jsx
+                _footer_brand = (
+                    project_schema.get("brand", {}).get("name")
+                    or description[:40].strip()
+                    or "Brand"
+                )
+                _footer_blurb = (
+                    project_schema.get("brand", {}).get("description")
+                    or project_schema.get("brand", {}).get("tagline")
+                    or ""
+                )
+                _footer_nav = project_schema.get("navigation") or []
+                _footer_jsx = build_marketing_footer_jsx(
+                    brand_name=_footer_brand,
+                    description=_footer_blurb,
+                    navigation=_footer_nav,
+                )
+                with open(_footer_abs, "w", encoding="utf-8") as _ff:
+                    _ff.write(_footer_jsx)
+                _det_footer_written = True
+                # Log the actual group/item shape so a future regression
+                # to "empty footer columns" is debuggable from logs alone
+                # without re-running the pipeline under a debugger.
+                _groups_summary = ", ".join(
+                    f"{(g.get('group') or '?')}({len(g.get('items') or [])})"
+                    for g in _footer_nav if isinstance(g, dict)
+                ) or "<empty>"
+                logger.info(
+                    "Deterministic MarketingFooter written (%d chars, %d nav groups: %s)",
+                    len(_footer_jsx), len(_footer_nav), _groups_summary,
+                )
+                await _ws_send(
+                    websocket, "progress",
+                    f"🦶 Wrote MarketingFooter (brand: {_footer_brand}, {len(_footer_nav)} nav groups)",
+                )
+            except Exception as _ftr_exc:
+                logger.warning(
+                    "Deterministic MarketingFooter write failed (non-fatal): %s", _ftr_exc,
+                )
+
+    # ── Step 3h: Deterministic Next.js route shells ──
+    # For each schema page that's a normal static route (not "/", no
+    # dynamic params, no hash anchors), write a tiny src/app/<route>/page.js
+    # that imports the page component and re-exports it with metadata.
+    # Phase 2 still writes the inner page components in
+    # src/components/pages/. Removes 5-10 thin files from Phase 1's
+    # output budget on a typical 5-page consumer site.
+    # FAIL-SOFT: any error → individual files skipped, LLM picks them up.
+    _det_route_shells_written: list[dict] = []
+    if "next" in _stack_lower or "nextjs" in _stack_lower:
+        try:
+            from app.services.route_shells_builder import plan_route_shells
+            _route_plan = plan_route_shells(project_schema)
+            for _entry in _route_plan:
+                _abs = os.path.join(workspace_path, _entry["rel_path"])
+                # If the file already exists in the cloned template,
+                # leave it alone — we don't want to overwrite something
+                # the template author put there for a reason.
+                if os.path.exists(_abs):
+                    continue
+                try:
+                    os.makedirs(os.path.dirname(_abs), exist_ok=True)
+                    with open(_abs, "w", encoding="utf-8") as _rf:
+                        _rf.write(_entry["contents"])
+                    _det_route_shells_written.append(_entry)
+                except Exception as _one_exc:
+                    logger.warning(
+                        "Failed to write route shell %s (non-fatal): %s",
+                        _entry["rel_path"], _one_exc,
+                    )
+            if _det_route_shells_written:
+                logger.info(
+                    "Deterministic route shells written: %d files (%s)",
+                    len(_det_route_shells_written),
+                    ", ".join(e["route"] for e in _det_route_shells_written),
+                )
+                await _ws_send(
+                    websocket, "progress",
+                    f"🛣️ Wrote {len(_det_route_shells_written)} route shells: "
+                    + ", ".join(e["route"] for e in _det_route_shells_written),
+                )
+        except Exception as _rs_exc:
+            logger.warning(
+                "Deterministic route-shells write failed (non-fatal): %s", _rs_exc,
+            )
 
     total_files = []
 
@@ -7540,8 +9321,12 @@ Generate ONLY these foundation files (Phases 2 and 3 will handle sections/featur
    - Blog/content sites: sticky top nav with logo, nav links, search icon, CTA button; rich footer with columns
    - Admin panels: sidebar (w-64, brand logo, nav groups, user profile area) + top header with search+notifications
    - DO NOT copy template defaults — create a UNIQUE layout matching the research
-{"   - ⚠️ MarketingHeader.jsx HAS ALREADY BEEN WRITTEN deterministically. DO NOT regenerate src/components/layout/MarketingHeader.jsx. Skip it entirely — do NOT include it in write_project_files. The Footer and Sidebar (if admin) are still yours to build." if _det_header_written else ""}
+{"   - ✏️ MarketingHeader.jsx — REQUIRED: regenerate src/components/layout/MarketingHeader.jsx with a rich, project-aware design. Do NOT ship a plain bordered bar. The header MUST include EVERY item in this checklist:\n       1. SCROLL-AWARE: useState + useEffect listener on window.scrollY. At top → transparent or near-transparent (bg-background/0 or bg-background/40). Past 16px → bg-background/95 + backdrop-blur + border-b. Smooth transition.\n       2. WORDMARK: font-heading class on the brand text, project-specific weight + tracking. Optional small icon glyph from lucide-react matching the domain (e.g. Coffee for café, Sparkles for spa, Wheat for bakery).\n       3. NAV LINKS: import { mainNav } from '@/config/navigation' (DO NOT redefine inline). Render with a hover underline or hover background pill — never plain text-only.\n       4. PROJECT-AWARE CTA: button text MUST match the domain — Restaurant→'Reserve a Table', Coffee→'Order Online', Bakery→'Pre-Order', Fitness→'Book a Class', Hotel→'Book Your Stay', Salon/Spa→'Book Appointment', Real estate→'Browse Listings', Portfolio→'Start a Project', SaaS→'Start Free' / 'Get Demo'. NEVER ship a generic placeholder.\n       5. MOBILE MENU: useState + Menu/X icons from lucide-react, opens a full-width panel below the header with the same nav links + CTA. Auto-close on pathname change (use 'use client' + usePathname()).\n       6. IMPORT CONTRACT (locked, do NOT redefine): import { mainNav } from '@/config/navigation' and { siteConfig } from '@/config/site'. Use siteConfig.name for the wordmark text.\n       The Sidebar (admin only) is yours to build separately." if _det_header_written else ""}
+{"   - ⚠️ MarketingFooter.jsx HAS ALREADY BEEN WRITTEN deterministically with the brand + schema nav columns. DO NOT regenerate src/components/layout/MarketingFooter.jsx. Skip it entirely — do NOT include it in write_project_files." if _det_footer_written else ""}
 {"   - ⚠️ globals.css (the project palette + Google Fonts) HAS ALREADY BEEN WRITTEN deterministically with the project's exact colors and fonts. DO NOT regenerate src/app/globals.css / src/index.css / src/styles/globals.css. Skip it entirely — do NOT include it in write_project_files. Trust the existing CSS variables (--primary, --accent, --background, --foreground, etc.) and the .font-heading / .font-body utility classes." if _det_globals_written else ""}
+{"   - ⚠️ src/config/site.js HAS ALREADY BEEN WRITTEN deterministically with the project name, description, URL, and logoText. DO NOT regenerate it. Trust { siteConfig } as imported." if _det_site_config_written else ""}
+{("   - ⚠️ src/config/navigation.js HAS ALREADY BEEN WRITTEN deterministically with " + ("navigation, modules, and appConfig" if _is_admin_stack else "mainNav, footerNav, and navigationConfig") + " from the schema. DO NOT regenerate it.") if _det_navigation_written else ""}
+{("   - ⚠️ Route shells already written deterministically — DO NOT regenerate these page.js files: " + ", ".join(e["rel_path"] for e in _det_route_shells_written) + ". You DO need to create the inner page COMPONENTS in src/components/pages/ that they import.") if _det_route_shells_written else ""}
 
 5. MAIN PAGE:
    - Landing page: page.js that imports section components (sections come in Phase 2)
@@ -7587,6 +9372,43 @@ Call the write_project_files tool with ALL files.
     PHASE1_MAX_TOKENS, PHASE1_EXTENDED = _phase_token_budget(project_schema, 1, _layout_archetype)
     logger.info("Phase 1 budget: max_tokens=%d extended=%s (archetype=%s, complexity score derived from schema)",
                 PHASE1_MAX_TOKENS, PHASE1_EXTENDED, _layout_archetype)
+
+    # ── Step 4: collect set of paths owned by deterministic builders ──
+    # Steps 3c.1, 3c.2, 3d, 3e, 3f, 3g, 3h above already wrote these files
+    # (fail-soft, gated on template presence + builder success). We snapshot
+    # the resulting set of "authoritative" paths so Phase 1's output can be
+    # filtered against it: any file Claude emits that overlaps an
+    # authoritative path is dropped before the write — single-write-per-file
+    # for those files, deterministic version is final.
+    _authoritative_paths: set[str] = set()
+    if _det_globals_written:
+        _authoritative_paths.add("src/app/globals.css")
+    if _det_design_system_written:
+        _authoritative_paths.add("src/lib/design-system.js")
+    # MarketingHeader.jsx intentionally NOT authoritative: the LLM produces
+    # visually richer headers (scroll-aware translucency, project-aware CTA,
+    # font-heading wordmark) than the deterministic builder's solid_bordered
+    # variants. The deterministic write still happens at Step 3d as a
+    # fallback if Phase 1 fails to emit a header. Data-file imports
+    # consumed by the LLM-emitted header (siteConfig, mainNav) remain
+    # authoritative below — so the LLM is free to restyle but cannot
+    # diverge on the import contract.
+    if _det_site_config_written:
+        _authoritative_paths.add("src/config/site.js")
+    if _det_navigation_written:
+        _authoritative_paths.add("src/config/navigation.js")
+    if _det_footer_written:
+        _authoritative_paths.add("src/components/layout/MarketingFooter.jsx")
+    for _entry in (_det_route_shells_written or []):
+        rp = (_entry or {}).get("rel_path")
+        if rp:
+            _authoritative_paths.add(rp)
+    if _authoritative_paths:
+        logger.info(
+            "Step 4: %d authoritative paths Phase 1 cannot overwrite: %s",
+            len(_authoritative_paths), sorted(_authoritative_paths),
+        )
+
     _phase_begin("claude_phase1")
     # Phase 1 is the critical path. Two-attempt strategy:
     #   • Attempt 1: 6-min wall-clock cap. Inner httpx read=60s already
@@ -7646,6 +9468,22 @@ Call the write_project_files tool with ALL files.
     if _phase1_timed_out_once and result1:
         logger.info("Phase 1 succeeded on attempt 2 after attempt 1 timeout")
     if result1:
+        # Step 4: drop any Claude-emitted file whose path is owned by the
+        # authoritative shells. Single-write-per-file: builders already
+        # wrote them above and they cannot be overwritten.
+        if _authoritative_paths and isinstance(result1.get("files"), list):
+            _before = len(result1["files"])
+            result1["files"] = [
+                f for f in result1["files"]
+                if (f.get("path") or f.get("filename") or "") not in _authoritative_paths
+            ]
+            _dropped = _before - len(result1["files"])
+            if _dropped:
+                logger.info(
+                    "Phase 1: dropped %d Claude file(s) overlapping authoritative shells",
+                    _dropped,
+                )
+
         written = write_files_from_json(result1, workspace_path)
         await _emit_file_writes(websocket, written)
         total_files += written
@@ -7661,7 +9499,7 @@ Call the write_project_files tool with ALL files.
         )
         await _ws_send(websocket, "error", "❌ Phase 1 failed")
         return False
-    
+
     # Rebuild file tree for Phase 2
     await _ws_send(websocket, "progress", "🔄 Preparing Phase 2 — indexing foundation files...")
     file_tree_2 = _build_file_tree(workspace_path)
@@ -7784,12 +9622,32 @@ IMPORTANT — API-READY SERVICES:
   The mock data lives in db.json (already generated) and is served by json-server.
   Services should catch errors and return empty arrays on failure (graceful degradation).
 
-IMPORTANT — DESIGN SYSTEM:
-  Import {{ ds }} from '@/lib/design-system' in ALL components.
-  Use ds.card for card wrappers, ds.badge[status] for status badges.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚨 HARD REQUIREMENT — DESIGN SYSTEM IMPORT (NON-NEGOTIABLE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EVERY page/component file MUST import the design system tokens AT THE TOP:
+
+    import {{ ds }} from '@/lib/design-system';
+
+Then USE the tokens in className expressions:
+
+    // ✅ CORRECT
+    <div className={{ds.card}}>...</div>
+    <Badge className={{ds.badge[row.status]}}>{{row.status}}</Badge>
+
+    // ❌ WRONG — never inline these classes when ds.* is available
+    <div className="rounded-lg border bg-card p-6 shadow-sm">
+    <Badge className="bg-green-100 text-green-800">{{row.status}}</Badge>
+
+If a component file does NOT contain `from '@/lib/design-system'`, it will FAIL the
+quality gate. Every .jsx/.tsx file in pages/, hooks/, services/ that renders UI
+MUST have this import.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 {schema_entity_spec}
 {schema_api_spec}
+
+{schema_entity_screens_spec}
 
 ALSO: Create any domain-specific specialized views from DOMAIN_MUST_HAVES in the research:
 - Maps, calendars, kanban boards, timelines, etc.
@@ -7815,6 +9673,28 @@ UI POLISH LAYER — SECTION SPATIAL PATTERNS
         phase2_instruction = f"""Generate ALL section components for the landing page.
 Create EVERY section listed in the schema — NO LIMIT.
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚨 HARD REQUIREMENT #1 — DESIGN SYSTEM IMPORT (NON-NEGOTIABLE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EVERY section component file MUST import the design system tokens AT THE TOP:
+
+    import {{ ds }} from '@/lib/design-system';
+
+Then USE the tokens in className expressions — do NOT hardcode spacing/layout strings:
+
+    // ✅ CORRECT
+    <section className={{`${{ds.sectionSpacing}} ${{ds.maxWidth}}`}}>
+      <div className={{ds.card}}>...</div>
+
+    // ❌ WRONG — never inline these classes when ds.* is available
+    <section className="py-24 max-w-7xl mx-auto">
+      <div className="rounded-lg border bg-card p-6 shadow-sm">
+
+If a section file does NOT contain `from '@/lib/design-system'`, it will FAIL the
+quality gate and be rejected. Every single .jsx/.tsx component file in
+src/components/sections/ MUST have this import.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 SECTIONS TO BUILD (from research schema — do NOT add or remove any):
 {schema_sections_spec}
 
@@ -7823,7 +9703,8 @@ Each section must be:
 - Fully responsive (mobile-first: sm: md: lg: xl:)
 - Animated with framer-motion (fade-up on scroll, hover effects)
 - Using REAL domain-specific copy (not lorem ipsum)
-- Import {{ ds }} from '@/lib/design-system' and use ds.sectionSpacing, ds.maxWidth, ds.card
+- Import {{ ds }} from '@/lib/design-system' (see HARD REQUIREMENT #1 above)
+- Use ds.sectionSpacing, ds.maxWidth, ds.card consistently — never inline equivalents
 - With realistic mock data (testimonials with i.pravatar.cc avatars, pricing with real USD)
 
 ALSO: Create any domain-specific must-have sections from the research:
@@ -7850,6 +9731,26 @@ Navigation rule:
 
 If the schema's navigation array has items labeled "Menu"/"About"/"Contact"/etc., they become
 SECTIONS on the landing page (e.g. <MenuSection id="menu" />) — NOT separate pages.
+
+Section ID contract (REQUIRED for nav anchors to scroll):
+  Every section component file MUST render its outermost JSX element with an `id` attribute
+  equal to the kebab-case slug of its filename. Examples:
+    - HeroSection.jsx        → <section id="hero" ...>
+    - OpenRolesSection.jsx   → <section id="open-roles" ...>
+    - PricingSection.jsx     → <section id="pricing" ...>
+  This MUST match the href in the header's nav links (#hero, #open-roles, #pricing). Without
+  the matching id, clicking a nav item does nothing on the rendered page.
+
+Image content contract (REQUIRED for visual richness):
+  Every content section EXCEPT pure-text sections (cta, newsletter, faq) MUST include at
+  LEAST ONE <img alt="..." /> tag with a SPECIFIC, project-relevant alt string — never just
+  "image" or "photo". Examples for a logistics company:
+    - Hero:        <img alt="Semi-truck driver smiling beside cab" ... />
+    - Open Roles:  <img alt="Long-haul driver inspecting trailer" ... />
+    - Fleet:       <img alt="Fleet of Volvo VNL 860 sleeper cabs at depot" ... />
+  Do NOT rely on CSS gradients or icons alone — the page MUST have multiple distinct
+  photos. The image_binder pipeline rebinds these to live Unsplash photos using the alt
+  text, so specific alts → relevant photos. Generic alts → repeated stock images.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 {_stitch_ui_polish}"""
     
@@ -7885,22 +9786,27 @@ Call the write_project_files tool with ALL files.
 
     # ── Admin batching ─────────────────────────────────────────────────────
     # Heavy admin projects (>4 entities) reliably truncate a single 64K call.
-    # Split entities into chunks of 3 and run the batches in parallel: each
-    # batch gets a focused prompt + smaller budget, and wall-time is bounded
-    # by the slowest batch instead of the sum.
+    # Split entities into balanced chunks (`_compute_batch_plan`) and run them
+    # in parallel: each batch gets a focused prompt + smaller budget, wall-time
+    # bounded by the slowest batch instead of the sum.
+    #
+    # Batch sizing: max 3 entities/batch (each entity = ~4 files × ~3K tokens
+    # ≈ 12K out, 3 entities ≈ 36K — fits 40K per-batch budget). The dynamic
+    # plan can pick smaller batches when that lets us saturate parallelism
+    # better (e.g., 8 entities → 4 batches × 2 instead of [3,3,2]).
     _entities_list = project_schema.get("entities", []) if _is_admin else []
-    ADMIN_BATCH_THRESHOLD = 4
-    ADMIN_ENTITIES_PER_BATCH = 3
+    ADMIN_BATCH_THRESHOLD = 4  # Below 5 entities, single call is faster (no per-batch overhead)
+    ADMIN_MAX_PER_BATCH = 3
     _use_admin_batching = _is_admin and len(_entities_list) > ADMIN_BATCH_THRESHOLD
 
     if _use_admin_batching:
-        batches = [
-            _entities_list[i:i + ADMIN_ENTITIES_PER_BATCH]
-            for i in range(0, len(_entities_list), ADMIN_ENTITIES_PER_BATCH)
-        ]
+        batches = _compute_batch_plan(
+            _entities_list,
+            max_per_batch=ADMIN_MAX_PER_BATCH,
+        )
         logger.info(
-            "Phase 2 batching: %d entities split into %d parallel batches (<=%d each)",
-            len(_entities_list), len(batches), ADMIN_ENTITIES_PER_BATCH,
+            "Phase 2 batching: %d entities split into %d parallel batches (sizes=%s)",
+            len(_entities_list), len(batches), [len(b) for b in batches],
         )
         await _ws_send(
             websocket,
@@ -7908,9 +9814,12 @@ Call the write_project_files tool with ALL files.
             f"⚙️  Generating {len(_entities_list)} entities in {len(batches)} parallel batches...",
         )
 
-        async def _run_admin_batch(batch_idx: int, entity_batch: list) -> dict | None:
+        async def _run_admin_batch(batch_idx: int, entity_batch: list, total_batches: int) -> dict | None:
             batch_schema = {**project_schema, "entities": entity_batch}
             batch_entity_spec = schema_to_entity_spec(batch_schema)
+            # Per-batch screens spec — only entities in THIS batch get their
+            # list/detail/create UI structure rendered, keeping prompts tight.
+            batch_screens_spec = schema_to_entity_screens_spec(batch_schema)
             batch_names = ", ".join(e.get("name", "?") for e in entity_batch)
 
             batch_instruction = f"""Generate CRUD feature modules for THIS BATCH of entities ONLY: {batch_names}
@@ -7930,12 +9839,32 @@ IMPORTANT — API-READY SERVICES:
   The mock data lives in db.json (already generated) and is served by json-server.
   Catch errors and return empty arrays on failure (graceful degradation).
 
-IMPORTANT — DESIGN SYSTEM:
-  Import {{ ds }} from '@/lib/design-system' in ALL components.
-  Use ds.card for card wrappers, ds.badge[status] for status badges.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🚨 HARD REQUIREMENT — DESIGN SYSTEM IMPORT (NON-NEGOTIABLE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EVERY page/component file MUST import the design system tokens AT THE TOP:
+
+    import {{ ds }} from '@/lib/design-system';
+
+Then USE the tokens in className expressions:
+
+    // ✅ CORRECT
+    <div className={{ds.card}}>...</div>
+    <Badge className={{ds.badge[row.status]}}>{{row.status}}</Badge>
+
+    // ❌ WRONG — never inline these classes when ds.* is available
+    <div className="rounded-lg border bg-card p-6 shadow-sm">
+    <Badge className="bg-green-100 text-green-800">{{row.status}}</Badge>
+
+If a component file does NOT contain `from '@/lib/design-system'`, it will FAIL the
+quality gate. Every .jsx/.tsx file in pages/, hooks/, services/ that renders UI
+MUST have this import.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 {batch_entity_spec}
 {schema_api_spec}
+
+{batch_screens_spec}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 UI DESIGN SPEC (from research)
@@ -7943,7 +9872,7 @@ UI DESIGN SPEC (from research)
 {design_instruction}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
 
-            batch_prompt = f"""PHASE 2 OF 3 — CONTENT FILES (batch {batch_idx + 1}/{len(batches)})
+            batch_prompt = f"""PHASE 2 OF 3 — CONTENT FILES (batch {batch_idx + 1}/{total_batches})
 
 The foundation is already built (see file tree below). DO NOT regenerate foundation files.
 {batch_instruction}
@@ -7979,89 +9908,29 @@ Call the write_project_files tool with ALL files for THIS batch only.
                 extended_output=True,
             )
 
-        # 10-min hard cap across all parallel batches. Each batch has its own
-        # 60s httpx read timeout, so a total-elapsed cap of 600s is generous
-        # for typical admin apps (3-5 batches × ~2min each). On timeout, we
-        # take what batches completed and fall through to Phase 3 to fill gaps.
-        def _batch_failed(res) -> bool:
-            return (
-                isinstance(res, Exception)
-                or not isinstance(res, dict)
-                or not res.get("files")
-            )
+        # Generic helper handles parallel gather, per-batch retry, dedupe,
+        # per-file emit with batch_index, and the phase2_batch_* WS events.
+        # 10-min initial cap + 5-min retry cap matches the prior admin path.
+        written, failed_batches, total_batches = await _run_phase2_parallel_batches(
+            websocket=websocket,
+            workspace_path=workspace_path,
+            batches=batches,
+            batch_runner=_run_admin_batch,
+            initial_timeout=600.0,
+            retry_timeout=300.0,
+            authoritative_paths=_authoritative_paths,
+        )
 
-        try:
-            batch_results = await asyncio.wait_for(
-                asyncio.gather(
-                    *[_run_admin_batch(i, b) for i, b in enumerate(batches)],
-                    return_exceptions=True,
-                ),
-                timeout=600.0,
-            )
-        except asyncio.TimeoutError:
-            logger.error("Phase 2 (batched) hit 10-min hard timeout — proceeding to Phase 3")
-            batch_results = []
-
-        # ── Per-batch retry pass ──────────────────────────────────────────
-        # Transient failures (rate-limit bursts, stream stalls, one-off
-        # truncation) are common in admin projects with many parallel
-        # batches. Re-run just the failed batches once before giving up.
-        # Successful batches are preserved; the retry is bounded at 300s so
-        # Phase 3 still runs in time.
-        batch_results = list(batch_results)
-        retry_indices = [i for i, r in enumerate(batch_results) if _batch_failed(r)]
-        if retry_indices and len(retry_indices) < len(batches):
-            logger.info("Phase 2 retrying %d failed batch(es): %s", len(retry_indices), retry_indices)
-            await _ws_send(
-                websocket,
-                "progress",
-                f"🔁 Retrying {len(retry_indices)} failed batch(es)...",
-            )
-            try:
-                retry_results = await asyncio.wait_for(
-                    asyncio.gather(
-                        *[_run_admin_batch(i, batches[i]) for i in retry_indices],
-                        return_exceptions=True,
-                    ),
-                    timeout=300.0,
-                )
-                for pos, idx in enumerate(retry_indices):
-                    batch_results[idx] = retry_results[pos]
-            except asyncio.TimeoutError:
-                logger.warning("Phase 2 retry hit 5-min cap — proceeding with partial results")
-
-        merged_files: list[dict] = []
-        seen_paths: set[str] = set()
-        failed_batches = 0
-        for idx, res in enumerate(batch_results):
-            if isinstance(res, Exception):
-                logger.error("Phase 2 batch %d raised: %s", idx + 1, res)
-                failed_batches += 1
-                continue
-            if not isinstance(res, dict) or not res.get("files"):
-                failed_batches += 1
-                continue
-            for f in res["files"]:
-                if not isinstance(f, dict):
-                    continue
-                path = f.get("path")
-                if not path or path in seen_paths:
-                    continue
-                merged_files.append(f)
-                seen_paths.add(path)
-
-        if merged_files:
-            written = write_files_from_json({"files": merged_files}, workspace_path)
-            await _emit_file_writes(websocket, written)
+        if written:
             total_files += written
-            status_msg = f"✅ Content: {len(written)} files across {len(batches)} parallel batches"
+            status_msg = f"✅ Content: {len(written)} files across {total_batches} parallel batches"
             if failed_batches:
                 status_msg += f" ({failed_batches} batch(es) failed)"
             await _ws_send(websocket, "progress", status_msg)
         else:
             logger.error(
                 "Phase 2 (batched) returned no files — all %d batches failed",
-                len(batches),
+                total_batches,
             )
             await websocket.send_json({
                 "type": "chat_message",
@@ -8069,36 +9938,191 @@ Call the write_project_files tool with ALL files for THIS batch only.
                 "content": "⚠️ Phase 2 generated no files across all batches. Phase 3 will attempt to fill the gap.",
             })
     else:
-        # 8-min hard cap — single Phase 2 call with ~64K max_tokens should
-        # never legitimately take longer. Fall through to Phase 3 on timeout.
-        try:
-            result2 = await asyncio.wait_for(
-                call_claude_for_json(
+        # ── Page batching (consumer / blog / portfolio / marketplace) ──────
+        # Off by default behind PHASE2_PAGE_BATCHING=1. When enabled and the
+        # project has enough pages, fan Phase 2 out per-page-group instead of
+        # one giant call. Mirrors admin batching: same helper, same retry +
+        # dedupe + WS-event semantics, just a different unit of work.
+        _pages_for_batching = project_schema.get("pages", []) or []
+        _use_page_batching = _should_batch_pages(_layout_archetype, _pages_for_batching)
+
+        if _use_page_batching:
+            page_batches = _compute_batch_plan(_pages_for_batching)
+            logger.info(
+                "Phase 2 page batching: %d pages split into %d parallel batches",
+                len(_pages_for_batching), len(page_batches),
+            )
+            await _ws_send(
+                websocket,
+                "progress",
+                f"⚙️  Generating {len(_pages_for_batching)} pages in {len(page_batches)} parallel batches...",
+            )
+
+            # Pre-compute the FULL page list (paths + components) once so each
+            # batch's prompt can reference siblings for nav/links without
+            # regenerating them. The batch only writes its own pages' files.
+            _all_pages_summary = "\n".join(
+                f"   {p.get('path', '?')} → {p.get('component', '?')} ({p.get('type', 'custom')})"
+                for p in _pages_for_batching
+            )
+
+            async def _run_page_batch(batch_idx: int, page_batch: list, total_batches: int) -> dict | None:
+                batch_summary = "\n".join(
+                    f"   {p.get('path', '?')} → {p.get('component', '?')} ({p.get('type', 'custom')})"
+                    for p in page_batch
+                )
+                batch_components = ", ".join(p.get("component", "?") for p in page_batch)
+
+                batch_instruction = f"""Generate page files for THIS BATCH ONLY ({len(page_batch)} of {len(_pages_for_batching)} total pages).
+
+PAGES IN THIS BATCH (write files for these):
+{batch_summary}
+
+ALL PAGES IN THE PROJECT (for nav/link context — DO NOT regenerate sibling pages):
+{_all_pages_summary}
+
+For EACH page in THIS batch, create:
+  - A complete page component file (e.g. src/pages/{{Name}}.jsx or src/app/{{path}}/page.jsx)
+  - Page-scoped section components in src/components/{{page-name}}/ if needed
+  - Real domain-specific copy (no lorem ipsum), realistic mock data, picsum.photos / Unsplash images
+  - Responsive layout (mobile-first: sm: md: lg:), framer-motion fade-up on scroll
+  - Import {{ ds }} from '@/lib/design-system' for tokens
+
+IMPORTANT — ONLY generate files for the {len(page_batch)} pages above ({batch_components}).
+Other pages are being generated in parallel — do NOT create files for them, do NOT touch
+their components. The router and nav already know about every page (Phase 1 wrote them).
+
+IMPORTANT — DO NOT create shared/cross-page components in this batch.
+Reusable components (header, footer, layout, theme) were created in Phase 1.
+Phase 3 polish handles any remaining shared widgets. If your page needs a
+custom component, scope it under src/components/{{page-name}}/ so two parallel
+batches can never collide on the same path.
+
+IMPORTANT — DO NOT regenerate Phase 1 foundation files (theme, nav, router, layout).
+Check the file tree below — anything already there is locked.
+
+DATA SERVICES (only if a page in this batch needs dynamic data):
+  const API_URL = import.meta.env.{_api_env} || '{_api_default}';
+  Real fetch() with graceful fallback to empty arrays on failure.
+
+{schema_entity_spec if _entities else ''}
+{schema_api_spec}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+UI DESIGN SPEC (from research — applies to every batch identically)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{design_instruction}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"""
+
+                batch_prompt = f"""PHASE 2 OF 3 — CONTENT FILES (page batch {batch_idx + 1}/{total_batches})
+
+The foundation is already built (see file tree below). DO NOT regenerate foundation files.
+{batch_instruction}
+
+PROJECT: {description}
+APP TYPE: {app_type}
+STACK: {stack}
+
+DESIGN SYSTEM FROM RESEARCH:
+{research_distilled}
+
+TEMPLATE MANIFEST:
+{manifest_sliced}
+
+CURRENT FILE TREE (foundation already written):
+{file_tree_2[:2000]}
+
+{stack_rules}
+{skills}
+
+Call the write_project_files tool with files for THIS batch's pages only.
+"""
+
+                # Per-batch budget: 2-4 pages comfortably fit in 40K with headroom.
+                return await call_claude_for_json(
                     system_prompt=_system_prompt_for_phase(2),
-                    user_prompt=_phase_rules_prefix(2, _live_unsplash_block) + "\n" + phase2_prompt,
+                    user_prompt=_phase_rules_prefix(2, _live_unsplash_block) + "\n" + batch_prompt,
                     api_key=api_key,
                     websocket=websocket,
-                    max_tokens=PHASE2_MAX_TOKENS,
+                    max_tokens=40000,
                     model=MODEL,
-                    extended_output=PHASE2_EXTENDED,
-                ),
-                timeout=480.0,
+                    extended_output=True,
+                )
+
+            # Same caps as admin: 10 min initial, 5 min retry. Phase 3 still
+            # has time even if both fully exhaust.
+            written, failed_batches, total_batches = await _run_phase2_parallel_batches(
+                websocket=websocket,
+                workspace_path=workspace_path,
+                batches=page_batches,
+                batch_runner=_run_page_batch,
+                initial_timeout=600.0,
+                retry_timeout=300.0,
+                authoritative_paths=_authoritative_paths,
             )
-        except asyncio.TimeoutError:
-            logger.error("Phase 2 (content) hit 8-min hard timeout — proceeding to Phase 3")
-            result2 = None
-        if result2:
-            written = write_files_from_json(result2, workspace_path)
-            await _emit_file_writes(websocket, written)
-            total_files += written
-            await _ws_send(websocket, "progress", f"✅ Content: {len(written)} files")
+
+            if written:
+                total_files += written
+                status_msg = f"✅ Content: {len(written)} files across {total_batches} parallel page batches"
+                if failed_batches:
+                    status_msg += f" ({failed_batches} batch(es) failed)"
+                await _ws_send(websocket, "progress", status_msg)
+            else:
+                logger.error(
+                    "Phase 2 (page-batched) returned no files — all %d batches failed",
+                    total_batches,
+                )
+                await websocket.send_json({
+                    "type": "chat_message",
+                    "role": "system",
+                    "content": "⚠️ Phase 2 page batching produced no files. Phase 3 will attempt to fill the gap.",
+                })
         else:
-            logger.error("Phase 2 (content) returned no files — likely truncated (budget: %d)", PHASE2_MAX_TOKENS)
-            await websocket.send_json({
-                "type": "chat_message",
-                "role": "system",
-                "content": "⚠️ Phase 2 generated no files (response was truncated). Phase 3 will attempt to fill the gap.",
-            })
+            # 8-min hard cap — single Phase 2 call with ~64K max_tokens should
+            # never legitimately take longer. Fall through to Phase 3 on timeout.
+            try:
+                result2 = await asyncio.wait_for(
+                    call_claude_for_json(
+                        system_prompt=_system_prompt_for_phase(2),
+                        user_prompt=_phase_rules_prefix(2, _live_unsplash_block) + "\n" + phase2_prompt,
+                        api_key=api_key,
+                        websocket=websocket,
+                        max_tokens=PHASE2_MAX_TOKENS,
+                        model=MODEL,
+                        extended_output=PHASE2_EXTENDED,
+                    ),
+                    timeout=480.0,
+                )
+            except asyncio.TimeoutError:
+                logger.error("Phase 2 (content) hit 8-min hard timeout — proceeding to Phase 3")
+                result2 = None
+            if result2:
+                # Drop any Phase 2 file overlapping a deterministic shell
+                # so single-write-per-file holds for the single-call path
+                # too (parity with the batched path).
+                if _authoritative_paths and isinstance(result2.get("files"), list):
+                    _before2 = len(result2["files"])
+                    result2["files"] = [
+                        f for f in result2["files"]
+                        if (f.get("path") or f.get("filename") or "") not in _authoritative_paths
+                    ]
+                    _dropped2 = _before2 - len(result2["files"])
+                    if _dropped2:
+                        logger.info(
+                            "Phase 2: dropped %d Claude file(s) overlapping authoritative shells",
+                            _dropped2,
+                        )
+                written = write_files_from_json(result2, workspace_path)
+                await _emit_file_writes(websocket, written)
+                total_files += written
+                await _ws_send(websocket, "progress", f"✅ Content: {len(written)} files")
+            else:
+                logger.error("Phase 2 (content) returned no files — likely truncated (budget: %d)", PHASE2_MAX_TOKENS)
+                await websocket.send_json({
+                    "type": "chat_message",
+                    "role": "system",
+                    "content": "⚠️ Phase 2 generated no files (response was truncated). Phase 3 will attempt to fill the gap.",
+                })
 
     # ── Phase 2.5: Entity coverage audit (admin/CRM/TMS only) ───────────
     # Heavy admin batches occasionally fail silently (one of N parallel
@@ -8150,6 +10174,43 @@ Call the write_project_files tool with ALL files for THIS batch only.
                 )
         except Exception as _audit_err:
             logger.warning("Entity coverage audit failed (non-fatal): %s", _audit_err)
+
+    # ── Phase 2.6: Design-system import audit + self-heal ───────────────
+    # Even with the 🚨 hard requirement in the Phase 2 prompt, Claude still
+    # skips `import { ds } from '@/lib/design-system'` in most section/page
+    # files (measured: 27/32 missing on a clean landing). Audit the relevant
+    # dirs and trigger a focused retry when the gap > 30% — guarantees the
+    # quality gate's design_system check actually has signal to score on.
+    try:
+        _ds_missing, _ds_total = _audit_design_system_imports(workspace_path)
+        if _ds_total and _ds_missing:
+            _miss_pct = len(_ds_missing) / _ds_total
+            logger.info(
+                "Design-system import audit: %d/%d files missing import (%.0f%%)",
+                len(_ds_missing), _ds_total, _miss_pct * 100,
+            )
+            if _miss_pct > 0.30:
+                _ds_recovered = await _recover_design_system_imports(
+                    workspace_path=workspace_path,
+                    missing_files=_ds_missing,
+                    api_key=api_key,
+                    websocket=websocket,
+                )
+                if _ds_recovered:
+                    total_files.extend(_ds_recovered)
+                    _post_missing, _post_total = _audit_design_system_imports(workspace_path)
+                    logger.info(
+                        "Design-system import audit (post-retry): %d/%d files still missing",
+                        len(_post_missing), _post_total,
+                    )
+            else:
+                logger.info(
+                    "Design-system import gap below 30%% threshold — skipping retry",
+                )
+        elif _ds_total:
+            logger.info("Design-system import audit: %d/%d files OK ✓", _ds_total, _ds_total)
+    except Exception as _ds_err:
+        logger.warning("Design-system import audit failed (non-fatal): %s", _ds_err)
 
     # Rebuild file tree for Phase 3
     file_tree_3 = _build_file_tree(workspace_path)
@@ -8430,7 +10491,11 @@ Call the write_project_files tool with ALL files.
     # ── Quality scoring (non-blocking) ──
     try:
         from app.services.quality_scorer import score_project
-        quality_result = await score_project(workspace_path, websocket)
+        _entity_count = len(project_schema.get("entities") or []) if isinstance(project_schema, dict) else 0
+        quality_result = await score_project(
+            workspace_path, websocket,
+            archetype=_layout_archetype, entity_count=_entity_count,
+        )
         # Send quality score to frontend
         try:
             await websocket.send_json({
@@ -8439,6 +10504,7 @@ Call the write_project_files tool with ALL files.
                 "grade": quality_result["grade"],
                 "checks": {k: {"label": v["label"], "score": v["score"], "value": v["value"]} for k, v in quality_result.get("checks", {}).items()},
                 "warnings": quality_result.get("warnings", []),
+                "skipped": quality_result.get("skipped", []),
             })
         except Exception:
             pass

@@ -1703,6 +1703,97 @@ export default function MarketingHeader() {{
 # ───────────────────────────────────────────────────────────────
 #  Main entry.
 # ───────────────────────────────────────────────────────────────
+def _inject_nav_anchor_helper(jsx: str) -> str:
+    """Post-process emitted header JSX so in-page anchor nav actually scrolls.
+
+    Why: nav iterations across all variants render `<Link key={link.href} href={link.href}>`.
+    Next.js `<Link>` routes hash hrefs through the router, which does NOT reliably
+    trigger native browser scroll-to-element on the same page. Plain `<a href="#id">`
+    does — but if any project also has `/route` items in the nav, plain `<a>` causes
+    a full page reload.
+
+    Fix: replace nav-iteration `<Link …>` with a small `NavAnchor` helper that picks
+    `<a>` for hash hrefs (in-page scroll) and `<Link>` for everything else (route nav).
+    Brand `<Link href="/">` and CTA `<Link href={cta_href_attr}>` are left untouched —
+    they don't carry `key={link.href}` so the regex doesn't match them.
+    """
+    helper_js = (
+        "\n"
+        "function NavAnchor({ href, onClick, children, ...rest }) {\n"
+        "  const isHash = typeof href === 'string' && href.startsWith('#');\n"
+        "  const handleClick = (e) => {\n"
+        "    if (typeof onClick === 'function') onClick(e);\n"
+        "    if (e.defaultPrevented) return;\n"
+        "    if (!isHash) return;\n"
+        "    if (typeof document === 'undefined') return;\n"
+        "    const id = href.slice(1);\n"
+        "    const el = document.getElementById(id);\n"
+        "    if (!el) return;\n"
+        "    e.preventDefault();\n"
+        "    el.scrollIntoView({ behavior: 'smooth', block: 'start' });\n"
+        "    if (typeof history !== 'undefined' && history.replaceState) {\n"
+        "      history.replaceState(null, '', href);\n"
+        "    }\n"
+        "  };\n"
+        "  if (isHash) {\n"
+        "    return <a href={href} onClick={handleClick} {...rest}>{children}</a>;\n"
+        "  }\n"
+        "  return <Link href={href} onClick={handleClick} {...rest}>{children}</Link>;\n"
+        "}\n"
+    )
+
+    # Walk source and rewrite nav-iteration <Link …> blocks.
+    out: list[str] = []
+    i = 0
+    while i < len(jsx):
+        idx = jsx.find('<Link', i)
+        if idx < 0:
+            out.append(jsx[i:])
+            break
+        out.append(jsx[i:idx])
+        # Find this tag's closing >
+        depth = 0
+        j = idx
+        while j < len(jsx):
+            c = jsx[j]
+            if c == '{':
+                depth += 1
+            elif c == '}':
+                depth = max(0, depth - 1)
+            elif c == '>' and depth == 0:
+                break
+            j += 1
+        if j >= len(jsx):
+            out.append(jsx[idx:])
+            break
+        opening = jsx[idx:j + 1]
+        if 'key={link.href}' in opening:
+            # Nav-iteration link → rewrite tag and find matching </Link>.
+            new_open = '<NavAnchor' + opening[len('<Link'):]
+            close_idx = jsx.find('</Link>', j + 1)
+            if close_idx < 0:
+                out.append(opening)
+                i = j + 1
+                continue
+            body = jsx[j + 1:close_idx]
+            out.append(new_open + body + '</NavAnchor>')
+            i = close_idx + len('</Link>')
+        else:
+            out.append(opening)
+            i = j + 1
+    rewritten = ''.join(out)
+    if 'NavAnchor' not in rewritten:
+        return rewritten
+
+    # Inject the helper definition after the last `import …;` line.
+    import_re = re.compile(r"^(?:import [^\n]+;\s*\n)+", re.MULTILINE)
+    m = import_re.search(rewritten)
+    if not m:
+        return helper_js + rewritten
+    insert_at = m.end()
+    return rewritten[:insert_at] + helper_js + rewritten[insert_at:]
+
+
 def build_marketing_header_jsx(
     brand_name: str,
     brand_mark: dict | None,
@@ -1744,7 +1835,7 @@ def build_marketing_header_jsx(
                 lucide_imports=lucide,
             )
             variant_name = f"spec:{header_spec.get('structure', '?')}/{header_spec.get('surface', '?')}"
-            return jsx, variant_name
+            return _inject_nav_anchor_helper(jsx), variant_name
         except Exception as _spec_exc:
             logger.warning("render_from_spec failed (%s), falling back to preset", _spec_exc)
 
@@ -1757,4 +1848,4 @@ def build_marketing_header_jsx(
         cta_href_attr=cta_href_attr,
         lucide_imports=lucide,
     )
-    return jsx, variant
+    return _inject_nav_anchor_helper(jsx), variant

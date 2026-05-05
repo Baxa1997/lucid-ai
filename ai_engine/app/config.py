@@ -102,6 +102,23 @@ class Settings(BaseSettings):
     # CONVERSATION_TIMEOUT env var (seconds until an idle session is reaped)
     CONVERSATION_TIMEOUT: int = 1800
 
+    # ── Supabase Management API (per-project provisioning) ───
+    # Personal access token from supabase.com/dashboard/account/tokens
+    # with projects:write scope. Used to create per-customer Supabase
+    # projects so each generated app has isolated data/keys.
+    SUPABASE_MGMT_TOKEN: str = ""
+    # Org under which new projects are created (a single Pro org holds
+    # many projects; ~$25/mo + per-project compute). Find at
+    # supabase.com/dashboard/org/<slug> → URL slug.
+    SUPABASE_MGMT_ORG_REF: str = ""
+    # Default region for newly provisioned projects. See
+    # supabase.com/docs/guides/platform/regions for valid values.
+    SUPABASE_DEFAULT_REGION: str = "us-east-1"
+    # Random DB password length for new projects. The password is
+    # generated server-side, encrypted, and stored in gen_project — never
+    # shown to the user. Customer access is via the project-scoped JWTs.
+    SUPABASE_DB_PASSWORD_LENGTH: int = 32
+
     # ── Validators ───────────────────────────────────────────
 
     @field_validator("SUPABASE_URL")

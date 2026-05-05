@@ -1387,6 +1387,162 @@ def validate_design_system(design: dict, layout_archetype: str = "") -> list[str
     return violations
 
 
+# ─── Gemini design critic ───────────────────────────────────────────────────
+#
+# The deterministic validator above catches *structural* defects (contrast,
+# type scale, default-blue clichés, admin-status-vs-primary clash). It cannot
+# catch *taste* defects:
+#
+#   • palette technically passes contrast but feels generic for a coffee
+#     brand ("could be any SaaS")
+#   • font pairing is on the curated list but doesn't match the cultural
+#     atmosphere ("Manrope on a Tuscan trattoria")
+#   • radius + shadow language reads modern-tech when the domain wants
+#     editorial / artisanal / premium-hospitality
+#
+# Gemini sees these because it's been trained on millions of real sites in
+# every domain. We hand it the design dict + research vibe block and ask
+# for a verdict + concrete change list, then feed that back into one
+# additional Claude retry.
+#
+# Cost: one Gemini Flash call (~5-10s, cheap). Skipped silently when no
+# key is provided.
+
+_GEMINI_CRITIC_MODEL = "gemini-2.5-flash"
+_GEMINI_CRITIC_TIMEOUT = 30.0
+
+
+async def _gemini_design_critic(
+    *,
+    design: dict,
+    description: str,
+    domain: str,
+    layout_archetype: str,
+    vibe: str,
+    cultural_atmosphere: str,
+    gemini_key: str,
+) -> Optional[dict]:
+    """Ask Gemini whether this design fits the domain.
+
+    Returns ``{"verdict": "pass"|"revise", "issues": [...], "changes": [...]}``
+    or None on any failure (caller treats None as pass — fail-soft).
+    """
+    if not gemini_key:
+        return None
+
+    import json as _json
+    import re as _re
+
+    palette = design.get("palette") or {}
+    typography = design.get("typography") or {}
+    radius = design.get("radius") or ""
+    archetype = design.get("archetype") or ""
+    name = design.get("design_system_name") or ""
+
+    # Hand Gemini a compact summary, not the whole tool dict — keeps the
+    # prompt short and focuses attention on the choices that actually
+    # affect taste.
+    summary = {
+        "design_system_name": name,
+        "archetype": archetype,
+        "palette": {k: palette.get(k) for k in (
+            "primary", "secondary", "accent", "background", "foreground", "card", "muted",
+        )},
+        "typography": {
+            "heading_font": typography.get("heading_font"),
+            "body_font": typography.get("body_font"),
+            "scale": typography.get("scale"),
+        },
+        "radius": radius,
+    }
+
+    prompt = f"""You are a senior brand designer reviewing a generated design system.
+
+PROJECT
+description: {description[:600]}
+domain: {domain}
+layout_archetype: {layout_archetype}
+vibe (from research): {vibe[:400]}
+cultural_atmosphere: {cultural_atmosphere[:600]}
+
+PROPOSED DESIGN SYSTEM
+{_json.dumps(summary, indent=2)}
+
+Judge it on TASTE (not structure — contrast and scale are already validated).
+
+Ask yourself, ruthlessly:
+  1. Does the palette feel SPECIFIC to this domain, or could it be any SaaS?
+  2. Does the font pairing match the cultural atmosphere and copy_tone?
+  3. Does the radius/archetype read right for this kind of business?
+     (editorial serif for a tech bro startup = wrong. Geometric mono for
+     a Tuscan trattoria = wrong.)
+  4. Is the design_system_name evocative of this brand, or generic?
+  5. Would a top site in this domain (think Aesop, Apple, Linear, Stripe,
+     Bluebottle, Notion, Shopify, Patagonia) actually choose THESE tokens?
+
+Return ONLY this JSON, no markdown fence:
+{{
+  "verdict": "pass" or "revise",
+  "issues": ["short phrase per issue, max 5 items"],
+  "changes": ["concrete instruction Claude can act on, max 5 items"]
+}}
+
+If the design is solid taste-wise, return verdict="pass" with empty arrays.
+Be picky but not pedantic — only flag issues a senior designer would call out."""
+
+    try:
+        async with httpx.AsyncClient(timeout=_GEMINI_CRITIC_TIMEOUT) as client:
+            resp = await client.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"{_GEMINI_CRITIC_MODEL}:generateContent?key={gemini_key}",
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": 0.4},
+                },
+            )
+        if resp.status_code != 200:
+            logger.info(
+                "Gemini design critic HTTP %d — skipping critic pass",
+                resp.status_code,
+            )
+            return None
+
+        from knowledge.loader import safe_gemini_text
+        raw = safe_gemini_text(resp.json()).strip()
+        if "```" in raw:
+            raw = _re.sub(r"```(?:json)?", "", raw).strip("`").strip()
+        parsed = _json.loads(raw)
+        verdict = str(parsed.get("verdict", "pass")).lower().strip()
+        if verdict not in ("pass", "revise"):
+            verdict = "pass"
+        return {
+            "verdict": verdict,
+            "issues": list(parsed.get("issues") or [])[:5],
+            "changes": list(parsed.get("changes") or [])[:5],
+        }
+    except Exception as exc:
+        logger.info("Gemini design critic skipped: %s", exc)
+        return None
+
+
+def _format_critic_feedback(critic: dict) -> str:
+    """Format the Gemini critic's verdict as Claude-facing feedback text."""
+    issues = critic.get("issues") or []
+    changes = critic.get("changes") or []
+    parts = ["⚠️ A senior designer (Gemini) reviewed your previous attempt and asked for revisions:"]
+    if issues:
+        parts.append("\nIssues:")
+        parts.extend(f"  - {i}" for i in issues)
+    if changes:
+        parts.append("\nConcrete changes to apply:")
+        parts.extend(f"  - {c}" for c in changes)
+    parts.append(
+        "\nApply these changes only. Keep the rest of the design's personality. "
+        "Re-emit the tool call."
+    )
+    return "\n".join(parts)
+
+
 # ─── Claude caller ──────────────────────────────────────────────────────────
 
 async def _call_claude(
@@ -1474,6 +1630,7 @@ async def build_design_system(
     api_key: str,
     vibe: str = "",
     cultural_atmosphere: str = "",
+    gemini_key: str = "",
     websocket=None,
 ) -> Optional[dict]:
     """One Claude call that designs a bespoke, validated design system.
@@ -1557,16 +1714,138 @@ async def build_design_system(
     else:
         logger.info("Design Director retry valid after feedback")
 
+    final_design = design2
+
+    # ── Gemini taste critic (post-validation, agentic Claude ↔ Gemini loop) ──
+    # Deterministic validation passed; now ask Gemini whether the design
+    # actually fits the domain. One critic call, one optional Claude retry
+    # with the critic's notes folded in. Skipped silently when no Gemini key.
+    final_design = await _apply_gemini_critic(
+        design=final_design,
+        description=description,
+        domain=domain,
+        brand_name=brand_name,
+        copy_tone=copy_tone,
+        layout_archetype=layout_archetype,
+        vibe=vibe,
+        cultural_atmosphere=cultural_atmosphere,
+        api_key=api_key,
+        gemini_key=gemini_key,
+        websocket=websocket,
+    )
+
     if websocket is not None:
         try:
             await websocket.send_json({
                 "type": "progress",
-                "content": f"✅ Design system locked: {design2.get('design_system_name', 'Custom')}",
+                "content": f"✅ Design system locked: {final_design.get('design_system_name', 'Custom')}",
             })
         except Exception:
             pass
 
-    return design2
+    return final_design
+
+
+async def _apply_gemini_critic(
+    *,
+    design: dict,
+    description: str,
+    domain: str,
+    brand_name: str,
+    copy_tone: str,
+    layout_archetype: str,
+    vibe: str,
+    cultural_atmosphere: str,
+    api_key: str,
+    gemini_key: str,
+    websocket,
+) -> dict:
+    """Run Gemini taste critic; on 'revise' verdict, ask Claude for one more pass.
+
+    Always returns a design dict — never None. If anything fails, returns
+    the original ``design`` unchanged.
+    """
+    if not gemini_key:
+        return design
+
+    if websocket is not None:
+        try:
+            await websocket.send_json({
+                "type": "progress",
+                "content": "🔍 Senior-designer review (Gemini)…",
+            })
+        except Exception:
+            pass
+
+    critic = await _gemini_design_critic(
+        design=design,
+        description=description,
+        domain=domain,
+        layout_archetype=layout_archetype,
+        vibe=vibe,
+        cultural_atmosphere=cultural_atmosphere,
+        gemini_key=gemini_key,
+    )
+
+    if not critic or critic.get("verdict") != "revise":
+        if critic:
+            logger.info("Gemini design critic verdict=pass")
+        return design
+
+    issues = critic.get("issues") or []
+    changes = critic.get("changes") or []
+    if not issues and not changes:
+        return design
+
+    logger.info(
+        "Gemini design critic verdict=revise — issues=%d changes=%d",
+        len(issues), len(changes),
+    )
+    for _i in issues:
+        logger.info("Gemini critic issue: %s", _i)
+    for _c in changes:
+        logger.info("Gemini critic change: %s", _c)
+
+    if websocket is not None:
+        try:
+            await websocket.send_json({
+                "type": "progress",
+                "content": f"🎨 Refining design — {len(issues)} taste note(s) from senior review",
+            })
+        except Exception:
+            pass
+
+    feedback = _format_critic_feedback(critic)
+    prompt_taste_retry = _build_user_prompt(
+        description=description,
+        domain=domain,
+        brand_name=brand_name,
+        copy_tone=copy_tone,
+        layout_archetype=layout_archetype,
+        vibe=vibe,
+        cultural_atmosphere=cultural_atmosphere,
+        retry_feedback=feedback,
+    )
+    refined = await _call_claude(_SYSTEM_PROMPT, prompt_taste_retry, api_key, websocket=websocket)
+    if not refined:
+        logger.info("Design taste-retry returned no design — keeping pre-critic version")
+        return design
+
+    # Re-validate to make sure the taste retry didn't introduce structural
+    # regressions. If it did, prefer the original (which already passed).
+    refined_violations = validate_design_system(refined, layout_archetype=layout_archetype)
+    if refined_violations:
+        logger.warning(
+            "Design taste-retry introduced %d structural violation(s) — keeping pre-critic version",
+            len(refined_violations),
+        )
+        return design
+
+    logger.info(
+        "Design taste-retry accepted — name=%s archetype=%s",
+        refined.get("design_system_name"), refined.get("archetype"),
+    )
+    return refined
 
 
 # ─── Rendering: design dict → research text blocks ──────────────────────────

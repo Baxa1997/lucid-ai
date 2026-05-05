@@ -29,6 +29,14 @@ logger = logging.getLogger("lucid.project_schema")
 # ╚══════════════════════════════════════════════════════════════╝
 
 EMPTY_SCHEMA: dict[str, Any] = {
+    # ── Project classification (top-level so every builder reads the same source) ──
+    # archetype: "single_page_landing" | "consumer_website" | "admin_dashboard" | …
+    # domain_kind: "saas" | "ecommerce" | "food" | "health" | "fintech" | "general" | …
+    # These were previously pipeline locals (_layout_archetype / _domain) — folded
+    # into the schema so any builder, persistence step, or quality gate reads them
+    # from one place. Set by _parse_schema_from_research from the classifier output.
+    "archetype": "",
+    "domain_kind": "",
     "brand": {
         "name": "",
         "tagline": "",
@@ -92,6 +100,10 @@ EMPTY_SCHEMA: dict[str, Any] = {
         "endpoints": [],  # [{entity, basePath}]
     },
     "mock_db": {},  # Full db.json content: {entity_slug: [...rows]}
+    # Design Director output — per-project visual identity (radius tokens, card
+    # language, motion language, brand mark, header spec, …). Empty dict means
+    # DD didn't run / timed out; builders fall back to theme tokens.
+    "design": {},
 }
 
 
@@ -452,6 +464,53 @@ def _parse_fonts(block: str) -> dict:
     return result
 
 
+# Section/nav-label keyword → Lucide icon name. Priority order matters:
+# more specific keywords come before generic ones (so "loaves" hits Wheat
+# before any softer match). All names are real lucide-react exports.
+# Used by _parse_header_nav and the section→nav fallback so synthesized
+# nav items get project-specific icons instead of every item being a
+# generic Circle.
+_SECTION_ICON_KEYWORDS: list[tuple[tuple[str, ...], str]] = [
+    (("loaves", "bread", "bake", "bakery", "pastry"), "Wheat"),
+    (("menu", "dish", "cuisine", "recipe", "kitchen"), "UtensilsCrossed"),
+    (("product", "catalog", "shop", "store"), "ShoppingBag"),
+    (("mill", "process", "craft", "how_it", "how-it", "make"), "Settings"),
+    (("visit", "location", "find_us", "find-us", "where", "address"), "MapPin"),
+    (("contact",), "Mail"),
+    (("team", "founders", "staff", "people"), "Users"),
+    (("gallery", "photos", "images", "portfolio"), "Image"),
+    (("pricing", "plans", "tiers", "price"), "Tag"),
+    (("testimonial", "reviews", "praise"), "Quote"),
+    (("cta", "order", "signup", "subscribe", "join", "get_started", "get-started"), "ArrowRight"),
+    (("features", "benefit", "why_us", "why-us"), "Sparkles"),
+    (("faq", "questions", "help"), "HelpCircle"),
+    (("services", "offering"), "Briefcase"),
+    (("blog", "news", "article", "post"), "Newspaper"),
+    (("event", "calendar", "schedule", "hours"), "Calendar"),
+    (("story", "about", "intro", "history"), "BookOpen"),
+    (("work", "case_study", "case-study", "projects"), "Layers"),
+]
+
+
+def _pick_section_icon(*texts: str) -> str:
+    """Pick a Lucide icon name from any free-text section label / id /
+    type. Lowercased substring search; first hit wins. Fallback: Circle.
+
+    Used by both `_parse_header_nav` (when research provides nav items)
+    and the section→nav fallback in `build_project_schema`, so icons are
+    project-specific everywhere instead of every nav item rendering as
+    a generic Circle.
+    """
+    haystack = " ".join(t.lower() for t in texts if t)
+    if not haystack:
+        return "Circle"
+    for keywords, icon in _SECTION_ICON_KEYWORDS:
+        for kw in keywords:
+            if kw in haystack:
+                return icon
+    return "Circle"
+
+
 def _parse_header_nav(block: str) -> tuple:
     """Parse ===HEADER=== text → (brand_name, list[nav_item_dict])."""
     brand = ""
@@ -472,7 +531,7 @@ def _parse_header_nav(block: str) -> tuple:
                 nav_items.append({
                     "label": label,
                     "path": f"#{label.lower().replace(' ', '-')}",
-                    "icon": "Circle",
+                    "icon": _pick_section_icon(label),
                 })
     return brand, nav_items
 
@@ -544,6 +603,8 @@ def _parse_sections(block: str) -> list:
             current["content"]["layout"] = ls.split(":", 1)[1].strip()
         elif ls.startswith("background:"):
             current["content"]["background"] = ls.split(":", 1)[1].strip()
+        elif ls.startswith("imagery:"):
+            current["content"]["imagery"] = ls.split(":", 1)[1].strip()
         elif ls.startswith("cta_primary:"):
             val = ls.split(":", 1)[1].strip()
             current["content"]["cta_primary"] = val.split("|")[0].strip().strip('"')
@@ -552,6 +613,11 @@ def _parse_sections(block: str) -> list:
         elif ls.startswith("hero_image:"):
             current["content"]["hero_image"] = ls.split(":", 1)[1].strip()
         elif ls.startswith("items:"):
+            current["content"]["items"] = ls.split(":", 1)[1].strip()
+        elif ls.startswith("content:"):
+            # Upgraded ===SECTIONS=== prompt emits "content:" with the
+            # per-section copy (cards/rows/items). Older prompts used "items:";
+            # store under "items" to keep one canonical key downstream.
             current["content"]["items"] = ls.split(":", 1)[1].strip()
     if current:
         sections.append(current)
@@ -594,19 +660,59 @@ def _parse_sections(block: str) -> list:
 def _parse_pages_block(block: str) -> list:
     """Parse ===PAGES=== text → list of page dicts for consumer sites.
 
-    Captures path, title, description, AND sections list so Phase 2 gets
-    explicit section specs per page instead of having to fish them out of
-    the raw research blob. Strict `[page: home]` syntax first, markdown
-    `## Home` fallback when Gemini drifts.
+    Captures path, title, hero, AND a structured `sections` list per page so
+    Phase 2 gets explicit per-section specs (headline, layout, imagery, etc.)
+    instead of having to fish them out of the raw research blob.
+
+    Two formats supported:
+
+    1. RICH (preferred — emitted by the upgraded research prompt):
+
+         [page: home]
+         path: /
+         purpose: ...
+         hero_headline: "..."
+         hero_subheadline: "..."
+         sections:
+           [section: hero]
+             headline: "..."
+             layout: ...
+             imagery: ...
+             content: ...
+           [section: features]
+             ...
+
+       Each `[section: name]` becomes a dict with the same shape as
+       `_parse_sections` returns for landing pages.
+
+    2. LEGACY (still tolerated when Gemini drifts back to the old shape):
+
+         [page: home]
+         path: /
+         sections: hero, services, testimonials, cta
+         purpose: ...
+
+       Each comma-separated entry becomes a minimal `{"type": <name>}` dict.
+
+    A markdown `## Home` / `### About Us` fallback covers cases where Gemini
+    skips the `[page: ...]` syntax entirely. In that path each page gets an
+    empty sections list so downstream defaults can fill in.
     """
     pages: list = []
     current: dict = {}
+    current_section: dict | None = None
+    in_sections_block = False
     if not block:
         return pages
     for line in block.splitlines():
         ls = line.strip()
+
+        # Page header opens — flush any in-flight section + page
         m = _re_sp.match(r"\[page:\s*(.+?)\]", ls)
         if m:
+            if current_section is not None and current is not None:
+                current.setdefault("sections", []).append(current_section)
+                current_section = None
             if current:
                 pages.append(current)
             title = m.group(1).strip().title()
@@ -616,21 +722,107 @@ def _parse_pages_block(block: str) -> list:
                 "component": title.replace(" ", "") + "Page",
                 "type": "custom",
                 "description": "",
-                "sections": [],   # new: section list for this page
+                "sections": [],
             }
+            in_sections_block = False
             continue
+
         if not current:
             continue
+
+        # Nested `[section: <slug>]` inside a page
+        sm = _re_sp.match(r"\[section:\s*(\w[\w_-]*)\]", ls)
+        if sm:
+            if current_section is not None:
+                current.setdefault("sections", []).append(current_section)
+            current_section = {
+                "type": sm.group(1).strip().lower().replace("-", "_"),
+                "headline": "",
+                "subheadline": "",
+                "content": {},
+                "animation": "",
+            }
+            in_sections_block = True
+            continue
+
+        if current_section is not None:
+            # Inside a [section: …] — collect its fields
+            if ls.startswith("headline:"):
+                current_section["headline"] = ls.split(":", 1)[1].strip().strip('"').strip("'")
+                continue
+            if ls.startswith("subheadline:"):
+                current_section["subheadline"] = ls.split(":", 1)[1].strip().strip('"').strip("'")
+                continue
+            if ls.startswith("layout:"):
+                current_section["content"]["layout"] = ls.split(":", 1)[1].strip()
+                continue
+            if ls.startswith("background:"):
+                current_section["content"]["background"] = ls.split(":", 1)[1].strip()
+                continue
+            if ls.startswith("imagery:"):
+                current_section["content"]["imagery"] = ls.split(":", 1)[1].strip()
+                continue
+            if ls.startswith("content:"):
+                current_section["content"]["items"] = ls.split(":", 1)[1].strip()
+                continue
+            if ls.startswith("animation:"):
+                current_section["animation"] = ls.split(":", 1)[1].strip()
+                continue
+            # Any other line ends the section's field block but stays inside
+            # the page; close the section and let the page-level parser pick
+            # up the line below.
+            if ls and not ls.startswith("["):
+                # Continue collecting page-level fields after closing section
+                pass
+
         if ls.startswith("path:"):
+            if current_section is not None:
+                current.setdefault("sections", []).append(current_section)
+                current_section = None
+                in_sections_block = False
             current["path"] = ls.split(":", 1)[1].strip()
         elif ls.startswith("hero_headline:"):
+            if current_section is not None:
+                current.setdefault("sections", []).append(current_section)
+                current_section = None
             current["description"] = ls.split(":", 1)[1].strip().strip('"').strip("'")
-        elif ls.startswith("purpose:") and not current.get("description"):
-            current["description"] = ls.split(":", 1)[1].strip()
+            current["hero_headline"] = current["description"]
+        elif ls.startswith("hero_subheadline:"):
+            if current_section is not None:
+                current.setdefault("sections", []).append(current_section)
+                current_section = None
+            current["hero_subheadline"] = ls.split(":", 1)[1].strip().strip('"').strip("'")
+        elif ls.startswith("hero_imagery:"):
+            current["hero_imagery"] = ls.split(":", 1)[1].strip()
+        elif ls.startswith("purpose:"):
+            if current_section is not None:
+                current.setdefault("sections", []).append(current_section)
+                current_section = None
+            purpose_text = ls.split(":", 1)[1].strip()
+            current["purpose"] = purpose_text
+            if not current.get("description"):
+                current["description"] = purpose_text
         elif ls.startswith("sections:"):
-            # "sections: hero, services, team, contact-form"
-            raw_sections = ls.split(":", 1)[1].strip()
-            current["sections"] = [s.strip() for s in raw_sections.split(",") if s.strip()]
+            # Legacy form — `sections: hero, services, cta`. The upgraded
+            # prompt emits a bare `sections:` line and follows with nested
+            # `[section: ...]` blocks; in that case the value after `:` is
+            # empty and we fall through to in_sections_block mode.
+            raw = ls.split(":", 1)[1].strip()
+            in_sections_block = True
+            if raw:
+                current["sections"] = [
+                    {
+                        "type": s.strip().lower().replace("-", "_"),
+                        "headline": "",
+                        "subheadline": "",
+                        "content": {},
+                        "animation": "",
+                    }
+                    for s in raw.split(",") if s.strip()
+                ]
+
+    if current_section is not None and current is not None:
+        current.setdefault("sections", []).append(current_section)
     if current:
         pages.append(current)
 
@@ -669,6 +861,123 @@ def _parse_pages_block(block: str) -> list:
             if len(pages) >= 12:
                 break
     return pages
+
+
+def attach_deep_research_to_schema(schema: dict, research: str) -> dict:
+    """Pluck ===ENTITY_DEEP::Name=== / ===PAGE_DEEP::Name=== blocks from the
+    research blob and attach to matching schema entities/pages as
+    `deep_research`. Idempotent — overwrites only when a fresh block exists.
+
+    Called from build_project_schema (no-op if Phase D ran nothing yet) AND
+    again from project_generator after Phase D enriches the research, so the
+    later pass actually picks up the deep blocks.
+    """
+    if not isinstance(schema, dict) or not research:
+        return schema
+    if schema.get("entities"):
+        for ent in schema["entities"]:
+            if not isinstance(ent, dict):
+                continue
+            name = (ent.get("name") or "").strip()
+            if not name:
+                continue
+            deep = _extract_block(research, f"===ENTITY_DEEP::{name}===", max_chars=4000)
+            if deep:
+                ent["deep_research"] = deep
+    if schema.get("pages"):
+        for pg in schema["pages"]:
+            if not isinstance(pg, dict):
+                continue
+            deep = ""
+            for key in ("name", "title", "path"):
+                candidate = (pg.get(key) or "").strip()
+                if not candidate:
+                    continue
+                deep = _extract_block(research, f"===PAGE_DEEP::{candidate}===", max_chars=4000)
+                if deep:
+                    break
+            if deep:
+                pg["deep_research"] = deep
+    return schema
+
+
+def _parse_entity_screens_block(block: str) -> dict:
+    """Parse ===ENTITY_SCREENS=== text → dict keyed by entity name (lowercased).
+
+    Each entity maps to a list of screen dicts with fields appropriate to the
+    screen kind (list / detail / create). Returned shape:
+
+        {
+            "shipment": [
+                {"kind": "list",   "layout": "...", "filter_bar": "...", ...},
+                {"kind": "detail", "layout": "...", "hero_strip": "...", ...},
+                {"kind": "create", "layout": "...", "field_groups": "...", ...},
+            ],
+            "customer": [...],
+        }
+
+    Schema-merging code in build_project_schema attaches each entity's screens
+    list back onto the entity dict so Phase 2 admin prompts can render the
+    rich per-entity-per-screen spec — symmetric to how multi-page sites get
+    rich per-page-per-section spec.
+    """
+    out: dict = {}
+    if not block:
+        return out
+    current_entity: str | None = None
+    current_screen: dict | None = None
+    # All field keys we recognise per screen kind. Any other "key:" line is
+    # ignored (Gemini sometimes invents extras — we don't blow up).
+    _LIST_KEYS = {
+        "layout", "filter_bar", "table_columns", "row_actions",
+        "bulk_actions", "empty_state", "pagination",
+    }
+    _DETAIL_KEYS = {
+        "layout", "hero_strip", "primary_panels", "side_rails",
+        "contextual_actions",
+    }
+    _CREATE_KEYS = {
+        "layout", "field_groups", "smart_defaults", "validation_quirks",
+        "primary_cta",
+    }
+    _ALL_KEYS = _LIST_KEYS | _DETAIL_KEYS | _CREATE_KEYS
+
+    def _flush_screen() -> None:
+        nonlocal current_screen
+        if current_entity and current_screen:
+            out.setdefault(current_entity, []).append(current_screen)
+        current_screen = None
+
+    for line in block.splitlines():
+        ls = line.strip()
+
+        m_ent = _re_sp.match(r"\[entity:\s*(.+?)\]", ls)
+        if m_ent:
+            _flush_screen()
+            current_entity = m_ent.group(1).strip().lower()
+            continue
+
+        if current_entity is None:
+            continue
+
+        m_scr = _re_sp.match(r"\[screen:\s*(\w+)\]", ls)
+        if m_scr:
+            _flush_screen()
+            current_screen = {"kind": m_scr.group(1).strip().lower()}
+            continue
+
+        if current_screen is None:
+            continue
+
+        # Field line: "key: value"
+        if ":" in ls:
+            key, _, value = ls.partition(":")
+            key = key.strip().lower()
+            if key in _ALL_KEYS:
+                current_screen[key] = value.strip()
+
+    _flush_screen()
+    return out
 
 
 def _parse_kpis(block: str) -> list:
@@ -908,6 +1217,12 @@ def _parse_schema_from_research(
     layout = classification.get("layout_archetype", "single_page_landing")
     domain = classification.get("domain", "general")
 
+    # Mirror classification into top-level schema fields so every downstream
+    # consumer (builders, persistence, quality gate) reads from a single source
+    # of truth instead of pipeline locals.
+    schema["archetype"] = layout
+    schema["domain_kind"] = domain
+
     # ── Theme: CSS variables ──────────────────────────────────
     css_block = _extract_block(research, "===CSS_VARIABLES===", max_chars=1200)
     if css_block:
@@ -987,6 +1302,53 @@ def _parse_schema_from_research(
         parsed_pages = _parse_pages_block(pages_block)
         if parsed_pages:
             schema["pages"] = parsed_pages
+
+    # ── Landing-page nav fallback ─────────────────────────────
+    # When research's ===HEADER=== block is missing/malformed, nav_items
+    # is empty and schema.navigation stays []. That's bad: the
+    # deterministic navigation.js + MarketingFooter writers both gate on
+    # navigation having items, so the page ends up with no nav at all.
+    # Synthesize from sections — labels come from each section's
+    # headline (project-specific), paths anchor to the section type,
+    # icons are picked per-section. Hero / footer / cta sections are
+    # excluded since they don't belong in the nav strip.
+    _SECTIONS_NOT_IN_NAV = {"hero", "footer", "cta", "newsletter"}
+    if (
+        layout == "single_page_landing"
+        and not schema["navigation"]
+        and schema.get("sections")
+    ):
+        nav_from_sections: list = []
+        seen_paths: set = set()
+        for s in schema["sections"]:
+            if not isinstance(s, dict):
+                continue
+            sec_type = (s.get("type") or "").strip()
+            if not sec_type or sec_type in _SECTIONS_NOT_IN_NAV:
+                continue
+            path = f"#{sec_type}"
+            if path in seen_paths:
+                continue
+            seen_paths.add(path)
+            headline = (s.get("headline") or "").strip()
+            # Marketing headlines are often a full sentence — too long
+            # for a nav strip. Fall back to humanized type when the
+            # headline is verbose or empty.
+            if headline and len(headline) <= 30:
+                label = headline
+            else:
+                label = sec_type.replace("_", " ").title()
+            nav_from_sections.append({
+                "label": label,
+                "path": path,
+                "icon": _pick_section_icon(label, sec_type),
+            })
+        if nav_from_sections:
+            schema["navigation"] = [{"group": "main", "items": nav_from_sections}]
+            logger.info(
+                "Landing nav derived from %d sections (HEADER block was empty)",
+                len(nav_from_sections),
+            )
 
     return schema
 
@@ -1265,6 +1627,30 @@ async def build_project_schema(
             if py_schema["design_system"].get("name") and not schema["design_system"].get("name"):
                 schema["design_system"]["name"] = py_schema["design_system"]["name"]
 
+        # ── Per-entity UI screens (admin-family only) ──────────────────
+        # The upgraded ===ENTITY_SCREENS=== block emits structured list/
+        # detail/create specs per entity. Attach each entity's screens to
+        # the schema so schema_to_entity_screens_spec can render rich UI
+        # spec into Phase 2 prompts (symmetric to schema_to_pages_spec).
+        if _is_admin and schema.get("entities"):
+            screens_block = _extract_block(research, "===ENTITY_SCREENS===", max_chars=20000)
+            if screens_block:
+                screens_by_entity = _parse_entity_screens_block(screens_block)
+                if screens_by_entity:
+                    for ent in schema["entities"]:
+                        if not isinstance(ent, dict):
+                            continue
+                        # Match by entity name, case-insensitive. Singular/
+                        # plural is preserved as Gemini emits it.
+                        name = (ent.get("name") or "").strip().lower()
+                        if name and name in screens_by_entity:
+                            ent["screens"] = screens_by_entity[name]
+
+        # Phase D deep_research blocks are attached AFTER this function returns
+        # (the upstream pipeline calls attach_deep_research_to_schema once Phase D
+        # has enriched the research blob).
+        attach_deep_research_to_schema(schema, research)
+
         entity_count = len(schema.get("entities", []))
         page_count = len(schema.get("pages", []))
         section_count = len(schema.get("sections", []))
@@ -1496,6 +1882,18 @@ def _validate_schema(schema: dict, layout_archetype: str = "") -> dict:
         if k not in schema.get("design_system", {}):
             schema.setdefault("design_system", {})[k] = v
 
+    # Stable ordinal for parallel-batching plumbing (Phase 2). Sections and
+    # pages keep a fixed `_index` after validation so a batcher can group
+    # them deterministically across retries — array position is reliable
+    # today but `_index` makes the contract explicit and survives any
+    # future schema rewrite that re-orders or filters lists.
+    for i, section in enumerate(schema.get("sections", []) or []):
+        if isinstance(section, dict):
+            section["_index"] = i
+    for i, page in enumerate(schema.get("pages", []) or []):
+        if isinstance(page, dict):
+            page["_index"] = i
+
     return schema
 
 
@@ -1550,6 +1948,76 @@ def schema_to_entity_spec(schema: dict) -> str:
         mock_count = len(entity.get("mockData", []))
         lines.append(f"Mock data: {mock_count} rows provided in db.json")
         lines.append("")
+
+    return "\n".join(lines)
+
+
+def schema_to_entity_screens_spec(schema: dict) -> str:
+    """Convert per-entity UI screens into a structured spec for admin Phase 2.
+
+    Mirrors schema_to_pages_spec for multi-page sites. Each entity gets up
+    to 3 screen blocks (list, detail, create) with the full per-screen
+    field set so Claude has explicit UI structure — filter bar contents,
+    table columns, panel layouts, field groups — instead of falling back
+    to generic CRUD scaffolding from the data schema alone.
+
+    Returns "" when no entity has screens attached (the data-schema-only
+    spec from schema_to_entity_spec still flows in that case).
+    """
+    entities = schema.get("entities", []) or []
+    entities_with_screens = [
+        e for e in entities
+        if isinstance(e, dict) and isinstance(e.get("screens"), list) and e["screens"]
+    ]
+    if not entities_with_screens:
+        return ""
+
+    lines = [
+        "## ENTITY SCREENS — per-entity UI structure (build EVERY screen, every field)\n",
+        "Each entity below has 1-3 named screens. Treat each screen as a real",
+        "page in the admin: render its filter_bar/table_columns/row_actions for",
+        "list views, its primary_panels/side_rails for detail views, and its",
+        "field_groups for create/edit forms. Do NOT fall back to a generic",
+        "DataTable + plain form template — the screens spec IS the design.\n",
+    ]
+
+    # Order screens deterministically so the output is stable (list, detail, create).
+    _ORDER = {"list": 0, "detail": 1, "create": 2, "edit": 2}
+
+    for ent in entities_with_screens:
+        name = ent.get("name", "Entity")
+        slug = ent.get("slug", "")
+        screens = sorted(
+            ent["screens"],
+            key=lambda s: _ORDER.get((s.get("kind") or "").lower(), 9),
+        )
+        lines.append(f"### Entity: {name}" + (f" (slug: {slug})" if slug else ""))
+        # Phase D deep research: a focused 600-1000 token paragraph from a
+        # dedicated Gemini call (industry patterns, validation quirks,
+        # workflow transitions). Render BEFORE the screens so Claude reads
+        # the why before the structural what.
+        deep = ent.get("deep_research")
+        if deep:
+            lines.append(f"  Industry context (from focused research):")
+            for ln in deep.splitlines():
+                if ln.strip():
+                    lines.append(f"    {ln.rstrip()}")
+            lines.append("")
+        for s in screens:
+            kind = (s.get("kind") or "").lower()
+            lines.append(f"  Screen: [{kind}]")
+            # Render each field on its own line if present. Field set varies by
+            # kind, but we render any recognised field — tolerant of extras.
+            for field in (
+                "layout", "filter_bar", "table_columns", "row_actions",
+                "bulk_actions", "empty_state", "pagination",
+                "hero_strip", "primary_panels", "side_rails", "contextual_actions",
+                "field_groups", "smart_defaults", "validation_quirks", "primary_cta",
+            ):
+                val = s.get(field)
+                if val:
+                    lines.append(f"    {field}: {val}")
+            lines.append("")
 
     return "\n".join(lines)
 
@@ -1725,25 +2193,53 @@ def schema_to_mock_db_json(schema: dict) -> str:
 
 
 def schema_to_sections_spec(schema: dict) -> str:
-    """Convert schema sections into a spec for landing page generation."""
+    """Convert schema sections into an explicit per-section spec for landing pages.
+
+    Mirrors schema_to_pages_spec (multi-page) so Phase 2 reads the same rich
+    structure: layout, background, imagery, copy items, and animation per
+    section. The parser puts these under `content` as a sub-dict; render each
+    on its own line so Claude sees a structured spec instead of a stringified
+    Python dict (the old behaviour, which truncated to 200 chars and ate most
+    of the research signal).
+    """
     sections = schema.get("sections", [])
     if not sections:
         return ""
 
-    lines = ["## LANDING PAGE SECTIONS (from schema — create ALL of these)\n"]
+    lines = ["## LANDING PAGE SECTIONS (build EVERY one — full domain-specific copy, no placeholders)\n"]
     for i, section in enumerate(sections, 1):
         s_type = section.get("type", "custom")
         headline = section.get("headline", "")
-        lines.append(f"{i}. [{s_type}] \"{headline}\"")
-        if section.get("subheadline"):
-            lines.append(f"   subheadline: \"{section['subheadline']}\"")
-        if section.get("content"):
-            content = str(section["content"])
-            if len(content) > 200:
-                content = content[:200] + "..."
+        subheadline = section.get("subheadline", "")
+        animation = section.get("animation", "")
+        content = section.get("content", {}) or {}
+
+        lines.append(f"### {i}. [{s_type}]")
+        if headline:
+            lines.append(f"   headline: \"{headline}\"")
+        if subheadline:
+            lines.append(f"   subheadline: \"{subheadline}\"")
+
+        # Rich format (preferred — `content` is a dict with structured fields)
+        if isinstance(content, dict) and content:
+            if content.get("layout"):
+                lines.append(f"   layout: {content['layout']}")
+            if content.get("background"):
+                lines.append(f"   background: {content['background']}")
+            if content.get("imagery"):
+                lines.append(f"   imagery: {content['imagery']}")
+            if content.get("hero_image"):
+                lines.append(f"   hero_image: {content['hero_image']}")
+            if content.get("items"):
+                lines.append(f"   content: {content['items']}")
+            if content.get("cta_primary"):
+                lines.append(f"   cta_primary: \"{content['cta_primary']}\"")
+        elif content:
+            # Legacy: content is a string. Pass it through without truncation.
             lines.append(f"   content: {content}")
-        if section.get("animation"):
-            lines.append(f"   animation: {section['animation']}")
+
+        if animation:
+            lines.append(f"   animation: {animation}")
         lines.append("")
 
     return "\n".join(lines)
@@ -1764,17 +2260,74 @@ def schema_to_pages_spec(schema: dict) -> str:
     for i, page in enumerate(pages, 1):
         path = page.get("path", "/")
         title = page.get("title", "Page").replace("Page", "").strip()
-        desc = page.get("description", "")
+        desc = page.get("purpose", "") or page.get("description", "")
         sections = page.get("sections", [])
         component = page.get("component", f"{title.replace(' ', '')}Page")
+        hero_headline = page.get("hero_headline", "")
+        hero_subheadline = page.get("hero_subheadline", "")
+        hero_imagery = page.get("hero_imagery", "")
 
-        lines.append(f"{i}. **{title}** → `{path}` (component: `{component}`)")
+        lines.append(f"### {i}. {title} → `{path}` (component: `{component}`)")
         if desc:
             lines.append(f"   Purpose: {desc}")
-        if sections:
-            lines.append(f"   Sections: {', '.join(sections)}")
+        if hero_headline:
+            lines.append(f"   Hero headline: \"{hero_headline}\"")
+        if hero_subheadline:
+            lines.append(f"   Hero subheadline: \"{hero_subheadline}\"")
+        if hero_imagery:
+            lines.append(f"   Hero imagery: {hero_imagery}")
+        # Phase D deep research — focused industry-pattern paragraph from a
+        # dedicated Gemini call. Render before sections so Claude reads the
+        # job-to-be-done + content beats before the structural spec.
+        deep = page.get("deep_research")
+        if deep:
+            lines.append(f"   Industry context (from focused research):")
+            for ln in deep.splitlines():
+                if ln.strip():
+                    lines.append(f"     {ln.rstrip()}")
+
+        # `sections` may be:
+        #   - a list of dicts (rich spec from upgraded research prompt)
+        #   - a list of strings (legacy comma-separated form, still tolerated)
+        #   - empty (fall back to per-page-name hints)
+        if sections and isinstance(sections[0], dict):
+            lines.append(f"   Sections ({len(sections)} required — build EVERY one):")
+            for s_idx, sec in enumerate(sections, 1):
+                stype = sec.get("type", "section")
+                shead = sec.get("headline", "")
+                ssub = sec.get("subheadline", "")
+                content = sec.get("content", {}) or {}
+                slayout = content.get("layout", "")
+                sbg = content.get("background", "")
+                simg = content.get("imagery", "")
+                sitems = content.get("items", "")
+                sanim = sec.get("animation", "")
+                lines.append(f"     {s_idx}. [{stype}]")
+                if shead:
+                    lines.append(f"        headline: \"{shead}\"")
+                if ssub:
+                    lines.append(f"        subheadline: \"{ssub}\"")
+                if slayout:
+                    lines.append(f"        layout: {slayout}")
+                if sbg:
+                    lines.append(f"        background: {sbg}")
+                if simg:
+                    lines.append(f"        imagery: {simg}")
+                if sitems:
+                    lines.append(f"        content: {sitems}")
+                if sanim:
+                    lines.append(f"        animation: {sanim}")
+        elif sections:
+            # Legacy: list of strings
+            section_names = [
+                s if isinstance(s, str) else (s.get("type", "") if isinstance(s, dict) else "")
+                for s in sections
+            ]
+            section_names = [s for s in section_names if s]
+            if section_names:
+                lines.append(f"   Sections: {', '.join(section_names)}")
         else:
-            # Fallback hints per common page names
+            # Fallback hints per common page names — domain-agnostic skeletons
             _fallback_sections = {
                 "home":      "hero, stats/trust-bar, services/features, testimonials, cta",
                 "about":     "hero, story/mission, team-grid, values, timeline",
@@ -1790,7 +2343,7 @@ def schema_to_pages_spec(schema: dict) -> str:
             page_key = title.lower().replace(" ", "")
             hint = next((v for k, v in _fallback_sections.items() if k in page_key), None)
             if hint:
-                lines.append(f"   Sections (fallback): {hint}")
+                lines.append(f"   Sections (fallback — Gemini did not specify, use these): {hint}")
         lines.append("")
 
     return "\n".join(lines)

@@ -24,6 +24,26 @@ _SKIP_DIRS = {"node_modules", ".git", ".next", "dist", "build", ".vite", "__pyca
 _SOURCE_EXTENSIONS = {".jsx", ".tsx", ".js", ".ts", ".vue"}
 _STYLE_EXTENSIONS = {".css", ".scss"}
 
+# Path prefixes (relative to workspace) and basenames that the design-system
+# adherence check should skip. Mirrors the audit set in
+# project_generator._audit_design_system_imports — keep these in sync so the
+# scorer denominator matches the audit's universe of "Claude-owned components".
+_DS_SKIP_PREFIXES = (
+    "src/components/ui/",        # shadcn template (restored from git)
+    "src/lib/",                  # utility files (incl. design-system.js itself)
+    "src/types/",                # type defs
+    "src/components/layout/",    # deterministic builders we control directly
+)
+_DS_SKIP_BASENAMES = frozenset({
+    "layout.js", "layout.jsx", "layout.tsx",
+    "error.js", "error.jsx", "error.tsx",
+    "global-error.js", "global-error.jsx", "global-error.tsx",
+    "not-found.js", "not-found.jsx", "not-found.tsx",
+    "loading.js", "loading.jsx", "loading.tsx",
+    "template.js", "template.jsx", "template.tsx",
+    "Providers.jsx", "Providers.tsx", "providers.jsx", "providers.tsx",
+})
+
 
 def _walk_src(workspace_path: str):
     """Walk source files, yielding (filepath, content) tuples."""
@@ -146,12 +166,25 @@ def _check_design_system(workspace_path: str) -> dict:
             "max": 100,
         }
 
-    # Count how many components import it
+    # Count how many components import it. Scope: Claude-generated components
+    # only — see _DS_SKIP_PREFIXES / _DS_SKIP_BASENAMES. Includes .js/.ts page
+    # files (Next.js App Router commonly emits page.js, not page.jsx).
     import_count = 0
     total_components = 0
     for fpath, content in _walk_src(workspace_path):
         ext = os.path.splitext(fpath)[1].lower()
-        if ext not in {".jsx", ".tsx", ".vue"}:
+        if ext not in {".jsx", ".tsx", ".vue", ".js", ".ts"}:
+            continue
+        rel = os.path.relpath(fpath, workspace_path).replace(os.sep, "/")
+        if any(rel.startswith(p) for p in _DS_SKIP_PREFIXES):
+            continue
+        if os.path.basename(fpath) in _DS_SKIP_BASENAMES:
+            continue
+        # Only count files that actually export a component (heuristic).
+        if "export default" not in content and "export {" not in content:
+            continue
+        if ext in {".js", ".ts"} and ("<" not in content or "return " not in content):
+            # .js / .ts file with no JSX or return — not a component
             continue
         total_components += 1
         if "design-system" in content or "designSystem" in content:
@@ -388,17 +421,32 @@ def _check_api_ready(workspace_path: str) -> dict:
 
 
 def _check_hardcoded_colors(workspace_path: str) -> dict:
-    """Check for hardcoded hex/rgb colors in JSX/TSX files (should use Tailwind vars)."""
+    """Check for hardcoded hex/rgb colors in JSX/TSX files (should use Tailwind vars).
+
+    Skips the same framework / template / utility paths the design-system check
+    skips, plus `global-error.{js,jsx,tsx}` specifically — Next.js renders this
+    file WITHOUT the root layout, so it has no access to Tailwind classes or
+    CSS variables and MUST inline styles. Hex colors there are correct, not
+    a violation.
+    """
     violations = 0
     violation_files = []
 
     hex_re = re.compile(r"""(?:color|background|bg|border)\s*[:=]\s*['"]#[0-9a-fA-F]{3,8}['"]""")
     rgb_re = re.compile(r"""(?:color|background)\s*[:=]\s*['"]rgb""")
 
+    _color_skip_basenames = _DS_SKIP_BASENAMES  # global-error.* etc. already in here
+
     for fpath, content in _walk_src(workspace_path):
         ext = os.path.splitext(fpath)[1].lower()
         if ext in _STYLE_EXTENSIONS:
             continue  # CSS files are allowed to have hex colors
+
+        rel = os.path.relpath(fpath, workspace_path).replace(os.sep, "/")
+        if any(rel.startswith(p) for p in _DS_SKIP_PREFIXES):
+            continue
+        if os.path.basename(fpath) in _color_skip_basenames:
+            continue
 
         hex_matches = hex_re.findall(content)
         rgb_matches = rgb_re.findall(content)
@@ -446,9 +494,37 @@ _WEIGHTS = {
     "hardcoded_colors": 5,
 }
 
+# Archetypes that don't ship a json-server / db.json — skipping the
+# mock_data check on these prevents false-flagging landings and content
+# sites where the missing db.json is correct, not a regression.
+_NO_DB_JSON_ARCHETYPES = frozenset({
+    "single_page_landing", "landing", "consumer_website", "blog",
+    "marketing_site",
+})
+
+
+def _checks_to_skip_for(archetype: str, entity_count: int) -> set[str]:
+    """Decide which quality checks don't apply to this archetype.
+
+    Skipped checks are dropped from both numerator and denominator so the
+    final score reflects only what was actually measurable.
+    """
+    skip: set[str] = set()
+    arch = (archetype or "").lower()
+    # No entities → mock_data + api_ready are irrelevant signals
+    if arch in _NO_DB_JSON_ARCHETYPES or entity_count <= 0:
+        skip.add("mock_data")
+        if entity_count <= 0:
+            skip.add("api_ready")
+    return skip
+
+
 async def score_project(
     workspace_path: str,
     websocket=None,
+    *,
+    archetype: str = "",
+    entity_count: int = 0,
 ) -> dict[str, Any]:
     """Score a generated project on multiple quality dimensions.
 
@@ -458,12 +534,18 @@ async def score_project(
             "grade": str ("A+", "A", "B", "C", "D", "F"),
             "checks": {check_name: check_result},
             "warnings": [str],
+            "skipped": [str],
         }
+
+    archetype + entity_count are optional context that lets the scorer skip
+    checks that don't apply (e.g. mock_data on a single-page landing has no
+    db.json by design — counting it as 0/100 is misleading).
     """
     from app.services.project_generator import _ws_send
 
     await _ws_send(websocket, "progress", "📊 Scoring project quality...")
 
+    skip = _checks_to_skip_for(archetype, entity_count)
     checks = {}
     warnings = []
 
@@ -483,6 +565,9 @@ async def score_project(
     for fn in check_fns:
         try:
             result = fn(workspace_path)
+            if result["name"] in skip:
+                # Don't include in average — track it for transparency.
+                continue
             checks[result["name"]] = result
 
             # Generate warnings for low scores
@@ -491,7 +576,7 @@ async def score_project(
         except Exception as e:
             logger.warning("Quality check %s failed: %s", fn.__name__, e)
 
-    # Calculate weighted overall score
+    # Calculate weighted overall score over only the applicable checks
     total_weight = sum(_WEIGHTS.get(name, 10) for name in checks)
     weighted_score = sum(
         checks[name]["score"] * _WEIGHTS.get(name, 10)
@@ -520,6 +605,7 @@ async def score_project(
         "grade": grade,
         "checks": checks,
         "warnings": warnings,
+        "skipped": sorted(skip),
     }
 
     await _ws_send(

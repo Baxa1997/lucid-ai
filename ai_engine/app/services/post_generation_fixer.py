@@ -94,6 +94,16 @@ _CONFIG_FILENAMES = {
     "tokens.js", "tokens.ts",
     "routes.js", "routes.ts",
     "metadata.js", "metadata.ts",
+    # design-system.js exports a plain { ds } object (no React, no hooks).
+    # It's imported by SERVER pages (about, contact, marketing root), which
+    # need to dot into ds.maxWidth / ds.section etc. Marking it 'use client'
+    # turns it into a client-module export; Next.js then refuses any server
+    # component that tries to read ds.something with:
+    #   "Cannot access maxWidth.toString on the server."
+    # The auto-injector previously added 'use client' because the comments
+    # in design-system.js mention "motion" as a token name, matching the
+    # framer-motion regex. Allowlist it here.
+    "design-system.js", "design-system.ts",
 }
 
 # Subdirectory paths that only contain config/data (relative to src/)
@@ -1926,6 +1936,200 @@ def fix_next_config_build_ignore(workspace_path: str) -> bool:
 
 
 # ╔══════════════════════════════════════════════════════════════╗
+# ║  FIXER — Strip unsupported -q flag from json-server scripts ║
+# ╚══════════════════════════════════════════════════════════════╝
+#
+# json-server v1.x dropped the legacy `-q`/`--quiet` flag. Templates
+# that ship `"json-server --watch db.json --port 3001 -q"` in scripts
+# crash on `pnpm dev` with `Unknown option '-q'`, and Next.js renders
+# a "1 error" badge in the dev overlay even though the page itself is
+# fine (HTTP 200). Cosmetic but visible in every screenshot.
+
+
+def fix_package_json_dev_script(workspace_path: str) -> bool:
+    """Strip unsupported `-q`/`--quiet` flag from json-server commands.
+
+    Walks package.json `scripts` block and removes the flag wherever it
+    appears in a json-server invocation. Returns True if the file was
+    modified.
+    """
+    pkg_path = os.path.join(workspace_path, "package.json")
+    if not os.path.exists(pkg_path):
+        return False
+
+    try:
+        with open(pkg_path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+    except Exception as e:
+        logger.warning("fix_package_json_dev_script: could not read %s: %s", pkg_path, e)
+        return False
+
+    if "json-server" not in content or (" -q" not in content and "--quiet" not in content):
+        return False
+
+    # Only strip the flag inside lines that mention json-server.
+    new_lines = []
+    patched = False
+    for line in content.splitlines(keepends=True):
+        if "json-server" in line and (" -q" in line or "--quiet" in line):
+            stripped = re.sub(r"\s+(-q|--quiet)\b", "", line)
+            if stripped != line:
+                patched = True
+                line = stripped
+        new_lines.append(line)
+
+    if not patched:
+        return False
+
+    try:
+        with open(pkg_path, "w", encoding="utf-8") as f:
+            f.write("".join(new_lines))
+        logger.info("fix_package_json_dev_script: stripped -q from json-server in package.json")
+        return True
+    except Exception as e:
+        logger.warning("fix_package_json_dev_script: could not write %s: %s", pkg_path, e)
+        return False
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  FIXER — Ensure each section has an id matching its filename ║
+# ║  so MarketingHeader's anchor nav (#features, #pricing) jumps  ║
+# ║  to the right element on the same page.                       ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+# Match a section filename and capture the slug part. Examples that match:
+#   HeroSection.jsx        → hero
+#   OpenRolesSection.jsx   → open_roles
+#   PricingSection.tsx     → pricing
+#   features.jsx           → features
+_SECTION_FILE_RE = re.compile(r"^(?P<slug>[A-Za-z0-9_]+?)(?:Section)?\.(?:jsx|tsx|js|ts)$")
+
+
+def _filename_to_section_id(filename: str) -> str:
+    """Turn `OpenRolesSection.jsx` → `open-roles`.
+
+    Hyphenated kebab-case is what the schema-derived nav anchors use
+    (`#open-roles`), so the section id must match that exact slug.
+    """
+    m = _SECTION_FILE_RE.match(filename)
+    base = m.group("slug") if m else os.path.splitext(filename)[0]
+    # CamelCase → snake_case → kebab
+    snake = re.sub(r"(?<=[a-z0-9])([A-Z])", r"_\1", base)
+    snake = re.sub(r"([A-Z]+)(?=[A-Z][a-z])", r"\1_", snake)
+    snake = snake.lower().replace("-", "_")
+    snake = re.sub(r"_+", "_", snake).strip("_")
+    return snake.replace("_", "-")
+
+
+def fix_section_ids(workspace_path: str) -> list[str]:
+    """Inject `id="<slug>"` on the outermost JSX element of each section file.
+
+    Walks `src/components/sections/`, picks the first opening JSX tag inside
+    the default-exported component's returned JSX, and adds an `id` attribute
+    matching the filename's slug. Skips files that already declare an id on
+    the outermost element so we don't double-write.
+
+    Returns the list of relative paths that were patched.
+    """
+    sections_dir = os.path.join(workspace_path, "src", "components", "sections")
+    if not os.path.isdir(sections_dir):
+        return []
+
+    patched: list[str] = []
+    for filename in sorted(os.listdir(sections_dir)):
+        full_path = os.path.join(sections_dir, filename)
+        if not os.path.isfile(full_path):
+            continue
+        if not _SECTION_FILE_RE.match(filename):
+            continue
+
+        slug = _filename_to_section_id(filename)
+        if not slug:
+            continue
+
+        try:
+            with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except Exception as e:
+            logger.warning("fix_section_ids: cannot read %s: %s", full_path, e)
+            continue
+
+        # Find the FIRST JSX opening tag after the first `return (` or `return <`
+        # — that's the outermost element of the component's render tree. We
+        # want to add id only there, not to nested <section> tags inside.
+        return_match = re.search(r"return\s*(\(|<)", content)
+        if not return_match:
+            continue
+        scan_from = return_match.end() - 1  # position of '(' or '<'
+
+        # If `return (`, the next non-whitespace char should be the JSX opener.
+        # If `return <`, scan_from already points at the '<'.
+        if content[scan_from] == "(":
+            # Skip whitespace/comments to first '<'
+            j = scan_from + 1
+            while j < len(content) and content[j] in " \t\r\n":
+                j += 1
+            if j >= len(content) or content[j] != "<":
+                continue
+            scan_from = j
+
+        # scan_from is now the '<' of the outermost JSX tag.
+        # Walk to find tag name + attributes up to the closing '>' or '/>'.
+        # Track brace depth so `{...}` expressions don't fool us.
+        tag_start = scan_from
+        i = tag_start + 1
+        # Capture the tag name
+        name_start = i
+        while i < len(content) and (content[i].isalnum() or content[i] in "._"):
+            i += 1
+        tag_name = content[name_start:i]
+        if not tag_name:
+            continue
+
+        # Find end of opening tag, respecting brace depth.
+        depth = 0
+        end_at = -1
+        while i < len(content):
+            c = content[i]
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth = max(0, depth - 1)
+            elif c == ">" and depth == 0:
+                end_at = i
+                break
+            i += 1
+        if end_at < 0:
+            continue
+
+        opening_tag = content[tag_start:end_at + 1]
+
+        # Skip if id already declared on this opening tag.
+        if re.search(r"\bid\s*=", opening_tag):
+            continue
+
+        # Insert id right after the tag name.
+        insert_pos = tag_start + 1 + len(tag_name)
+        new_content = (
+            content[:insert_pos]
+            + f' id="{slug}"'
+            + content[insert_pos:]
+        )
+
+        try:
+            with open(full_path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            patched.append(os.path.relpath(full_path, workspace_path))
+        except Exception as e:
+            logger.warning("fix_section_ids: cannot write %s: %s", full_path, e)
+            continue
+
+    if patched:
+        logger.info("fix_section_ids: injected id on %d section file(s)", len(patched))
+    return patched
+
+
+# ╔══════════════════════════════════════════════════════════════╗
 # ║  FIXER — Inject Next.js App Router error boundaries         ║
 # ╚══════════════════════════════════════════════════════════════╝
 
@@ -2478,6 +2682,32 @@ async def run_all_fixers(
             await _ws_send(websocket, "progress", "🔧 Patched next.config.js to skip ESLint/TS errors on build")
     except Exception as e:
         logger.warning("next.config build-ignore patcher failed (non-fatal): %s", e)
+
+    # 7c. Strip `-q`/`--quiet` from json-server invocations. v1.x dropped
+    #     the flag, so templates that still ship it crash `pnpm dev` and
+    #     surface a "1 error" badge in the Next.js overlay.
+    try:
+        patched = fix_package_json_dev_script(workspace_path)
+        results["package_json_dev_script_patched"] = patched
+        if patched:
+            await _ws_send(websocket, "progress", "🔧 Stripped unsupported -q flag from json-server in package.json")
+    except Exception as e:
+        logger.warning("package.json dev-script patcher failed (non-fatal): %s", e)
+
+    # 7d. Inject id attribute on each section's outermost element so the
+    #     header's #anchor nav links scroll to the right element. Without
+    #     this, Phase 2 LLM occasionally omits the id and clicking nav
+    #     does nothing on the rendered page.
+    try:
+        section_id_patched = fix_section_ids(workspace_path)
+        results["section_ids_patched"] = section_id_patched
+        if section_id_patched:
+            await _ws_send(
+                websocket, "progress",
+                f"🔧 Injected anchor id on {len(section_id_patched)} section file(s)",
+            )
+    except Exception as e:
+        logger.warning("section-id patcher failed (non-fatal): %s", e)
 
     results["total_fixes"] = (
         len(results["config_stripped"])
