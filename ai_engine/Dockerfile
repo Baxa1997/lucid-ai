@@ -11,7 +11,7 @@ WORKDIR /app
 #   docker.io  — Docker CLI + daemon socket access for sandbox management
 #   git        — Required by the agent for repo operations inside workspaces
 #   curl       — Container health checks
-#   node 20    — Required for running/building frontend projects
+#   node 22    — Required for running/building frontend projects (pnpm@10+ requires Node ≥22.13)
 #   xvfb/x11vnc/novnc/websockify — noVNC live preview
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
@@ -28,8 +28,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV DISPLAY=:99
 
 
-# Install Node.js 20 for running frontend projects
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+# Install Node.js 22 for running frontend projects.
+# pnpm@10+ requires Node ≥22.13. Older Node 20 produced
+# "warn: This version of pnpm requires at least Node.js v22.13" and the
+# install eventually failed mid-pipeline.
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
@@ -39,18 +42,22 @@ RUN npm install -g pnpm@latest yarn@latest
 # Warm the pnpm store with common dependencies shared across all 3 templates.
 # This means workspace installs pull from the local store (~10-20s) instead
 # of downloading from the network (~60-180s) every time.
+# Fail-safe (|| true): warmup is a performance optimisation only — a failure
+# here must never block the build.  --ignore-scripts skips post-install hooks
+# that frequently break in slim containers (sharp, canvas, etc.).
 RUN mkdir -p /tmp/pnpm-warmup && cd /tmp/pnpm-warmup \
     && pnpm init \
-    && pnpm add \
-        react react-dom \
-        next \
+    && pnpm add --ignore-scripts --no-strict-peer-dependencies \
+        react@18 react-dom@18 \
+        next@14 \
         vue \
         vite @vitejs/plugin-react @vitejs/plugin-vue \
         tailwindcss postcss autoprefixer \
         @radix-ui/react-slot \
         class-variance-authority clsx tailwind-merge \
         lucide-react \
-    && cd / && rm -rf /tmp/pnpm-warmup
+    && cd / && rm -rf /tmp/pnpm-warmup \
+    || (echo "pnpm warmup skipped — store will populate on first workspace install" && rm -rf /tmp/pnpm-warmup)
 
 # NOTE: cloudflared removed — E2B cloud sandboxes handle preview URLs natively
 
@@ -81,7 +88,9 @@ RUN mkdir -p /root/.claude && echo '{\
 COPY requirements.txt .
 
 # Install all Python dependencies including OpenHands SDK (all in requirements.txt)
-RUN pip install --no-cache-dir -r requirements.txt
+# legacy-resolver tolerates lmnr's over-strict opentelemetry-semantic-conventions pin
+# (lmnr>=0.7.47 pins ==0.60b1 but no opentelemetry-instrumentation release matches).
+RUN pip install --no-cache-dir --use-deprecated=legacy-resolver -r requirements.txt
 
 # Copy application source
 COPY . .

@@ -1477,6 +1477,51 @@ async def build_project_schema(
                     break
             page_count = len(py_schema["pages"])
 
+        # Safety net: if landing has sections but nav is still empty (the
+        # in-parser fallback at _parse_schema_from_research didn't fire — e.g.
+        # all section types fell into the deny-list, or sections were filled
+        # by the section-defaults block above which runs AFTER that fallback),
+        # derive nav from sections here. The deterministic MarketingHeader
+        # writer in project_generator.py gates on len(nav_groups) > 0, so an
+        # empty nav silently disables the header.
+        if (
+            app_type == "single_page_landing"
+            and nav_items == 0
+            and section_count > 0
+        ):
+            _NOT_IN_NAV = {"hero", "footer", "cta", "cta_final", "newsletter"}
+            _derived: list = []
+            _seen: set = set()
+            for s in py_schema.get("sections", []):
+                if not isinstance(s, dict):
+                    continue
+                sec_type = (s.get("type") or "").strip()
+                if not sec_type or sec_type in _NOT_IN_NAV:
+                    continue
+                path = f"#{sec_type}"
+                if path in _seen:
+                    continue
+                _seen.add(path)
+                headline = (s.get("headline") or "").strip()
+                if headline and len(headline) <= 30:
+                    label = headline
+                else:
+                    label = sec_type.replace("_", " ").title()
+                _derived.append({
+                    "label": label,
+                    "path": path,
+                    "icon": _pick_section_icon(label, sec_type),
+                })
+                if len(_derived) >= 6:
+                    break
+            if _derived:
+                py_schema["navigation"] = [{"group": "main", "items": _derived}]
+                nav_items = len(_derived)
+                logger.info(
+                    "Fast-parse safety net: derived %d nav items from sections",
+                    nav_items,
+                )
+
         _sufficient = section_count >= 2 or (page_count >= 2 and has_theme)
         if _sufficient:
             label = f"{section_count} sections" if section_count else f"{page_count} pages"

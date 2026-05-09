@@ -1570,11 +1570,6 @@ async def _call_claude(
     payload = {
         "model": _MODEL,
         "max_tokens": _MAX_TOKENS,
-        "temperature": 0.75,  # high taste variance — same domain shouldn't
-                              # produce the same archetype/palette twice. Was
-                              # 0.45; that turned out too tight and made
-                              # coffee-shop runs converge on espresso+cream
-                              # warm_artisan over and over.
         "system": system,
         "messages": [{"role": "user", "content": user}],
         "tools": [_DESIGN_TOOL],

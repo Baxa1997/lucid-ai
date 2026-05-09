@@ -1314,6 +1314,129 @@ def fix_unescaped_entities(workspace_path: str) -> list[str]:
 
 
 # ╔══════════════════════════════════════════════════════════════╗
+# ║  FIXER 5a — Single-quoted JS strings with internal apostrophes ║
+# ╚══════════════════════════════════════════════════════════════╝
+# Symptom: `next build` fails with
+#   Error: Unexpected token ... `chef's` (or similar)
+# Cause: Claude wrote a JS string literal like
+#   detail: '14 guests per evening's seating; gratuity included.'
+# where the apostrophe in `evening's` terminates the string at column 26
+# and the rest of the line becomes garbage to the parser.
+#
+# Fix: scan each line, find single-quoted string literals whose content
+# contains an unescaped apostrophe, and convert the outer quotes to "..."
+# while escaping any inner double quotes. We skip lines that are obviously
+# JSX (start with `<` or contain `>`) — those are handled by FIXER 5.
+# Match a single-quoted literal whose body contains an English contraction
+# (letter-apostrophe-letter). The contraction requirement is what stops the
+# regex from matching ACROSS string boundaries: a ternary like
+#     'Click to zoom out' : 'Click to zoom in'
+# has no `letter'letter` between the outer quotes (just `' : '`), so it is
+# correctly skipped. A real bug like
+#     '14 guests per evening's seating'
+# DOES contain `g's ` (letter-apos-letter), so we rewrite it.
+_CONTRACTION_QUOTED_RE = re.compile(
+    r"'(?P<body>[^'\n]*?[A-Za-z]'[A-Za-z][^'\n]*?)'(?=[\s,;:)\]}])"
+)
+
+
+def _line_quotes_balanced(line: str) -> bool:
+    """Return True if the line has an even number of `'` and `\"`.
+
+    A simple sanity check used to reject any rewrite that produces
+    mismatched quotes (e.g. ``'X"`` or ``"X'``) — the symptom of the
+    bug this fixer is meant to repair.
+    """
+    return line.count("'") % 2 == 0 and line.count('"') % 2 == 0
+
+
+def fix_jsx_apostrophe_in_js_string(workspace_path: str) -> list[str]:
+    """Convert single-quoted JS strings with internal `'` to double-quoted.
+
+    Targets the most common Claude bug: writing
+        `detail: '14 guests per evening's seating'`
+    instead of
+        `detail: "14 guests per evening's seating"`.
+
+    Conservative strategy:
+      • Only match when the body contains a real English contraction
+        (letter-apostrophe-letter), so we never cross a ternary like
+        `'a' : 'b'`.
+      • After rewriting, RE-VALIDATE the line: if it now has an odd
+        count of `'` or `"` we revert. This guards against any edge
+        case the regex still gets wrong.
+    """
+    fixed_files: list[str] = []
+    src_dir = os.path.join(workspace_path, "src")
+    if not os.path.isdir(src_dir):
+        src_dir = workspace_path
+
+    for root, dirs, files in os.walk(src_dir):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for fname in files:
+            ext = os.path.splitext(fname)[1].lower()
+            if ext not in {".jsx", ".tsx", ".js", ".ts"}:
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                    original = f.read()
+            except Exception:
+                continue
+
+            if "'" not in original:
+                continue
+
+            new_lines: list[str] = []
+            mutated = False
+            for line in original.splitlines(keepends=True):
+                stripped = line.lstrip()
+                # Skip obviously pure-JSX text / comment / import / unrelated.
+                if (
+                    stripped.startswith("//")
+                    or stripped.startswith("import ")
+                    or stripped.startswith("export ")
+                    or stripped.startswith("from ")
+                    or stripped.startswith("*")
+                    or "'use client'" in stripped
+                    or "'use server'" in stripped
+                ):
+                    new_lines.append(line)
+                    continue
+
+                def _swap(match: re.Match) -> str:
+                    body = match.group("body")
+                    # Refuse if body would need double-quote escaping.
+                    if '"' in body:
+                        return match.group(0)
+                    return f'"{body}"'
+
+                candidate = _CONTRACTION_QUOTED_RE.sub(_swap, line)
+                if candidate != line and _line_quotes_balanced(candidate):
+                    new_lines.append(candidate)
+                    mutated = True
+                else:
+                    new_lines.append(line)
+
+            if mutated:
+                try:
+                    with open(fpath, "w", encoding="utf-8") as f:
+                        f.writelines(new_lines)
+                    fixed_files.append(os.path.relpath(fpath, workspace_path))
+                except Exception as e:
+                    logger.warning(
+                        "fix_jsx_apostrophe_in_js_string: could not write %s: %s",
+                        fpath, e,
+                    )
+
+    if fixed_files:
+        logger.info(
+            "Apostrophe-in-JS-string fixer fixed %d file(s)", len(fixed_files),
+        )
+    return fixed_files
+
+
+# ╔══════════════════════════════════════════════════════════════╗
 # ║  FIXER 5b — Reverse mis-escaped HTML entities in JS context ║
 # ╚══════════════════════════════════════════════════════════════╝
 # Recovery layer for projects produced by an older fix_unescaped_entities
@@ -1419,6 +1542,99 @@ def fix_mis_escaped_entities_in_js(workspace_path: str) -> list[str]:
             "fix_mis_escaped_entities_in_js: reverted JS-context entities in %d file(s)",
             len(fixed_files),
         )
+    return fixed_files
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  FIXER 5c — Decode \uXXXX in JSX text content              ║
+# ╚══════════════════════════════════════════════════════════════╝
+# Claude's tool-use JSON sometimes emits non-ASCII characters as the literal
+# 6-character escape sequence `ʻ` rather than the actual codepoint.
+# JSX *expressions* (`{"ʻ"}`) interpret these; JSX *text* (`>koʻp<`)
+# does NOT, so the user sees `koʻp` rendered verbatim. This bites every
+# non-ASCII language: Uzbek apostrophe (ʻ U+02BB), degree sign (° U+00B0),
+# Russian/Arabic/CJK characters, etc.
+#
+# Fix: walk JSX text nodes only and decode `\uXXXX` → real character. We
+# skip the inside of `{…}` expressions because those are valid JS where
+# the engine already decodes the escape correctly.
+
+_UNICODE_ESCAPE_RE = re.compile(r"\\u([0-9A-Fa-f]{4})")
+
+
+def _decode_unicode_escapes_in_jsx_text(jsx_text: str) -> str:
+    """Decode `\\uXXXX` → actual char inside a single JSX text node."""
+    if "\\u" not in jsx_text:
+        return jsx_text
+
+    out: list[str] = []
+    i = 0
+    depth = 0  # depth of `{ … }` JS-expression nesting within this text node
+    while i < len(jsx_text):
+        c = jsx_text[i]
+        if c == "{":
+            depth += 1
+            out.append(c)
+            i += 1
+            continue
+        if c == "}":
+            depth = max(0, depth - 1)
+            out.append(c)
+            i += 1
+            continue
+        if depth == 0 and c == "\\" and i + 5 < len(jsx_text) and jsx_text[i + 1] == "u":
+            hexdigits = jsx_text[i + 2 : i + 6]
+            try:
+                code = int(hexdigits, 16)
+                out.append(chr(code))
+                i += 6
+                continue
+            except ValueError:
+                pass
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def fix_unicode_escapes_in_jsx(workspace_path: str) -> list[str]:
+    """Replace literal `\\uXXXX` with the real character in JSX text nodes."""
+    fixed_files: list[str] = []
+    src_dir = os.path.join(workspace_path, "src")
+    if not os.path.isdir(src_dir):
+        src_dir = workspace_path
+
+    for root, dirs, files in os.walk(src_dir):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for fname in files:
+            if os.path.splitext(fname)[1].lower() not in {".jsx", ".tsx"}:
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                    original = f.read()
+            except Exception:
+                continue
+
+            if "\\u" not in original:
+                continue
+
+            def _sub(m: re.Match) -> str:
+                inner = m.group(1)
+                return ">" + _decode_unicode_escapes_in_jsx_text(inner) + "<"
+
+            fixed = _JSX_TEXT_RE.sub(_sub, original)
+            if fixed == original:
+                continue
+
+            try:
+                with open(fpath, "w", encoding="utf-8") as f:
+                    f.write(fixed)
+                fixed_files.append(os.path.relpath(fpath, workspace_path))
+            except Exception as e:
+                logger.warning("fix_unicode_escapes_in_jsx: could not write %s: %s", fpath, e)
+
+    if fixed_files:
+        logger.info("Unicode-escape decoder fixed %d file(s)", len(fixed_files))
     return fixed_files
 
 
@@ -2019,6 +2235,217 @@ def _filename_to_section_id(filename: str) -> str:
     snake = snake.lower().replace("-", "_")
     snake = re.sub(r"_+", "_", snake).strip("_")
     return snake.replace("_", "-")
+
+
+# Matches a Next.js `<Link>` whose href reads from a loop variable like
+# `link.href`, `item.href`, `nav.href`. Brand `<Link href="/">` and CTA
+# `<Link href={cta_href_attr}>` don't match this — those are intentionally
+# left as routed Links.
+_NAV_LINK_OPEN_RE = re.compile(r"<Link\b([^>]*?\bhref=\{[A-Za-z_]\w*\.href\}[^>]*?)>")
+
+_NAV_ANCHOR_HELPER = (
+    "\nfunction NavAnchor({ href, onClick, children, ...rest }) {\n"
+    "  const isHash = typeof href === 'string' && href.startsWith('#');\n"
+    "  const handleClick = (e) => {\n"
+    "    if (typeof onClick === 'function') onClick(e);\n"
+    "    if (e.defaultPrevented) return;\n"
+    "    if (!isHash) return;\n"
+    "    if (typeof document === 'undefined') return;\n"
+    "    const id = href.slice(1);\n"
+    "    const el = document.getElementById(id);\n"
+    "    if (!el) return;\n"
+    "    e.preventDefault();\n"
+    "    el.scrollIntoView({ behavior: 'smooth', block: 'start' });\n"
+    "    if (typeof history !== 'undefined' && history.replaceState) {\n"
+    "      history.replaceState(null, '', href);\n"
+    "    }\n"
+    "  };\n"
+    "  if (isHash) {\n"
+    "    return <a href={href} onClick={handleClick} {...rest}>{children}</a>;\n"
+    "  }\n"
+    "  return <Link href={href} onClick={handleClick} {...rest}>{children}</Link>;\n"
+    "}\n"
+)
+
+
+def fix_marketing_header_nav_anchors(workspace_path: str) -> bool:
+    """Rewrite `<Link href={x.href}>` in MarketingHeader.jsx to use NavAnchor.
+
+    Why: Next.js `<Link>` does NOT trigger native scroll for hash hrefs on the
+    same page, so anchor navs silently do nothing once Phase 1's Claude-emitted
+    header replaces the deterministic builder's output. The marketing-header
+    builder has its own NavAnchor injector keyed on `key={link.href}`, but
+    Phase 1 LLM emits `key={item.label}`, `key={nav.id}`, etc., so that
+    injector misses. This post-gen pass catches whatever the LLM produced.
+
+    Returns True when the file was patched.
+    """
+    header_path = os.path.join(
+        workspace_path, "src", "components", "layout", "MarketingHeader.jsx"
+    )
+    if not os.path.isfile(header_path):
+        return False
+    try:
+        with open(header_path, "r", encoding="utf-8", errors="replace") as f:
+            src = f.read()
+    except Exception as e:
+        logger.warning("fix_marketing_header_nav_anchors: cannot read %s: %s", header_path, e)
+        return False
+
+    if "NavAnchor" in src:
+        return False  # already patched (deterministic builder or earlier pass)
+    if not _NAV_LINK_OPEN_RE.search(src):
+        return False  # no nav-iteration links to convert
+
+    new_src = src
+    # 1. Rewrite each matching <Link …> → <NavAnchor …> and its </Link> close.
+    #    We walk left-to-right since regex sub doesn't know about the close tag.
+    out: list[str] = []
+    i = 0
+    while True:
+        m = _NAV_LINK_OPEN_RE.search(new_src, i)
+        if not m:
+            out.append(new_src[i:])
+            break
+        out.append(new_src[i:m.start()])
+        attrs = m.group(1)
+        # Find the matching </Link>. Nav-iteration <Link> contents are short
+        # (just a label); the next </Link> wins.
+        close_idx = new_src.find("</Link>", m.end())
+        if close_idx < 0:
+            # Malformed source — bail out without partial rewrite.
+            out.append(new_src[m.start():])
+            break
+        body = new_src[m.end():close_idx]
+        out.append(f"<NavAnchor{attrs}>{body}</NavAnchor>")
+        i = close_idx + len("</Link>")
+    new_src = "".join(out)
+
+    if "NavAnchor" not in new_src:
+        return False
+
+    # 2. Inject the helper after the last top-level `import …;` line.
+    import_re = re.compile(r"^(?:import [^\n]+;\s*\n)+", re.MULTILINE)
+    m_imp = import_re.search(new_src)
+    if m_imp:
+        insert_at = m_imp.end()
+        new_src = new_src[:insert_at] + _NAV_ANCHOR_HELPER + new_src[insert_at:]
+    else:
+        new_src = _NAV_ANCHOR_HELPER + new_src
+
+    try:
+        with open(header_path, "w", encoding="utf-8") as f:
+            f.write(new_src)
+    except Exception as e:
+        logger.warning("fix_marketing_header_nav_anchors: cannot write %s: %s", header_path, e)
+        return False
+
+    logger.info("fix_marketing_header_nav_anchors: patched MarketingHeader.jsx (NavAnchor injected)")
+    return True
+
+
+def _collect_section_slugs(workspace_path: str) -> list[str]:
+    """Return the kebab-case slugs that fix_section_ids will assign.
+
+    Mirrors `_filename_to_section_id` over `src/components/sections/*`.
+    Used by the header-anchor audit so hrefs target ids that actually exist.
+    """
+    sections_dir = os.path.join(workspace_path, "src", "components", "sections")
+    if not os.path.isdir(sections_dir):
+        return []
+    slugs: list[str] = []
+    for filename in sorted(os.listdir(sections_dir)):
+        full_path = os.path.join(sections_dir, filename)
+        if not os.path.isfile(full_path):
+            continue
+        if not _SECTION_FILE_RE.match(filename):
+            continue
+        s = _filename_to_section_id(filename)
+        if s and s not in slugs:
+            slugs.append(s)
+    return slugs
+
+
+_HASH_HREF_RE = re.compile(r'href\s*[:=]\s*\{?\s*[\'"`]#([A-Za-z0-9_\-]+)[\'"`]')
+
+
+def fix_header_anchor_alignment(workspace_path: str) -> int:
+    """Rewrite hash hrefs in MarketingHeader.jsx to match real section ids.
+
+    Phase 1 frequently emits `href="#features"` while the section file is
+    `FeatureGridSection.jsx` (id `feature-grid`), or vice-versa, so the
+    anchor click scrolls nowhere. This audit reads the section slugs that
+    `fix_section_ids` assigns and rewrites each header href to the closest
+    match (exact slug, or a slug whose first token matches, or substring).
+    Hrefs with no match are left alone.
+
+    Returns the number of href substitutions made.
+    """
+    header_path = os.path.join(
+        workspace_path, "src", "components", "layout", "MarketingHeader.jsx"
+    )
+    if not os.path.isfile(header_path):
+        return 0
+
+    slugs = _collect_section_slugs(workspace_path)
+    if not slugs:
+        return 0
+    slug_set = set(slugs)
+
+    try:
+        with open(header_path, "r", encoding="utf-8", errors="replace") as f:
+            src = f.read()
+    except Exception as e:
+        logger.warning("fix_header_anchor_alignment: cannot read %s: %s", header_path, e)
+        return 0
+
+    def _best_match(want: str) -> str:
+        if want in slug_set:
+            return want
+        want_l = want.lower()
+        want_token = want_l.split("-", 1)[0]
+        # First-token equality (e.g. "feature" → "feature-grid")
+        for s in slugs:
+            if s.split("-", 1)[0] == want_token:
+                return s
+        # Substring either way (e.g. "open-positions" ↔ "open-roles" wouldn't
+        # match here — that's fine, we'd rather not rewrite than guess wrong).
+        for s in slugs:
+            if want_l in s or s in want_l:
+                return s
+        return ""
+
+    changes = 0
+    out: list[str] = []
+    pos = 0
+    for m in _HASH_HREF_RE.finditer(src):
+        anchor = m.group(1)
+        target = _best_match(anchor)
+        out.append(src[pos:m.start(1)])
+        if target and target != anchor:
+            out.append(target)
+            changes += 1
+        else:
+            out.append(anchor)
+        pos = m.end(1)
+    out.append(src[pos:])
+
+    if changes == 0:
+        return 0
+
+    new_src = "".join(out)
+    try:
+        with open(header_path, "w", encoding="utf-8") as f:
+            f.write(new_src)
+    except Exception as e:
+        logger.warning("fix_header_anchor_alignment: cannot write %s: %s", header_path, e)
+        return 0
+
+    logger.info(
+        "fix_header_anchor_alignment: rewrote %d hash href(s) to match section ids",
+        changes,
+    )
+    return changes
 
 
 def fix_section_ids(workspace_path: str) -> list[str]:
@@ -2654,6 +3081,19 @@ async def run_all_fixers(
     except Exception as e:
         logger.warning("Unescaped entities fixer failed (non-fatal): %s", e)
 
+    # 5d. Decode `\\uXXXX` escapes in JSX text content. Claude's tool-use
+    #     JSON occasionally writes non-ASCII characters (Uzbek apostrophe ʻ,
+    #     degree sign °, Cyrillic, etc.) as the literal escape sequence
+    #     instead of the codepoint. JSX text nodes do NOT decode these,
+    #     so without this pass non-English prompts render the raw `\\u…`.
+    try:
+        fixed = fix_unicode_escapes_in_jsx(workspace_path)
+        results["unicode_escapes_decoded"] = fixed
+        if fixed:
+            await _ws_send(websocket, "progress", f"🔧 Decoded \\uXXXX in JSX text in {len(fixed)} file(s)")
+    except Exception as e:
+        logger.warning("Unicode-escape decoder failed (non-fatal): %s", e)
+
     # 6. Replace <img> with Next.js <Image /> (only for Next.js projects)
     try:
         fixed = fix_img_tags(workspace_path)
@@ -2708,6 +3148,38 @@ async def run_all_fixers(
             )
     except Exception as e:
         logger.warning("section-id patcher failed (non-fatal): %s", e)
+
+    # 7e. Wrap nav-iteration <Link> tags in MarketingHeader.jsx with a
+    #     NavAnchor helper so hash hrefs trigger native smooth scroll
+    #     instead of Next.js's router (which silently no-ops on hashes).
+    #     The marketing-header builder injects this only when keyed on
+    #     `key={link.href}`; Phase 1 Claude often uses other key shapes
+    #     and slips past, so we run a broader pass here.
+    try:
+        header_patched = fix_marketing_header_nav_anchors(workspace_path)
+        results["marketing_header_nav_anchor_patched"] = header_patched
+        if header_patched:
+            await _ws_send(
+                websocket, "progress",
+                "🔧 Wrapped MarketingHeader nav links with NavAnchor (hash-scroll fix)",
+            )
+    except Exception as e:
+        logger.warning("marketing-header NavAnchor patcher failed (non-fatal): %s", e)
+
+    # 7f. Audit hash hrefs in MarketingHeader against actual section ids.
+    #     Phase 1 frequently emits href="#features" while the section file
+    #     is FeatureGridSection.jsx (id "feature-grid"). Run AFTER section_ids
+    #     so we know the canonical slug each section will end up with.
+    try:
+        anchor_rewrites = fix_header_anchor_alignment(workspace_path)
+        results["header_anchor_rewrites"] = anchor_rewrites
+        if anchor_rewrites:
+            await _ws_send(
+                websocket, "progress",
+                f"🔧 Aligned {anchor_rewrites} header anchor(s) to section ids",
+            )
+    except Exception as e:
+        logger.warning("header-anchor alignment patcher failed (non-fatal): %s", e)
 
     results["total_fixes"] = (
         len(results["config_stripped"])

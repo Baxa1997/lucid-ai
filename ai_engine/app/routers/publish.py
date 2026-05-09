@@ -62,11 +62,24 @@ async def bootstrap_publish(
     if not PLATFORM_GITHUB_TOKEN:
         raise HTTPException(500, "PLATFORM_GITHUB_TOKEN not configured")
 
-    workspace_path = os.path.join(
-        settings.WORKSPACE_BASE_PATH, user.user_id, project_id,
-    )
+    # ── Resolve workspace path ───────────────────────────────────────
+    # New-flow projects (landing pipeline + generated projects) live under
+    # PREVIEW_WS_ROOT keyed by project_id (e.g. /app/storage/preview_ws/
+    # lucid_ws_<short>). Imported-repo projects live under WORKSPACE_BASE_PATH/
+    # <user>/<project>. Try the preview path first since it's where every
+    # platform-generated project lands; fall back to the imported layout
+    # only if the preview path is empty.
+    candidate_paths = [
+        preview_workspace_path(project_id),
+        os.path.join(settings.WORKSPACE_BASE_PATH, user.user_id, project_id),
+    ]
+    workspace_path = next((p for p in candidate_paths if os.path.isdir(p)), candidate_paths[-1])
+    logger.info("bootstrap_publish: workspace_path=%s (project_id=%s)", workspace_path, project_id)
 
     # ── Load existing chat_session (might already have platform_repo_url) ──
+    # Try lookup by project_id first (canonical key). Fall back to id=<project_id>
+    # because the new landing flow uses chat_session_id as project_id when the
+    # frontend didn't supply one — same UUID, just stored on a different column.
     async with db_client(user.raw_jwt) as sb:
         sess_res = await (
             sb.table("chat_sessions")
@@ -76,7 +89,17 @@ async def bootstrap_publish(
             .maybe_single()
             .execute()
         )
-    session_row = (sess_res.data if sess_res else None) or {}
+        session_row = (sess_res.data if sess_res else None) or {}
+        if not session_row:
+            sess_res = await (
+                sb.table("chat_sessions")
+                .select("id,platform_repo_url,vercel_url,user_repo_url,user_repo_provider")
+                .eq("user_id", user.user_id)
+                .eq("id", project_id)
+                .maybe_single()
+                .execute()
+            )
+            session_row = (sess_res.data if sess_res else None) or {}
 
     # ── Clone-on-demand for imported projects with no workspace yet ──
     # Imported projects only get cloned when the user first triggers a chat

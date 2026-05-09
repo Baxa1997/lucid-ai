@@ -62,6 +62,80 @@ function PlanDescription({ text }) {
   );
 }
 
+// ── ClarificationBubble — archetype-conflict question card ────────
+// Backend pauses generation when a prompt mixes incompatible signals
+// (e.g. "landing page" + cart/checkout). This card surfaces the question
+// and the option buttons; clicking an option fires submitClarification
+// which wraps the original task with a force-archetype marker and
+// kicks the pipeline back off on the server.
+function ClarificationBubble({ msg }) {
+  const c = msg.clarification || {};
+  const options = Array.isArray(c.options) ? c.options : [];
+  const { submitClarification } = useWorkspace() || {};
+  const answered = !!c.answered;
+
+  const handlePick = (opt) => {
+    if (answered || !submitClarification) return;
+    submitClarification({
+      messageId: msg.id,
+      archetype: opt.id,
+      label: opt.label,
+      originalTask: c.originalTask || '',
+    });
+  };
+
+  return (
+    <div className="flex items-start gap-3 px-4 py-3 animate-in fade-in duration-300">
+      <div className="w-7 h-7 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shrink-0 mt-0.5 shadow-sm shadow-orange-500/20">
+        <Sparkles className="w-3.5 h-3.5 text-white" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="border border-slate-100 dark:border-[#2d333b] rounded-xl overflow-hidden mb-2.5">
+          <div className="px-4 py-2 bg-slate-50 dark:bg-[#161b22] border-b border-slate-100 dark:border-[#2d333b]">
+            <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+              Quick question
+            </span>
+          </div>
+          <div className="px-4 py-3 bg-white dark:bg-[#0d1117] space-y-3">
+            <p className="text-[13px] leading-relaxed text-slate-700 dark:text-slate-200">
+              {c.question}
+            </p>
+            <div className="flex flex-col gap-2">
+              {options.map((opt) => {
+                const isPicked = answered && c.answerLabel === opt.label;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => handlePick(opt)}
+                    disabled={answered}
+                    className={cn(
+                      'text-left px-3 py-2 rounded-lg border text-[13px] leading-snug transition-colors',
+                      answered
+                        ? (isPicked
+                            ? 'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-700/60 dark:bg-emerald-900/20 dark:text-emerald-200'
+                            : 'border-slate-100 bg-slate-50 text-slate-400 dark:border-[#2d333b] dark:bg-[#161b22] dark:text-slate-500')
+                        : 'border-slate-200 bg-white hover:border-orange-300 hover:bg-orange-50 text-slate-700 dark:border-[#2d333b] dark:bg-[#0d1117] dark:hover:border-orange-700/60 dark:hover:bg-orange-900/10 dark:text-slate-200 cursor-pointer'
+                    )}
+                  >
+                    {isPicked && <Check className="w-3.5 h-3.5 inline-block mr-1.5 text-emerald-600" />}
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+            {answered && (
+              <p className="text-[11px] text-slate-400 dark:text-slate-500">
+                Choice received — generation continuing.
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── PlanBubble — base44-style structured plan card ────────
 function PlanBubble({ msg }) {
   const { planData, fileWrites = [] } = msg;
@@ -434,6 +508,9 @@ export default function MessageBubble({ msg, isLatest }) {
 
   // Structured plan card
   if (msg.messageType === 'plan') return <PlanBubble msg={msg} />;
+
+  // Archetype-conflict clarification card
+  if (msg.messageType === 'clarification') return <ClarificationBubble msg={msg} />;
 
   // ── User message ──────────────────────────────────────
   if (msg.role === 'user') {

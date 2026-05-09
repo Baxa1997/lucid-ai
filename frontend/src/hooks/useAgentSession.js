@@ -158,6 +158,10 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   const idCounter = useRef(0);
   const initialTaskRef = useRef(task);
   const reconnectCount = useRef(0);
+  // One-shot guard so a 4010 close runs supabase.auth.refreshSession() at
+  // most once per session — if the refresh can't recover the token we fall
+  // through to the user-facing AUTH_EXPIRED error. Reset on each clean open.
+  const authRefreshAttemptedRef = useRef(false);
 
   // Store volatile props in refs so callbacks don't go stale
   const tokenRef = useRef(token);
@@ -371,6 +375,9 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       // Internal manager events
       if (msg.type === '_internal') {
         if (msg.event === 'connected') {
+          // Successful connect — clear the one-shot auth-refresh guard so a
+          // future 4010 (e.g. token expires again hours later) can recover.
+          authRefreshAttemptedRef.current = false;
           setState('preparing');
           setErrorStage(null);
           // Do NOT clear previewError here. If the dev server crashed before the
@@ -409,13 +416,51 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
           pushLog(`WebSocket error${msg.reason ? ' — ' + msg.reason : ''}`, 'error');
         } else if (msg.event === 'closed') {
           // 4010 = server rejected with "authentication required" — JWT
-          // expired or was invalid. Don't silently retry (the retry would
-          // also fail). Surface as AUTH_EXPIRED so the UI can prompt re-auth.
+          // expired or was invalid. Try a one-shot supabase refreshSession()
+          // first; if Supabase still has a valid refresh_token it'll mint a
+          // new access_token and we reconnect silently. Only surface
+          // AUTH_EXPIRED if the refresh itself fails (truly expired session).
           if (msg.code === 4010) {
-            setState('error');
-            setErrorCode('AUTH_EXPIRED');
-            setError('Your session has expired. Please sign in again.');
-            pushLog('Session expired — please sign in again', 'error');
+            if (authRefreshAttemptedRef.current) {
+              // We already tried — refresh didn't fix it.
+              setState('error');
+              setErrorCode('AUTH_EXPIRED');
+              setError('Your session has expired. Please sign in again.');
+              pushLog('Session expired — please sign in again', 'error');
+              return;
+            }
+            authRefreshAttemptedRef.current = true;
+            setState('reconnecting');
+            (async () => {
+              try {
+                const supabase = getSupabaseBrowserClient();
+                const { data, error: refreshErr } = await supabase.auth.refreshSession();
+                const fresh = data?.session?.access_token;
+                if (refreshErr || !fresh) {
+                  setState('error');
+                  setErrorCode('AUTH_EXPIRED');
+                  setError('Your session has expired. Please sign in again.');
+                  pushLog('Session expired — please sign in again', 'error');
+                  return;
+                }
+                tokenRef.current = fresh;
+                if (manager && !manager.isOpen && !manager.isConnecting) {
+                  manager.connect({
+                    token: fresh,
+                    projectId: projectIdRef.current,
+                    repoUrl: repoUrlRef.current,
+                    gitToken: gitTokenRef.current,
+                    branch: branchRef.current,
+                    task: '',
+                  });
+                }
+              } catch (e) {
+                setState('error');
+                setErrorCode('AUTH_EXPIRED');
+                setError('Your session has expired. Please sign in again.');
+                pushLog('Session expired — please sign in again', 'error');
+              }
+            })();
           } else if ([1000, 4001].includes(msg.code)) {
             setState('stopped');
             pushLog(`Session ended (${msg.reason || msg.code})`, 'system');
@@ -712,12 +757,13 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
             return updated.sort((a, b) => a.phase - b.phase);
           });
         }
-        // Update live chat status indicator + push phase label into chat stream
+        // Update live status indicator only. The TaskProgress component
+        // already renders task_phase events as an animated progress bar,
+        // so duplicating them as chat-stream entries was just noise.
         if (msg.status === 'active') {
           const PHASE_ICONS = { 1: '✓', 2: '📁', 3: '🔍', 4: '📐', 5: '✍️', 6: '🔨', 7: '🚀', 8: '🌐' };
           const icon = PHASE_ICONS[msg.phase] || '⚡';
           setAgentStatus({ label: `${icon} ${msg.title}`, subtext: msg.description || '' });
-          pushChat('system', `${icon} ${msg.title}`);
         } else if (msg.status === 'error') {
           setAgentStatus({ label: `❌ ${msg.title}`, subtext: msg.description || 'Failed' });
         }
@@ -1000,6 +1046,46 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
               }
             }
 
+            // ── Detect persisted clarification messages ──────────
+            // Persisted as JSON: {"kind","question","options","original_task"}.
+            // We restore the question card; if the next message in this
+            // history list is a ClarificationResponse from the user it
+            // means they already answered, so render as resolved.
+            if ((m.role === 'assistant' || m.role === 'agent') && content.trimStart().startsWith('{"kind"')) {
+              try {
+                const parsed = JSON.parse(content);
+                if (parsed.question && Array.isArray(parsed.options)) {
+                  const next = msg.messages[i + 1];
+                  const answeredLabel = (
+                    next && next.role === 'user' && next.event_type === 'ClarificationResponse'
+                  ) ? (next.content || null) : null;
+                  return [{
+                    id: m.id || `wshist_clarify_${i}`,
+                    role: 'agent',
+                    messageType: 'clarification',
+                    clarification: {
+                      kind: parsed.kind || '',
+                      question: parsed.question,
+                      options: parsed.options,
+                      originalTask: parsed.original_task || '',
+                      answered: !!answeredLabel,
+                      answerLabel: answeredLabel,
+                    },
+                    ts: m.created_at ? new Date(m.created_at).getTime() : Date.now(),
+                    fromHistory: true,
+                  }];
+                }
+              } catch (_) {
+                // not valid JSON — fall through to plain text
+              }
+            }
+
+            // Skip raw ClarificationResponse rows — they are merged into
+            // the question card above as `answerLabel`.
+            if (m.role === 'user' && m.event_type === 'ClarificationResponse') {
+              return [];
+            }
+
             // Plain text messages
             if (!content.trim()) return [];
             return [{
@@ -1074,6 +1160,32 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         } else {
           pushChat('system', `⚠️ ${text}`);
         }
+        return;
+      }
+
+      // ─── Clarification needed — backend wants the user to disambiguate ──
+      // Backend detected conflicting archetype signals (e.g. "landing page"
+      // + cart/checkout). The pipeline is paused on the server side; it
+      // resumes only after the user picks an option, which fires
+      // submitClarification() and sends `clarification_response` back.
+      if (msg.type === 'clarification_needed') {
+        setChatMessages((prev) => [
+          ...prev,
+          {
+            id: uid(),
+            role: 'agent',
+            messageType: 'clarification',
+            clarification: {
+              kind: msg.kind || '',
+              question: msg.question || '',
+              options: Array.isArray(msg.options) ? msg.options : [],
+              originalTask: msg.original_task || '',
+              answered: false,
+              answerLabel: null,
+            },
+            ts: Date.now(),
+          },
+        ]);
         return;
       }
 
@@ -1199,15 +1311,6 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     // Fresh connection (new project or cold start)
     if (state === 'idle' || (manager.isOpen && manager.projectId !== projectIdRef.current)) {
       const taskToSend = initialTaskRef.current || '';
-      // [DIAG] handshake-bug — confirm task reaches the auto-connect path
-      console.log("[DIAG/auto-connect]", {
-        projectId: projectIdRef.current,
-        taskLen: taskToSend.length,
-        taskHead: taskToSend.slice(0, 80),
-        managerProjectId: manager.projectId,
-        managerIsOpen: manager.isOpen,
-        state,
-      });
       if (taskToSend) {
         // Show user message in chat ONCE. Strip the [LUCID_PROJECT] header for display.
         const displayText = taskToSend.includes('\n\n')
@@ -1584,6 +1687,45 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         pushLog(`Plan rejected — re-researching: ${correction?.slice(0, 60)}...`, 'system');
       } else {
         pushLog('Failed to send rejection — please retry', 'error');
+      }
+    }, [pushLog]),
+
+    // Clarification — user answered an archetype-conflict question. Sends
+    // the locked archetype + original task back; backend re-runs the
+    // pipeline with classification short-circuited.
+    submitClarification: useCallback(({ messageId, archetype, label, originalTask }) => {
+      if (!manager) return;
+      if (!manager.isOpen && !manager.isConnecting) {
+        pushLog('Connection lost — reconnecting before sending answer...', 'system');
+        reconnectCount.current = 0;
+        getFreshToken().then((freshToken) => {
+          if (!manager.isOpen && !manager.isConnecting) {
+            manager.connect({
+              token: freshToken,
+              projectId: projectIdRef.current,
+              repoUrl: repoUrlRef.current,
+              gitToken: gitTokenRef.current,
+              branch: branchRef.current,
+              task: '',
+            });
+          }
+        });
+      }
+      const sent = manager.send({
+        type: 'clarification_response',
+        archetype,
+        option_label: label,
+        task: originalTask,
+      });
+      if (sent || manager.isConnecting) {
+        setChatMessages((prev) => prev.map((m) => (
+          m.id === messageId
+            ? { ...m, clarification: { ...m.clarification, answered: true, answerLabel: label } }
+            : m
+        )));
+        pushLog(`Choice received: ${label} — starting generation...`, 'system');
+      } else {
+        pushLog('Failed to send choice — please retry', 'error');
       }
     }, [pushLog]),
   };

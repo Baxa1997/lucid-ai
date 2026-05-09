@@ -236,7 +236,6 @@ a short list for the README.
     payload = {
         "model": _MODEL,
         "max_tokens": _MAX_TOKENS,
-        "temperature": 0.2,  # SQL must be deterministic-leaning
         "system": system,
         "messages": [{"role": "user", "content": user}],
         "tools": [_MIGRATION_TOOL],

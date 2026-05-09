@@ -566,8 +566,15 @@ async def websocket_agent(websocket: WebSocket):
                 # PRIORITY: completed sessions > sessions with platform_repo > plain latest.
                 # Without this, an empty reconnect-session created AFTER the real generation
                 # gets picked first → _prev_session_data looks empty → no preview started.
+                #
+                # Use the admin client for this lookup. RLS-enforced queries (via the user
+                # JWT) were silently returning empty for legitimate rows whenever the JWT
+                # context didn't satisfy the policy (e.g. JWT minted with a kid the policy
+                # didn't trust, refreshed token, etc). We still gate on user_id explicitly
+                # so this remains per-user — admin only bypasses RLS, not access control.
+                from app.supabase_client import managed_admin_client
                 prev_sid: str | None = None
-                async with db_client(user_jwt) as client:
+                async with managed_admin_client() as client:
                     # 1a. Most recent session with generation_complete=True
                     try:
                         completed_r = await (
@@ -617,6 +624,41 @@ async def websocket_agent(websocket: WebSocket):
                         if plain_r.data:
                             prev_sid = plain_r.data[0]["id"]
 
+                    # 1d. Legacy fallback — chat_sessions.project_id may be NULL on
+                    # rows generated before the landing-pipeline finalisation patch
+                    # set it. The frontend's /api/platform-repos route falls back
+                    # to using `chat_sessions.id` as the URL projectId in that case.
+                    # So when the project_id-keyed lookups all miss, try the row id.
+                    if not prev_sid:
+                        id_r = await (
+                            client.table("chat_sessions")
+                            .select("id, project_id")
+                            .eq("user_id", user_id)
+                            .eq("id", project_id)
+                            .maybe_single()
+                            .execute()
+                        )
+                        if id_r and id_r.data:
+                            prev_sid = id_r.data["id"]
+                            # Backfill project_id so future lookups hit 1a-1c
+                            # cheaply and the row appears in Recent Projects.
+                            if not id_r.data.get("project_id"):
+                                try:
+                                    await (
+                                        client.table("chat_sessions")
+                                        .update({"project_id": project_id})
+                                        .eq("id", prev_sid)
+                                        .execute()
+                                    )
+                                    logger.info(
+                                        "Backfilled project_id=%s on legacy session %s",
+                                        project_id, prev_sid,
+                                    )
+                                except Exception as _bf_err:
+                                    logger.debug(
+                                        "project_id backfill skipped (%s)", _bf_err,
+                                    )
+
                 if prev_sid:
 
                     # Step 2: try to read optional flag columns (added in later migrations).
@@ -625,7 +667,7 @@ async def websocket_agent(websocket: WebSocket):
                     generation_complete = False
                     user_repo_url = None
                     try:
-                        async with db_client(user_jwt) as client:
+                        async with managed_admin_client() as client:
                             flags_r = await (
                                 client.table("chat_sessions")
                                 .select("platform_repo_url, user_repo_url, generation_complete")
@@ -633,7 +675,7 @@ async def websocket_agent(websocket: WebSocket):
                                 .maybe_single()
                                 .execute()
                             )
-                        if flags_r.data:
+                        if flags_r and flags_r.data:
                             platform_repo_url = flags_r.data.get("platform_repo_url")
                             user_repo_url = flags_r.data.get("user_repo_url")
                             generation_complete = flags_r.data.get("generation_complete", False)
@@ -645,7 +687,7 @@ async def websocket_agent(websocket: WebSocket):
                         )
 
                     # Step 3: load messages for chat history replay + wizard re-entry detection
-                    async with db_client(user_jwt) as client:
+                    async with managed_admin_client() as client:
                         prev_msgs = await (
                             client.table("chat_messages")
                             .select("id, role, content, created_at, event_type")
@@ -747,16 +789,50 @@ async def websocket_agent(websocket: WebSocket):
                 and _prev_session_data
                 and _prev_session_data.get("messages")
             )
+            # Tight check: a fully-generated Next.js workspace exists on disk
+            # for this project_id — package.json plus a src/ or app/ directory.
+            # Both must be present so we never confuse a half-cloned template
+            # (package.json only, no source) with a real generated project.
+            _has_real_workspace = False
+            if project_id:
+                try:
+                    _candidate_ws = preview_workspace_path(project_id)
+                    _has_real_workspace = (
+                        os.path.isdir(_candidate_ws)
+                        and os.path.isfile(os.path.join(_candidate_ws, "package.json"))
+                        and (
+                            os.path.isdir(os.path.join(_candidate_ws, "src"))
+                            or os.path.isdir(os.path.join(_candidate_ws, "app"))
+                        )
+                    )
+                except Exception:
+                    _has_real_workspace = False
+
+            # Diagnostic — exposed so reload bugs are easy to triage from logs.
+            logger.info(
+                "Reload decision for project=%s: prev_session=%s repo=%s user_repo=%s "
+                "complete=%s wizard_reentry=%s real_workspace=%s",
+                project_id,
+                bool(_prev_session_data),
+                bool(_prev_session_data.get("platform_repo_url") if _prev_session_data else False),
+                bool(_prev_session_data.get("user_repo_url") if _prev_session_data else False),
+                bool(_prev_session_data.get("generation_complete") if _prev_session_data else False),
+                _wizard_reentry,
+                _has_real_workspace,
+            )
+
             if _prev_session_data and (
                 _prev_session_data.get("platform_repo_url")
                 or _prev_session_data.get("user_repo_url")
                 or _prev_session_data.get("generation_complete")
                 or _wizard_reentry
+                or _has_real_workspace
             ):
                 _skip_reason = (
                     "published" if _prev_session_data.get("platform_repo_url")
                     else "generation_complete flag" if _prev_session_data.get("generation_complete")
-                    else "wizard re-entry with previous messages"
+                    else "wizard re-entry with previous messages" if _wizard_reentry
+                    else "workspace files on disk (package.json + src/app)"
                 )
                 logger.info(
                     "Skipping pipeline for project %s — already generated (%s). "
@@ -824,7 +900,7 @@ async def websocket_agent(websocket: WebSocket):
                     except Exception:
                         pass
 
-                if _repo_to_clone or _has_cached_ws:
+                if _repo_to_clone or _has_cached_ws or _has_real_workspace:
                     # Capture conv_id for the closure (stable across reconnects)
                     _bg_conv_id = project_id or conversation_id
 
@@ -887,6 +963,21 @@ async def websocket_agent(websocket: WebSocket):
                                 await websocket.send_json({"type": "preview_status",
                                                            "status": "starting",
                                                            "message": "Starting preview (cached)…"})
+                            elif not _repo_to_clone and os.path.isdir(_tmp) and os.path.isfile(os.path.join(_tmp, "package.json")):
+                                # Landing-flow / locally-generated path: workspace files
+                                # already exist on disk (preview_ws is volume-mounted) but
+                                # node_modules isn't installed yet AND there's no GitHub
+                                # repo to clone from. Skip the clone block entirely and
+                                # fall through to the install + dev-server-start logic
+                                # below — overwriting the generated source via clone
+                                # would destroy the user's project.
+                                logger.info(
+                                    "bg_preview: no repo to clone but workspace files exist for %s — going straight to install",
+                                    _bg_conv_id,
+                                )
+                                await websocket.send_json({"type": "preview_status",
+                                                           "status": "preparing",
+                                                           "message": "Preparing preview…"})
                             else:
                                 # Fresh workspace — need to clone and install.
                                 await websocket.send_json({"type": "preview_status",
@@ -1489,40 +1580,82 @@ async def websocket_agent(websocket: WebSocket):
                 except Exception as exc:
                     logger.warning("Failed to persist user message: %s", exc)
 
-            # ── Step: Got Task ────────────────────────────────
-            await ws_transition(
-                session, websocket, WorkspaceState.UPDATING,
-                "Agent starting task...",
-            )
-            await websocket.send_json({
-                "type": "step", "step": "got_task",
-                "label": "Got task", "done": True,
-            })
-            await websocket.send_json({
-                "type": "agent_event", "event": "task_start",
-                "content": f"Agent starting task: {task}",
-            })
-            await websocket.send_json({
-                "type": "step", "step": "understanding",
-                "label": "Understanding the project", "done": True,
-            })
+            # ── Ambiguity gate: ask before generating if archetype is mixed ──
+            # Heuristic conflict detector flags prompts that name one
+            # archetype but pack signals from another (e.g. "landing page
+            # with cart and checkout"). When triggered, persist the
+            # question, send it to the client, and skip the pipeline —
+            # generation resumes only after a clarification_response
+            # arrives in the follow-up loop below.
+            from knowledge.loader import detect_classification_conflict
+            _conflict = detect_classification_conflict(task)
+            if _conflict:
+                _payload = {
+                    "kind": _conflict["kind"],
+                    "question": _conflict["question"],
+                    "options": _conflict["options"],
+                    "original_task": task,
+                }
+                if chat_session_id:
+                    try:
+                        import json as _json
+                        await ChatService.add_message(
+                            session_id=chat_session_id, role="agent",
+                            content=_json.dumps(_payload),
+                            event_type="ClarificationNeeded",
+                            user_jwt=user_jwt,
+                        )
+                    except Exception as exc:
+                        logger.warning("Failed to persist clarification message: %s", exc)
+                try:
+                    await websocket.send_json({
+                        "type": "clarification_needed", **_payload,
+                    })
+                except Exception:
+                    pass
+                await ws_transition(
+                    session, websocket, WorkspaceState.READY,
+                    "Awaiting your choice…",
+                )
+                logger.info(
+                    "[%s] Classification conflict (%s) — awaiting user response",
+                    session.session_id, _conflict["kind"],
+                )
+            else:
+                # ── Step: Got Task ────────────────────────────────
+                await ws_transition(
+                    session, websocket, WorkspaceState.UPDATING,
+                    "Agent starting task...",
+                )
+                await websocket.send_json({
+                    "type": "step", "step": "got_task",
+                    "label": "Got task", "done": True,
+                })
+                await websocket.send_json({
+                    "type": "agent_event", "event": "task_start",
+                    "content": f"Agent starting task: {task}",
+                })
+                await websocket.send_json({
+                    "type": "step", "step": "understanding",
+                    "label": "Understanding the project", "done": True,
+                })
 
-            # ── Build enriched task + run pipeline via orchestrator ──
-            enriched_task = await build_enriched_task(task, session, project_id, user_id, user_jwt)
-            pipeline_user = build_pipeline_user(session, api_key, gemini_api_key, user_package_manager, user_jwt)
-            _task_result: TaskResult = await agent_orchestrator.execute_task(
-                enriched_task=enriched_task,
-                session=session,
-                websocket=websocket,
-                pipeline_user=pipeline_user,
-                chat_session_id=chat_session_id or "",
-                conversation_id=conversation_id,
-                user_jwt=user_jwt,
-                task=task,
-                images=[],
-            )
-            if _task_result.stopped:
-                explicit_stop = True
+                # ── Build enriched task + run pipeline via orchestrator ──
+                enriched_task = await build_enriched_task(task, session, project_id, user_id, user_jwt)
+                pipeline_user = build_pipeline_user(session, api_key, gemini_api_key, user_package_manager, user_jwt)
+                _task_result: TaskResult = await agent_orchestrator.execute_task(
+                    enriched_task=enriched_task,
+                    session=session,
+                    websocket=websocket,
+                    pipeline_user=pipeline_user,
+                    chat_session_id=chat_session_id or "",
+                    conversation_id=conversation_id,
+                    user_jwt=user_jwt,
+                    task=task,
+                    images=[],
+                )
+                if _task_result.stopped:
+                    explicit_stop = True
 
         # ── 5. Follow-up loop ────────────────────────────
         while True:
@@ -1641,6 +1774,89 @@ async def websocket_agent(websocket: WebSocket):
                         })
                     except Exception:
                         pass
+                continue
+
+            # ── Clarification response — user answered an archetype question ──
+            # Sent in reply to a clarification_needed event. We prepend the
+            # internal lock marker to the original task so the classifier
+            # routes correctly, then dispatch the same execute_task flow
+            # used for fresh handshake tasks.
+            if msg_type == "clarification_response":
+                from knowledge.loader import (
+                    ARCHETYPE_LOCK_PREFIX, LAYOUT_ARCHETYPES,
+                )
+                _archetype = (data.get("archetype") or data.get("id") or "").strip()
+                _original = (data.get("task") or data.get("original_task") or "").strip()
+                if _archetype not in LAYOUT_ARCHETYPES or not _original:
+                    logger.warning(
+                        "[%s] Bad clarification_response (archetype=%r task_len=%d)",
+                        getattr(session, "session_id", "?"),
+                        _archetype, len(_original),
+                    )
+                    try:
+                        await websocket.send_json({
+                            "type": "warning",
+                            "message": "Clarification response was malformed — please try again.",
+                        })
+                    except Exception:
+                        pass
+                    continue
+
+                _option_label = data.get("option_label") or _archetype
+                if chat_session_id:
+                    try:
+                        await ChatService.add_message(
+                            session_id=chat_session_id, role="user",
+                            content=str(_option_label),
+                            event_type="ClarificationResponse",
+                            user_jwt=user_jwt,
+                        )
+                    except Exception as exc:
+                        logger.warning("Failed to persist clarification reply: %s", exc)
+
+                _locked_task = f"{ARCHETYPE_LOCK_PREFIX}{_archetype}] {_original}"
+                logger.info(
+                    "[%s] User chose archetype=%s — resuming pipeline",
+                    getattr(session, "session_id", "?"), _archetype,
+                )
+
+                await ws_transition(
+                    session, websocket, WorkspaceState.UPDATING,
+                    "Agent starting task...",
+                )
+                await websocket.send_json({
+                    "type": "step", "step": "got_task",
+                    "label": "Got task", "done": True,
+                })
+                await websocket.send_json({
+                    "type": "agent_event", "event": "task_start",
+                    "content": f"Agent starting task: {_original}",
+                })
+                await websocket.send_json({
+                    "type": "step", "step": "understanding",
+                    "label": "Understanding the project", "done": True,
+                })
+
+                enriched_task = await build_enriched_task(
+                    _locked_task, session, project_id, user_id, user_jwt,
+                )
+                pipeline_user = build_pipeline_user(
+                    session, api_key, gemini_api_key, user_package_manager, user_jwt,
+                )
+                _task_result: TaskResult = await agent_orchestrator.execute_task(
+                    enriched_task=enriched_task,
+                    session=session,
+                    websocket=websocket,
+                    pipeline_user=pipeline_user,
+                    chat_session_id=chat_session_id or "",
+                    conversation_id=conversation_id,
+                    user_jwt=user_jwt,
+                    task=_locked_task,
+                    images=[],
+                )
+                if _task_result.stopped:
+                    explicit_stop = True
+                    break
                 continue
 
             if not content and not followup_images:

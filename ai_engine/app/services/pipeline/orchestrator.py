@@ -173,15 +173,12 @@ async def _cached_install(
             except Exception:
                 pass
         else:
-            err = (result.stderr or result.stdout or "")[:200]
-            logger.warning("_cached_install: %s install failed (non-fatal): %s", pm, err)
-            try:
-                await websocket.send_json({
-                    "type": "warning",
-                    "message": f"⚠️ {pm} install failed (Claude will fix if needed): {err[:100]}",
-                })
-            except Exception:
-                pass
+            # Surface only to server logs — the build_validator step catches
+            # real install issues with full stderr context. Forwarding the
+            # truncated head-of-stderr to chat just looks scary (e.g. pnpm
+            # writes "Lockfile is up to date…" to stderr on success-ish runs).
+            err = (result.stderr or result.stdout or "")[:400]
+            logger.warning("_cached_install: %s install non-zero (non-fatal): %s", pm, err)
 
     except Exception as exc:
         logger.warning("_cached_install error (non-fatal): %s", exc)

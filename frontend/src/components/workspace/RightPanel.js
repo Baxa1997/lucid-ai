@@ -282,59 +282,13 @@ function PlanReviewPanel({planData, onConfirm, onReject}) {
 }
 
 // ── Preview "booting" panel ────────────────────────────────────────────────
-// Shown in the preview pane while the dev server is being prepared. Replaces
-// the previous static spinner+message with a real stepper, elapsed-time
-// counter, and per-stage time estimate so the user can tell something is
-// actually happening during a 2-5 minute install.
-const PREVIEW_STAGES = [
-  { id: "cloning",      label: "Cloning repo",          estimateSec: 15 },
-  { id: "installing",   label: "Installing deps",       estimateSec: 90 },
-  { id: "starting",     label: "Starting dev server",   estimateSec: 30 },
-  { id: "health_check", label: "Waiting for response",  estimateSec: 30 },
-];
-
-// Map the various raw `status` strings the backend emits to one of the four
-// canonical stage ids above. Anything unknown is treated as "starting".
-function _normalizeStage(raw) {
-  if (!raw) return "starting";
-  const s = String(raw).toLowerCase();
-  if (s.includes("clon"))                                 return "cloning";
-  if (s.includes("install_done"))                         return "starting";
-  if (s.includes("install"))                              return "installing";
-  if (s.includes("health"))                               return "health_check";
-  if (s.includes("restart"))                              return "starting";
-  if (s.includes("start"))                                return "starting";
-  return "starting";
-}
-
+// Shown in the preview pane while the dev server is being prepared. Mirrors
+// the BuildingScreen visual (orange gradient logo, pulse rings, three orange
+// dots) so the workspace feels like one continuous loading state.
 function PreviewBootingPanel({
-  previewPhase,
-  previewStage,
   previewStatusMsg,
-  previewStartedAt,
   workspaceStatus,
 }) {
-  // 1-second tick so the elapsed counter updates live without re-mounting.
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    if (!previewStartedAt) return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [previewStartedAt]);
-
-  const currentStage = _normalizeStage(previewStage || workspaceStatus);
-  const currentIndex = Math.max(0, PREVIEW_STAGES.findIndex((s) => s.id === currentStage));
-  const elapsedSec = previewStartedAt
-    ? Math.floor((now - previewStartedAt) / 1000)
-    : 0;
-  const elapsedLabel = elapsedSec >= 60
-    ? `${Math.floor(elapsedSec / 60)}m ${String(elapsedSec % 60).padStart(2, "0")}s`
-    : `${elapsedSec}s`;
-
-  // Total estimate = sum of all stage estimates. Used to show "~X min total".
-  const totalEstimateSec = PREVIEW_STAGES.reduce((acc, s) => acc + s.estimateSec, 0);
-  const totalEstimateLabel = `${Math.ceil(totalEstimateSec / 60)} min`;
-
   const fallbackMsg =
     workspaceStatus === "connecting" ? "Connecting to the agent…" :
     workspaceStatus === "cloning"    ? "Cloning the repository…" :
@@ -345,61 +299,55 @@ function PreviewBootingPanel({
     "Booting workspace — the preview will appear here as soon as the dev server is ready.";
 
   return (
-    <div className="flex flex-col items-center justify-center h-full text-center p-8 bg-white dark:bg-[#0d1117]">
-      {/* Spinner badge */}
-      <div className="w-14 h-14 rounded-2xl bg-blue-50 dark:bg-blue-950/30 flex items-center justify-center mb-5">
-        <Loader2 className="w-7 h-7 text-blue-500 animate-spin" />
+    <div className="h-full flex flex-col items-center justify-center relative overflow-hidden bg-white dark:bg-[#0d1117]">
+      {/* Animated orange orbs */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-[12%] left-[8%] w-80 h-80 bg-orange-300/15 dark:bg-orange-500/8 rounded-full blur-3xl animate-orb-1" />
+        <div className="absolute top-[35%] right-[6%] w-64 h-64 bg-orange-200/15 dark:bg-orange-500/8 rounded-full blur-3xl animate-orb-2" />
+        <div className="absolute bottom-[15%] left-[28%] w-72 h-72 bg-orange-200/15 dark:bg-orange-600/6 rounded-full blur-3xl animate-orb-3" />
+      </div>
+      <div className="absolute bottom-0 left-0 right-0 h-[40%] bg-gradient-to-t from-slate-50/40 via-slate-50/15 to-transparent dark:from-slate-900/20 dark:via-slate-900/5 dark:to-transparent pointer-events-none" />
+
+      {/* Orange logo with pulse rings */}
+      <div className="relative z-10 mb-6">
+        <div
+          className="absolute -inset-5 rounded-full bg-orange-400/8 dark:bg-orange-400/5 animate-pulse"
+          style={{animationDuration: "3s"}}
+        />
+        <div
+          className="absolute -inset-3 rounded-full bg-orange-400/12 dark:bg-orange-400/8 animate-pulse"
+          style={{animationDuration: "2.2s", animationDelay: "0.4s"}}
+        />
+        <div className="absolute -inset-1.5 rounded-full bg-orange-400/20 dark:bg-orange-400/10" />
+        <div className="relative w-20 h-20 rounded-full bg-gradient-to-br from-[#dc5426] to-orange-600 flex items-center justify-center shadow-xl shadow-orange-500/25">
+          <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+            <rect x="8" y="10" width="24" height="3" rx="1.5" fill="white" opacity="0.9" />
+            <rect x="8" y="16" width="24" height="3" rx="1.5" fill="white" opacity="0.7" />
+            <rect x="8" y="22" width="24" height="3" rx="1.5" fill="white" opacity="0.5" />
+            <rect x="12" y="28" width="16" height="3" rx="1.5" fill="white" opacity="0.3" />
+          </svg>
+        </div>
       </div>
 
-      {/* Title + status message */}
-      <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-1">
-        {previewPhase === "booting" ? "Setting up preview" : "Preparing workspace"}
-      </h3>
-      <p className="text-[13px] text-slate-500 dark:text-slate-400 max-w-sm mb-6">
+      <h2 className="relative z-10 text-xl font-semibold text-slate-700 dark:text-slate-300 mb-2 transition-all duration-500">
+        Preparing Preview
+      </h2>
+      <p className="relative z-10 text-[13px] text-slate-400 dark:text-slate-500 max-w-sm text-center transition-all duration-300">
         {previewStatusMsg || fallbackMsg}
       </p>
 
-      {/* Stage stepper */}
-      <div className="w-full max-w-md mb-4">
-        <div className="flex items-center justify-between gap-2">
-          {PREVIEW_STAGES.map((stage, idx) => {
-            const done = idx < currentIndex;
-            const active = idx === currentIndex;
-            return (
-              <div key={stage.id} className="flex-1 flex flex-col items-center">
-                <div
-                  className={cn(
-                    "w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-semibold border-2 transition-colors",
-                    done && "bg-emerald-500 text-white border-emerald-500",
-                    active && "bg-blue-500 text-white border-blue-500",
-                    !done && !active && "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 border-slate-200 dark:border-slate-700",
-                  )}
-                >
-                  {done ? "✓" : idx + 1}
-                </div>
-                <span
-                  className={cn(
-                    "mt-1.5 text-[11px] tracking-wide",
-                    active && "text-slate-800 dark:text-slate-200 font-semibold",
-                    !active && "text-slate-400 dark:text-slate-500",
-                  )}
-                >
-                  {stage.label}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Elapsed + estimate row */}
-      <div className="flex items-center gap-4 text-[12px] text-slate-500 dark:text-slate-400 mt-1">
-        <div className="flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-          <span>Elapsed: <span className="font-mono text-slate-700 dark:text-slate-300">{elapsedLabel}</span></span>
-        </div>
-        <div className="w-px h-3 bg-slate-200 dark:bg-slate-700" />
-        <div>Typical: <span className="font-mono">~{totalEstimateLabel}</span></div>
+      {/* Animated orange dots */}
+      <div className="relative z-10 flex items-center gap-1.5 mt-5">
+        {[0, 1, 2].map((i) => (
+          <div
+            key={i}
+            className="w-1.5 h-1.5 rounded-full bg-orange-400/70"
+            style={{
+              animation: "dot-bounce 1.4s ease-in-out infinite",
+              animationDelay: `${i * 0.22}s`,
+            }}
+          />
+        ))}
       </div>
     </div>
   );

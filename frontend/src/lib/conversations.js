@@ -49,7 +49,8 @@ export async function listConversations() {
     .from('chat_sessions')
     .select('project_id, user_repo_url, user_repo_provider, title, created_at, updated_at, is_active')
     .eq('user_id', user.id)
-    .order('updated_at', { ascending: false });
+    .order('updated_at', { ascending: false })
+    .limit(100);
 
   if (error) return [];
 
@@ -92,7 +93,7 @@ export async function getConversation(conversationId) {
 
   const { data, error } = await supabase
     .from('chat_sessions')
-    .select('project_id, user_repo_url, user_repo_provider, platform_repo_url, platform_repo_branch')
+    .select('project_id, title, user_repo_url, user_repo_provider, platform_repo_url, platform_repo_branch')
     .eq('project_id', conversationId)
     .order('created_at', { ascending: false })
     .limit(1)
@@ -109,7 +110,9 @@ export async function getConversation(conversationId) {
 
   return {
     id: conversationId,
-    title: repoName?.split('/').pop() || 'Project',
+    // DB title is the brand name set by the landing pipeline — prefer it over
+    // the repo slug so landing projects show "The Bali Haven" not "lucid-ws-...".
+    title: data.title || repoName?.split('/').pop() || 'Project',
     repo_name: repoName,
     repo_provider: data.user_repo_provider || null,
     repo_url: repoUrl,

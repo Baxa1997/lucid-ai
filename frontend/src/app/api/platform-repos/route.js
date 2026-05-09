@@ -22,12 +22,15 @@ export async function GET() {
   try {
     const supabase = await getSupabaseServerClient();
 
-    // Query chat_sessions with platform_repo_url for this user
+    // Query chat_sessions for this user. Show ALL projects — drafts that
+    // haven't been exported, AND sessions that pushed to GitHub even if
+    // their project_id row was never populated (legacy / repair path).
+    // We filter client-side because PostgREST lacks an OR-NULL operator
+    // that's clean to chain with .not().
     const { data: sessions, error } = await supabase
       .from('chat_sessions')
-      .select('id, project_id, platform_repo_url, vercel_url, created_at, updated_at')
+      .select('id, project_id, title, platform_repo_url, vercel_url, created_at, updated_at')
       .eq('user_id', ctx.userId)
-      .not('platform_repo_url', 'is', null)
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -39,27 +42,45 @@ export async function GET() {
       return NextResponse.json({ repos: [] });
     }
 
-    // Deduplicate by project_id (keep latest)
+    // Filter to rows that have AT LEAST one identifier we can use as a
+    // workspace key (project_id OR platform_repo_url). Skip pure-empty
+    // sessions (idle wizard opens, broken auth handshakes, etc).
+    const usable = sessions.filter(
+      (s) => s.project_id || s.platform_repo_url
+    );
+
+    // Deduplicate by project_id when we have one, otherwise by repo URL.
+    // This way a session that pushed to GitHub but never got project_id
+    // assigned still surfaces, while normal cases collapse correctly.
     const seen = new Set();
-    const uniqueSessions = sessions.filter(s => {
-      const key = s.project_id;
+    const uniqueSessions = usable.filter((s) => {
+      const key = s.project_id || s.platform_repo_url;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
 
-    // Build response — derive names from the repo URL directly
+    // Build response — prefer the repo name when the project has been
+    // exported, otherwise fall back to the chat session title (which is
+    // seeded from the user's first prompt) so drafts have a real label.
     const repos = uniqueSessions.map(s => {
       const repoName = s.platform_repo_url
         ?.replace('https://github.com/', '')
         ?.split('/')
-        ?.pop() || 'Unknown';
+        ?.pop() || null;
 
+      const fallbackTitle = (s.title || '').trim().slice(0, 60) || 'Untitled project';
+      const projectName = repoName || fallbackTitle;
+
+      // Always return a projectId — fall back to the chat-session id when
+      // the row's project_id column was never populated. The workspace
+      // launcher routes to /workspace/<projectId>, so a missing key here
+      // would silently break the "Recent Projects" tile click.
       return {
-        projectId: s.project_id,
-        repoUrl: s.platform_repo_url,
-        repoName,
-        projectName: repoName,
+        projectId: s.project_id || s.id,
+        repoUrl: s.platform_repo_url || null,
+        repoName: repoName || projectName,
+        projectName,
         createdAt: s.created_at,
         deployUrl: s.vercel_url || null,
         deployStatus: s.vercel_url ? 'deployed' : null,

@@ -99,6 +99,83 @@ def classify_project_type(task: str) -> str:
     return result["app_type"]
 
 
+# ── Ambiguity detection ─────────────────────────────────────────────
+# When a prompt mixes signals from two incompatible archetypes (e.g.
+# "landing page" + cart/checkout), the keyword fast-path locks it into
+# the wrong route. detect_classification_conflict surfaces these so the
+# caller can ask the user before any expensive work runs.
+_LANDING_SIGNALS = (
+    "landing page", "landing-page", "one-pager", "one pager", "one-page",
+    "single page", "single-page", "promo page", "marketing page",
+    "scrollable page",
+)
+_ECOMMERCE_SIGNALS = (
+    "cart", "checkout", "add to cart", "shopping cart", "online store",
+    "online shop", "ecommerce", "e-commerce", "sell products",
+    "product catalog", "buy products", "place orders",
+)
+
+
+def detect_classification_conflict(task: str) -> Optional[dict]:
+    """Detect prompts that mix incompatible archetype signals.
+
+    Returns a clarification dict (question + options) when the user's
+    prompt names one archetype but contains strong signals for another,
+    or None if there is no conflict.
+    """
+    if not task:
+        return None
+    t = task.lower()
+
+    has_landing = any(s in t for s in _LANDING_SIGNALS)
+    has_ecom = any(s in t for s in _ECOMMERCE_SIGNALS)
+
+    if has_landing and has_ecom:
+        return {
+            "kind": "landing_vs_ecommerce",
+            "question": (
+                "It looks like you want an online store. Should I generate a "
+                "full e-commerce website with cart and checkout, or just a "
+                "marketing landing page?"
+            ),
+            "options": [
+                {
+                    "id": "ecommerce",
+                    "label": "Full e-commerce website with cart & checkout",
+                },
+                {
+                    "id": "single_page_landing",
+                    "label": "Marketing landing page only",
+                },
+            ],
+        }
+    return None
+
+
+# Internal marker used to lock the classifier to a user-chosen archetype
+# after they answer a clarification question. Stripped by the project
+# generator before the description flows into prompts.
+ARCHETYPE_LOCK_PREFIX = "[LUCID_FORCE_ARCHETYPE::"
+
+
+def force_archetype_from_task(task: str) -> tuple[Optional[str], str]:
+    """Parse an archetype-lock marker out of a task string.
+
+    The marker can sit at the start of the task or buried inside a
+    larger ``enriched_task`` (the orchestrator may prepend conversation
+    context before the raw task is consumed). Returns
+    (locked_archetype, task_without_marker). When no marker is present,
+    returns (None, task) unchanged.
+    """
+    import re as _re
+    if not task or ARCHETYPE_LOCK_PREFIX not in task:
+        return None, task or ""
+    m = _re.search(r"\[LUCID_FORCE_ARCHETYPE::([a-z_]+)\]\s*", task)
+    if not m:
+        return None, task
+    return m.group(1), task[: m.start()] + task[m.end():]
+
+
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  AI-Powered Classifier (Gemini Flash — 2 seconds)           ║
 # ╚══════════════════════════════════════════════════════════════╝
@@ -350,7 +427,11 @@ def _classify_static(task: str) -> dict:
     return _build_rich_classification("consumer_website", "general")
 
 
-async def classify_project_type_ai(task: str, gemini_api_key: str = "") -> dict:
+async def classify_project_type_ai(
+    task: str,
+    gemini_api_key: str = "",
+    force_archetype: Optional[str] = None,
+) -> dict:
     """AI-powered project classifier using Gemini Flash.
 
     Returns a rich classification dict:
@@ -365,7 +446,17 @@ async def classify_project_type_ai(task: str, gemini_api_key: str = "") -> dict:
     }
 
     Falls back to static keyword classifier if Gemini is unavailable.
+
+    When ``force_archetype`` is provided (e.g. user resolved a
+    classification conflict via a clarification dialog), classification
+    is short-circuited and the archetype is locked.
     """
+    if force_archetype and force_archetype in LAYOUT_ARCHETYPES:
+        logger.info("classify: forced archetype=%s (user clarification)", force_archetype)
+        return _build_rich_classification(
+            force_archetype, _detect_domain((task or "").lower()), locked=True
+        )
+
     if not gemini_api_key:
         return _classify_static(task)
 

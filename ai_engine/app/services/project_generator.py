@@ -149,7 +149,11 @@ async def clear_persisted_plan(chat_session_id: str) -> None:
 
 CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
 DEFAULT_MODEL  = "claude-sonnet-4-6"   # 64K native output — no beta header needed
-FALLBACK_MODEL = "claude-opus-4-7"    # fallback for edge cases
+# Fallback chain (in order). Sonnet 4.5 sits between 4.6 and Opus because
+# during high-load windows 4.6 returns `overloaded_error` while 4.5 still
+# has free capacity — much cheaper than failing over to Opus right away.
+FALLBACK_MODELS = ["claude-sonnet-4-5", "claude-opus-4-7"]
+FALLBACK_MODEL = FALLBACK_MODELS[-1]   # legacy alias — last-resort model
 MAX_TOKENS_PER_CALL = 64000                # claude-sonnet-4-6 native max output
 MAX_FIX_ATTEMPTS = 1
 
@@ -1459,7 +1463,9 @@ async def call_claude_for_json(
     payload = {
         "model": model,
         "max_tokens": max_tokens,
-        "temperature": 0.3,
+        # `temperature` is deprecated for newer Claude models (4.x reasoning
+        # variants reject it with a 400). Anthropic uses a sensible default;
+        # we don't need to pin it here.
         "system": system_prompt,
         "messages": [{"role": "user", "content": user_prompt}],
         "tools": [write_files_tool],
@@ -1467,6 +1473,7 @@ async def call_claude_for_json(
     }
 
     _last_stop_reason: list[str] = [""]  # mutable container so inner fn can write it
+    _last_stream_error: list[str] = [""]  # captures Anthropic's `error` event text
 
     async def _make_request(use_model: str) -> Optional[dict]:
         payload["model"] = use_model
@@ -1495,6 +1502,18 @@ async def call_claude_for_json(
                             "Claude API error %d with %s: %s",
                             response.status_code, use_model, error_text,
                         )
+                        # Parse Anthropic's structured error body for a
+                        # human-readable reason — without this the chat
+                        # only shows "Claude API error (400)" which is
+                        # unactionable. The body is JSON like:
+                        #   {"type":"error","error":{"type":"invalid_request_error","message":"..."}}
+                        _err_reason = ""
+                        try:
+                            _err_obj = json.loads(error_text)
+                            _err_inner = (_err_obj or {}).get("error") or {}
+                            _err_reason = (_err_inner.get("message") or "")[:300]
+                        except Exception:
+                            _err_reason = error_text[:300]
                         if response.status_code in (401, 403):
                             await _ws_send(websocket, "error", "❌ Anthropic API key is invalid.")
                         elif response.status_code in (400, 402) and "credit" in error_text.lower():
@@ -1504,7 +1523,10 @@ async def call_claude_for_json(
                         elif response.status_code == 529:
                             await _ws_send(websocket, "error", "⚠️ Anthropic API overloaded. Retrying...")
                         else:
-                            await _ws_send(websocket, "error", f"❌ Claude API error ({response.status_code}).")
+                            _msg = f"❌ Claude API error ({response.status_code})."
+                            if _err_reason:
+                                _msg = f"{_msg} {_err_reason}"
+                            await _ws_send(websocket, "error", _msg)
                         return None
 
                     _stream_started_at = _time.monotonic()
@@ -1535,6 +1557,7 @@ async def call_claude_for_json(
             response_data: dict = {}
             tool_input_parts: list[str] = []
             stop_reason = ""
+            _stream_error = ""  # captured if SSE includes an error event
             _in_tok = 0
             _cache_read_tok = 0
             _cache_create_tok = 0
@@ -1562,6 +1585,16 @@ async def call_claude_for_json(
                     _delta_usage = chunk.get("usage") or {}
                     if _delta_usage:
                         _out_tok = int(_delta_usage.get("output_tokens", _out_tok) or _out_tok)
+                elif ctype == "error":
+                    # Anthropic streams an `error` event when the request is
+                    # accepted (200) but the model run aborts mid-stream
+                    # (overloaded, rate limited, content blocked). Without
+                    # this branch we'd silently fall through to "empty
+                    # response" and look stuck.
+                    _err_inner = chunk.get("error") or {}
+                    _stream_error = (
+                        _err_inner.get("message") or _err_inner.get("type") or "stream error"
+                    )[:200]
 
             # Report token usage to the billing meter (fire-and-forget).
             # user_id resolves from the ambient contextvar set by
@@ -1619,9 +1652,11 @@ async def call_claude_for_json(
                         logger.info("Salvaged %d files from truncated stream", len(salvaged["files"]))
                         return salvaged
 
-            logger.error("Claude stream had no tool_use input (model=%s, stop=%s)", use_model, stop_reason)
-            # Send actual error details to help debug
-            await _ws_send(websocket, "warning", f"⚠️ Phase returned empty response (stop={stop_reason}). Retrying...")
+            logger.error(
+                "Claude stream had no tool_use input (model=%s, stop=%s, error=%s, chunks=%d)",
+                use_model, stop_reason, _stream_error or "—", len(raw_chunks),
+            )
+            _last_stream_error[0] = _stream_error or ""
             return None
 
         except httpx.TimeoutException as te:
@@ -1633,8 +1668,47 @@ async def call_claude_for_json(
             return None
 
 
-    # Try with primary model
-    result = await _make_request(model)
+    # ── Retry helper ────────────────────────────────────────────────
+    # Anthropic's streaming API frequently aborts mid-stream with
+    # "Overloaded" or returns an empty stream (no stop_reason) under
+    # load. Without retry, every transient hiccup kills a section.
+    # We retry up to 3 times with exponential backoff (1s, 3s, 7s).
+    # `max_tokens` failures are NOT retried (slimmer-prompt path
+    # below handles that); 4xx HTTP errors are NOT retried (returned
+    # as None directly from _make_request).
+    async def _request_with_retry(use_model: str, max_attempts: int = 3) -> Optional[dict]:
+        import asyncio as _asyncio
+        backoff = 1.0
+        for attempt in range(1, max_attempts + 1):
+            r = await _make_request(use_model)
+            if r is not None:
+                return r
+            # Truncation isn't retryable here — let the slimmer-prompt logic
+            # downstream handle it.
+            if _last_stop_reason[0] == "max_tokens":
+                return None
+            err = _last_stream_error[0] or "(empty stream)"
+            if attempt >= max_attempts:
+                # Final failure — surface the reason once to the UI.
+                await _ws_send(
+                    websocket, "warning",
+                    f"⚠️ Anthropic {err} after {max_attempts} attempts on {use_model}.",
+                )
+                return None
+            logger.warning(
+                "Claude empty/error on %s (attempt %d/%d, reason=%s) — backing off %.1fs",
+                use_model, attempt, max_attempts, err, backoff,
+            )
+            await _ws_send(
+                websocket, "progress",
+                f"⏳ {err} — retrying in {backoff:.0f}s ({attempt}/{max_attempts})…",
+            )
+            await _asyncio.sleep(backoff)
+            backoff = backoff * 2 + 1  # 1 → 3 → 7
+        return None
+
+    # Try with primary model (with retries)
+    result = await _request_with_retry(model)
     if result:
         return result
 
@@ -1666,13 +1740,22 @@ async def call_claude_for_json(
         await _ws_send(websocket, "warning", "⚠️ Generation was too large — proceeding with partial output...")
         return None
 
-    # Fallback to Opus if Sonnet failed for a non-truncation reason
-    if model != FALLBACK_MODEL:
-        await _ws_send(websocket, "progress", f"⚠️ {model} failed, retrying with {FALLBACK_MODEL}...")
-        logger.warning("Falling back from %s to %s", model, FALLBACK_MODEL)
-        result = await _make_request(FALLBACK_MODEL)
+    # Fallback chain (Sonnet 4.5 → Opus 4.7) if the primary failed for a
+    # non-truncation reason. We walk the chain so a single transient
+    # capacity blip on the primary doesn't immediately cost the user
+    # an Opus call — Sonnet 4.5 is usually free even when 4.6 is overloaded.
+    for fb_model in FALLBACK_MODELS:
+        if fb_model == model:
+            continue  # don't retry the same model we just failed on
+        await _ws_send(
+            websocket, "progress",
+            f"⚠️ {model} failed, retrying with {fb_model}...",
+        )
+        logger.warning("Falling back from %s to %s", model, fb_model)
+        result = await _request_with_retry(fb_model)
         if result:
             return result
+        model = fb_model  # so the next loop iteration's "from" message is right
 
     return None
 
@@ -1816,11 +1899,6 @@ def _extract_research_section(text: str, header: str, max_chars: int = 2000) -> 
 _DISTILL_SECTIONS: tuple[tuple[str, int], ...] = (
     ("DESIGN_SYSTEM_NAME", 100),
     ("CLASSIFICATION", 300),
-    # PAGE_INTENT defines the conversion goal + must-have sections derived from
-    # the user's prompt. Phase 1/2 prompts treat must_have_sections as
-    # non-negotiable, so this MUST survive distillation. Placed before
-    # USER_REQUIREMENTS because the goal frames the rest of the brief.
-    ("PAGE_INTENT", 1200),
     # User-stated requirements (loader, cursor, animations, copy specifics, …) —
     # MUST survive distillation; Phase 1/2/3 prompts treat this as non-negotiable.
     # Placed early so even an extreme truncation keeps it.
@@ -2240,8 +2318,8 @@ async def _call_gemini_single(
     """
     import httpx
     # Pro thinkingBudget bumped from 2048 → 8192 for deeper reasoning on
-    # PAGE_INTENT extraction, slug-rename judgment, and ENTITY_SCREENS
-    # structure. Cost delta is ~$0.05/call, well worth it on the foundational
+    # ENTITY_SCREENS structure, slug-rename judgment, and architectural
+    # decisions. Cost delta is ~$0.05/call, well worth it on the foundational
     # research step. Flash stays at 0 (it's used for short structured calls
     # where extra thinking adds no value).
     _thinking_config = (
@@ -2841,165 +2919,6 @@ reasoning: [confirm or explain any correction in 1 sentence]
 
 {"⚠️ LOCKED: The user explicitly requested this layout type. Output layout_archetype EXACTLY as shown above — do NOT change it." if is_locked else "(Correct the layout_archetype line above ONLY if clearly wrong — keep others matching)"}
 
-===PAGE_INTENT===
-⚠️  CRITICAL — READ THE USER PROMPT LIKE A PRODUCT MANAGER, NOT LIKE A DOMAIN
-CLASSIFIER. The user's prompt almost always names a SPECIFIC GOAL the page must
-serve, and that goal is what drives section selection — NOT the industry the
-business operates in. Past failure: user wrote "landing page for logistics
-company hiring drivers and operators" and the research returned a generic
-logistics site (services / fleet / coverage / contact) with NO open-positions
-section, NO driver-benefits section, NO application form. The page failed at
-its single job because the research treated "logistics" as the brief and
-"hiring" as a flavor word.
-
-Extract THREE things from the original PROJECT description above:
-
-primary_goal:
-  [ONE sentence in the form "<verb> <target audience> to <action>".
-   Examples that show how to read the prompt CORRECTLY:
-     prompt: "landing page for a logistics company for hiring drivers and operators"
-       → "Recruit truck drivers and fleet operators to apply for open positions"
-       (NOT: "Promote logistics services to potential customers" — wrong audience.)
-
-     prompt: "landing page for our coffee shop that just opened in SoHo"
-       → "Convert nearby pedestrians and locals to visit the café for coffee"
-
-     prompt: "fundraising page for our nonprofit's clean-water campaign"
-       → "Convert visitors into one-time or recurring donors for the campaign"
-
-     prompt: "beta signup page for our AI note-taking app"
-       → "Capture beta-list emails from prosumer knowledge workers"
-
-     prompt: "landing page for a yoga studio that does outdoor retreats in Costa Rica"
-       → "Convert wellness-curious visitors to book a Costa Rica retreat slot"
-   The verb is the conversion action. The target audience is WHO clicks. If you
-   write "promote" or "showcase" or "introduce" you have FAILED — those are not
-   conversion verbs. Rewrite until the verb is concrete (apply / book / donate /
-   sign up / order / reserve / visit / enroll / inquire / hire).]
-
-target_audience:
-  [WHO is on this page? Be specific. Not "potential customers" — name them.
-   Recruitment page → "experienced CDL-A truck drivers in the southeast US,
-   age 25-55, currently employed but open to switching".
-   Beta signup → "knowledge workers, ICs at SaaS companies, currently using
-   Notion/Obsidian and frustrated by manual organization".
-   Yoga retreat → "women 28-45 with disposable income, urban professionals
-   seeking burnout reset, mid-to-advanced practice level".
-   This audience drives copy tone, imagery, social proof, and which objections
-   the sections must address.]
-
-must_have_sections:
-  [The 3-7 sections WITHOUT WHICH this page fails its primary_goal. Derive
-   these from the goal, not from the industry. Format: section_slug — why
-   it is non-negotiable for THIS goal.
-
-   Example for "Recruit truck drivers and fleet operators":
-     - hero_role_focused — headline/CTA must speak to drivers, not shippers
-       ("Drive with us. Home weekly." NOT "Logistics solutions for your business")
-     - open_positions — current job openings with location/route/pay range
-       (without this, no application happens; this is THE conversion section)
-     - driver_benefits — pay structure, home time, equipment, health insurance
-       (drivers compare offers on these specifics; missing this loses them)
-     - day_in_the_life — typical route/schedule/equipment with real photos
-       (answers "what's actually different about this company")
-     - driver_testimonials — quotes from current drivers (NOT customer testimonials)
-     - apply_now_form — short form: name, CDL class, years experience, location,
-       phone (long forms kill mobile applications)
-     - faq_for_drivers — pay frequency, hometime guarantee, dispatch style,
-       truck assignment policy
-
-   Example for "Convert visitors to book a Costa Rica yoga retreat":
-     - hero_with_retreat_imagery — single hero image of the actual retreat
-       location, NOT a yoga studio interior
-     - what_is_included — daily schedule + meals + accommodation + excursions
-     - dates_and_pricing — specific upcoming retreat weeks with prices/openings
-     - lead_teacher_bio — credentials, photo, teaching style
-     - what_past_attendees_said — testimonials with photos from real retreats
-     - location_and_accommodation — gallery of the property + room types
-     - book_now_cta — date selection + deposit info + booking form
-
-   Example for "Capture beta-list emails from prosumer knowledge workers":
-     - hero_with_demo_screenshot — actual product UI, not abstract gradient
-     - problem_resonance — the specific frustration the user has TODAY
-     - how_it_works — 3-step flow showing the product in action
-     - feature_proof — specific UX moments that win the comparison vs Notion
-     - waitlist_count_or_social_proof — numbers that signal momentum
-     - email_signup_form — the conversion section, prominent twice
-     - faq_for_skeptics — "is my data private", "when will I get access"
-
-   Counter-example showing what NOT to do:
-   ✗ For the recruitment prompt above, "services / industries we serve / our
-     fleet / contact us" — those serve customer-acquisition, not driver-recruitment.
-     They are LITERALLY the wrong page for the user's stated goal.]
-
-conversion_amplifiers:
-  [3-5 ADDITIONAL sections that a domain EXPERT would put ON TOP of the
-   must_haves to maximize conversion. The page WORKS without them — but a
-   real practitioner who has run conversion experiments in this space would
-   always add 2-4 of these. Format: section_slug — why a pro adds this.
-
-   The difference from must_have_sections:
-     • must_have = page fails its job without it (e.g. apply_now_form on a
-       recruitment page)
-     • conversion_amplifier = page works without it, but with it the conversion
-       rate jumps because it removes a specific objection or adds momentum
-
-   Example for "Recruit truck drivers":
-     - referral_bonus_callout — drivers refer drivers; a $1-3K referral bonus
-       banner converts existing-driver visitors into a recruiting channel
-     - meet_your_recruiter_card — photo + name + direct phone of the actual
-       recruiter; reduces "is this a real company" hesitation
-     - paid_orientation_promise — "$1,000 paid orientation, hotel + meals
-       covered" addresses the "I can't afford to start a new job" objection
-     - day_in_the_life_video — short loom-style video of a real route /
-       dispatch interaction; outperforms text testimonials 2-3x
-     - live_chat_or_text_recruiter — sticky widget with "text us at 555-…";
-       captures applicants who won't fill the form
-
-   Example for "Capture beta-list emails":
-     - waitlist_count_ticker — "join 12,847 others on the list" — momentum
-       social proof; works even when count is mid-thousands
-     - who_else_signed_up_logos — company logos of beta users; signals
-       legitimacy in 1 second
-     - founder_loom_video — 90s personal video; converts the "is this real"
-       skeptic into believer
-     - early_access_perks — "first 100 get free annual plan"; urgency without
-       a fake countdown
-     - last_signup_ticker — "Sarah from London signed up 4 minutes ago";
-       live-ish feed under the form
-
-   Example for "Convert visitors to book a Costa Rica yoga retreat":
-     - tonight_availability_or_remaining_spots — "Only 3 spots left for
-       March 18 retreat"; scarcity that's real, not fake
-     - whats_not_included_for_clarity — pre-empts the "do I need flights"
-       worry that makes 30% bounce
-     - financing_or_payment_plan_card — "$500 deposit holds your spot,
-       balance due 30 days before"; lowers the activation barrier
-     - past_attendee_photo_wall — instagram-style grid of real retreat
-       photos with captions from attendees
-     - custom_retreat_inquiry — a smaller form for "I want a private group
-       retreat"; captures B2B/group leads alongside individuals
-
-   Example for "Donations for clean-water campaign":
-     - live_donation_counter — "$84,231 raised toward $100k goal" with a
-       progress bar; momentum social proof
-     - where_your_money_goes_breakdown — "$25 = 1 family clean for a year";
-       concretizes the impact-per-dollar
-     - recurring_giving_upsell — "$10/mo over 1 year does 3x what $30 once
-       does"; nudges from one-time to recurring
-     - corporate_match_lookup — input "your employer name"; instantly shows
-       2x match availability
-     - legacy_giving_card — for older audiences; "include us in your will"
-       captures a demographic the main flow misses
-
-   Pick amplifiers that match THIS specific primary_goal — do not list generic
-   items. The point is to think like a domain practitioner who has watched
-   real users convert (or not) on pages like this.]
-
-intent_self_check:
-  [In ONE sentence, state how the section list above will rank #1 on the
-   primary_goal conversion. If you can't, your sections are wrong — rewrite.]
-
 ═══════════════════════════════════════════════════════════════
 
 ===USER_REQUIREMENTS===
@@ -3142,67 +3061,12 @@ cta: "[CTA text — use the domain-appropriate verb: Reserve a Table / Book a Cl
 sticky: yes | blur_bg: yes
 
 ===SECTIONS===
-⚠️  HARDEST RULE — INTENT BEATS DOMAIN:
-The section list MUST serve the primary_goal you wrote in ===PAGE_INTENT===,
-NOT the generic "what a {domain} site usually has" stack.
-
-TWO-TIER REQUIREMENT — both tiers are mandatory:
-
-TIER 1 — Must-haves (page FAILS without them):
-  Every section_slug listed in ===PAGE_INTENT===.must_have_sections MUST
-  appear here, by the SAME section_slug name, and must come EARLY in the
-  page (before any generic domain-flavor sections).
-
-TIER 2 — Conversion amplifiers (separates 7/10 from 10/10):
-  Pick AT LEAST 2 (preferably 3-4) section_slugs from
-  ===PAGE_INTENT===.conversion_amplifiers and include them here, by the SAME
-  section_slug name. These are what a domain expert would always add — the
-  difference between "the page is complete" and "the page converts at the
-  ceiling for this goal".
-
-Concretely:
-  • Recruitment → must-have: open_positions, driver_benefits, apply_now_form;
-    amplifier picks: referral_bonus_callout, meet_your_recruiter_card,
-    paid_orientation_promise, day_in_the_life_video.
-  • Donation → must-have: impact_proof, donation_tiers, donate_now_cta;
-    amplifier picks: live_donation_counter, where_your_money_goes_breakdown,
-    recurring_giving_upsell.
-  • Beta-signup → must-have: email_signup_form (twice), problem_resonance,
-    product_demo; amplifier picks: waitlist_count_ticker, founder_loom_video,
-    early_access_perks.
-  • Reservation/booking → must-have: booking_widget visible above-the-fold;
-    amplifier picks: scarcity_or_remaining_spots, financing_or_deposit_card,
-    past_attendee_photo_wall.
-
-SELF-CHECK — run ALL THREE before continuing:
-  1. Re-read each section_slug in ===PAGE_INTENT===.must_have_sections.
-     If ANY is missing from the list below → ADD it now.
-  2. Count sections matching ===PAGE_INTENT===.conversion_amplifiers slugs.
-     If fewer than 2 → ADD until you have at least 2 (preferably 3-4).
-  3. Scan every section_slug for GENERIC names: `how_it_works`, `features`,
-     `testimonials`, `cta`, `cta_final`, `about`, `about_us`, `faq`,
-     `newsletter`, `pricing`. If a section's CONTENT is custom and goal-
-     specific, RENAME the slug to match what it actually shows. Examples:
-       • `how_it_works` with content "Prompt → Preview → Publish"
-            → `prompt_preview_publish_flow`
-       • `features` for a sailing charter with content "sunset sails,
-          multi-day cruises, private skipper"
-            → `charter_experiences`
-       • `testimonials` for a dental hygienist recruitment page with
-          content "what our hygienists say about working here"
-            → `hygienist_voices`
-       • `cta_final` for a reforestation donation page with content
-          "Sponsor your first tree today"
-            → `sponsor_a_tree_cta`
-     Keep `hero` and `footer` as-is (they are universal anchors). Keep a
-     generic slug ONLY if the content is genuinely generic (e.g. a vanilla
-     FAQ that could appear on any site).
-
-Total page length: 8-12 sections. The mix is must-haves + amplifiers + a
-small number of domain-flavor sections that genuinely strengthen the
-conversion path. Study what real top {domain} sites put on their landing page;
-the list below is a menu of POSSIBLE sections; pick what fits, skip what
-doesn't, INVENT sections unique to the goal if needed.
+Invent the section list that THIS domain actually needs — do NOT default to the
+generic "hero / features / pricing / faq / cta" stack. Study what real top
+{domain} sites put on their landing page and pick 7-12 sections that flow in a
+domain-appropriate order. The list below is a menu of POSSIBLE sections; pick
+what fits this domain, skip what doesn't, and INVENT sections unique to the
+domain if needed.
 
 Possible section types (not all apply — pick what THIS domain needs):
   Universal: hero, social_proof (logos / ratings / user count), cta_final, footer
@@ -5799,6 +5663,38 @@ questions, testimonial quotes), write new copy in the SAME voice
 and specificity as the deck — never fall back to generic filler.
 
 ───────────────────────────────────────────────────────────────
+VOICE_GUIDANCE — RESEARCH-GROUNDED COPY PRIMING (multi-page websites)
+───────────────────────────────────────────────────────────────
+If a ===VOICE_GUIDANCE=== block is present (multi-page consumer
+sites, dashboards with public surfaces, etc.) AND no COPY_DECK is
+present, this block is your authoritative voice anchor for every
+hero, section, feature, About paragraph, and CTA across ALL pages:
+
+  - AUDIENCE LANGUAGE  → mirror the register and cadence in
+                         headlines, eyebrow text, and CTA microcopy.
+                         Do NOT paste these quotes verbatim into a
+                         hero unless they fit naturally; they are
+                         priming, not filler. They CAN appear
+                         verbatim inside testimonials sections.
+  - INDUSTRY VOCABULARY → weave 1-2 of these into body copy where
+                         they land naturally. Skip if forced.
+                         A reader from this domain should recognise
+                         the language as insider, not jargon.
+  - REGIONAL ANCHORS   → reference 1 by name in About, Locations,
+                         or Proof sections. Do NOT name-drop in
+                         every section — once is credibility,
+                         repetition reads as filler.
+  - DIFFERENTIATION    → use these angles to shape the value-prop
+                         section's headlines and the About copy.
+                         They are what competitors aren't saying.
+
+This is voice priming, not a checklist. Skip any signal that does
+not fit a section's role (e.g. don't squeeze a regional anchor
+into a generic Features grid). Never sacrifice clarity to shoehorn
+a phrase. When BOTH a COPY_DECK and a VOICE_GUIDANCE block exist,
+COPY_DECK wins — VOICE_GUIDANCE only fills gaps the deck doesn't.
+
+───────────────────────────────────────────────────────────────
 BRAND_MARK, RADIUS_TOKENS, IMAGE_COMPOSITION, ADMIN_UI_LANGUAGE — DIRECTOR BLOCKS
 ───────────────────────────────────────────────────────────────
 If a ===BRAND_MARK=== block is present: every Header/Navbar/Sidebar you
@@ -6489,29 +6385,6 @@ WHAT TO DO INSTEAD (pick one variation per section that breaks the template):
   CTA       → full-bleed image with dark overlay + one bold verb | split (text left, visual right)
               | animated counter stat row above the CTA button
   About     → timeline vertical | editorial 2-column with large pull-quote | full-bleed with motif
-
-PAGE INTENT (from ===PAGE_INTENT=== in research) — TOP PRIORITY:
-  Gemini extracted four fields: primary_goal, target_audience,
-  must_have_sections, and conversion_amplifiers. Two-tier rule:
-
-    Tier 1 — must_have_sections (page FAILS without them):
-      Every section_slug listed in must_have_sections MUST be built as its own
-      component, with copy that speaks to the named target_audience — NOT the
-      industry's usual customers. A logistics recruitment landing builds
-      open_positions / driver_benefits / apply_now_form — NOT services /
-      fleet / contact.
-
-    Tier 2 — conversion_amplifiers (separates 7/10 from 10/10):
-      Build AT LEAST 2 (preferably 3-4) of the section_slugs listed in
-      conversion_amplifiers as their own components. These are what a domain
-      expert adds on top of the must-haves to maximize conversion (e.g.
-      referral_bonus_callout for recruitment, live_donation_counter for
-      fundraising, waitlist_count_ticker for beta signup). Without them the
-      page is "complete"; with them it converts at the ceiling for the goal.
-
-  If you find yourself generating a section that does not serve the
-  primary_goal AND is not in must_have_sections OR conversion_amplifiers,
-  delete it.
 
 USER REQUIREMENTS (from ===USER_REQUIREMENTS=== in research) — HIGHEST PRIORITY:
   The user wrote things in their description that they explicitly want. Gemini extracted
@@ -7356,6 +7229,14 @@ async def _generate_new_project_inner(
     user_jwt: str = "",
 ) -> bool:
     """Inner implementation of generate_new_project (wrapped in try/except above)."""
+    # ── Strip user-clarification archetype lock from the description ──
+    # When the user resolved a classification conflict, the WS handler
+    # prepends [LUCID_FORCE_ARCHETYPE::xxx] to the task so the classifier
+    # can route correctly. The marker is consumed here so it never flows
+    # into research/Claude prompts.
+    from knowledge.loader import force_archetype_from_task
+    _force_archetype, description = force_archetype_from_task(description)
+
     # ── TEMP timing instrumentation (do not commit) ──────────────────
     import time as _perf_time
     _t_total = _perf_time.perf_counter()
@@ -7425,13 +7306,37 @@ async def _generate_new_project_inner(
     # wrong schema structure even if ===CLASSIFICATION=== is later corrected.
     from knowledge.loader import classify_project_type_ai
     _phase_begin("classify")
-    _classification = await classify_project_type_ai(description, gemini_key)
+    _classification = await classify_project_type_ai(
+        description, gemini_key, force_archetype=_force_archetype,
+    )
     _phase_end("classify")
     app_type = _classification["app_type"]
     _layout_archetype = _classification["layout_archetype"]
     _domain = _classification["domain"]
 
     await _ws_send(websocket, "progress", f"📋 {_layout_archetype.replace('_', ' ').title()} — {_domain} domain")
+
+    # ── Landing fast-path ───────────────────────────────────────────
+    # New flow: single_page_landing skips Phase 1/2/3 in favour of a
+    # Brief-driven, parallel-per-section pipeline. The legacy stack is
+    # kept untouched for dashboards, consumer multi-page sites, etc.
+    if _layout_archetype == "single_page_landing":
+        from app.services.landing_pipeline import run_landing_pipeline
+        _phase_begin("landing_pipeline")
+        ok = await run_landing_pipeline(
+            description=description,
+            classification=_classification,
+            workspace_path=workspace_path,
+            validated=validated,
+            websocket=websocket,
+            chat_session_id=chat_session_id,
+        )
+        _phase_end("landing_pipeline")
+        logger.info(
+            "⏱️  [TIMING] TOTAL landing pipeline: %.2fs",
+            _perf_time.perf_counter() - _t_total,
+        )
+        return ok
 
     # ── Step 2.5: Expand very short prompts ──
     # "ACCA website" or "yoga studio" yields empty research blocks because Gemini
@@ -7554,81 +7459,83 @@ async def _generate_new_project_inner(
                 logger.warning("Research returned minimal content (%d chars)", len(research))
                 await _ws_send(websocket, "warning", "⚠️ Research returned limited results — generation will use basic patterns")
             else:
-                # ── Vision-grounded enrichment ──
-                # Fetch screenshots of the reference sites Gemini just named,
-                # then ask Gemini Pro to critique them visually. The resulting
-                # ===VISUAL_DNA=== block gets appended to the research text so
-                # Claude sees concrete visual patterns, not just verbal ones.
-                # FAIL-SOFT: empty string on any error, pipeline proceeds unchanged.
-                try:
-                    from app.services.vision_research import vision_enrich_research
-                    _visual_dna = await vision_enrich_research(
-                        research_text=research,
-                        description=description,
-                        domain=_domain,
-                        gemini_key=gemini_key,
-                        websocket=websocket,
-                    )
-                    if _visual_dna:
-                        research = research + _visual_dna
-                        logger.info("Research enriched with VISUAL_DNA (+%d chars)", len(_visual_dna))
-                except Exception as _vision_exc:
-                    logger.warning("Vision enrichment failed (non-fatal): %s", _vision_exc)
+                # ── Pre-research augmentation (parallel) ──
+                # Vision-grounded enrichment and Design Director both consume
+                # the same Gemini research blob and don't depend on each other.
+                # Running them concurrently saves up to ~3 minutes per generation.
+                #
+                # Both are FAIL-SOFT — exceptions/timeouts return a neutral
+                # value so the pipeline proceeds with whichever pieces succeeded.
+                async def _run_vision_enrich() -> str:
+                    """Returns the ===VISUAL_DNA=== block to append, or "" on failure."""
+                    try:
+                        from app.services.vision_research import vision_enrich_research
+                        return await vision_enrich_research(
+                            research_text=research,
+                            description=description,
+                            domain=_domain,
+                            gemini_key=gemini_key,
+                            websocket=websocket,
+                        )
+                    except Exception as _vision_exc:
+                        logger.warning("Vision enrichment failed (non-fatal): %s", _vision_exc)
+                        return ""
 
-                # ── Design Director (Option: Design System First) ──
-                # One dedicated Claude call that designs a bespoke, validated
-                # design system BEFORE code generation. Replaces the weak verbal
-                # design hints from Gemini research with enforced tokens
-                # (contrast-validated palette, musical type scale, grid-aligned
-                # spacing, locked card + motion language). Downstream code-gen
-                # phases read the same ===CSS_VARIABLES===/===FONTS===/===LAYOUT_BLUEPRINT===
-                # blocks — no consumer changes needed.
-                # FAIL-SOFT: returns None on failure, pipeline uses original research.
-                try:
-                    from app.services.design_system_builder import (
-                        build_design_system,
-                        inject_design_blocks,
-                    )
-                    _vibe_from_research = _extract_research_section(research, "===VIBE===", max_chars=400)
-                    _copy_tone_from_research = _extract_research_section(research, "===COPY_TONE===", max_chars=400)
-                    # Cultural atmosphere — Gemini's research on what country/region
-                    # cues this brand should evoke. Drives palette, typography,
-                    # imagery, and language phrases. For "none — modern global"
-                    # brands, the design system falls back to its generic logic.
-                    _cultural_atmosphere = _extract_research_section(research, "===CULTURAL_ATMOSPHERE===", max_chars=2400)
-                    # Brand name: Claude can infer it from description inside the call;
-                    # passing description as-is avoids brittle regex extraction here.
+                async def _run_design_director() -> dict | None:
+                    """Returns the design dict, or None on failure/timeout."""
                     # Outer cap (260s): up to three Claude attempts × ~90s
                     # httpx timeout (initial + structural retry + Gemini-critic
                     # taste retry) plus the ~30s critic call. If Anthropic
                     # stalls we bail and use the original research rather than
                     # holding up the pipeline.
-                    _design = await asyncio.wait_for(
-                        build_design_system(
-                            description=description,
-                            domain=_domain,
-                            brand_name="",  # inferred from description
-                            copy_tone=_copy_tone_from_research,
-                            layout_archetype=_layout_archetype,
-                            vibe=_vibe_from_research,
-                            cultural_atmosphere=_cultural_atmosphere,
-                            api_key=api_key,
-                            gemini_key=gemini_key,
-                            websocket=websocket,
-                        ),
-                        timeout=260.0,
-                    )
-                    if _design:
-                        research = inject_design_blocks(research, _design)
-                        logger.info(
-                            "Design Director injected — name=%s archetype=%s",
-                            _design.get("design_system_name"),
-                            _design.get("archetype"),
+                    try:
+                        from app.services.design_system_builder import build_design_system
+                        _vibe = _extract_research_section(research, "===VIBE===", max_chars=400)
+                        _copy_tone = _extract_research_section(research, "===COPY_TONE===", max_chars=400)
+                        _cultural = _extract_research_section(research, "===CULTURAL_ATMOSPHERE===", max_chars=2400)
+                        return await asyncio.wait_for(
+                            build_design_system(
+                                description=description,
+                                domain=_domain,
+                                brand_name="",  # inferred from description
+                                copy_tone=_copy_tone,
+                                layout_archetype=_layout_archetype,
+                                vibe=_vibe,
+                                cultural_atmosphere=_cultural,
+                                api_key=api_key,
+                                gemini_key=gemini_key,
+                                websocket=websocket,
+                            ),
+                            timeout=260.0,
                         )
-                except asyncio.TimeoutError:
-                    logger.warning("Design Director timed out after 220s — falling back to research-only design")
-                except Exception as _dd_exc:
-                    logger.warning("Design Director failed (non-fatal): %s", _dd_exc)
+                    except asyncio.TimeoutError:
+                        logger.warning("Design Director timed out after 260s — falling back to research-only design")
+                        return None
+                    except Exception as _dd_exc:
+                        logger.warning("Design Director failed (non-fatal): %s", _dd_exc)
+                        return None
+
+                _visual_dna, _design = await asyncio.gather(
+                    _run_vision_enrich(),
+                    _run_design_director(),
+                )
+
+                # Merge order: design's block injection (which removes & prepends
+                # design-related headers) operates on the original research,
+                # then vision's VISUAL_DNA appendix is concatenated at the end.
+                # This matches the prior sequential semantics — vision_dna lives
+                # at the tail, design blocks live at the head.
+                if _design:
+                    from app.services.design_system_builder import inject_design_blocks
+                    research = inject_design_blocks(research, _design)
+                    logger.info(
+                        "Design Director injected — name=%s archetype=%s",
+                        _design.get("design_system_name"),
+                        _design.get("archetype"),
+                    )
+                if _visual_dna:
+                    research = research + _visual_dna
+                    logger.info("Research enriched with VISUAL_DNA (+%d chars)", len(_visual_dna))
 
                 # Save to cache for next time (includes VISUAL_DNA + DESIGN_DIRECTOR if present)
                 try:
@@ -7658,6 +7565,44 @@ async def _generate_new_project_inner(
             await _ws_send(websocket, "warning", "⚠️ Research failed — proceeding with basic generation...")
             research = f"Project: {description}\nApp type: {app_type}\nStack: {stack}"
 
+    # ── Voice signal extraction (research-grounded copy priming) ─────
+    # Distills audience language, industry vocabulary, regional anchors,
+    # and positioning white-space into a ===VOICE_GUIDANCE=== block
+    # appended to the research blob. All phase prompts read the blob, so
+    # one ~5–10s Flash call enriches every page and component with the
+    # same voice priming used on landing pages. Best-effort — failure
+    # silently leaves generation on the legacy path.
+    if (
+        research_quality != "failed"
+        and "===VOICE_GUIDANCE===" not in research
+        and len(research) > 500
+    ):
+        try:
+            from app.services.landing_research_extract import (
+                extract_multipage_voice_signals, format_voice_guidance_block,
+            )
+            _phase_begin("voice_signals")
+            _voice_signals = await extract_multipage_voice_signals(
+                research, _classification, gemini_key=gemini_key,
+            )
+            _phase_end("voice_signals")
+            _voice_block = format_voice_guidance_block(_voice_signals)
+            if _voice_block:
+                research = research + "\n" + _voice_block
+                logger.info(
+                    "Research enriched with VOICE_GUIDANCE (+%d chars)",
+                    len(_voice_block),
+                )
+                # Refresh the on-disk cache so we don't re-spend the
+                # Flash call on subsequent hits inside the 10-minute TTL.
+                try:
+                    with open(_cache_path, "w", encoding="utf-8") as _cf:
+                        _cf.write(research)
+                except Exception:
+                    pass
+        except Exception as _vexc:
+            logger.warning("Voice signal extraction failed (non-fatal): %s", _vexc)
+
     # Extract domain-specific component blueprint from Gemini research.
     # This covers every domain automatically — known types get a richer spec,
     # unknown/unusual types get domain guidance they wouldn't have otherwise.
@@ -7682,12 +7627,45 @@ async def _generate_new_project_inner(
         try:
             from app.services.unsplash import fetch_project_images as _unsplash_fetch
 
-            # 1. Try to pull specific imagery from cultural atmosphere block
-            _sig_keywords = _parse_signature_imagery(_research_cultural_atmosphere)
+            # 1. Try to pull specific imagery from cultural atmosphere block.
+            #    But — discard anything that contains the brand name. Gemini
+            #    often writes "<brand> product photography" which Unsplash
+            #    doesn't index, returning 0 results and falling through to a
+            #    generic pool (e.g. pizzas for an agriculture site).
+            _brand_tokens: set[str] = set()
+            try:
+                _brand_raw = (project_schema or {}).get("brand", {}).get("name", "") if False else ""
+            except Exception:
+                _brand_raw = ""
+            # The schema's brand isn't built yet at this point, so derive from
+            # the first non-stopword in the description as a brand-name proxy.
+            _first_desc_word = next(
+                (w for w in description.split() if len(w) > 2 and w.isalpha()),
+                "",
+            ).lower()
+            if _first_desc_word:
+                _brand_tokens.add(_first_desc_word)
+
+            _sig_keywords_raw = _parse_signature_imagery(_research_cultural_atmosphere)
+            _sig_keywords = [
+                kw for kw in (_sig_keywords_raw or [])
+                if not any(tok and tok in kw.lower() for tok in _brand_tokens)
+            ]
 
             # 2. Fallback: build meaningful queries from domain + description noun phrases
             if not _sig_keywords:
                 _DOMAIN_QUERIES: dict[str, list[str]] = {
+                    # Agriculture / produce / greenhouse — was previously missing,
+                    # so prompts in non-English languages (e.g. "issiqxonada
+                    # bodring, pamidor, qulupnay") fell through to generic
+                    # "<brand> product photography" → Unsplash 0 results →
+                    # static pool with random food shots (pizzas).
+                    "agriculture": ["greenhouse farming", "fresh vegetables harvest", "tomato cucumber produce"],
+                    "agritech":    ["greenhouse farming", "smart agriculture", "vertical farm produce"],
+                    "farming":     ["farm fresh produce", "greenhouse vegetables", "agricultural field"],
+                    "produce":     ["fresh produce market", "vegetable harvest", "farmer hands vegetables"],
+                    "greenhouse":  ["greenhouse interior", "tomato vines greenhouse", "leafy greens hydroponic"],
+                    "horticulture": ["greenhouse plants", "seedling tray", "horticulture nursery"],
                     "restaurant": ["restaurant interior", "plated food", "dining table"],
                     "cafe": ["coffee shop", "latte art", "cozy cafe"],
                     "coffee": ["espresso coffee", "coffee shop interior", "barista"],
@@ -7738,11 +7716,13 @@ async def _generate_new_project_inner(
                     (v for k, v in _DOMAIN_QUERIES.items() if k in _d or _d in k), None
                 )
                 if not _sig_keywords:
-                    # Last resort: use noun-like words from description, but PREFIX
-                    # them with "{noun} product photography" so the Unsplash search
-                    # returns shots of the actual subject instead of generic
-                    # business/landscape filler. Old code searched raw "selling
-                    # landing website" and got telephone poles for a car site.
+                    # Last resort: use English noun-like words from the
+                    # description, prefixed with "{noun} product photography".
+                    # Skip non-ASCII words (Uzbek, Russian, Arabic, CJK) —
+                    # Unsplash only indexes English, so passing "qishloq"
+                    # or "issiqxona" returns 0 results and the system falls
+                    # to a generic photo pool unrelated to the project.
+                    # Also skip the first description word (likely brand).
                     _STOPWORDS = {
                         "landing", "page", "website", "site", "app", "platform",
                         "service", "company", "business", "online", "digital",
@@ -7752,7 +7732,11 @@ async def _generate_new_project_inner(
                     }
                     _desc_words = [
                         w.lower() for w in description.split()
-                        if len(w) > 3 and w.isalpha() and w.lower() not in _STOPWORDS
+                        if len(w) > 3
+                        and w.isalpha()
+                        and w.isascii()
+                        and w.lower() not in _STOPWORDS
+                        and w.lower() not in _brand_tokens
                     ]
                     if _desc_words:
                         # Build 2 distinct queries from the top noun candidates
@@ -7850,6 +7834,19 @@ async def _generate_new_project_inner(
         original_description=original_description,
     )
     _phase_end("schema_build")
+
+    # Diagnostic — confirm the dynamic palette + fonts actually landed in the
+    # schema. If primary/accent are empty here, downstream globals.css falls
+    # back to shadcn-blue defaults and every project ends up looking identical.
+    _theme_dbg = (project_schema or {}).get("theme") or {}
+    logger.info(
+        "THEME_FLOW: primary=%s accent=%s background=%s heading_font=%s body_font=%s",
+        _theme_dbg.get("primary") or "(empty)",
+        _theme_dbg.get("accent") or "(empty)",
+        _theme_dbg.get("background") or "(empty)",
+        _theme_dbg.get("heading_font") or "(empty)",
+        _theme_dbg.get("body_font") or "(empty)",
+    )
 
     # Fold the Design Director output and classification into the schema so it
     # becomes the single source of truth. Builders downstream can read

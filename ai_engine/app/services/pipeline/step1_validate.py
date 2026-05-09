@@ -8,6 +8,7 @@ Zero logic changes.
 from __future__ import annotations
 
 import logging
+import re
 
 from fastapi import WebSocket
 
@@ -22,6 +23,32 @@ from .github import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# Cheap heuristics that catch the obvious garbage prompts ("dasdasdasdas",
+# "asdfasdfasdf", "aaaaaa") BEFORE we burn a Gemini grounded-research call
+# on them. Real prompts always pass — the bar is intentionally low.
+def _looks_like_garbage(raw: str) -> str:
+    """Return a reason string if the prompt is garbage, else ''."""
+    text = (raw or "").strip().lower()
+    if len(text) < 8:
+        return "Description is too short — please describe your project in a sentence or two."
+    compact = re.sub(r"\s+", "", text)
+    # Repeated short cluster: "dasdasdas" → matches r"(.{1,4})\1{2,}"
+    if re.fullmatch(r"(.{1,4})\1{2,}", compact):
+        return "Description looks like keyboard mashing. Try something like 'Italian restaurant in Brooklyn' or 'B2B logistics dashboard'."
+    letters = [c for c in text if c.isalpha()]
+    if letters:
+        vowels = sum(c in "aeiou" for c in letters)
+        # English/Latin prose runs 30-50% vowels. Below 15% is almost always
+        # consonant-mashing like "dfgdfgdfg" or "qwrtqwrt".
+        if vowels / len(letters) < 0.15:
+            return "Description doesn't look like a real sentence. Please describe your project in plain words."
+    # Need at least 3 distinct ≥3-char tokens — a real prompt has multiple words.
+    tokens = {t for t in re.findall(r"[a-z]{3,}", text)}
+    if len(tokens) < 3:
+        return "Please describe your project in a few words — e.g. 'modern coffee shop landing page' or 'fitness coach portfolio'."
+    return ""
 
 
 async def validate_inputs(
@@ -70,8 +97,14 @@ async def validate_inputs(
         # false positives when a previous wizard session's last_task is injected
         # as conversation context (e.g. "## What happened in the previous
         # session\n\nTask: [LUCID_PROJECT]...").
+        # Walk the first non-blank line of the task in full — do NOT slice
+        # `_task_str` first. A long description (e.g. 280-char Uzbek text)
+        # plus the `[LUCID_PROJECT] description=… | stack=nextjs | …` framing
+        # easily exceeds 300 chars, and a pre-slice cuts the header mid-value
+        # (e.g. `stack=nextjs` becomes `stack=next` → unknown stack →
+        # template clone skipped → local-skeleton fallback).
         _header_raw = ""
-        for _ln in _task_str[:300].split("\n"):
+        for _ln in _task_str.split("\n", 4):
             _ln_stripped = _ln.strip()
             if not _ln_stripped:
                 continue  # skip blank lines at the top
@@ -92,6 +125,13 @@ async def validate_inputs(
             _stack       = _hdr("stack")        # e.g. "nextjs"
             _description = _hdr("description")  # e.g. "netflix style blog"
             _backend     = _hdr("backend")      # e.g. "none"
+
+            _garbage_reason = _looks_like_garbage(_description)
+            if _garbage_reason:
+                logger.info("validate_inputs: rejecting garbage wizard description %r — %s",
+                            _description[:80], _garbage_reason)
+                await websocket.send_json({"type": "error", "message": f"❌ {_garbage_reason}"})
+                return None
 
             # ── Resolve which template repo to clone (backend registry) ────
             # We NO LONGER depend on clone_url from the frontend.
@@ -324,6 +364,17 @@ async def validate_inputs(
                 "message": "❌ Task description is empty.",
             })
             return None
+
+        # Follow-up tasks on existing repos are often short ("fix the header") —
+        # only enforce the garbage gate when this is genuinely a fresh request.
+        # `scratch_mode=True` means no repo, no chat history → first message.
+        if scratch_mode:
+            _garbage_reason = _looks_like_garbage(task)
+            if _garbage_reason:
+                logger.info("validate_inputs: rejecting garbage scratch task %r — %s",
+                            task[:80], _garbage_reason)
+                await websocket.send_json({"type": "error", "message": f"❌ {_garbage_reason}"})
+                return None
 
         # Non-wizard normal tasks (user's own repo)
         # new_project_mode is always False here — wizard tasks returned early above.

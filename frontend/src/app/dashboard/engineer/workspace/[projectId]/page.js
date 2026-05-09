@@ -92,13 +92,6 @@ function ConversationPageInner({params}) {
     try {
       const key = `wizard_prompt_${decodeURIComponent(projectId || "unknown")}`;
       const prompt = sessionStorage.getItem(key);
-      // [DIAG] handshake-bug — confirm sessionStorage state at workspace mount
-      console.log("[DIAG/wizardTask]", {
-        projectId,
-        key,
-        promptLen: prompt ? prompt.length : 0,
-        allWizardKeys: Object.keys(sessionStorage).filter(k => k.startsWith("wizard_")),
-      });
       if (!prompt) return "";
 
       const cid = decodeURIComponent(projectId || "unknown");
@@ -410,6 +403,7 @@ function ConversationPageInner({params}) {
     planConfirmed,
     confirmPlan,
     rejectPlan,
+    submitClarification,
     previewFileMap,
   } = useAgentSession({
     projectId: conversationId,
@@ -428,6 +422,21 @@ function ConversationPageInner({params}) {
   // ── Derived: path classification from resolver ──────────
   const isNewProject = resolvingInfo?.path === "new_project";
   const isExistingProject = resolvingInfo?.path === "existing_repo";
+
+  // Reconnect banner with grace delay — most reconnects complete in <1s.
+  // Showing the yellow "Reconnecting…" bar instantly on every blip is jarring
+  // and makes the workspace feel unstable even when nothing's wrong. Only
+  // surface the banner after 1.5s of sustained reconnecting state; if the
+  // socket comes back before then, the user never sees a flash.
+  const [showReconnectBanner, setShowReconnectBanner] = useState(false);
+  useEffect(() => {
+    if (!isReconnecting) {
+      setShowReconnectBanner(false);
+      return;
+    }
+    const timer = setTimeout(() => setShowReconnectBanner(true), 1500);
+    return () => clearTimeout(timer);
+  }, [isReconnecting]);
 
   // Code tab is always visible — it shows an empty state until files are available.
   const codeTabVisible = true;
@@ -637,39 +646,50 @@ function ConversationPageInner({params}) {
   }, [conversation?.repo_name, conversation?.branch, conversation?.repo_provider, files.length]);
 
   // ── Auto-start wizard task when workspace becomes ready ──
-  // NOTE: For wizard mode, the task is now sent in the WebSocket handshake
-  // (via the `task` prop to useAgentSession). This effect is kept ONLY as a
-  // safety net — the handshake path is the primary flow.
-  const wizardAutoStarted = useRef(isWizardMode); // Already started if wizard mode
+  // Safety net for wizard handshakes whose `task` field was dropped before
+  // reaching the backend (rare, but the symptom is "workspace ready, no build").
+  // We watch for the bug signature — status=ready, nothing ever ran, wizard
+  // prompt still in sessionStorage, no platform repo on the row — and resend
+  // the prompt as a follow-up message.
+  const wizardAutoStarted = useRef(false);
+  const everStartedRef = useRef(false);
+  useEffect(() => {
+    if (status === "running" || status === "updating") {
+      everStartedRef.current = true;
+    }
+  }, [status]);
   useEffect(() => {
     if (wizardAutoStarted.current) return;
+    if (status !== "ready") return;
+    if (everStartedRef.current) return;
+    if (repoInfo.platformRepoUrl || repoInfo.vercelUrl || repoInfo.deployedUrl) return;
 
-    // If wizard task was passed in handshake, just mark as started
-    if (wizardTask) {
+    let prompt = "";
+    try {
+      prompt = sessionStorage.getItem(`wizard_prompt_${conversationId}`) || "";
+    } catch (_) {}
+    if (!prompt) return;
+
+    // Wait ~2s — on a healthy handshake, ready transitions to updating well
+    // within that window. If we're still in ready after the timer fires,
+    // the handshake-task path is dead and we need to kick the build manually.
+    const timer = setTimeout(() => {
+      if (everStartedRef.current) return;
+      if (wizardAutoStarted.current) return;
       wizardAutoStarted.current = true;
-      return;
-    }
-
-    // Fallback: check sessionStorage — only runs if handshake missed the task
-    // and the project was never successfully created (no platform_repo_url).
-    if (status === "ready") {
-      try {
-        const key = `wizard_prompt_${conversationId}`;
-        const prompt = sessionStorage.getItem(key);
-        if (prompt && !repoInfo.platformRepoUrl) {
-          wizardAutoStarted.current = true;
-          // Don't clear sessionStorage here — the repoInfo effect handles cleanup
-          // once the generation actually succeeds.
-          setTimeout(() => startSession(prompt), 300);
-        }
-      } catch (_) {}
-    }
+      const finalPrompt = wizardTask || prompt;
+      console.warn("[workspace] handshake task missed — falling back to startSession");
+      startSession(finalPrompt);
+    }, 2000);
+    return () => clearTimeout(timer);
   }, [
     status,
     conversationId,
     startSession,
     wizardTask,
     repoInfo.platformRepoUrl,
+    repoInfo.vercelUrl,
+    repoInfo.deployedUrl,
   ]);
 
   // ── Frontend save (guaranteed backup for legacy messages table) ──────────
@@ -1007,6 +1027,7 @@ function ConversationPageInner({params}) {
     planConfirmed,
     confirmPlan,
     rejectPlan,
+    submitClarification,
     // WebContainers file map — triggers browser sandbox boot in RightPanel
     previewFileMap,
     // Per-file content + metrics for inline DiffViewer in the Code tab
@@ -1023,8 +1044,8 @@ function ConversationPageInner({params}) {
   return (
     <WorkspaceContext.Provider value={ctxValue}>
       <div className="flex flex-col h-screen bg-[#f8f9fb] dark:bg-[#0d1117] overflow-hidden transition-colors duration-200">
-        {/* Reconnecting banner */}
-        {isReconnecting && (
+        {/* Reconnecting banner — only after 1.5s grace, see effect above */}
+        {showReconnectBanner && (
           <div className="flex items-center justify-center gap-2 px-4 py-2 bg-yellow-50 dark:bg-yellow-900/20 border-b border-yellow-200 dark:border-yellow-800 text-yellow-800 dark:text-yellow-300 text-sm font-medium">
             <svg
               className="animate-spin h-4 w-4 shrink-0"
@@ -1356,7 +1377,9 @@ function ConversationPageInner({params}) {
                         {userName || "My Workspace"}
                       </p>
                       <p className="text-[12px] text-slate-400 dark:text-slate-500 leading-tight">
-                        Free plan
+                        {subscription?.plan
+                          ? subscription.plan.charAt(0).toUpperCase() + subscription.plan.slice(1) + " plan"
+                          : "Free plan"}
                       </p>
                     </div>
                   </div>
@@ -1505,7 +1528,7 @@ function ConversationPageInner({params}) {
                     {conversation?.title || wizardDesc || "New Project"}
                   </span>
                   <span className="text-[11px] text-slate-400 dark:text-slate-500 leading-tight truncate max-w-[140px]">
-                    {userName ? `${userName}'s Workspace W...` : "AI Workspace"}
+                    {userName ? `${userName}'s workspace` : "AI Workspace"}
                   </span>
                 </div>
               </button>
@@ -1513,20 +1536,18 @@ function ConversationPageInner({params}) {
               {/* App dropdown */}
               {showAppDropdown && (
                 <div className="absolute top-full left-0 mt-1.5 w-52 bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-xl shadow-xl z-50 py-1.5 overflow-hidden">
-                  {[
-                    {icon: LayoutGrid, label: "App Overview"},
-                    {icon: Users, label: "Users"},
-                    {icon: Shield, label: "Security"},
-                    {icon: SlidersHorizontal, label: "App Settings"},
-                  ].map(({icon: Icon, label}) => (
-                    <button
-                      key={label}
-                      onClick={() => setShowAppDropdown(false)}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 text-[14px] text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors text-left">
-                      <Icon className="w-4 h-4 text-slate-500 dark:text-slate-400 shrink-0" />
-                      {label}
-                    </button>
-                  ))}
+                  <button
+                    onClick={() => { setShowAppDropdown(false); window.location.href = "/dashboard/engineer"; }}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 text-[14px] text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors text-left">
+                    <LayoutGrid className="w-4 h-4 text-slate-500 dark:text-slate-400 shrink-0" />
+                    All Projects
+                  </button>
+                  <button
+                    onClick={() => { setShowAppDropdown(false); window.location.href = "/dashboard/engineer/settings"; }}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 text-[14px] text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors text-left">
+                    <SlidersHorizontal className="w-4 h-4 text-slate-500 dark:text-slate-400 shrink-0" />
+                    Settings
+                  </button>
                 </div>
               )}
             </div>

@@ -480,7 +480,6 @@ async def _call_claude(system: str, user: str, api_key: str, user_id: str | None
     payload = {
         "model": _MODEL,
         "max_tokens": _MAX_TOKENS,
-        "temperature": 0.55,  # some variance so copy doesn't repeat across runs
         "system": system,
         "messages": [{"role": "user", "content": user}],
         "tools": [_COPY_TOOL],
