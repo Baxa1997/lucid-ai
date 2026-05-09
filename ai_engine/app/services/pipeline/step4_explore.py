@@ -12,7 +12,6 @@ import json
 import asyncio
 import logging
 
-import google.generativeai as genai
 from fastapi import WebSocket
 
 from app.services.llm_retry import call_with_retry
@@ -83,8 +82,9 @@ async def explore_with_gemini(
     relevant_files = []
     fallback_count = 10
     try:
-        genai.configure(api_key=gemini_key)
-        model = genai.GenerativeModel(GEMINI_MODEL)
+        from app.services.gemini_http import gemini_post
+        from app.services.llm_retry import classify_http_error
+        from knowledge.loader import safe_gemini_text
 
         file_tree_str = "\\n".join(file_paths)
 
@@ -122,29 +122,34 @@ IMPORTANT SELECTION RULES:
 Return ONLY a valid JSON list of file paths. No markdown formatting, no backticks, just the JSON array.
 Example: ["src/app/page.js", "src/components/Header.js"]"""
 
-        # Tiny JSON list output — temperature=0 for determinism. thinking_budget=0
-        # would save ~3-5s but is unsupported by the legacy google-generativeai SDK
-        # (would need migration to google-genai). Try-block is forward-looking.
-        try:
-            _filter_gen_config = genai.GenerationConfig(
-                temperature=0,
-                thinking_config=genai.types.ThinkingConfig(thinking_budget=0),  # noqa: SLF001
-            )
-        except (AttributeError, TypeError):
-            _filter_gen_config = genai.GenerationConfig(temperature=0)
+        # Tiny JSON list output — temperature=0 for determinism, thinking_budget=0
+        # to cut ~3-5s of reasoning latency.
+        _filter_payload = {
+            "contents": [{"parts": [{"text": filter_prompt}]}],
+            "generationConfig": {
+                "temperature": 0,
+                "thinkingConfig": {"thinkingBudget": 0},
+            },
+        }
 
         async def _do_filter():
-            return await asyncio.wait_for(
-                asyncio.to_thread(
-                    model.generate_content,
-                    filter_prompt,
-                    generation_config=_filter_gen_config,
+            status, data, raw = await asyncio.wait_for(
+                gemini_post(
+                    model=GEMINI_MODEL,
+                    payload=_filter_payload,
+                    timeout_s=60.0,
+                    api_key=gemini_key,
+                    label="step4_filter_files",
                 ),
                 timeout=60,
             )
-        filter_response = await call_with_retry(_do_filter, label="step4_filter_files", websocket=websocket)
+            if status != 200 or data is None:
+                raise classify_http_error(status if status > 0 else 500, raw or "")
+            return data
 
-        text = filter_response.text.strip()
+        filter_data = await call_with_retry(_do_filter, label="step4_filter_files", websocket=websocket)
+
+        text = safe_gemini_text(filter_data).strip()
         if "```" in text:
             # Extract JSON from markdown fencing
             parts = text.split("```")
@@ -381,7 +386,10 @@ async def gemini_research(
     is_admin = validated.get("is_admin", False)
 
     try:
-        genai.configure(api_key=gemini_key)
+        from app.services.gemini_http import gemini_post
+        from app.services.llm_retry import classify_http_error
+        from knowledge.loader import safe_gemini_text
+
         _research_system_instruction = (
             "You are a world-class product researcher and UX strategist. "
             "You research real products (Stripe, Linear, Notion, Vercel, Airbnb, Shopify, etc.) "
@@ -391,20 +399,6 @@ async def gemini_research(
             "and proven UI patterns. Never use generic placeholders — every spec must be unique "
             "to the requested domain."
         )
-        # Try to enable Google Search grounding (requires Gemini 2.5 model + SDK support)
-        try:
-            _search_tool = genai.protos.Tool(google_search=genai.protos.GoogleSearch())
-            model = genai.GenerativeModel(
-                GEMINI_RESEARCH_MODEL,
-                system_instruction=_research_system_instruction,
-                tools=[_search_tool],
-            )
-        except (AttributeError, Exception):
-            # SDK version does not support google_search grounding — use model without tools
-            model = genai.GenerativeModel(
-                GEMINI_RESEARCH_MODEL,
-                system_instruction=_research_system_instruction,
-            )
 
         spec_prompt = f"""You are a world-class product researcher and UX designer.
 A user wants to build a COMPLETE, PRODUCTION-READY project. Your job is to RESEARCH what this type of project actually needs in the real world, then write a detailed specification.
@@ -510,20 +504,33 @@ If two different users asking for "blog landing page" get the same spec, you hav
 If the user's request is short/vague, you MUST still produce a COMPREHENSIVE spec by researching the niche.
 Research the specific niche. Customize everything.
 """
+        _spec_payload = {
+            "contents": [{"parts": [{"text": spec_prompt}]}],
+            "generationConfig": {
+                "temperature": 0.3,
+                "maxOutputTokens": 16384,
+            },
+            "tools": [{"google_search": {}}],
+            "systemInstruction": {"parts": [{"text": _research_system_instruction}]},
+        }
+
         async def _do_spec():
-            return await asyncio.wait_for(
-                asyncio.to_thread(
-                    model.generate_content,
-                    spec_prompt,
-                    generation_config=genai.GenerationConfig(
-                        temperature=0.3,
-                        max_output_tokens=16384,
-                    ),
+            status, data, raw = await asyncio.wait_for(
+                gemini_post(
+                    model=GEMINI_RESEARCH_MODEL,
+                    payload=_spec_payload,
+                    timeout_s=180.0,
+                    api_key=gemini_key,
+                    label="step4_research_spec",
                 ),
                 timeout=180,
             )
-        response = await call_with_retry(_do_spec, label="step4_research_spec", websocket=websocket)
-        spec = response.text.strip()
+            if status != 200 or data is None:
+                raise classify_http_error(status if status > 0 else 500, raw or "")
+            return data
+
+        spec_data = await call_with_retry(_do_spec, label="step4_research_spec", websocket=websocket)
+        spec = safe_gemini_text(spec_data).strip()
         if not spec:
             spec = f"# Project Specification\n\nBuild: {task}"
 
@@ -1127,8 +1134,9 @@ async def gemini_create_plan(
     blueprint = {}
     blueprint_text = ""
     try:
-        genai.configure(api_key=gemini_key)
-        model = genai.GenerativeModel(GEMINI_BLUEPRINT_MODEL)
+        from app.services.gemini_http import gemini_post
+        from app.services.llm_retry import classify_http_error
+        from knowledge.loader import safe_gemini_text
 
         blueprint_prompt = f"""You are a senior product architect converting a product specification into a complete implementation blueprint.
 
@@ -1241,21 +1249,32 @@ Return ONLY valid JSON (no markdown, no backticks):
 
 Return ONLY the raw JSON object. No markdown. No backticks. No explanation.
 """
+        _bp_payload = {
+            "contents": [{"parts": [{"text": blueprint_prompt}]}],
+            "generationConfig": {
+                "temperature": 0.7,
+                "maxOutputTokens": 65536,
+                "responseMimeType": "application/json",
+            },
+        }
+
         async def _do_blueprint():
-            return await asyncio.wait_for(
-                asyncio.to_thread(
-                    model.generate_content,
-                    blueprint_prompt,
-                    generation_config=genai.GenerationConfig(
-                        temperature=0.7,
-                        max_output_tokens=65536,
-                        response_mime_type="application/json",
-                    ),
+            status, data, raw = await asyncio.wait_for(
+                gemini_post(
+                    model=GEMINI_BLUEPRINT_MODEL,
+                    payload=_bp_payload,
+                    timeout_s=240.0,
+                    api_key=gemini_key,
+                    label="step4_blueprint",
                 ),
                 timeout=240,
             )
-        response = await call_with_retry(_do_blueprint, label="step4_blueprint", websocket=websocket)
-        blueprint_text = response.text.strip()
+            if status != 200 or data is None:
+                raise classify_http_error(status if status > 0 else 500, raw or "")
+            return data
+
+        bp_data = await call_with_retry(_do_blueprint, label="step4_blueprint", websocket=websocket)
+        blueprint_text = safe_gemini_text(bp_data).strip()
 
         # Clean up markdown fences if present
         if "```" in blueprint_text:

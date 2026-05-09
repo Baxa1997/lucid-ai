@@ -53,6 +53,14 @@ class Settings(BaseSettings):
     LLM_API_KEY: str = ""
     LLM_BASE_URL: str | None = None
 
+    # ── Vertex AI (Google Cloud) ─────────────────────────────
+    # When USE_VERTEX_AI is true, all Gemini REST calls route to Vertex
+    # using ADC (gcloud login or service-account JSON) instead of
+    # generativelanguage.googleapis.com + GOOGLE_API_KEY.
+    USE_VERTEX_AI: bool = False
+    GOOGLE_CLOUD_PROJECT: str = ""
+    GOOGLE_CLOUD_LOCATION: str = "global"
+
     # ── Image services ───────────────────────────────────────
     UNSPLASH_ACCESS_KEY: str = ""
 

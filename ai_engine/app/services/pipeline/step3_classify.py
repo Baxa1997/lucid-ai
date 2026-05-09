@@ -11,7 +11,6 @@ import json
 import asyncio
 import logging
 
-import google.generativeai as genai
 from fastapi import WebSocket
 
 from .constants import GEMINI_MODEL
@@ -34,10 +33,8 @@ async def classify_task(
             "message": "🎯 Classifying task...",
         })
 
-        from app.services.llm_retry import call_with_retry
-
-        genai.configure(api_key=gemini_key)
-        model = genai.GenerativeModel(GEMINI_MODEL)
+        from app.services.llm_retry import call_with_retry, classify_http_error
+        from app.services.gemini_http import gemini_post
 
         _prompt = f"""You are a senior engineering manager at a top tier tech company.
 You assign tasks to the right developer.
@@ -150,28 +147,32 @@ Never go below these minimums.
 Better to give too many than too few.
 """
 
-        # Tiny fixed-schema JSON — temperature=0 for determinism. Ideally we
-        # would also set thinking_budget=0 to cut ~3-5s of reasoning latency,
-        # but the legacy google-generativeai SDK does not expose ThinkingConfig.
-        # That requires migrating to the new google-genai package.
-        try:
-            _gen_config = genai.GenerationConfig(
-                temperature=0,
-                thinking_config=genai.types.ThinkingConfig(thinking_budget=0),  # noqa: SLF001
-            )
-        except (AttributeError, TypeError):
-            _gen_config = genai.GenerationConfig(temperature=0)
+        # Tiny fixed-schema JSON — temperature=0 for determinism, thinking_budget=0
+        # to cut ~3-5s of reasoning latency.
+        _payload = {
+            "contents": [{"parts": [{"text": _prompt}]}],
+            "generationConfig": {
+                "temperature": 0,
+                "thinkingConfig": {"thinkingBudget": 0},
+            },
+        }
 
         async def _do_classify():
-            return await asyncio.to_thread(
-                model.generate_content,
-                _prompt,
-                generation_config=_gen_config,
+            status, data, raw = await gemini_post(
+                model=GEMINI_MODEL,
+                payload=_payload,
+                timeout_s=60.0,
+                api_key=gemini_key,
+                label="step3_classify",
             )
+            if status != 200 or data is None:
+                raise classify_http_error(status if status > 0 else 500, raw or "")
+            return data
 
-        response = await call_with_retry(_do_classify, label="step3_classify", websocket=websocket)
+        data = await call_with_retry(_do_classify, label="step3_classify", websocket=websocket)
 
-        text = response.text.strip()
+        from knowledge.loader import safe_gemini_text
+        text = safe_gemini_text(data).strip()
         # Remove markdown code fences if present
         if "```" in text:
             text = text.split("```")[1]

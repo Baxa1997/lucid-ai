@@ -71,6 +71,16 @@ services:
       # Bind-mount (not named volume) so the Docker daemon can resolve
       # the host-side path when creating per-session sandbox containers.
       - ${PWD}/workspaces:/app/storage
+      # Vertex AI auth — supports both:
+      #  1) Local dev (Mac/Linux laptop): host gcloud ADC mounted read-only.
+      #     Set up with `gcloud auth application-default login` on the host.
+      #  2) Production (server): a service-account JSON placed at
+      #     ./secrets/vertex-sa.json + GOOGLE_APPLICATION_CREDENTIALS env var
+      #     pointing at /secrets/vertex-sa.json (set in .env).
+      # google.auth.default() auto-picks: GOOGLE_APPLICATION_CREDENTIALS first,
+      # then falls back to the ADC file. No-op if USE_VERTEX_AI is false.
+      - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
+      - ./secrets:/secrets:ro
       # Persist the pnpm content-addressable store across container restarts so
       # the second/third preview install hits the cache instead of re-downloading
       # ~600MB of Next.js + Tailwind + shadcn deps. Without this, every fresh
@@ -98,6 +108,15 @@ services:
       - LLM_BASE_URL=${LLM_BASE_URL}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      # ── Vertex AI (Google Cloud) ─────────────────────────
+      # When USE_VERTEX_AI=true, all Gemini calls route to Vertex via ADC
+      # (mounted from host above). Set in .env to flip on.
+      - USE_VERTEX_AI=${USE_VERTEX_AI:-false}
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:-}
+      - GOOGLE_CLOUD_LOCATION=${GOOGLE_CLOUD_LOCATION:-global}
+      # Production service-account JSON path (inside container).
+      # Leave empty for local dev — auth falls back to mounted ADC.
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
       - UNSPLASH_ACCESS_KEY=${UNSPLASH_ACCESS_KEY}
       - DEFAULT_MODEL_PROVIDER=${DEFAULT_MODEL_PROVIDER:-google}
       - MAX_ITERATIONS=200

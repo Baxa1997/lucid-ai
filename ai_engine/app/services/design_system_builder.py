@@ -1491,24 +1491,26 @@ If the design is solid taste-wise, return verdict="pass" with empty arrays.
 Be picky but not pedantic — only flag issues a senior designer would call out."""
 
     try:
-        async with httpx.AsyncClient(timeout=_GEMINI_CRITIC_TIMEOUT) as client:
-            resp = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"{_GEMINI_CRITIC_MODEL}:generateContent?key={gemini_key}",
-                json={
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"temperature": 0.4},
-                },
-            )
-        if resp.status_code != 200:
+        from app.services.gemini_http import gemini_post
+
+        status, data, _ = await gemini_post(
+            model=_GEMINI_CRITIC_MODEL,
+            payload={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0.4},
+            },
+            timeout_s=_GEMINI_CRITIC_TIMEOUT,
+            api_key=gemini_key,
+            label="design_critic",
+        )
+        if status != 200 or data is None:
             logger.info(
-                "Gemini design critic HTTP %d — skipping critic pass",
-                resp.status_code,
+                "Gemini design critic HTTP %d — skipping critic pass", status,
             )
             return None
 
         from knowledge.loader import safe_gemini_text
-        raw = safe_gemini_text(resp.json()).strip()
+        raw = safe_gemini_text(data).strip()
         if "```" in raw:
             raw = _re.sub(r"```(?:json)?", "", raw).strip("`").strip()
         parsed = _json.loads(raw)

@@ -2109,17 +2109,19 @@ Return ONLY this JSON, no markdown:
 }}"""
 
     try:
-        import httpx, json as _json, re as _re
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"gemini-2.5-flash:generateContent?key={gemini_key}",
-                json={"contents": [{"parts": [{"text": prompt}]}]},
-            )
-        if resp.status_code != 200:
-            logger.debug("intent_gate: HTTP %d — passing input through", resp.status_code)
+        import json as _json, re as _re
+        from app.services.gemini_http import gemini_post
+
+        _status, _resp_json, _ = await gemini_post(
+            model="gemini-2.5-flash",
+            payload={"contents": [{"parts": [{"text": prompt}]}]},
+            timeout_s=10.0,
+            api_key=gemini_key,
+            label="intent_gate",
+        )
+        if _status != 200 or _resp_json is None:
+            logger.debug("intent_gate: HTTP %d — passing input through", _status)
             return {"is_project": True, "score": 10, "ask_user": ""}
-        _resp_json = resp.json()
         try:
             _u = _resp_json.get("usageMetadata") or {}
             _in = int(_u.get("promptTokenCount", 0) or 0)
@@ -2179,13 +2181,8 @@ async def _expand_short_prompt(
         return description
 
     try:
-        import httpx as _httpx
         # Flash is plenty for prompt expansion; thinkingBudget=0 keeps it sub-second.
         _model = "gemini-2.5-flash"
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{_model}:generateContent?key={gemini_key}"
-        )
         prompt = (
             f"The user gave a very short product brief: \"{_clean}\".\n"
             f"Project type: {layout_archetype.replace('_', ' ')} in the {domain} domain.\n\n"
@@ -2215,12 +2212,18 @@ async def _expand_short_prompt(
                 "thinkingConfig": {"thinkingBudget": 0},
             },
         }
-        async with _httpx.AsyncClient(timeout=20.0) as client:
-            r = await client.post(url, json=payload)
-        if r.status_code != 200:
-            logger.warning("Prompt expansion API %d: %s", r.status_code, r.text[:200])
+        from app.services.gemini_http import gemini_post
+
+        _r_status, data, _r_raw = await gemini_post(
+            model=_model,
+            payload=payload,
+            timeout_s=20.0,
+            api_key=gemini_key,
+            label="expand_prompt",
+        )
+        if _r_status != 200 or data is None:
+            logger.warning("Prompt expansion API %d: %s", _r_status, _r_raw[:200])
             return description
-        data = r.json()
         try:
             _u = data.get("usageMetadata") or {}
             _in = int(_u.get("promptTokenCount", 0) or 0)
@@ -2304,24 +2307,25 @@ def _normalize_research_headers(text: str, section_names: tuple[str, ...]) -> st
 
 async def _call_gemini_single(
     prompt: str,
-    gemini_url: str,
+    model: str,
     is_pro: bool,
     websocket,
     label: str,
     max_tokens: int = 10000,
+    api_key: str = "",
 ) -> str:
     """Single Gemini REST call with retry+backoff. Returns response text.
 
     Each call acquires its own _gemini_semaphore slot so two parallel calls
     from the same project both proceed concurrently (semaphore value=2) while
     a third concurrent project waits, keeping us inside Gemini rate limits.
+    Routes via gemini_http shim — works against AI Studio or Vertex.
     """
-    import httpx
+    from app.services.gemini_http import gemini_post
+
     # Pro thinkingBudget bumped from 2048 → 8192 for deeper reasoning on
     # ENTITY_SCREENS structure, slug-rename judgment, and architectural
-    # decisions. Cost delta is ~$0.05/call, well worth it on the foundational
-    # research step. Flash stays at 0 (it's used for short structured calls
-    # where extra thinking adds no value).
+    # decisions. Flash stays at 0 (used for short structured calls).
     _thinking_config = (
         {"thinkingBudget": 8192} if is_pro else {"thinkingBudget": 0}
     )
@@ -2347,20 +2351,25 @@ async def _call_gemini_single(
         },
     }
 
-    response = None
+    status: int = 0
+    data: dict | None = None
+    raw: str = ""
     _max_attempts = 3
     async with _gemini_semaphore:
         for _attempt in range(1, _max_attempts + 1):
             try:
-                # Timeouts bumped 120s/130s → 280s/300s. With thinkingBudget
-                # 8192 + bigger maxOutputTokens, admin/multi-page calls can
-                # legitimately need 200+ s. Timing out at 130s drops valid
-                # research and forces a retry (which re-runs all the thinking).
-                async with httpx.AsyncClient(timeout=280.0) as client:
-                    response = await asyncio.wait_for(
-                        client.post(gemini_url, json=payload),
-                        timeout=300.0,
-                    )
+                # 280s timeout — Pro with 8192 thinkingBudget + big
+                # maxOutputTokens can legitimately need 200+ s.
+                status, data, raw = await asyncio.wait_for(
+                    gemini_post(
+                        model=model,
+                        payload=payload,
+                        timeout_s=280.0,
+                        api_key=api_key,
+                        label=label,
+                    ),
+                    timeout=300.0,
+                )
             except asyncio.TimeoutError:
                 logger.warning("Gemini %s timed out (attempt %d/%d)", label, _attempt, _max_attempts)
                 if _attempt < _max_attempts:
@@ -2368,7 +2377,7 @@ async def _call_gemini_single(
                     continue
                 raise RuntimeError(f"Gemini {label} API timed out after all retry attempts")
 
-            if response.status_code == 429:
+            if status == 429:
                 _backoff = 10 * _attempt
                 logger.warning("Gemini rate limit (429) on %s attempt %d — retrying in %ds", label, _attempt, _backoff)
                 await _ws_send(websocket, "progress", f"⚠️ Gemini rate limit ({label}) — retrying in {_backoff}s...")
@@ -2377,16 +2386,10 @@ async def _call_gemini_single(
                     continue
             break
 
-    if response is None or response.status_code != 200:
-        status = response.status_code if response is not None else 0
-        _api_msg = ""
-        try:
-            if response is not None:
-                _api_msg = (response.json().get("error") or {}).get("message", "")
-        except Exception:
-            pass
+    if status != 200 or data is None:
+        _api_msg = raw[:300] if raw else ""
         if status == 403:
-            await _ws_send(websocket, "error", "❌ Google API key rejected (403). Check GOOGLE_API_KEY in .env.")
+            await _ws_send(websocket, "error", "❌ Google API rejected request (403). Check credentials / project billing.")
         elif status == 400:
             await _ws_send(websocket, "error", f"❌ Gemini rejected the request (400): {_api_msg or 'bad request'}")
         elif status == 404:
@@ -2396,11 +2399,6 @@ async def _call_gemini_single(
         else:
             await _ws_send(websocket, "error", f"❌ Gemini API error {status}: {_api_msg or 'unknown'}")
         raise RuntimeError(f"Gemini {label} API error: {status}")
-
-    try:
-        data = response.json()
-    except Exception as exc:
-        raise RuntimeError(f"Gemini {label} returned non-JSON body: {exc}")
 
     # Report token usage to the billing meter (fire-and-forget).
     # user_id resolves from the ambient contextvar set at the entry point.
@@ -2601,10 +2599,6 @@ async def enrich_research_with_deep_dives(
         return research
 
     _research_model = os.environ.get("GEMINI_RESEARCH_MODEL", "gemini-3.1-pro-preview")
-    gemini_url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{_research_model}:generateContent?key={gemini_key}"
-    )
     _is_pro = "pro" in _research_model.lower()
 
     # Per-project parallelism cap. The shared _gemini_semaphore (=2) is the
@@ -2618,11 +2612,12 @@ async def enrich_research_with_deep_dives(
                 text = await asyncio.wait_for(
                     _call_gemini_single(
                         prompt,
-                        gemini_url,
+                        _research_model,
                         _is_pro,
                         websocket,
                         f"deep_{kind.lower()}_{name[:24]}",
                         max_tokens=2000,
+                        api_key=gemini_key,
                     ),
                     timeout=_PHASE_D_PER_CALL_TIMEOUT,
                 )
@@ -3969,15 +3964,9 @@ Output ONLY ERA_CALIBRATION, LIVE_UI_RESEARCH, and LAYOUT_BLUEPRINT blocks.
 """
 
     # ── Parallel Gemini calls ─────────────────────────────────────────────────
-    import httpx
-
     _research_model = os.environ.get("GEMINI_RESEARCH_MODEL", "gemini-3.1-pro-preview")
     await _ws_send(websocket, "progress", f"🔬 Calling {_research_model} — structure & design in parallel...")
 
-    gemini_url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{_research_model}:generateContent?key={gemini_key}"
-    )
     _is_pro = "pro" in _research_model.lower()
 
     # Run structure research (content/pages/entities) and design research
@@ -3990,8 +3979,8 @@ Output ONLY ERA_CALIBRATION, LIVE_UI_RESEARCH, and LAYOUT_BLUEPRINT blocks.
         # truncated mid-block. Multi-page sites with 6-8 pages × rich
         # per-section spec also benefit. We pay only for what's used —
         # this is a CEILING, not a target.
-        _call_gemini_single(research_prompt, gemini_url, _is_pro, websocket, "structure", max_tokens=32000),
-        _call_gemini_single(_design_prompt, gemini_url, _is_pro, websocket, "design", max_tokens=12000),
+        _call_gemini_single(research_prompt, _research_model, _is_pro, websocket, "structure", max_tokens=32000, api_key=gemini_key),
+        _call_gemini_single(_design_prompt, _research_model, _is_pro, websocket, "design", max_tokens=12000, api_key=gemini_key),
         return_exceptions=True,
     )
 

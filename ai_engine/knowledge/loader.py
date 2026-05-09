@@ -507,14 +507,17 @@ Description: "{task}"
 
 JSON:"""
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_api_key}",
-                json={"contents": [{"parts": [{"text": prompt}]}]},
-            )
+        from app.services.gemini_http import gemini_post
 
-        if response.status_code == 200:
-            data = response.json()
+        status, data, _ = await gemini_post(
+            model="gemini-2.5-flash",
+            payload={"contents": [{"parts": [{"text": prompt}]}]},
+            timeout_s=10.0,
+            api_key=gemini_api_key,
+            label="classifier",
+        )
+
+        if status == 200 and data is not None:
             result_text = safe_gemini_text(data)
 
             # Parse JSON response

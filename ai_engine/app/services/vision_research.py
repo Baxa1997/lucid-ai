@@ -224,8 +224,6 @@ async def _call_gemini_vision(
     timeout: float = 90.0,
 ) -> Optional[str]:
     """Call Gemini with text + inline image parts. Returns the raw text or None."""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
-
     parts: list[dict] = [{"text": prompt}]
     for _url, img_bytes in refs:
         parts.append({
@@ -250,13 +248,19 @@ async def _call_gemini_vision(
     from app.services.llm_retry import (
         call_with_retry, classify_http_error, LLMPermanentError,
     )
+    from app.services.gemini_http import gemini_post
 
     async def _do_call() -> dict:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(url, json=payload)
-        if resp.status_code != 200:
-            raise classify_http_error(resp.status_code, resp.text)
-        return resp.json()
+        status, data, raw = await gemini_post(
+            model=model,
+            payload=payload,
+            timeout_s=timeout,
+            api_key=gemini_key,
+            label="vision",
+        )
+        if status != 200 or data is None:
+            raise classify_http_error(status if status > 0 else 500, raw or "")
+        return data
 
     try:
         data = await call_with_retry(_do_call, label="gemini_vision")

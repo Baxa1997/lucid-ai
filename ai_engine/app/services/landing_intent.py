@@ -226,6 +226,8 @@ async def analyze_intent(
 
 async def _structured_intent_call(prompt: str, key: str, timeout_s: float) -> str:
     """Flash + JSON output, no tools."""
+    from app.services.gemini_http import gemini_post
+
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
@@ -236,29 +238,15 @@ async def _structured_intent_call(prompt: str, key: str, timeout_s: float) -> st
             "thinkingConfig": {"thinkingBudget": 0},
         },
     }
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{_INTENT_MODEL}:generateContent?key={key}"
+
+    status, data, _ = await gemini_post(
+        model=_INTENT_MODEL,
+        payload=payload,
+        timeout_s=timeout_s,
+        api_key=key,
+        label="intent",
     )
-
-    try:
-        async with httpx.AsyncClient(timeout=timeout_s) as client:
-            resp = await client.post(url, json=payload)
-    except httpx.TimeoutException:
-        logger.warning("gemini intent: timeout after %ss", timeout_s)
-        return ""
-    except Exception as exc:
-        logger.warning("gemini intent: transport error — %s", exc)
-        return ""
-
-    if resp.status_code != 200:
-        logger.warning("gemini intent: HTTP %d — %s", resp.status_code, resp.text[:300])
-        return ""
-
-    try:
-        data = resp.json()
-    except Exception:
-        logger.warning("gemini intent: non-JSON response")
+    if status != 200 or data is None:
         return ""
 
     # Token billing

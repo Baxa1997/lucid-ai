@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import logging
 
-import google.generativeai as genai
 from fastapi import WebSocket
 
 from .constants import GEMINI_MODEL
@@ -82,11 +81,8 @@ async def analyze_images(
     if actual_images:
         try:
             import base64
-            from PIL import Image
-            from io import BytesIO
-
-            genai.configure(api_key=gemini_key)
-            model = genai.GenerativeModel(GEMINI_MODEL)
+            from app.services.gemini_http import gemini_post
+            from knowledge.loader import safe_gemini_text
 
             for i, img_data in enumerate(actual_images):
                 try:
@@ -97,12 +93,20 @@ async def analyze_images(
                         descriptions.append(f"### Image: {name}\n(No image data received)")
                         continue
 
-                    # Extract base64 from data URL (data:image/png;base64,xxxxx)
-                    if "," in raw:
+                    # Extract mime type and base64 from data URL.
+                    # Format: data:image/png;base64,xxxxx
+                    mime_type = "image/png"
+                    if raw.startswith("data:"):
+                        try:
+                            header, b64data = raw.split(",", 1)
+                            # header = "data:image/png;base64"
+                            mime_type = header.split(":")[1].split(";")[0] or mime_type
+                            raw = b64data
+                        except Exception:
+                            if "," in raw:
+                                raw = raw.split(",", 1)[1]
+                    elif "," in raw:
                         raw = raw.split(",", 1)[1]
-
-                    img_bytes = base64.b64decode(raw)
-                    pil_image = Image.open(BytesIO(img_bytes))
 
                     analysis_prompt = f"""Analyze this image in the context of this coding task:
 Task: {task}
@@ -115,12 +119,27 @@ Describe what you see in detail:
 
 Be specific and technical. Your description will be used by another AI to implement code changes."""
 
-                    response = await asyncio.to_thread(
-                        model.generate_content,
-                        [analysis_prompt, pil_image],
-                    )
+                    payload = {
+                        "contents": [{
+                            "parts": [
+                                {"text": analysis_prompt},
+                                {"inlineData": {"mimeType": mime_type, "data": raw}},
+                            ]
+                        }],
+                    }
 
-                    desc = response.text.strip()
+                    status, data, _ = await gemini_post(
+                        model=GEMINI_MODEL,
+                        payload=payload,
+                        timeout_s=60.0,
+                        api_key=gemini_key,
+                        label="step4b_image",
+                    )
+                    if status != 200 or data is None:
+                        descriptions.append(f"### Image: {name}\n(Vision API error {status})")
+                        continue
+
+                    desc = safe_gemini_text(data).strip()
                     descriptions.append(f"### Image: {name}\n{desc}")
 
                     logger.info("Image '%s' analyzed: %d chars", name, len(desc))
@@ -129,8 +148,6 @@ Be specific and technical. Your description will be used by another AI to implem
                     logger.warning("Failed to analyze image '%s': %s", name, e)
                     descriptions.append(f"### Image: {name}\n(Failed to analyze: {str(e)[:100]})")
 
-        except ImportError:
-            logger.warning("PIL not available for image analysis, skipping")
         except Exception as e:
             logger.warning("analyze_images failed: %s", e)
 

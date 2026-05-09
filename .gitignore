@@ -3,6 +3,10 @@
 .env.local
 .env*.local
 
+# Secrets (Vertex AI service-account JSON, etc.)
+secrets/
+!secrets/.gitkeep
+
 # Python
 __pycache__/
 *.pyc

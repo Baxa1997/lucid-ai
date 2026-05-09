@@ -628,12 +628,10 @@ async def _grounded_research(
         "tools": [{"google_search": {}}],
     }
 
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{_RESEARCH_MODEL}:generateContent?key={key}"
+    text, grounding = await _post_gemini(
+        _RESEARCH_MODEL, payload_grounded, timeout_s,
+        label=f"{label}_grounded", api_key=key,
     )
-
-    text, grounding = await _post_gemini(url, payload_grounded, timeout_s, label=f"{label}_grounded")
     sources = _grounding_source_count(grounding)
 
     # Telemetry only — never discard or retry just because metadata is missing.
@@ -663,7 +661,10 @@ async def _grounded_research(
     # safety block). Drop the tool, try ungrounded — better than nothing.
     payload_plain = dict(payload_grounded)
     payload_plain.pop("tools", None)
-    text2, _ = await _post_gemini(url, payload_plain, timeout_s, label=f"{label}_plain")
+    text2, _ = await _post_gemini(
+        _RESEARCH_MODEL, payload_plain, timeout_s,
+        label=f"{label}_plain", api_key=key,
+    )
     return text2 or ""
 
 
@@ -693,43 +694,33 @@ async def _structured_distill(prompt: str, key: str, timeout_s: float) -> str:
             "thinkingConfig": {"thinkingBudget": 0},
         },
     }
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{_BRIEF_MODEL}:generateContent?key={key}"
+    text, _ = await _post_gemini(
+        _BRIEF_MODEL, payload, timeout_s,
+        label="brief_distill", api_key=key,
     )
-    text, _ = await _post_gemini(url, payload, timeout_s, label="brief_distill")
     return text
 
 
 async def _post_gemini(
-    url: str, payload: dict, timeout_s: float, *, label: str,
+    model: str, payload: dict, timeout_s: float, *, label: str, api_key: str = "",
 ) -> tuple[str, dict | None]:
     """POST to Gemini and extract text. Logs token usage.
 
     Returns ``(text, grounding_metadata)``. ``grounding_metadata`` is the
     raw ``candidates[0].groundingMetadata`` dict when present, else None.
-    Caller can use it to detect whether ``google_search`` was actually
-    invoked (a successful response without it means the model answered
-    from training memory).
+    Routes via gemini_http shim — works against AI Studio or Vertex
+    based on settings.USE_VERTEX_AI.
     """
-    try:
-        async with httpx.AsyncClient(timeout=timeout_s) as client:
-            resp = await client.post(url, json=payload)
-    except httpx.TimeoutException:
-        logger.warning("gemini %s: timeout after %ss", label, timeout_s)
-        return "", None
-    except Exception as exc:
-        logger.warning("gemini %s: transport error — %s", label, exc)
-        return "", None
+    from app.services.gemini_http import gemini_post
 
-    if resp.status_code != 200:
-        logger.warning("gemini %s: HTTP %d — %s", label, resp.status_code, resp.text[:300])
-        return "", None
-
-    try:
-        data = resp.json()
-    except Exception:
-        logger.warning("gemini %s: non-JSON response", label)
+    status, data, _ = await gemini_post(
+        model=model,
+        payload=payload,
+        timeout_s=timeout_s,
+        api_key=api_key,
+        label=f"landing_{label}",
+    )
+    if status != 200 or data is None:
         return "", None
 
     # Token billing

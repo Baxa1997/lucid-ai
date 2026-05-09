@@ -27,6 +27,11 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
             mkdir -p workspaces
+            # secrets/ holds the Vertex AI service-account JSON (gitignored).
+            # docker-compose mounts ./secrets:/secrets:ro and would fail to
+            # start if the directory doesn't exist on disk yet.
+            mkdir -p secrets
+            chmod 700 secrets
 
             # ── Write production env overrides ──────────────────────────────
             # These variables are server-specific and override docker-compose defaults.
