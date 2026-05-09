@@ -82,6 +82,30 @@ async def lifespan(_app: FastAPI):
     if not settings.LLM_API_KEY and not settings.GOOGLE_API_KEY and not settings.ANTHROPIC_API_KEY:
         logger.warning("No LLM API keys set — agent will not function")
 
+    # ── AI backend banner ───────────────────────────────────
+    import os as _os
+    _ADC = "/root/.config/gcloud/application_default_credentials.json"
+    if settings.USE_VERTEX_AI:
+        _adc_ok = _os.path.isfile(_ADC)
+        logger.info(
+            "🔷 VERTEX AI ACTIVE | project=%s | location=%s | ADC file=%s",
+            settings.GOOGLE_CLOUD_PROJECT or "(not set)",
+            settings.GOOGLE_CLOUD_LOCATION,
+            "✅ found" if _adc_ok else "❌ MISSING — mount secrets/gcloud-adc.json",
+        )
+        if not _adc_ok:
+            logger.warning(
+                "ADC file not found at %s. "
+                "Run: scp ~/.config/gcloud/application_default_credentials.json "
+                "user@server:/opt/lucid-ai/secrets/gcloud-adc.json",
+                _ADC,
+            )
+    else:
+        logger.info(
+            "🔶 AI STUDIO ACTIVE | GOOGLE_API_KEY=%s",
+            "set" if settings.GOOGLE_API_KEY else "NOT SET",
+        )
+
     # Start the background session reaper (cleans up inactive sessions after 2h)
     reaper_task = asyncio.create_task(reap_expired_sessions())
     logger.info("Session reaper started (TTL=2h, interval=2min)")

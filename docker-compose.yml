@@ -71,16 +71,15 @@ services:
       # Bind-mount (not named volume) so the Docker daemon can resolve
       # the host-side path when creating per-session sandbox containers.
       - ${PWD}/workspaces:/app/storage
-      # Vertex AI auth — supports both:
-      #  1) Local dev (Mac/Linux laptop): host gcloud ADC mounted read-only.
-      #     Set up with `gcloud auth application-default login` on the host.
-      #  2) Production (server): a service-account JSON placed at
-      #     ./secrets/vertex-sa.json + GOOGLE_APPLICATION_CREDENTIALS env var
-      #     pointing at /secrets/vertex-sa.json (set in .env).
-      # google.auth.default() auto-picks: GOOGLE_APPLICATION_CREDENTIALS first,
-      # then falls back to the ADC file. No-op if USE_VERTEX_AI is false.
-      - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
-      - ./secrets:/secrets:ro
+      # ── Vertex AI auth (gcloud ADC) ─────────────────────────
+      # Copy your local ADC to secrets/ with:
+      #   scp ~/.config/gcloud/application_default_credentials.json \
+      #       user@server:/opt/lucid-ai/secrets/gcloud-adc.json
+      # The file is mounted at exactly the path google-auth looks for ADC.
+      # No GOOGLE_APPLICATION_CREDENTIALS env var needed — google.auth.default()
+      # finds it automatically at /root/.config/gcloud/application_default_credentials.json.
+      # Refresh locally with `gcloud auth application-default login` then re-scp.
+      - ./secrets/gcloud-adc.json:/root/.config/gcloud/application_default_credentials.json:ro
       # Persist the pnpm content-addressable store across container restarts so
       # the second/third preview install hits the cache instead of re-downloading
       # ~600MB of Next.js + Tailwind + shadcn deps. Without this, every fresh
@@ -114,9 +113,9 @@ services:
       - USE_VERTEX_AI=${USE_VERTEX_AI:-false}
       - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:-}
       - GOOGLE_CLOUD_LOCATION=${GOOGLE_CLOUD_LOCATION:-global}
-      # Production service-account JSON path (inside container).
-      # Leave empty for local dev — auth falls back to mounted ADC.
-      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
+      # DO NOT set GOOGLE_APPLICATION_CREDENTIALS — we rely on gcloud ADC
+      # mounted above at /root/.config/gcloud/application_default_credentials.json.
+      # Setting this env var to a JSON key file is explicitly NOT supported.
       - UNSPLASH_ACCESS_KEY=${UNSPLASH_ACCESS_KEY}
       - DEFAULT_MODEL_PROVIDER=${DEFAULT_MODEL_PROVIDER:-google}
       - MAX_ITERATIONS=200
