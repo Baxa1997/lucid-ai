@@ -39,7 +39,6 @@ CASES: list[tuple[str, dict]] = [
 
 
 async def run_one(prompt: str, classification: dict) -> dict:
-    key = os.environ.get("GOOGLE_API_KEY", "").strip()
     print("─" * 78)
     print(f"PROMPT: {prompt!r}")
     print(f"CLASSIFICATION: {classification}")
@@ -48,7 +47,6 @@ async def run_one(prompt: str, classification: dict) -> dict:
     intent = await analyze_intent(
         prompt,
         classification,
-        gemini_key=key or None,
         websocket=None,
         timeout_s=60.0,
     )
@@ -78,8 +76,9 @@ async def run_one(prompt: str, classification: dict) -> dict:
 
 
 async def main() -> None:
-    key = os.environ.get("GOOGLE_API_KEY", "").strip()
-    print(f"GOOGLE_API_KEY present: {bool(key)} (len={len(key)})")
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
+    location = os.environ.get("GOOGLE_CLOUD_LOCATION", "").strip() or "global"
+    print(f"Vertex project: {project or '(unset)'} location={location}")
     print(f"Running {len(CASES)} cases\n")
 
     results = []

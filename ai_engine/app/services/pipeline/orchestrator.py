@@ -628,7 +628,6 @@ async def run_pipeline(
             await _send_phase(3, "Classifying task", "Analyzing task complexity…", "active")
             classification = await classify_task(
                 task,
-                validated["gemini_api_key"],
                 websocket,
             )
             model = classification.get("model", "sonnet")
@@ -749,7 +748,6 @@ async def run_pipeline(
                 task,
                 workspace_path,
                 classification,
-                validated["gemini_api_key"],
                 websocket,
             )
             await asyncio.sleep(0.8)
@@ -796,7 +794,6 @@ async def run_pipeline(
             image_analysis = await analyze_images(
                 images,
                 task,
-                validated["gemini_api_key"],
                 websocket,
             )
             if image_analysis:

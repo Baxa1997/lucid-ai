@@ -30,448 +30,222 @@ logger = logging.getLogger(__name__)
 _SECTION_MAX_TOKENS = 16000
 
 
-# ── Hero archetype anatomy library ───────────────────────────────────
-# Each entry is a STRUCTURAL skeleton — what goes where, sized in what scale.
-# Claude has freedom over class choices and copy positioning *within* the
-# archetype, but the archetype itself dictates layout intent. The Brief picks
-# one per project, so output structurally varies across projects.
-#
-# Why a library, not a single prescription: the round-2 result was visually
-# repetitive because every hero used the same "full-bleed darken + center copy"
-# rule. Real-world top sites use 6-10 distinct hero patterns; we pick from
-# them rather than hard-coding one.
-_HERO_ARCHETYPES: dict[str, str] = {
-    "full-bleed-overlay": (
-        "ARCHETYPE: full-bleed-overlay (cinematic, editorial — used by El Toro, Tonight Is a Good Night for Tapas).\n"
-        "  ANATOMY:\n"
-        "    • <section> is `relative isolate min-h-[600px] md:min-h-[720px] lg:min-h-[820px] overflow-hidden`.\n"
-        "    • Layer 1 (z-0): <Image fill priority> from section.images[0] as full-bleed background, `object-cover`.\n"
-        "    • Layer 2 (z-10): absolute-inset gradient overlay — `bg-gradient-to-t from-foreground/85 via-foreground/40 to-foreground/20`\n"
-        "      OR `bg-gradient-to-r from-foreground/85 via-foreground/40 to-transparent` if you place copy bottom-LEFT.\n"
-        "    • Layer 3 (z-20): foreground container `relative max-w-3xl px-6 sm:px-10 lg:px-16 py-24 md:py-32`,\n"
-        "      placed bottom-left or middle-left (NEVER centered):\n"
-        "        - Eyebrow: small caps, tracking-widest, text-primary or text-accent (text-xs md:text-sm)\n"
-        "        - Headline: display, text-5xl md:text-6xl lg:text-7xl, leading-[1.05], tracking-tight,\n"
-        "          text-background (white). Optionally render one accent word in italic OR text-primary.\n"
-        "        - Subheadline: text-lg md:text-xl text-background/80 max-w-xl\n"
-        "        - CTA row: primary CTA pill + ghost-outline secondary, gap-4, mt-8\n"
-        "    • Optional bottom-center scroll cue (animated chevron-down or thin pulsing line, text-background/60).\n"
-        "  WRAP all foreground content in `<Reveal variant=\"fade-up\">` with staggered delays."
+# ── Section anatomy: minimal fallback skeletons ──────────────────────
+# We deliberately keep these THIN and CATEGORY-AGNOSTIC. The real per-section
+# anatomy comes from `brief["visual_dna"]["section_anatomies"][section_type]`,
+# which Gemini writes from grounded research. These fallbacks fire only when:
+#   • visual_dna research failed entirely, OR
+#   • Gemini didn't produce an anatomy for THIS specific section type.
+# A fallback's job is to ship a structurally-correct section, not a beautiful
+# one. Cohesion + culture come from visual_dna; pixel correctness comes from
+# PROJECT_DESIGN_TOKENS + the global rules in the system prompt.
+_FALLBACK_SKELETONS: dict[str, str] = {
+    "hero": (
+        "STRUCTURAL FLOOR — hero section minimum:\n"
+        "  • Outer <section> is `relative isolate min-h-[600px] md:min-h-[720px] lg:min-h-[820px] overflow-hidden`.\n"
+        "  • THREE stacked layers when bg media exists: media (z-0) → readability overlay (z-10) → content (z-20).\n"
+        "  • Foreground content includes (in order): eyebrow tag → headline (text-5xl md:text-6xl lg:text-7xl, leading-[1.05]) → 1-line subhead (text-lg md:text-xl, max-w-xl) → ≥1 CTA + 0-1 secondary.\n"
+        "  • Wrap content group in <Reveal variant=\"fade-up\">.\n"
+        "  • COMPOSITION (left-aligned vs centered, full-bleed photo vs split, where the eyebrow/cta land) is driven by visual_dna.layout_signature + visual_dna.section_flavors.hero. Apply ≥2 motifs/textures from visual_dna in concrete accent positions."
     ),
-    "oversized-watermark": (
-        "ARCHETYPE: oversized-watermark (massive bg type behind product — HOCN \"VICTORIA\", Setto \"Precision Delivery\", Fujifilm).\n"
-        "  ANATOMY:\n"
-        "    • <section> is `relative isolate bg-background min-h-[640px] md:min-h-[760px] overflow-hidden`.\n"
-        "    • Layer 1 (z-0): an oversized watermark word — pick ONE strong word from the headline (or use brand name).\n"
-        "      Render it as a single span absolutely positioned center-ish, with `text-[clamp(8rem,18vw,18rem)] font-black\n"
-        "      tracking-[-0.04em] leading-none text-foreground/[0.06] select-none whitespace-nowrap` and rotate or shift\n"
-        "      so it bleeds off one edge. This is the visual anchor.\n"
-        "    • Layer 2 (z-10): two-column grid `grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-16 items-center px-6 lg:px-12 py-20 lg:py-28`.\n"
-        "        - Copy column (`lg:col-span-6`): Eyebrow → headline (text-5xl md:text-6xl lg:text-7xl, font-bold) →\n"
-        "          subheadline → CTA pair. Pin to top or middle.\n"
-        "        - Image column (`lg:col-span-6`): hero <Image fill> in a tall `aspect-[4/5] lg:aspect-[3/4]` frame,\n"
-        "          rounded-3xl, shadow-2xl, possibly slightly tilted with `rotate-1` or `lg:translate-x-4`.\n"
-        "    • Optional floating numeric badge bottom-right of the image (`absolute -bottom-4 -left-4 bg-card border\n"
-        "      border-border rounded-2xl shadow-lg p-4`) — rating, user count, or stat (read from items if present)."
+    "menu": (
+        "STRUCTURAL FLOOR — list-of-items section minimum:\n"
+        "  • Heading group at top (eyebrow + h2 + 1-line subhead).\n"
+        "  • Items rendered grouped by category (when item.label or item.category exists), or as a single grid otherwise.\n"
+        "  • Each item shows: title (font-semibold), description (text-sm text-muted-foreground), price/value (when present, font-semibold text-primary).\n"
+        "  • Photo-led grid when section.images[i] exists for items; editorial text-only rows when not.\n"
+        "  • Cards in a row share aspect ratios + heights; mt-auto on price/CTA so footers align.\n"
+        "  • Decorative elements (category dividers, bullet markers, frame ornaments) come from visual_dna.decorative_motifs."
     ),
-    "asymmetric-split": (
-        "ARCHETYPE: asymmetric-split (uneven 2-col, copy + product — Chanel diffuser, Veloretti Electric Ace).\n"
-        "  ANATOMY:\n"
-        "    • <section> is `bg-background min-h-[600px] md:min-h-[760px] overflow-hidden`.\n"
-        "    • Top-level: `grid grid-cols-1 lg:grid-cols-12 gap-y-12 lg:gap-x-12 items-center px-6 lg:px-12 py-20 lg:py-28`.\n"
-        "    • Copy col (`lg:col-span-7` or `lg:col-span-6` — pick UNEVEN): centered vertically.\n"
-        "        - Small underline/dash element above eyebrow (`h-px w-12 bg-primary mb-6`).\n"
-        "        - Eyebrow → display headline (text-5xl md:text-6xl lg:text-7xl, font-bold or font-semibold,\n"
-        "          tracking-tight, leading-[1.05]). Break across 2-3 lines; render 1 accent word in italic\n"
-        "          serif OR `text-primary`.\n"
-        "        - Subheadline (text-base md:text-lg text-muted-foreground max-w-md).\n"
-        "        - CTA pair, gap-4.\n"
-        "    • Image col (`lg:col-span-5` or `lg:col-span-6` — the OTHER size): hero <Image fill> inside a tall\n"
-        "      aspect-[4/5] container, rounded-3xl, shadow-xl. Add ONE decorative absolute element breaking the edge\n"
-        "      (a thin ring, dot grid, soft blob in `bg-primary/10`, or a small floating accent card).\n"
-        "    • Bottom edge (full-width, optional): a thin row of 4-5 stat / trust signals if section.items exists\n"
-        "      (`flex items-center gap-8 pt-12 border-t border-border text-sm text-muted-foreground`)."
+    "gallery": (
+        "STRUCTURAL FLOOR — image grid section minimum:\n"
+        "  • Heading group above (eyebrow + h2 + subhead, max-w-2xl).\n"
+        "  • Responsive grid: `grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4` (or asymmetric variant — pick from visual_dna.layout_signature).\n"
+        "  • Tiles use varied aspect ratios (aspect-[4/5] | aspect-square | aspect-[3/4]) for editorial rhythm — never uniform thumbnails.\n"
+        "  • Each tile: `relative overflow-hidden` with photo as <Image fill object-cover> + hover scale.\n"
+        "  • Section root needs `overflow-hidden` to contain decorative blobs."
     ),
-    "type-wrapping-product": (
-        "ARCHETYPE: type-wrapping-product (giant headline split around centered product — Setto Precision Delivery).\n"
-        "  ANATOMY:\n"
-        "    • <section> is `relative isolate bg-background min-h-[700px] md:min-h-[820px] overflow-hidden`.\n"
-        "    • Background headline split: take the headline's two strongest words (e.g. 'Precision' / 'Delivery').\n"
-        "        - Word 1: absolute top-6 left-6 (or top-12 left-12 on lg), text-[clamp(4rem,12vw,11rem)] font-black\n"
-        "          tracking-[-0.04em] leading-none text-foreground.\n"
-        "        - Word 2: absolute bottom-6 right-6 (or bottom-12 right-12), same scale, same weight.\n"
-        "        - These words are huge — they ARE the visual frame.\n"
-        "    • Center: hero <Image fill> in a `relative z-10 mx-auto max-w-2xl aspect-square` (or aspect-[4/5]) frame,\n"
-        "      possibly with a subtle rotation (`rotate-2` or `-rotate-3`).\n"
-        "    • Right edge (z-20, hidden on small screens): 2-3 floating mini-cards stacked vertically with `absolute\n"
-        "      right-6 top-1/3 space-y-3 hidden lg:flex flex-col`. Each card is small (`w-56`), `bg-card border border-border\n"
-        "      rounded-2xl shadow-md p-4`, showing a stat / testimonial / trust badge from section.items.\n"
-        "    • Bottom-left absolute: primary CTA pill + 1-line subheadline. Eyebrow may sit above-left."
+    "testimonials": (
+        "STRUCTURAL FLOOR — testimonial cards minimum:\n"
+        "  • Heading group above.\n"
+        "  • ≥3 quote cards (grid or carousel — pick from visual_dna.section_flavors.testimonials).\n"
+        "  • Each card: optional star row (lucide Star, fill-primary), quote body (italic or display serif when quote is hero-level), attribution row (avatar circle with initials OR <Image>, name font-semibold, role/location text-sm muted).\n"
+        "  • Cards in a row share heights via h-full + items-stretch.\n"
+        "  • Decorative quote-mark glyph or culturally-resonant frame element from visual_dna.decorative_motifs."
     ),
-    "video-mask": (
-        "ARCHETYPE: video-mask (large hero photo with circular play overlay + side card stack — Architecture, Coffee Cups).\n"
-        "  ANATOMY:\n"
-        "    • <section> is `bg-background min-h-[640px] md:min-h-[760px]`.\n"
-        "    • Top-level: `grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-10 items-stretch px-6 lg:px-12 py-16 lg:py-24`.\n"
-        "    • Left col (`lg:col-span-7`): hero <Image fill> in a relative aspect-[4/3] lg:aspect-[3/2] container,\n"
-        "      rounded-3xl, overflow-hidden. Layer a CIRCULAR play button absolute centered:\n"
-        "        `absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 h-20 w-20 md:h-24 md:w-24 rounded-full\n"
-        "        bg-foreground text-background flex items-center justify-center shadow-2xl transition hover:scale-110`\n"
-        "      with a `<Play className=\"h-8 w-8 ml-1\" />` icon. Aria-label 'Play intro'.\n"
-        "    • Right col (`lg:col-span-5`): vertical flex.\n"
-        "        - Top: eyebrow → headline (text-4xl md:text-5xl lg:text-6xl, can include italic accent word) →\n"
-        "          subheadline.\n"
-        "        - Middle: two stacked smaller image-cards from section.images[1..2] OR cards built from\n"
-        "          section.items, each `aspect-[4/3] rounded-2xl shadow-md hover:scale-[1.02] transition`.\n"
-        "        - Bottom: a thin row with index counter (e.g. '03') + prev/next arrow controls + primary CTA pill."
+    "features": (
+        "STRUCTURAL FLOOR — capability/benefits section minimum:\n"
+        "  • Heading group above (eyebrow + h2 + subhead).\n"
+        "  • Render items in one of: 3-col icon grid | split-image-bullets | numbered-stepper | editorial-numbered-list | bento — pick from visual_dna.layout_signature + section_flavors.\n"
+        "  • Each item: icon chip (h-10 w-10 or h-12 w-12, fixed) OR oversized numeral (when stepper/editorial), title (font-semibold), description (text-sm text-muted-foreground).\n"
+        "  • Cards equalize via h-full + items-stretch; gap-4 md:gap-6 lg:gap-8.\n"
+        "  • Lucide icons should match visual_dna.iconography_anchors when item.icon is available."
     ),
-    "card-stack": (
-        "ARCHETYPE: card-stack (copy + multiple overlapping rotated cards on side — Architecture, Coffee Cups).\n"
-        "  ANATOMY:\n"
-        "    • <section> is `bg-background min-h-[640px] md:min-h-[760px] overflow-hidden`.\n"
-        "    • Top-level: `grid grid-cols-1 lg:grid-cols-12 gap-12 items-center px-6 lg:px-12 py-20 lg:py-28`.\n"
-        "    • Copy col (`lg:col-span-6`): eyebrow → headline (text-5xl md:text-6xl lg:text-7xl, font-bold) →\n"
-        "      subheadline → CTA pair. Optional: a row of 3 small trust logos OR a stat triple along bottom.\n"
-        "    • Cards col (`lg:col-span-6`): a relative container, `min-h-[480px]`, that hosts 3 absolute cards:\n"
-        "        - Card A (largest): `top-0 left-0 w-[80%] aspect-[3/4] rotate-[-4deg] z-30` — main hero <Image>.\n"
-        "        - Card B (medium): `top-12 right-0 w-[58%] aspect-square rotate-[6deg] z-20` — second image OR\n"
-        "          a stat card with bg-card border-border + a big number from section.items[0].value.\n"
-        "        - Card C (small): `bottom-0 left-12 w-[44%] aspect-[4/5] rotate-[-2deg] z-10` — third image OR\n"
-        "          a quote / testimonial card.\n"
-        "      Each card: `rounded-3xl overflow-hidden shadow-2xl border border-border`."
+    "press": (
+        "STRUCTURAL FLOOR — press / publications section minimum (NEVER overlapping cards):\n"
+        "  • Heading group with eyebrow ('PRESS' or research-grounded label).\n"
+        "  • FLAT logo strip — `grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-x-6 md:gap-x-10 gap-y-8 items-center`. Each cell renders the publication name as an uppercase wordmark (NOT an Unsplash image).\n"
+        "  • Pull-quote block below — single editorial quote (text-xl md:text-2xl font-serif italic) + attribution. Carousel when 3+ quotes.\n"
+        "  • NEVER absolute-positioned, rotated, or overlapping cards. Press is in-flow only.\n"
+        "  • Section MUST be at least min-h-[480px] content-wise; fill all 3 blocks before any spacer."
     ),
-}
-
-
-# ── Menu archetype anatomy ────────────────────────────────────────────
-_MENU_ARCHETYPES: dict[str, str] = {
-    "two-column-dotted": (
-        "ARCHETYPE: two-column-dotted (editorial menu — text rows w/ dotted leaders, El Toro-style).\n"
-        "  ANATOMY:\n"
-        "    • Group section.items by `item.label` (category). Render each category as its own block.\n"
-        "    • Category header: small uppercase eyebrow with a 1-px primary underline (`text-xs tracking-[0.25em]\n"
-        "      text-primary mb-6 inline-flex items-center gap-3 before:content-[''] before:h-px before:w-8\n"
-        "      before:bg-primary`).\n"
-        "    • Items in `grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-6` per category.\n"
-        "    • Row: top line is `flex items-baseline gap-3` — dish name (font-semibold text-lg) on LEFT,\n"
-        "      a flex-1 dotted leader (`flex-1 border-b border-dotted border-foreground/20 mx-2`),\n"
-        "      price (item.value, font-semibold text-primary) on RIGHT.\n"
-        "      Below: description (text-sm text-muted-foreground, max-w-md).\n"
-        "    • DO NOT render images per row. No item cards / borders. Pure typography."
+    "story": (
+        "STRUCTURAL FLOOR — narrative / about section minimum:\n"
+        "  • Two-column split (asymmetric is fine — driven by visual_dna.layout_signature): copy column with eyebrow + h2 + multi-paragraph body + optional small CTA, image/accent column with hero photo OR a stat panel OR a quote pull-out.\n"
+        "  • Body copy uses `text-base md:text-lg text-muted-foreground leading-relaxed`, max-w-prose for readability.\n"
+        "  • Optional decorative element from visual_dna.decorative_motifs as a divider or accent."
     ),
-    "photo-card-grid": (
-        "ARCHETYPE: photo-card-grid (photo-led product cards — Coffee TV / Coffee Cups menus).\n"
-        "  ANATOMY:\n"
-        "    • Group items by category. For EACH category: small category header, then a 3 or 4-col grid\n"
-        "      `grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6`.\n"
-        "    • Each item card: relative aspect-[4/5] OR aspect-square, rounded-2xl overflow-hidden bg-card.\n"
-        "      If item has image_query (rendered as section.images[i].url at runtime), use <Image fill> as bg.\n"
-        "      If no image, use a soft gradient placeholder (`bg-gradient-to-br from-muted to-muted/40`)\n"
-        "      with a centered Lucide icon (Coffee/UtensilsCrossed/Wine/Cake based on item.label).\n"
-        "    • Bottom strip overlay: `absolute bottom-0 inset-x-0 p-4 bg-gradient-to-t from-foreground/80\n"
-        "      to-transparent`. Inside: dish name (font-semibold text-background text-lg), small price\n"
-        "      pill (`inline-flex bg-background/90 text-foreground rounded-full px-3 py-1 text-sm font-medium`).\n"
-        "    • Hover: scale image 105%, lift card."
+    "process": (
+        "STRUCTURAL FLOOR — process / how-it-works section minimum:\n"
+        "  • Heading group above.\n"
+        "  • Sequential steps (3-5 typical): horizontal stepper on lg+, vertical on mobile. Each step has numbered indicator + title + description.\n"
+        "  • Optional connecting line behind the indicators (h-px bg-border, hidden on mobile).\n"
+        "  • Numbered indicator style (circle, square, hand-drawn glyph) comes from visual_dna.decorative_motifs."
     ),
-    "categorized-rows": (
-        "ARCHETYPE: categorized-rows (single-column photo+text rows grouped by category — Drink TV menu).\n"
-        "  ANATOMY:\n"
-        "    • Single column, vertical stack of category blocks. Each category:\n"
-        "      Category header (h3, font-bold text-2xl uppercase tracking-wide text-primary, with a h-px\n"
-        "      bg-border alongside).\n"
-        "      Then items in a stacked list (no grid).\n"
-        "    • Each item row: `flex items-center gap-6 py-4 border-b border-border/50 last:border-0`.\n"
-        "      Left: 64x64 round photo (rounded-full bg-muted overflow-hidden) using image_query if present,\n"
-        "      or a Lucide icon centered if not.\n"
-        "      Middle (flex-1): dish name (font-semibold text-base) + description (text-sm text-muted-foreground).\n"
-        "      Right: price (item.value, font-semibold text-primary text-lg).\n"
-        "    • Hover row: bg-muted/40 transition. Cursor-default.\n"
-        "    • Optional: pin a small CTA at the bottom (e.g. 'View full menu PDF' link)."
+    "stats": (
+        "STRUCTURAL FLOOR — big numbers band:\n"
+        "  • 2-4 columns separated by `divide-x divide-border`.\n"
+        "  • Each item: huge number (text-5xl sm:text-6xl font-bold text-primary, optional count-up on scroll), label below (uppercase tracking-widest text-muted-foreground).\n"
+        "  • Optional small description per item (text-sm) when section.items[i].description exists."
+    ),
+    "faq": (
+        "STRUCTURAL FLOOR — FAQ accordion:\n"
+        "  • Heading group above (eyebrow + h2).\n"
+        "  • Vertical accordion using <details>+<summary> OR useState. Each row: question (font-semibold), answer (text-muted-foreground) revealed on toggle.\n"
+        "  • Plus icon rotates 45° on open. max-w-3xl mx-auto for readability."
+    ),
+    "pricing": (
+        "STRUCTURAL FLOOR — pricing tiers:\n"
+        "  • Heading group above + optional billing-period toggle (useState).\n"
+        "  • 2-3 plan cards: each with plan name, big price, billing-period note, feature list (check icons), CTA.\n"
+        "  • Highlight the recommended tier via `ring-2 ring-primary` + small 'Recommended' pill.\n"
+        "  • Cards equalize heights; CTAs align via mt-auto."
+    ),
+    "cta": (
+        "STRUCTURAL FLOOR — CTA band:\n"
+        "  • Full-width band with `bg-primary text-primary-foreground`, generous padding (py-16 lg:py-24), centered or left-aligned.\n"
+        "  • Giant headline (text-4xl md:text-5xl lg:text-6xl font-bold) + supporting line + primary CTA pill (`bg-background text-foreground`).\n"
+        "  • Optional decorative motif from visual_dna in a corner accent position."
+    ),
+    "team": (
+        "STRUCTURAL FLOOR — team grid:\n"
+        "  • Heading group above.\n"
+        "  • Grid of avatar cards (3-4 col): rounded portrait (rounded-full or rounded-2xl), name (font-semibold), role (text-sm muted), optional 1-line bio.\n"
+        "  • Cards equalize heights, hover-lift."
+    ),
+    "locations": (
+        "STRUCTURAL FLOOR — locations / addresses:\n"
+        "  • Heading group above.\n"
+        "  • Cards or rows per location: name (font-semibold), address, phone (tel:), hours table, optional map link.\n"
+        "  • Optional embedded map or photo per location."
+    ),
+    "reservation": (
+        "STRUCTURAL FLOOR — booking / reservation form:\n"
+        "  • Two-column layout: form (left or right), info panel with brand business_info (address/phone/hours).\n"
+        "  • Form fields: name, email, phone, date (input type=date), party-size or quantity (input type=number), notes textarea, submit.\n"
+        "  • Real validation (required + email regex) + success state on submit. Mark file 'use client'."
+    ),
+    "contact": (
+        "STRUCTURAL FLOOR — contact form section:\n"
+        "  • Two-column: form (name, email, message textarea, submit) + info panel (address, phone, email, hours).\n"
+        "  • Real validation + success state."
+    ),
+    "newsletter": (
+        "STRUCTURAL FLOOR — newsletter signup:\n"
+        "  • Centered band: heading + 1-line description + inline email input + submit button.\n"
+        "  • Real email validation + success state. Optional GDPR/privacy line below."
+    ),
+    "header": (
+        "STRUCTURAL FLOOR — site header (sticky-bar fallback):\n"
+        "  • <header> is `sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80`.\n"
+        "  • Inner: `container mx-auto flex h-16 items-center justify-between px-4 sm:px-6 lg:px-8` — brand left, nav center (gap-8 text-sm, max 6 links), CTA right (primary button).\n"
+        "  • Mobile drawer below the bar when hamburger toggled. ESC closes; click outside closes.\n"
+        "  • Brand mark, nav typography, and CTA pill flavor come from visual_dna.typography_voice."
+    ),
+    "footer": (
+        "STRUCTURAL FLOOR — site footer (minimalist fallback):\n"
+        "  • `border-t border-border bg-background`.\n"
+        "  • Inner: `container mx-auto flex flex-col gap-4 px-6 py-8 sm:flex-row sm:items-center sm:justify-between`.\n"
+        "  • Left: brand monogram + © year. Center (sm+): inline links from landing.footer.links (text-xs uppercase tracking-widest). Right: 3-4 social icons.\n"
+        "  • Optional accent motif from visual_dna.decorative_motifs as the only flourish."
     ),
 }
 
-
-# ── Gallery archetype anatomy ────────────────────────────────────────
-_GALLERY_ARCHETYPES: dict[str, str] = {
-    "asymmetric-12col": (
-        "ARCHETYPE: asymmetric-12col (curated 12-col grid with varying tile spans).\n"
-        "  ANATOMY:\n"
-        "    • Container: `grid grid-cols-2 md:grid-cols-12 gap-3 md:gap-4 auto-rows-[140px] md:auto-rows-[180px]`.\n"
-        "    • Tile spans (cycle through these for each image):\n"
-        "        i=0: `md:col-span-7 md:row-span-2` (large feature)\n"
-        "        i=1: `md:col-span-5`\n"
-        "        i=2: `md:col-span-5 md:row-span-2`\n"
-        "        i=3: `md:col-span-4`\n"
-        "        i=4: `md:col-span-3`\n"
-        "        i=5: `md:col-span-8`\n"
-        "        (additional images repeat the cycle).\n"
-        "    • Each tile: `relative overflow-hidden rounded-2xl group`. <Image fill> with `object-cover\n"
-        "      transition-transform duration-700 group-hover:scale-105`. Optional caption overlay on hover\n"
-        "      (`absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-foreground/80 to-transparent\n"
-        "      opacity-0 group-hover:opacity-100 transition`)."
-    ),
-    "marquee-scroll": (
-        "ARCHETYPE: marquee-scroll (horizontal infinite scroll of photo cards).\n"
-        "  ANATOMY:\n"
-        "    • Single horizontal row that overflows: `relative w-full overflow-hidden`.\n"
-        "    • Inner track: `flex gap-6 animate-[marquee_40s_linear_infinite]` (define keyframes inline\n"
-        "      via Tailwind arbitrary properties OR add the keyframes via `<style jsx global>`).\n"
-        "    • Each card: `relative w-[280px] md:w-[360px] aspect-[4/5] flex-none rounded-3xl overflow-hidden`.\n"
-        "      <Image fill object-cover>. Hover pauses (`hover:[animation-play-state:paused]` on track).\n"
-        "    • Duplicate the images list once inside the track so the marquee loops seamlessly.\n"
-        "    • Optional fade gradients on left/right edges (`absolute inset-y-0 w-24 from-background\n"
-        "      to-transparent` left/right pointing).\n"
-        "    • Above the marquee: heading block (eyebrow, h2, subhead) — left-aligned, max-w-2xl."
-    ),
-    "bento-mosaic": (
-        "ARCHETYPE: bento-mosaic (modern bento grid with strong mixed sizes).\n"
-        "  ANATOMY:\n"
-        "    • Container: `grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4`.\n"
-        "    • Tile spans (cycle):\n"
-        "        i=0: `md:col-span-2 md:row-span-2 aspect-square` (hero tile — large square)\n"
-        "        i=1: `aspect-[4/5]`\n"
-        "        i=2: `aspect-square`\n"
-        "        i=3: `md:col-span-2 aspect-[2/1]` (wide)\n"
-        "        i=4: `aspect-[4/5]`\n"
-        "        i=5: `aspect-square`\n"
-        "    • Each tile: `relative overflow-hidden rounded-3xl group`, <Image fill object-cover>,\n"
-        "      hover: scale-[1.04] + slight contrast lift.\n"
-        "    • DO NOT add captions unless item.label exists — pure imagery."
-    ),
+# Aliases — section types that map to the same fallback. Aliases live here
+# rather than in _FALLBACK_SKELETONS so the canonical list reads cleanly.
+_TYPE_ALIASES: dict[str, str] = {
+    "value_prop":       "features",
+    "benefits":         "features",
+    "how_it_works":     "process",
+    "steps":            "process",
+    "experience":       "gallery",
+    "experiences":      "gallery",
+    "events":           "gallery",
+    "publications":     "press",
+    "logos":            "press",
+    "awards":           "press",
+    "philosophy":       "story",
+    "about":            "story",
+    "marketing_header": "header",
+    "navbar":           "header",
+    "marketing_footer": "footer",
+    "site_footer":      "footer",
+    "booking_form":     "reservation",
+    "contact_form":     "contact",
+    "menu_highlights":  "menu",
+    "featured_dishes":  "menu",
+    "destinations":     "gallery",
+    "rooms":            "gallery",
+    "accommodations":   "gallery",
+    "products":         "menu",
+    "portfolio":        "gallery",
+    "instagram_feed":   "gallery",
 }
 
 
-# ── Testimonials archetype anatomy ────────────────────────────────────
-_TESTIMONIALS_ARCHETYPES: dict[str, str] = {
-    "glass-cards-bg": (
-        "ARCHETYPE: glass-cards-bg (translucent cards floating over a textured photo bg — El Toro).\n"
-        "  ANATOMY:\n"
-        "    • <section> is `relative isolate min-h-[600px] py-20 lg:py-28 overflow-hidden`.\n"
-        "    • Layer 1 (z-0): if section.images[0] present, render as <Image fill object-cover> bg;\n"
-        "      otherwise use `bg-gradient-to-br from-muted to-card`.\n"
-        "    • Layer 2 (z-10): `absolute inset-0 bg-foreground/70` for darken (only if bg image used).\n"
-        "    • Layer 3 (z-20): heading block top-left (eyebrow + h2 in display serif italic if available\n"
-        "      + subhead), text-background.\n"
-        "    • Cards grid: `grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 mt-12`.\n"
-        "    • Each card: `bg-card/10 backdrop-blur-md border border-background/15 rounded-2xl p-6\n"
-        "      text-background`. Star row at top (5 stars from lucide-react Star, fill-primary text-primary).\n"
-        "      Italic body text. Bottom: avatar circle (initials, bg-primary/20 text-background) + name +\n"
-        "      role/location (text-background/70).\n"
-        "    • Wrap each card in <Reveal variant=\"fade-up\" delay={{i*80}}>."
-    ),
-    "marquee-row": (
-        "ARCHETYPE: marquee-row (horizontal scrolling testimonial pills).\n"
-        "  ANATOMY:\n"
-        "    • Heading block above: eyebrow + h2 + subhead, centered or left-aligned.\n"
-        "    • Marquee track: `relative w-full overflow-hidden`. Inside: `flex gap-4 animate-[marquee_45s_linear_infinite]`\n"
-        "      with the items duplicated.\n"
-        "    • Each item card: `flex-none w-[340px] md:w-[420px] bg-card border border-border rounded-2xl\n"
-        "      p-6 shadow-sm`. Top: small star row (fill-primary). Body: text-sm leading-relaxed.\n"
-        "      Bottom: `flex items-center gap-3` — avatar (rounded-full bg-primary/10 text-primary text-sm\n"
-        "      font-semibold initials) + name (font-semibold) + role (text-xs text-muted-foreground).\n"
-        "    • Hover pauses marquee.\n"
-        "    • Run TWO opposite-direction rows for visual interest (one scrolls left, one scrolls right)\n"
-        "      if there are 6+ items, otherwise just one row."
-    ),
-    "big-quote-portrait": (
-        "ARCHETYPE: big-quote-portrait (one huge quote w/ author portrait, smaller cards underneath).\n"
-        "  ANATOMY:\n"
-        "    • Two-row layout. Row 1: `grid grid-cols-1 lg:grid-cols-12 gap-10 items-center`.\n"
-        "        - Left col (`lg:col-span-5`): if section.images[0] exists, render a tall portrait\n"
-        "          (`relative aspect-[4/5] rounded-3xl overflow-hidden`). Otherwise show large initials\n"
-        "          avatar (`flex h-72 w-72 items-center justify-center rounded-full bg-primary/10\n"
-        "          text-primary text-7xl font-bold`).\n"
-        "        - Right col (`lg:col-span-7`): giant Quote icon (h-12 w-12 text-primary), then the\n"
-        "          PRIMARY quote in display serif (`text-3xl md:text-4xl lg:text-5xl font-medium\n"
-        "          leading-tight tracking-tight`). Below: 5-star row + author name (font-semibold) +\n"
-        "          role + small `verified` badge if present.\n"
-        "    • Row 2 (smaller cards): `grid grid-cols-1 md:grid-cols-3 gap-4 mt-12`. Render 2-3 SECONDARY\n"
-        "      testimonials as compact cards: `bg-card border border-border rounded-xl p-5`. Star row,\n"
-        "      one-line quote (line-clamp-2), name + role at bottom."
-    ),
-}
+_GENERIC_FALLBACK = (
+    "STRUCTURAL FLOOR — generic content section minimum:\n"
+    "  • Heading group at top (eyebrow + h2 + optional 1-line subhead).\n"
+    "  • Primary content block: list of items, grid, or single narrative paragraph — pick what fits visual_dna.layout_signature.\n"
+    "  • At least one supporting block (CTA row, micro-stat triple, attribution row, info card) so the section feels complete.\n"
+    "  • Decorative integration from visual_dna.decorative_motifs in accent positions only."
+)
 
 
-# ── Features archetype anatomy ────────────────────────────────────────
-_FEATURES_ARCHETYPES: dict[str, str] = {
-    "icon-grid-3": (
-        "ARCHETYPE: icon-grid-3 (3-col icon cards — clean SaaS pattern).\n"
-        "  ANATOMY:\n"
-        "    • Heading block above: eyebrow + h2 + subhead, max-w-2xl, centered or left.\n"
-        "    • Grid: `grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-12`.\n"
-        "    • Each card: `bg-card border border-border rounded-2xl p-6 transition-all duration-300\n"
-        "      hover:-translate-y-1 hover:shadow-lg hover:border-primary/40`.\n"
-        "      Top: icon container `inline-flex h-12 w-12 items-center justify-center rounded-xl\n"
-        "      bg-primary/10 text-primary mb-4` with a Lucide icon from item.icon.\n"
-        "      Then h3 (font-semibold text-lg mb-2) + description (text-muted-foreground text-sm leading-relaxed).\n"
-        "    • Wrap each in <Reveal variant=\"fade-up\" delay={{i*80}}>."
-    ),
-    "numbered-stepper": (
-        "ARCHETYPE: numbered-stepper (process / how_it_works horizontal stepper).\n"
-        "  ANATOMY:\n"
-        "    • Heading block above. Then a horizontal stepper on lg+, vertical on mobile.\n"
-        "    • Container: `relative grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-8 mt-16`.\n"
-        "    • Connecting line on lg: `absolute top-6 left-12 right-12 h-px bg-border hidden lg:block` — sits\n"
-        "      behind the numbered circles.\n"
-        "    • Each step (z-10 to sit above the line): `relative flex flex-col items-start text-left`.\n"
-        "        Numbered circle: `flex h-12 w-12 items-center justify-center rounded-full bg-primary\n"
-        "        text-primary-foreground text-lg font-bold mb-4 shadow-md`. Use the index+1 (`{i+1}`).\n"
-        "        h3 (font-semibold text-lg). Description (text-sm text-muted-foreground)."
-    ),
-    "split-image-bullets": (
-        "ARCHETYPE: split-image-bullets (image left, feature list right — product-led).\n"
-        "  ANATOMY:\n"
-        "    • Two-col: `grid grid-cols-1 lg:grid-cols-2 gap-12 lg:gap-20 items-center`.\n"
-        "    • Left col: large hero photo (or section.images[0]) in `relative aspect-[4/5] rounded-3xl\n"
-        "      overflow-hidden shadow-xl`. Optional decorative ring/blob breaking the edge.\n"
-        "      If no image, use the dominant feature item as a large stat block (a giant primary number\n"
-        "      with label).\n"
-        "    • Right col: heading block (eyebrow + h2 + subhead), then a vertical list of feature rows.\n"
-        "      Each row: `flex items-start gap-4 py-5 border-t border-border first:border-0`.\n"
-        "        Icon column: `flex-none flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10\n"
-        "        text-primary` with Lucide icon from item.icon.\n"
-        "        Text column: h3 (font-semibold) + description (text-sm text-muted-foreground)."
-    ),
-}
+def _canonical_section_type(section_type: str) -> str:
+    """Resolve a section type to its canonical key in _FALLBACK_SKELETONS."""
+    t = (section_type or "").strip().lower()
+    return _TYPE_ALIASES.get(t, t)
 
 
-# ── Header archetype anatomy ──────────────────────────────────────────
-_HEADER_ARCHETYPES: dict[str, str] = {
-    "transparent-pill": (
-        "ARCHETYPE: transparent-pill (floating glass pill that solidifies on scroll — premium / lifestyle / restaurants).\n"
-        "  ANATOMY:\n"
-        "    • Wrapper `<header>` is `fixed top-0 left-0 right-0 z-50 transition-all duration-300`.\n"
-        "    • Inner pill: `mx-auto mt-4 flex h-14 max-w-6xl items-center justify-between rounded-full px-6\n"
-        "      transition-all duration-300`. When `scrolled` (state) → add `bg-background/80 backdrop-blur-md\n"
-        "      border border-border shadow-lg`. Otherwise transparent.\n"
-        "    • Left: brand name (font-semibold tracking-tight text-lg) — Link to `/`.\n"
-        "    • Center (md+): nav links from `landing.nav` (text-sm font-medium text-foreground/80 hover:text-primary\n"
-        "      transition-colors), gap-7. Active link gets `text-primary`.\n"
-        "    • Right: primary CTA from `landing.ctas?.primary` as a small filled pill\n"
-        "      (`inline-flex h-9 rounded-full bg-primary px-5 text-sm font-medium text-primary-foreground\n"
-        "      hover:opacity-90 transition`). Hidden on mobile.\n"
-        "    • Mobile: hamburger button (h-9 w-9 grid place-items-center) toggles a slide-down sheet\n"
-        "      (`absolute inset-x-4 top-20 rounded-2xl bg-background border border-border shadow-xl p-6 space-y-3`).\n"
-        "    • REQUIRED useEffect for scroll listener (set scrolled=true past 8px).\n"
-    ),
-    "solid-bar": (
-        "ARCHETYPE: solid-bar (classic full-bleed top bar — SaaS, B2B, agencies).\n"
-        "  ANATOMY:\n"
-        "    • Wrapper `<header>` is `sticky top-0 z-50 w-full border-b border-border bg-background/95\n"
-        "      backdrop-blur supports-[backdrop-filter]:bg-background/80`.\n"
-        "    • Inner: `container mx-auto flex h-16 items-center justify-between px-4 sm:px-6 lg:px-8`.\n"
-        "    • Brand left, nav center (gap-8 text-sm), CTA right.\n"
-        "    • CTA right is a primary button (rounded-md, not pill).\n"
-        "    • Mobile drawer below the bar: `border-t border-border bg-background` when open.\n"
-    ),
-    "centered-logo": (
-        "ARCHETYPE: centered-logo (editorial / luxury — Chanel, Hermès style).\n"
-        "  ANATOMY:\n"
-        "    • Wrapper `<header>` is `sticky top-0 z-50 bg-background border-b border-border`.\n"
-        "    • Inner is a 3-row grid OR a flex with brand absolutely centered:\n"
-        "      `relative flex h-20 items-center justify-between px-6 lg:px-12`.\n"
-        "    • Left nav: half of the nav links (text-xs uppercase tracking-[0.2em]).\n"
-        "    • CENTER (absolute left-1/2 -translate-x-1/2): brand name in display serif if heading_font is serif,\n"
-        "      large (text-2xl md:text-3xl font-bold tracking-tight).\n"
-        "    • Right nav: the OTHER half of nav links + small CTA pill OR icon-only icons (Search, ShoppingBag).\n"
-        "    • Use this when the motif is editorial / luxury / fashion / restaurant-fine-dining.\n"
-    ),
-    "side-rail": (
-        "ARCHETYPE: side-rail (vertical fixed sidebar — portfolio / studio / agency, magazine).\n"
-        "  ANATOMY:\n"
-        "    • Hidden on mobile (use a top bar fallback). On lg+:\n"
-        "      `<aside className=\"hidden lg:flex fixed left-0 top-0 bottom-0 w-20 z-40 bg-background\n"
-        "      border-r border-border flex-col items-center py-6 gap-8\">`.\n"
-        "    • Top: brand monogram (initials in a square, w-10 h-10 rounded-xl bg-primary text-primary-foreground\n"
-        "      font-bold text-lg grid place-items-center).\n"
-        "    • Middle: rotated nav links (`-rotate-90 origin-center` text-[11px] tracking-[0.3em] uppercase),\n"
-        "      stacked vertically.\n"
-        "    • Bottom: vertical social icons (Instagram, etc.) using lucide-react.\n"
-        "    • Mobile (<lg): render a compact `solid-bar` style top bar instead.\n"
-    ),
-    "mega-menu": (
-        "ARCHETYPE: mega-menu (dropdown panel showing site map — large platforms, e-com, multi-product).\n"
-        "  ANATOMY:\n"
-        "    • Wrapper: same pattern as solid-bar but `<nav>` items hover-open a wide dropdown panel\n"
-        "      (absolute, full-width, bg-background border-y border-border shadow-2xl).\n"
-        "    • Each dropdown panel: 3 columns (`grid grid-cols-3 gap-12 p-10`), each with a small uppercase eyebrow,\n"
-        "      4-6 link rows, plus an optional accent card on the right.\n"
-        "    • Use `useState` to track open panel.\n"
-        "    • Mobile: drawer with collapsible accordion sections per top-level item.\n"
-    ),
-}
+def _resolve_anatomy(section_type: str, visual_dna: dict | None) -> tuple[str, str]:
+    """Return (anatomy_text, source) for a section.
 
+    Priority:
+      1. visual_dna.section_anatomies[section_type]   — research-grounded
+      2. visual_dna.section_anatomies[canonical_type] — research via alias
+      3. _FALLBACK_SKELETONS[canonical_type]          — minimal floor
+      4. _GENERIC_FALLBACK                            — last resort
 
-_FOOTER_ARCHETYPES: dict[str, str] = {
-    "mega-columns": (
-        "ARCHETYPE: mega-columns (4-5 column footer with brand + many link groups — SaaS, marketplaces).\n"
-        "  ANATOMY:\n"
-        "    • `<footer>` `bg-card border-t border-border`.\n"
-        "    • Inner: `container mx-auto px-6 py-16 grid gap-10 md:grid-cols-12`.\n"
-        "    • Col A (md:col-span-4): brand name large (font-bold text-xl), tagline, social icons row\n"
-        "      using lucide-react (Instagram, Twitter, etc. — read from landing.brand.social).\n"
-        "    • Cols B,C,D (md:col-span-2 each): titled link groups built from `landing.footer.links` split\n"
-        "      into 3 buckets, each with an uppercase eyebrow + a stacked column of links (text-sm hover:text-primary).\n"
-        "    • Col E (md:col-span-2): newsletter signup OR contact info from landing.brand.business_info.\n"
-        "    • Bottom strip (separate row, border-t pt-6): copyright left, secondary tagline right.\n"
-    ),
-    "minimalist-row": (
-        "ARCHETYPE: minimalist-row (single-row tight footer — fashion, lifestyle, agencies).\n"
-        "  ANATOMY:\n"
-        "    • `<footer>` `border-t border-border bg-background`.\n"
-        "    • Inner: `container mx-auto flex flex-col gap-4 px-6 py-8 sm:flex-row sm:items-center sm:justify-between`.\n"
-        "    • Left: brand monogram + small © year.\n"
-        "    • Center (sm+): inline links from `landing.footer.links` (text-xs uppercase tracking-widest).\n"
-        "    • Right: 3-4 small social icons.\n"
-        "    • NO huge link grid; this is a quiet closer.\n"
-    ),
-    "cta-band-footer": (
-        "ARCHETYPE: cta-band-footer (huge CTA panel above the footer — restaurants, conversion-focused).\n"
-        "  ANATOMY:\n"
-        "    • Outer wrapper has TWO bands.\n"
-        "    • Band 1: `bg-primary text-primary-foreground py-16 lg:py-24`, centered.\n"
-        "      Contains a giant headline (text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight),\n"
-        "      a subhead (text-lg max-w-2xl mx-auto), and a primary CTA pill (bg-background text-foreground).\n"
-        "      Pull the headline from `landing.ctas?.primary?.label` + brand tagline if needed.\n"
-        "    • Band 2: `border-t border-border bg-card py-10`. Inner: contact info + small link row + © line.\n"
-        "    • Use this when the prompt is conversion-heavy (restaurant reservation, SaaS sign-up landing).\n"
-    ),
-    "centered-stack": (
-        "ARCHETYPE: centered-stack (vertical stacked footer with brand statement — luxury / editorial).\n"
-        "  ANATOMY:\n"
-        "    • `<footer>` `bg-foreground text-background py-20`.\n"
-        "    • Centered column max-w-2xl: brand name (very large text-4xl md:text-5xl font-bold), tagline\n"
-        "      below in italic muted color, then a thin h-px w-12 bg-background/30 divider.\n"
-        "    • Below: 4-6 inline links (text-xs uppercase tracking-[0.3em] gap-6).\n"
-        "    • Below: social icon row centered.\n"
-        "    • Bottom: small © line text-background/50.\n"
-    ),
-}
+    Source is one of: "research", "research-aliased", "fallback", "generic".
+    """
+    raw_type = (section_type or "").strip().lower()
+    canonical = _canonical_section_type(raw_type)
+    anatomies = ((visual_dna or {}).get("section_anatomies") or {})
 
+    custom = anatomies.get(raw_type)
+    if isinstance(custom, str) and len(custom.strip()) >= 40:
+        return custom.strip(), "research"
 
-# Master map: section type → archetype library. When a section.type maps to an
-# entry here, the user_prompt injects the matching archetype's anatomy block.
-# Adding a new section variant = add a new entry to its library; no other
-# code changes required.
-_SECTION_ARCHETYPES: dict[str, dict[str, str]] = {
-    "hero": _HERO_ARCHETYPES,
-    "menu": _MENU_ARCHETYPES,
-    "gallery": _GALLERY_ARCHETYPES,
-    "testimonials": _TESTIMONIALS_ARCHETYPES,
-    "features": _FEATURES_ARCHETYPES,
-    "value_prop": _FEATURES_ARCHETYPES,  # alias — same anatomy library applies
-    "benefits": _FEATURES_ARCHETYPES,
-    "how_it_works": _FEATURES_ARCHETYPES,
-    "process": _FEATURES_ARCHETYPES,
-}
+    custom_alias = anatomies.get(canonical)
+    if isinstance(custom_alias, str) and len(custom_alias.strip()) >= 40:
+        return custom_alias.strip(), "research-aliased"
 
+    fallback = _FALLBACK_SKELETONS.get(canonical)
+    if fallback:
+        return fallback, "fallback"
 
-def _default_archetype(section_type: str) -> str:
-    """First-defined archetype per section type — the safe fallback."""
-    lib = _SECTION_ARCHETYPES.get(section_type.lower())
-    if not lib:
-        return ""
-    return next(iter(lib.keys()))
+    return _GENERIC_FALLBACK, "generic"
 
 
 def _section_filename(section: dict[str, Any]) -> str:
@@ -506,12 +280,14 @@ def _system_prompt(
     personality: dict | None = None,
     references: list[dict] | None = None,
     design_tokens: dict | None = None,
+    visual_dna: dict | None = None,
 ) -> str:
     """Per-call system prompt — small, focused, no rules unrelated to a single section."""
     palette_lines = "\n".join(f"  --{k}: {v};" for k, v in palette.items())
     ds = design_system or {}
     dt = design_tokens or {}
     pers = personality or {}
+    vd = visual_dna or {}
     pers_block = ""
     if pers:
         vibe = ", ".join(pers.get("vibe_keywords") or [])
@@ -521,6 +297,83 @@ def _system_prompt(
             f"  Vibe keywords: {vibe or 'modern, clear'}\n"
             f"  Energy: {pers.get('energy', 'medium')}\n"
         )
+
+    # ── VISUAL DNA — the lead design directive ─────────────────────────
+    # Rich, concrete cultural cues distilled from grounded design research.
+    # When present, these are the PRIMARY visual instruction — the abstract
+    # motion/accent_shape/surface enums below are still authoritative for
+    # tokens (radius, padding, transition) but the LOOK and FEEL of the
+    # section is driven by visual_dna. When absent (research failed), the
+    # codegen falls back to the legacy enums-only path and produces the
+    # generic "modern luxe" output.
+    visual_dna_block = ""
+    if vd:
+        intensity = (vd.get("cultural_intensity") or "subtle").strip().lower()
+        motifs = vd.get("decorative_motifs") or []
+        textures = vd.get("signature_textures") or []
+        icons = vd.get("iconography_anchors") or []
+        photo = (vd.get("photography_style") or "").strip()
+        layout_sig = (vd.get("layout_signature") or "").strip()
+        palette_emph = (vd.get("cultural_palette_emphasis") or "").strip()
+        type_voice = (vd.get("typography_voice") or "").strip()
+        flavors = vd.get("section_flavors") or {}
+
+        intensity_note = (
+            "Cultural cues sit in ACCENT POSITIONS only (a small motif under headlines, "
+            "an iconography anchor next to CTAs, a single textural detail). The page reads "
+            "modern-upscale with cultural FLAVOR — restraint stays."
+            if intensity == "subtle"
+            else "Cultural cues take a STRONGER role (larger textures over hero photos, "
+                 "decorative motifs as section dividers, iconography woven into headings, "
+                 "full-bleed cultural patterns where appropriate). The page reads UNMISTAKABLY "
+                 "of this category and culture."
+        )
+
+        parts = [
+            "\nVISUAL DNA — THIS IS THE PRIMARY VISUAL DIRECTIVE FOR THIS BRAND.",
+            "Concrete, culturally-specific visual cues distilled from real grounded research.",
+            "Your section MUST visibly reflect VISUAL_DNA in ≥3 distinct ways (color emphasis, "
+            "decorative motif, iconography accent, photography style, typography voice, OR layout "
+            "signature). A generic 'modern sans + photos + 3-col grid' output that could fit any "
+            "brand in this category is a FAILURE.",
+            f"\nCultural intensity: {intensity}",
+            f"  → {intensity_note}",
+        ]
+        if palette_emph:
+            parts.append(f"\nCultural palette emphasis:\n  {palette_emph}")
+        if type_voice:
+            parts.append(f"\nTypography voice:\n  {type_voice}")
+        if photo:
+            parts.append(f"\nPhotography style:\n  {photo}")
+        if layout_sig:
+            parts.append(f"\nLayout signature:\n  {layout_sig}")
+        if motifs:
+            parts.append("\nDecorative motifs (USE these as accents — pick ones that fit this section):")
+            for m in motifs[:6]:
+                parts.append(f"  • {m}")
+        if textures:
+            parts.append("\nSignature textures (use AT MOST one per section — don't stack):")
+            for t in textures[:3]:
+                parts.append(f"  • {t}")
+        if icons:
+            parts.append(
+                "\nIconography anchors (when section calls for icons, prefer Lucide icons that "
+                "evoke these — not generic Zap/Star/Check; pick lucide names that match these ideas):"
+            )
+            for ic in icons[:6]:
+                parts.append(f"  • {ic}")
+        if flavors:
+            parts.append("\nPer-section visual flavor (apply when generating that section type):")
+            for stype, note in flavors.items():
+                if note and isinstance(note, str):
+                    parts.append(f"  • {stype}: {note}")
+        parts.append(
+            "\nAPPLY VISUAL DNA HOLISTICALLY — don't slap a single decorative motif on a generic "
+            "skeleton and call it done. The cumulative effect of color emphasis + iconography + "
+            "photography + layout signature should make this brand feel UNMISTAKABLY of its "
+            "category and culture, not Stripe-with-a-different-logo."
+        )
+        visual_dna_block = "\n".join(parts) + "\n"
 
     ref_block = ""
     if references:
@@ -557,8 +410,39 @@ MANDATORY RULES
      import landing from "@/content/landing.json";
      const section = landing.sections.find((s) => s.id === "<section-id>");
      // then render section.headline, section.subheadline, section.items, section.cta, section.images, etc.
-2. Use TAILWIND CLASSES ONLY for styling. NEVER write inline `style={{...}}` for colors.
-   Use semantic Tailwind tokens: bg-primary, text-foreground, bg-muted, border-border, bg-card, text-muted-foreground.
+1.5 VISUAL DNA IS THE LEAD DESIGN DIRECTIVE. The DESIGN CONTEXT block below carries a VISUAL DNA
+    section with concrete, culturally-specific cues (decorative motifs, signature textures,
+    iconography anchors, photography style, layout signature, palette emphasis, typography
+    voice, per-section flavors). YOUR SECTION MUST VISIBLY REFLECT VISUAL_DNA IN ≥3 DISTINCT
+    WAYS. Examples of "visibly reflecting":
+      • Adopt the cultural_palette_emphasis on a hero gradient or accent surface.
+      • Use one decorative_motif as a divider, eyebrow ornament, or hero accent.
+      • Pick lucide-react icons that match an iconography_anchor (lantern → 'Lamp', tea cup
+        → 'Coffee', olive branch → 'Leaf') instead of generic Zap/Star.
+      • Apply the photography_style mood as the photo subject + lighting choice in alt text
+        and image_treatment intent.
+      • Write headings in the typography_voice register (calligraphy-like serif for Chinese,
+        rustic warm serif for Italian, etc.) — match the heading_font's cultural grain.
+      • Echo the layout_signature in the section's overall composition.
+    A section that could fit any business in this category — generic SaaS-flavored skeleton
+    with the brand name swapped in — is a FAILURE. The cumulative cultural specificity should
+    make this brand feel UNMISTAKABLY of its category and culture.
+    If VISUAL DNA is not present in DESIGN CONTEXT below, fall back to the abstract enums
+    (motif / accent_shape / surface) — but keep the same goal: avoid generic SaaS output.
+2. Use TAILWIND CLASSES for styling — never inline `style={{...}}` for colors.
+   For LAYOUT COLORS (page background, section surfaces, headings, body copy, borders,
+   the primary→accent gradient set), USE SEMANTIC TOKENS so the palette can change
+   between generations: bg-primary, text-foreground, bg-muted, border-border, bg-card,
+   text-muted-foreground, plus opacity variants (text-foreground/80, bg-primary/50)
+   and gradients across them (from-primary via-accent to-background).
+   For STATUS COLORS (form success/error, validation hints), Tailwind named palettes
+   are fine: text-green-600, text-red-600, text-amber-600.
+   For BRAND-FIXED visuals (a logo SVG fill that must match the company's exact brand
+   color, a partner badge, a flag icon), hex/rgb is fine.
+   AVOID hex/rgb or Tailwind palette numbers (bg-blue-500, bg-[#2563eb]) for the main
+   layout colors — those lock the page to one look and stop tracking the brief's
+   palette. The post-gen pipeline logs warnings when it sees layout-color drift; treat
+   it as a signal, not a hard error.
 3. Render the section to match the provided layout_hint.
 4. The component MUST default-export a React function whose name matches the file name
    (e.g. HeroSection.jsx → export default function HeroSection()).
@@ -586,6 +470,32 @@ MANDATORY RULES
     braces and render the inner text inline as a normal `<span className="text-primary
     font-semibold">culinary publications</span>` — NEVER as a rounded pill chip. Treat
     curly-brace text as emphasis, not as form fields.
+12. BORDER-RADIUS IS MANDATORY on every clickable affordance and card-like surface.
+    The design system defines `--radius` (mapped to Tailwind `rounded-lg`). NEVER ship sharp
+    90° corners on these elements:
+      • <button>, <Button>, <Link asButton>, CTA links → `rounded-md` MINIMUM
+        (use `rounded-lg`, `rounded-xl`, or `rounded-full` for pill-shaped CTAs)
+      • <input>, <textarea>, <select>, search bars → `rounded-md` or `rounded-lg`
+      • Cards, surfaces, and stat tiles (`bg-card border` containers) → `rounded-2xl` standard,
+        `rounded-3xl` for hero/feature blocks
+      • Avatars, brand-mark badges, status dots → `rounded-full`
+      • Image containers, photo tiles → `rounded-xl` or `rounded-2xl`
+    NEVER use `rounded-none` unless the brief explicitly says "brutalist" or "sharp" motif.
+    If you write a card, button, or input WITHOUT a `rounded-*` class, you have produced
+    a defect — the design system relies on radius for visual identity.
+13. JSX SIBLINGS INSIDE ANY EXPRESSION MUST BE WRAPPED. JSX expressions can return
+    exactly ONE element. The same rule applies to ternaries, `&&` short-circuits,
+    `.map()` callbacks, IIFEs, and any function returning JSX. Multiple siblings
+    inside `( ... )` produce a SWC syntax error ("Expected ',', got '<...'").
+    Always wrap multiple siblings in a fragment or div:
+      ✗  {{hasImage ? ( <Image .../> <div className="overlay" /> ) : ( <Fallback /> )}}
+      ✓  {{hasImage ? ( <> <Image .../> <div className="overlay" /> </> ) : ( <Fallback /> )}}
+      ✓  {{hasImage ? ( <div className="relative"><Image .../><div className="overlay"/></div> ) : ...}}
+      ✗  {{hasImage && ( <Image .../> <div className="overlay" /> )}}
+      ✓  {{hasImage && ( <> <Image .../> <div className="overlay" /> </> )}}
+    Same rule for `.map()` callbacks: `items.map(x => <><Title/><Body/></>)` not
+    `items.map(x => <Title/> <Body/>)`. The outer element of a map iteration must carry
+    `key={{...}}` — fragments accept it via `<Fragment key={{...}}>` or a wrapping <div>.
 
 ANIMATION (REQUIRED — every section MUST animate on scroll)
   • Import the Reveal component:  `import Reveal from "@/components/ui/Reveal";`
@@ -640,6 +550,17 @@ IMAGES — PHOTOS BEAT ICONS
     Each entry is just a fully-qualified Unsplash https:// URL.
     READ it directly: `const heroImg = section.images?.[0];` then `<Image src={{heroImg}} ... />`.
     For alt text, optionally read `section.image_alts?.[i]` (parallel array) — fallback to a hardcoded English string like the section's headline summary.
+
+  • FORBIDDEN — hardcoded image URL constants. NEVER define a local `const UNSPLASH_IMAGES = {{...}}`
+    or `const IMAGE_MAP = {{...}}` or any dict mapping item titles/keys to Unsplash URLs in your
+    component file. The pipeline guarantees `section.images[i]` (parallel-indexed with
+    `section.items[i]`) is already populated in landing.json by the time your component runs.
+    If `section.images[i]` is empty/falsy, render the gradient placeholder described above —
+    NEVER guess a URL from training data. Hardcoded URLs go stale, return 404, and bypass the
+    binder's domain whitelist.
+      ✗  const UNSPLASH_IMAGES = {{ peking_duck: "https://images.unsplash.com/photo-...", ... }};
+      ✗  const HERO_IMG = "https://images.unsplash.com/photo-...";
+      ✓  const heroImg = section.images?.[0];   // empty string → render placeholder
   • Use Next.js `<Image>` from "next/image" with `fill` + `sizes` for hero/large blocks, or fixed `width`/`height` for thumbnails.
   • Wrap each <Image> in a `relative overflow-hidden` container with the design_system.accent_shape rounding.
   • Apply design_system.image_treatment:
@@ -664,7 +585,7 @@ FORM SECTIONS (type contact_form | reservation | booking_form | contact | newsle
 
 DESIGN SYSTEM (apply CONSISTENTLY across the section — this is what makes the whole landing look like one product, not 8 random components)
   Motion intensity: {ds.get("motion", "subtle")}      → subtle = duration-500 only on entrance; energetic = +hover lifts; dramatic = +scale on enter; organic = +slow ease, gentle blur-in.
-  Accent shape:     {ds.get("accent_shape", "rounded")}  → squared: rounded-none/sm; rounded: rounded-xl; pill: rounded-full on buttons + rounded-2xl on cards; blob: rounded-[40%_60%_70%_30%/40%_50%_60%_50%] on image masks; hairline: rounded-none + thin border accents.
+  Accent shape:     {ds.get("accent_shape", "rounded")}  → squared: rounded-md on every interactive surface, rounded-lg on cards (NEVER rounded-none); rounded: rounded-xl on cards, rounded-md+ on buttons; pill: rounded-full on buttons + rounded-2xl on cards; blob: rounded-[40%_60%_70%_30%/40%_50%_60%_50%] on image masks; hairline: rounded-md on buttons, rounded-lg on cards, with a thin 1px border (NEVER rounded-none — the radius and the hairline border coexist). Rule 12 below is the hard floor — every accent_shape must respect it.
   Surface:          {ds.get("surface", "elevated")}    → flat: bg-card no shadow; elevated: shadow-md hover:shadow-xl; bordered: border-2 border-border no shadow; layered: stacked z-translucent panels (bg-card/80 backdrop-blur); duotone: alternating bg-muted/bg-card per card.
   Image treatment:  {ds.get("image_treatment", "natural")} (see IMAGES rules).
   Section rhythm:   {ds.get("section_rhythm", "balanced")} → tight: py-12 sm:py-16; balanced: py-16 sm:py-20 lg:py-24; airy: py-24 sm:py-32.
@@ -690,14 +611,17 @@ DESIGN CONTEXT
   Body font:    {typography.get("body_font", "Inter")}
   Palette (already wired as CSS vars in globals.css):
 {palette_lines}
-{pers_block}{ref_block}
+{visual_dna_block}{pers_block}{ref_block}
 
-SECTION ARCHETYPES (driven by section.archetype + the user message)
-  hero / menu / gallery / testimonials / features / value_prop / benefits / how_it_works / process —
-  the user message will include an "ARCHETYPE — IMPLEMENT THIS EXACT ANATOMY" block. Follow it
-  PRECISELY: structural skeleton (where copy/image/CTA go, grid shape, scale tokens) is non-negotiable.
-  Tailwind class choices, copy positioning details, and decorative accents are yours. NEVER
-  substitute a different layout pattern. Centered-text-on-flat-color = guaranteed FAILURE.
+SECTION ANATOMY (driven by VISUAL DNA + the user message)
+  Every section's user message includes ONE of:
+    • "ANATOMY — IMPLEMENT THIS EXACT SPEC" — the spec is research-grounded, written from real
+      research about THIS brand. Treat its structural skeleton (z-stacking, container hierarchy,
+      grid shape, scale tokens, decorative integration) as non-negotiable.
+    • "ANATOMY — STARTING POINT" — a generic structural floor. Use its z-stacking + overflow
+      + headline scale as invariants, but compose the actual look from VISUAL DNA above.
+  Centered-text-on-flat-color is a guaranteed FAILURE either way — every section must offer
+  something visually distinct.
 
 SECTION DENSITY (every non-hero section must feel COMPLETE — sparse = broken)
   Every non-hero section MUST render at least 3 distinct visual content blocks before any
@@ -746,6 +670,11 @@ OTHER SECTION RULES (sections without an archetype block fall back to these)
     NEVER render the section as JUST a pill row of 3 award-name pills with no logo strip and
     no quote. NEVER place a giant decorative watermark word in the section background.
     NEVER write the body as pill chips embedded in a paragraph (see Rule 9 / 11 above).
+    NEVER use absolute-positioned, rotated, or overlapping award/press cards (no `card-stack`
+    pattern, no `absolute inset-0`, no `rotate-[Xdeg]` on the cards, no negative margins that
+    pull cards over each other). Press cards/logos render in a FLAT, in-flow grid only — every
+    cell occupies its own row/column with no overlap. If you write `position: absolute` or
+    `rotate-` on a press card, you have produced a defect.
     Section MUST be at least `min-h-[480px]` content-wise — fill all 3 blocks before any spacer.
 
   experience / journey / process / steps — When the section uses a horizontal carousel of cards,
@@ -758,6 +687,15 @@ OTHER SECTION RULES (sections without an archetype block fall back to these)
 
 PIXEL-PRECISE LAYOUT TOKENS (use exactly these — they keep the whole page on one rhythm)
   • Outer section: `<section id="..." className="<bg> py-20 md:py-28 lg:py-36">` — vertical rhythm is fixed.
+  • Decorative bleed containment: if THIS section uses ANY absolute-positioned decorative element
+    (oversized watermark word, decorative blob, motif shape, accent ring, gradient orb, image that
+    extends past the section edge for editorial effect, rotated card, sticker badge offset with
+    negative inset), the outer `<section>` MUST include `overflow-hidden` (or `overflow-x-clip` if
+    the section needs sticky/scrolling children). Decorative elements that escape the section root
+    appear over the next section, the footer, the page edges, or as stray dark shapes in empty
+    space — every shipped page with a black blob in a corner traces back to a missing `overflow-hidden`
+    on the section that owns the decoration. Add it preemptively whenever you introduce an absolute
+    decorative element; do NOT wait to see it leak.
   • Container: `<div className="container max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">` — never wider, never narrower.
   • Eyebrow:    `text-xs tracking-[0.2em] uppercase text-primary font-semibold mb-3`
   • H2:         `text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight font-[family-name:var(--font-heading)]`
@@ -778,6 +716,27 @@ CONTRAST & READABILITY (NON-NEGOTIABLE — every line of text must be plainly le
   • Text over IMAGES: stack a real overlay (`bg-foreground/60`, or `bg-gradient-to-t from-foreground/70 to-transparent`)
     BEFORE rendering text, then render text in `text-background`. Never put white text directly on unprocessed photos.
   • Text over `bg-primary`: must be `text-primary-foreground`. Text over `bg-card` / `bg-muted`: must be `text-foreground` (NOT muted).
+  • DARK INVERSE SURFACES — when a section, footer, or panel uses ANY of
+    `bg-foreground`, `bg-secondary` (when secondary is a dark brand color),
+    `bg-foreground/95`, or any dark `bg-*` shade that inverts the page:
+      ✗ NEVER use `text-foreground` (same hue as bg → invisible).
+      ✗ NEVER use `text-muted-foreground` (slightly darker hue → invisible).
+      ✓ Body text MUST be `text-background` (full opacity, max contrast).
+      ✓ Muted/secondary text on dark surfaces uses `text-background/70`
+        (NEVER lower; 70% on dark inverse stays AA-readable).
+      ✓ Headings: `text-background` (no opacity).
+      ✓ Links: `text-background hover:text-primary-foreground`
+        (or hover to `text-accent` if accent is light).
+      ✓ Borders: `border-background/15` for hairlines on dark panels.
+      ✓ Form inputs on dark surfaces: `bg-background/10 text-background
+        placeholder:text-background/50 border-background/20`.
+      ✓ Pairing `bg-primary-foreground` text on `bg-secondary` is a
+        FAILURE when secondary isn't paired with primary-foreground in
+        the palette — use `text-background` instead. The only safe
+        cross-token pairing is `bg-primary` ↔ `text-primary-foreground`.
+    This is the #1 footer / dark-band failure mode — invisible nav links and
+    body copy because the writer reached for `text-foreground` or
+    `text-muted-foreground` reflexively. Always invert text on inverse surfaces.
   • Watermark / decorative oversized type uses `text-foreground/[0.06]` — that is the ONLY place a sub-10% opacity is allowed,
     and it must NEVER be the only text in its block (it sits BEHIND a real headline).
   • Buttons MUST visibly differ from the surface they sit on:
@@ -841,6 +800,7 @@ def _user_prompt(
     section_index: int = 0,
     section_count: int = 1,
     voice_context: dict[str, Any] | None = None,
+    visual_dna: dict | None = None,
 ) -> str:
     """Per-section user prompt — section spec + 2 sibling specs for cohesion."""
     sib_summaries = []
@@ -933,22 +893,32 @@ def _user_prompt(
             "system tokens (motif, accent_shape, motion) within this skeleton."
         )
 
-    # Archetype injection: when this section's type maps into the archetype
-    # library, append the matching anatomy skeleton. Sections without a
-    # library entry fall back to the OTHER SECTION RULES in the system prompt.
-    archetype_block = ""
+    # Anatomy injection — research-driven first, fallback skeleton second.
+    # `_resolve_anatomy` checks visual_dna.section_anatomies[type] (Gemini-
+    # written from grounded research), falls back to _FALLBACK_SKELETONS
+    # (minimal structural floor), and finally _GENERIC_FALLBACK. The source
+    # determines the framing language: research-grounded anatomies get
+    # "IMPLEMENT THIS"; fallback skeletons get "STARTING POINT — overlay
+    # cultural cues from visual_dna" so Claude treats them as a floor not
+    # a ceiling.
     section_type = (section.get("type") or "").lower()
-    if section_type in _SECTION_ARCHETYPES:
-        lib = _SECTION_ARCHETYPES[section_type]
-        arch = (section.get("archetype") or "").strip().lower()
-        if arch not in lib:
-            arch = next(iter(lib.keys()))  # default to first variant
-        anatomy = lib[arch]
+    anatomy_text, anatomy_source = _resolve_anatomy(section_type, visual_dna)
+    if anatomy_source in ("research", "research-aliased"):
         archetype_block = (
-            f"\nARCHETYPE — IMPLEMENT THIS EXACT ANATOMY (the Brief picked {arch!r} for this {section_type} section):\n"
-            f"{anatomy}\n"
-            "DO NOT substitute a different layout pattern. Tailwind classes + copy positioning details are yours, "
-            "but the structural skeleton above is the spec."
+            f"\nANATOMY — IMPLEMENT THIS EXACT SPEC (research-grounded for this brand's {section_type} section):\n"
+            f"{anatomy_text}\n"
+            "Tailwind class choices and copy positioning details are yours, but the structural skeleton, "
+            "decorative integration, and scale tokens above are the spec. This anatomy was written from real "
+            "grounded research about THIS brand — it is the right shape for this project."
+        )
+    else:
+        archetype_block = (
+            f"\nANATOMY — STARTING POINT (generic fallback for {section_type} — no research-grounded anatomy was produced for this brand):\n"
+            f"{anatomy_text}\n"
+            "This is a STRUCTURAL FLOOR, not a final design. The composition, decorative integration, and "
+            "any cultural inflection should be driven by the VISUAL DNA block in the system prompt. Use the "
+            "floor's z-stacking, overflow, and headline scale as invariants — but compose the actual look "
+            "(asymmetric vs centered, photo-led vs editorial, motif placements) from visual_dna."
         )
 
     # Interactivity directive from the brief — this is the "must DO something"
@@ -997,6 +967,21 @@ def _user_prompt(
         parts.append("  IMPORTANT: this is voice priming, not a checklist. If a signal doesn't fit this section's role, ignore it. Never sacrifice clarity to shoehorn a phrase.")
         voice_block = "\n".join(parts)
 
+    # Purpose directive — highest-priority structural law. Emitted whenever
+    # analyze_intent picked a known purpose (hiring / lead_generation /
+    # ecommerce / booking). Empty string skips the block.
+    purpose_directive = (vc.get("purpose_directive") or "").strip()
+    purpose_block = ""
+    if purpose_directive:
+        purpose_block = (
+            "\n\nPURPOSE DIRECTIVE — read this BEFORE writing any JSX:\n"
+            "This block declares what KIND of page this is and what its sections must accomplish. "
+            "If it conflicts with COPY_DECK or LAYOUT_BLUEPRINT on STRUCTURAL questions (which sections "
+            "exist, what's mandatory, what's forbidden), the directive wins. The deck still owns exact "
+            "string content for sections that DO exist.\n"
+            f"{purpose_directive}"
+        )
+
     return f"""Build ONE section component.
 
 FILE PATH:     {file_path}
@@ -1023,7 +1008,7 @@ ANTI-MONOTONY RULE — CRITICAL:
       stat-band, accordion list, marquee row, comparison table, pull-quote dominant, pill cluster}}.
   • If you and a neighbor have the SAME `type`, your `archetype` is your differentiator — use it.
   • Cohesion comes from SHARED design tokens (palette, fonts, accent_shape, motion) — NOT from copying their layout.
-{image_hint}{archetype_block}{interactivity_block}
+{image_hint}{archetype_block}{interactivity_block}{purpose_block}
 
 Generate the component now. Output via write_project_files with exactly ONE file."""
 
@@ -1045,6 +1030,7 @@ async def _generate_one_section(
     api_key: str,
     websocket: Any,
     voice_context: dict[str, Any] | None = None,
+    visual_dna: dict | None = None,
 ) -> dict[str, str] | None:
     """Generate one section component. Returns {'path', 'content'} or None on failure."""
     from app.services.project_generator import call_claude_for_json
@@ -1057,11 +1043,13 @@ async def _generate_one_section(
         brand_name, motif, palette, typography, design_system,
         personality=personality, references=references,
         design_tokens=design_tokens,
+        visual_dna=visual_dna,
     )
     usr_p = _user_prompt(
         section, siblings, component, file_path,
         section_index=section_index, section_count=section_count,
         voice_context=voice_context,
+        visual_dna=visual_dna,
     )
 
     try:
@@ -1146,14 +1134,23 @@ async def generate_landing_sections(
         from app.services.landing_brief import _build_design_tokens
         design_tokens = _build_design_tokens(design_system)
 
+    # Visual DNA — concrete cultural cues from research. Lead design
+    # directive when present; codegen falls back to enums-only if absent.
+    visual_dna = dict(brief.get("visual_dna") or {})
+
     # Voice/context fields populated by enrich_brief_with_signals when the
     # research stage succeeded. Absent on briefs built without research,
     # in which case the user prompt skips the VOICE & CONTEXT block.
+    # purpose_directive carries the ===PURPOSE_DIRECTIVE=== block text
+    # built from analyze_intent's output (named_roles, primary_purpose,
+    # urgency_signals). Empty string when no purpose was detected — every
+    # section prompt then skips the directive block.
     voice_context = {
-        "voice_phrases":  brief.get("voice_phrases") or [],
-        "industry_terms": brief.get("industry_terms") or [],
-        "regional_refs":  brief.get("regional_refs") or [],
-        "white_space":    brief.get("white_space") or [],
+        "voice_phrases":     brief.get("voice_phrases") or [],
+        "industry_terms":    brief.get("industry_terms") or [],
+        "regional_refs":     brief.get("regional_refs") or [],
+        "white_space":       brief.get("white_space") or [],
+        "purpose_directive": brief.get("purpose_directive") or "",
     }
 
     sem = asyncio.Semaphore(concurrency)
@@ -1177,6 +1174,7 @@ async def generate_landing_sections(
                 api_key=api_key,
                 websocket=websocket,
                 voice_context=voice_context,
+                visual_dna=visual_dna,
             )
             return idx, s, res
 
@@ -1261,12 +1259,14 @@ def _layout_system_prompt(
     personality: dict,
     references: list[dict],
     design_tokens: dict | None = None,
+    visual_dna: dict | None = None,
 ) -> str:
     """System prompt for header/footer codegen — anatomy-driven, JSON-fed."""
     palette_lines = "\n".join(f"  --{k}: {v};" for k, v in palette.items())
     ds = design_system or {}
     dt = design_tokens or {}
     pers = personality or {}
+    vd = visual_dna or {}
     vibe = ", ".join(pers.get("vibe_keywords") or [])
     pers_block = (
         f"\nPERSONALITY (tone the layout to match this voice):\n"
@@ -1274,6 +1274,33 @@ def _layout_system_prompt(
         f"  Vibe: {vibe or 'modern, clear'}\n"
         f"  Energy: {pers.get('energy', 'medium')}\n"
     )
+
+    # Compact visual_dna block for header/footer — header is small, doesn't
+    # need the full per-section flavors, just enough to flavor the brand
+    # mark, nav style, and footer mood.
+    visual_dna_block = ""
+    if vd:
+        intensity = (vd.get("cultural_intensity") or "subtle").strip().lower()
+        motifs = (vd.get("decorative_motifs") or [])[:3]
+        type_voice = (vd.get("typography_voice") or "").strip()
+        palette_emph = (vd.get("cultural_palette_emphasis") or "").strip()
+        parts = [
+            "\nVISUAL DNA (apply to brand mark, nav typography, and footer mood — accent positions, not full takeover):",
+            f"  Intensity: {intensity}",
+        ]
+        if palette_emph:
+            parts.append(f"  Palette emphasis: {palette_emph}")
+        if type_voice:
+            parts.append(f"  Typography voice: {type_voice}")
+        if motifs:
+            parts.append("  Decorative cues you may use sparingly (logo lockup accent, footer divider, social-icon row treatment):")
+            for m in motifs:
+                parts.append(f"    • {m}")
+        parts.append(
+            "  The header/footer carries the brand identity quietly — don't overload them. "
+            "One brand-mark accent + one nav-type voice + restraint everywhere else."
+        )
+        visual_dna_block = "\n".join(parts) + "\n"
     ref_block = ""
     if references:
         rls = []
@@ -1283,6 +1310,23 @@ def _layout_system_prompt(
             rls.append(f"  • {n} — {why}")
         if rls:
             ref_block = "\nREFERENCE SITES (real sites this brief is grounded in):\n" + "\n".join(rls) + "\n"
+
+    # Anatomy framing — research-grounded specs are authoritative; fallback
+    # skeletons are floors that visual_dna composes on top of.
+    if (archetype_label or "").startswith("research"):
+        anatomy_intro = "IMPLEMENT THIS EXACT SPEC (research-grounded for this brand)"
+        anatomy_outro = (
+            "Tailwind class choices and decorative details are yours, but the structural skeleton, "
+            "scroll behavior, and decorative integration above are the spec. This anatomy was written "
+            "from real research about THIS brand."
+        )
+    else:
+        anatomy_intro = "STARTING POINT (generic fallback — no research-grounded anatomy was produced for this layout)"
+        anatomy_outro = (
+            "This is a STRUCTURAL FLOOR. Use the floor's scroll behavior, container hierarchy, and "
+            "responsive bones as invariants — but compose the actual look (brand mark style, nav "
+            "typography, social row treatment, footer accent) from the VISUAL DNA block above."
+        )
 
     return f"""You are a senior front-end engineer writing ONE Next.js layout component (header OR footer) for a landing page.
 
@@ -1304,10 +1348,15 @@ MANDATORY RULES
 4. Mark `'use client';` as the FIRST line if you use useState / useEffect / onClick.
 5. Lucide-react icons for social (Instagram, Twitter, Facebook, Linkedin, Youtube, Github) and any UI affordances (Menu, X, ChevronDown). Map social.label string → icon via a small const dict.
 6. NO CSS modules, NO styled-components, NO dynamic class strings Tailwind can't parse.
+7. BORDER-RADIUS IS MANDATORY. Buttons, CTAs, and pill-style nav items use the
+   PROJECT_DESIGN_TOKENS button_radius_class (below). Mobile-menu icon buttons use the same.
+   Newsletter input/email-capture inputs use `rounded-md`. Logo lockup container `rounded-md`
+   if it has a background color, no radius if it's transparent. NEVER use `rounded-none`
+   on any header/footer element.
 
-ARCHETYPE — IMPLEMENT THIS EXACT ANATOMY:
+ANATOMY — {anatomy_intro}:
 {anatomy}
-DO NOT substitute a different layout pattern. Tailwind class choices and decorative details are yours, but the structural skeleton is the spec.
+{anatomy_outro}
 
 INTERACTIVITY (REQUIRED)
   • Sticky/fixed headers: useEffect listens to window.scrollY → setScrolled(true) past 8px → flips classes (transparent → solid w/ backdrop-blur). NO exceptions on mobile-only headers.
@@ -1334,7 +1383,7 @@ PROJECT_DESIGN_TOKENS — USE THESE EXACT TAILWIND CLASS STRINGS VERBATIM in the
   Examples:
     <Link className="{dt.get("button_radius_class", "rounded-md")} bg-primary text-primary-foreground px-5 py-2.5 {dt.get("transition_class", "transition-all duration-300")} hover:opacity-90">
     <button aria-label="Open menu" className="{dt.get("button_radius_class", "rounded-md")} p-2 {dt.get("transition_class", "transition-all duration-300")} hover:bg-muted">
-{pers_block}{ref_block}
+{visual_dna_block}{pers_block}{ref_block}
 
 CONTRAST & READABILITY (NON-NEGOTIABLE)
   • Nav links: `text-foreground/80 hover:text-foreground` on solid header surfaces; on transparent-pill / floating-glass
@@ -1346,6 +1395,18 @@ CONTRAST & READABILITY (NON-NEGOTIABLE)
     the user scrolls past 8px, swap to a SOLID surface (`bg-background/95 backdrop-blur` + `border-b border-border`) so
     the navigation never becomes invisible.
   • Footer link text: `text-muted-foreground hover:text-foreground` (full opacity). Footer headings: `text-foreground`.
+  • DARK FOOTER SURFACES — when the footer wrapper uses `bg-foreground`,
+    `bg-secondary` (dark brand color), or any dark `bg-*`:
+      ✗ NEVER `text-foreground` or `text-muted-foreground` (invisible — same hue as bg).
+      ✗ NEVER `text-primary-foreground` (only pairs with `bg-primary`, NOT secondary).
+      ✓ Body / nav links: `text-background hover:text-background/80`.
+      ✓ Muted descriptions (newsletter sublabel, copyright): `text-background/70`.
+      ✓ Headings (column labels): `text-background` full opacity.
+      ✓ Newsletter input: `bg-background/10 text-background placeholder:text-background/50 border-background/20`.
+      ✓ Section divider line: `border-background/15`.
+    This is the #1 footer failure: white-on-white or brown-on-brown text
+    because the writer reached for `text-foreground` / `text-muted-foreground`
+    on an inverse surface. Always invert text colors on inverse surfaces.
 
 QUALITY BAR
   • Looks like a real, professional layout for this brand — not a generic template.
@@ -1391,6 +1452,7 @@ async def _generate_layout_component(
     design_tokens: dict,
     api_key: str,
     websocket: Any,
+    visual_dna: dict | None = None,
 ) -> dict[str, str] | None:
     from app.services.project_generator import call_claude_for_json
 
@@ -1401,6 +1463,7 @@ async def _generate_layout_component(
         component, file_path, archetype_label, anatomy,
         brand_name, motif, palette, typography, design_system, personality, references,
         design_tokens=design_tokens,
+        visual_dna=visual_dna,
     )
     usr_p = _layout_user_prompt({}, component, file_path)
 
@@ -1455,40 +1518,41 @@ async def generate_layout_components(
     if not design_tokens:
         from app.services.landing_brief import _build_design_tokens
         design_tokens = _build_design_tokens(design_system)
+    visual_dna = dict(brief.get("visual_dna") or {})
 
-    h_arch = (brief.get("header_archetype") or "solid-bar").strip().lower()
-    f_arch = (brief.get("footer_archetype") or "minimalist-row").strip().lower()
-    if h_arch not in _HEADER_ARCHETYPES:
-        h_arch = "solid-bar"
-    if f_arch not in _FOOTER_ARCHETYPES:
-        f_arch = "minimalist-row"
+    # Resolve header + footer anatomies via the same pipeline used for sections:
+    # research first (visual_dna.section_anatomies), fallback skeleton second.
+    header_anatomy, header_source = _resolve_anatomy("header", visual_dna)
+    footer_anatomy, footer_source = _resolve_anatomy("footer", visual_dna)
 
     if websocket is not None:
         try:
             await websocket.send_json({
                 "type": "progress",
-                "message": f"⚡ Generating header ({h_arch}) + footer ({f_arch}) in parallel...",
+                "message": f"⚡ Generating header ({header_source}) + footer ({footer_source}) in parallel...",
             })
         except Exception:
             pass
 
     header_task = _generate_layout_component(
         kind="header",
-        archetype_label=h_arch,
-        anatomy=_HEADER_ARCHETYPES[h_arch],
+        archetype_label=header_source,
+        anatomy=header_anatomy,
         brand_name=brand_name, motif=motif, palette=palette, typography=typography,
         design_system=design_system, personality=personality, references=references,
         design_tokens=design_tokens,
         api_key=api_key, websocket=websocket,
+        visual_dna=visual_dna,
     )
     footer_task = _generate_layout_component(
         kind="footer",
-        archetype_label=f_arch,
-        anatomy=_FOOTER_ARCHETYPES[f_arch],
+        archetype_label=footer_source,
+        anatomy=footer_anatomy,
         brand_name=brand_name, motif=motif, palette=palette, typography=typography,
         design_system=design_system, personality=personality, references=references,
         design_tokens=design_tokens,
         api_key=api_key, websocket=websocket,
+        visual_dna=visual_dna,
     )
 
     header_res, footer_res = await asyncio.gather(header_task, footer_task)
@@ -1522,11 +1586,38 @@ async def generate_layout_components(
     return out
 
 
-def write_landing_page_shell(workspace_path: str, page_imports: list[str], page_renders: list[str]) -> str:
+_FIXED_TOP_HEADER_PATTERN = re.compile(
+    r"\bfixed\s+top-0\b|\bposition:\s*fixed\b|\bfloating\s+(glass\s+)?pill\b",
+    re.IGNORECASE,
+)
+
+
+def _header_is_fixed_top(header_anatomy: str) -> bool:
+    """Detect whether the resolved header anatomy describes a fixed-top header
+    (which floats over content and needs the page to add pt compensation).
+
+    Matches `fixed top-0`, `position: fixed`, or "floating pill" phrasing in
+    the anatomy text. Sticky/in-flow headers don't match.
+    """
+    return bool(header_anatomy and _FIXED_TOP_HEADER_PATTERN.search(header_anatomy))
+
+
+def write_landing_page_shell(
+    workspace_path: str,
+    page_imports: list[str],
+    page_renders: list[str],
+    *,
+    header_anatomy: str = "",
+) -> str:
     """Write `app/page.jsx` that imports + renders all section components in order.
 
     The shell is dead-simple — no header/footer here (those are layout-level
     components written by Phase 0 builders). Sections render top-to-bottom.
+
+    `header_anatomy` is the resolved header anatomy text (research-grounded or
+    fallback). When it describes a fixed-top header (`fixed top-0`, floating
+    pill), <main> gets `pt-20 lg:pt-24` so content doesn't slide under the
+    floating header. Sticky/in-flow headers stay padding-free.
     """
     app_dir = os.path.join(workspace_path, "src", "app")
     os.makedirs(app_dir, exist_ok=True)
@@ -1560,11 +1651,15 @@ def write_landing_page_shell(workspace_path: str, page_imports: list[str], page_
     target = os.path.join(app_dir, "page.jsx")
     imports_block = "\n".join(page_imports)
     renders_block = "\n      ".join(page_renders) if page_renders else "<div />"
+    needs_top_pad = _header_is_fixed_top(header_anatomy)
+    main_class = "min-h-screen bg-background text-foreground"
+    if needs_top_pad:
+        main_class += " pt-20 lg:pt-24"
     src = f"""{imports_block}
 
 export default function Page() {{
   return (
-    <main className="min-h-screen bg-background text-foreground">
+    <main className="{main_class}">
       {renders_block}
     </main>
   );

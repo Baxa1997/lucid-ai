@@ -30,7 +30,6 @@ async def explore_with_gemini(
     task: str,
     workspace_path: str,
     classification: dict,
-    gemini_key: str,
     websocket: WebSocket,
 ) -> tuple[str, list[str]]:
     """Read specific codebase files and generate implementation plan.
@@ -138,7 +137,6 @@ Example: ["src/app/page.js", "src/components/Header.js"]"""
                     model=GEMINI_MODEL,
                     payload=_filter_payload,
                     timeout_s=60.0,
-                    api_key=gemini_key,
                     label="step4_filter_files",
                 ),
                 timeout=60,
@@ -303,7 +301,6 @@ async def gemini_research(
     task: str,
     workspace_path: str,
     validated: dict,
-    gemini_key: str,
     websocket: WebSocket,
 ) -> str:
     """Use Gemini to research and create a detailed spec for new projects.
@@ -520,7 +517,6 @@ Research the specific niche. Customize everything.
                     model=GEMINI_RESEARCH_MODEL,
                     payload=_spec_payload,
                     timeout_s=180.0,
-                    api_key=gemini_key,
                     label="step4_research_spec",
                 ),
                 timeout=180,
@@ -1058,7 +1054,6 @@ async def gemini_create_plan(
     workspace_path: str,
     spec: str,
     validated: dict,
-    gemini_key: str,
     websocket: WebSocket,
 ) -> str:
     """Generate a framework-agnostic project blueprint, then convert to plan.json.
@@ -1264,7 +1259,6 @@ Return ONLY the raw JSON object. No markdown. No backticks. No explanation.
                     model=GEMINI_BLUEPRINT_MODEL,
                     payload=_bp_payload,
                     timeout_s=240.0,
-                    api_key=gemini_key,
                     label="step4_blueprint",
                 ),
                 timeout=240,

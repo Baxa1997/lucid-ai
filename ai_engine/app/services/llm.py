@@ -2,18 +2,18 @@
 
 Builds an OpenHands ``LLM`` instance for the requested provider or model.
 
-Key lookup order
-================
-1. A fully-qualified LiteLLM model identifier is looked up directly in
-   ``MODEL_CONFIGS`` (e.g. ``"gemini/gemini-3-flash-preview"``).
-2. If *model* is a bare provider name (``"google"`` / ``"anthropic"``),
-   we fall back to the ``DEFAULT_MODEL_PER_PROVIDER`` value, which keeps
-   the old call-sites working.
+Routing
+=======
+- Anthropic models (``anthropic/...``) authenticate with an API key via
+  ``ANTHROPIC_API_KEY`` (or a per-request override).
+- Google Gemini models go through **Vertex AI** (``vertex_ai/...``) and
+  authenticate with Application Default Credentials (ADC). No API key.
+  AI Studio (``gemini/...`` + ``GOOGLE_API_KEY``) is no longer supported.
 
-API key resolution order
-========================
+Key lookup order (Anthropic only)
+=================================
 1. ``user_api_key`` passed in the request.
-2. Provider-specific env var (e.g. ``GOOGLE_API_KEY``).
+2. Provider-specific env var (``ANTHROPIC_API_KEY``).
 3. Generic ``LLM_API_KEY`` fallback.
 """
 
@@ -38,17 +38,23 @@ def resolve_llm(model_or_provider: str, user_api_key: str | None = None):
     """Return a configured ``LLM`` instance.
 
     *model_or_provider* can be:
-    - A full LiteLLM model string: ``"gemini/gemini-3-flash-preview"``
-    - A bare provider key: ``"google"`` or ``"anthropic"``
+    - A full LiteLLM model string: ``"vertex_ai/gemini-3-flash-preview"``
+      or ``"anthropic/claude-3-5-sonnet-20241022"``.
+    - A bare provider key: ``"google"`` or ``"anthropic"``.
 
     Raises:
         ProviderError: if the model/provider is not supported.
-        APIKeyMissingError: if no key can be found.
+        APIKeyMissingError: only for Anthropic (Vertex uses ADC, not keys).
     """
-    # Map legacy or deprecated model IDs to their new active equivalents
+    # Map legacy / deprecated model IDs to their active equivalents. Old
+    # ``gemini/...`` ids predate the Vertex migration; rewrite them so any
+    # caller that still passes the AI Studio prefix transparently lands on
+    # Vertex routing.
     legacy_mappings = {
-        "gemini/gemini-2.5-flash-preview": "gemini/gemini-3-flash-preview",
-        "gemini/gemini-2.5-pro-preview": "gemini/gemini-3.1-pro-preview",
+        "gemini/gemini-2.5-flash-preview":  "vertex_ai/gemini-3-flash-preview",
+        "gemini/gemini-2.5-pro-preview":    "vertex_ai/gemini-3.1-pro-preview",
+        "gemini/gemini-3-flash-preview":    "vertex_ai/gemini-3-flash-preview",
+        "gemini/gemini-3.1-pro-preview":    "vertex_ai/gemini-3.1-pro-preview",
     }
     model_or_provider = legacy_mappings.get(model_or_provider, model_or_provider)
 
@@ -67,17 +73,41 @@ def resolve_llm(model_or_provider: str, user_api_key: str | None = None):
     config = MODEL_CONFIGS[model_id]
     provider = config["provider"]
 
-    # ── resolve API key ───────────────────────────────────────
+    # ── Vertex (Google) — no API key, ADC handles auth ───────
+    if provider == "google":
+        if not settings.GOOGLE_CLOUD_PROJECT:
+            raise APIKeyMissingError(
+                "GOOGLE_CLOUD_PROJECT is empty — Vertex auth requires a project. "
+                "Set it in .env / docker-compose.yml."
+            )
+        # LiteLLM reads vertex_project + vertex_location from kwargs OR env.
+        # Setting both makes the call succeed regardless of how LiteLLM
+        # decided to look this up at any given version.
+        os.environ.setdefault("VERTEXAI_PROJECT",  settings.GOOGLE_CLOUD_PROJECT)
+        os.environ.setdefault("VERTEXAI_LOCATION", settings.GOOGLE_CLOUD_LOCATION or "global")
+        llm_kwargs: dict = {
+            "model":            model_id,
+            "vertex_project":   settings.GOOGLE_CLOUD_PROJECT,
+            "vertex_location":  settings.GOOGLE_CLOUD_LOCATION or "global",
+            "safety_settings":  GEMINI_SAFETY_SETTINGS,
+        }
+        if settings.LLM_BASE_URL:
+            llm_kwargs["base_url"] = settings.LLM_BASE_URL
+        logger.info(
+            "resolve_llm [%s] -> Vertex AI (project=%s, location=%s, ADC)",
+            model_id,
+            settings.GOOGLE_CLOUD_PROJECT,
+            settings.GOOGLE_CLOUD_LOCATION or "global",
+        )
+        return LLM(**llm_kwargs)
+
+    # ── Anthropic — API key path ──────────────────────────────
     resolved_key = user_api_key or os.getenv(config["env_key"], "")
-    
-    # Only fallback to generic LLM_API_KEY if we are actually using Google Gemini,
-    # because our LLM_API_KEY in .env is specifically a Gemini key.
-    if not resolved_key and provider == "google":
-        resolved_key = settings.LLM_API_KEY
+    if not resolved_key:
+        resolved_key = settings.LLM_API_KEY  # generic fallback
 
     if resolved_key:
         resolved_key = resolved_key.strip()
-        # Force it into os.environ to bypass any LiteLLM bugs where it ignores kwargs
         if config.get("env_key"):
             os.environ[config["env_key"]] = resolved_key
 
@@ -88,20 +118,15 @@ def resolve_llm(model_or_provider: str, user_api_key: str | None = None):
             f"or provide a key in the request / user settings."
         )
 
-    llm_kwargs: dict = {
+    llm_kwargs = {
         "model":   model_id,
         "api_key": SecretStr(resolved_key),
     }
-
-    logger.info("resolve_llm [%s] -> Using API Key starting with: '%s' (len: %d)", model_id, resolved_key[:8] if resolved_key else "None", len(resolved_key) if resolved_key else 0)
-
     if settings.LLM_BASE_URL:
         llm_kwargs["base_url"] = settings.LLM_BASE_URL
 
-    if provider == "google":
-        llm_kwargs["safety_settings"] = GEMINI_SAFETY_SETTINGS
-        logger.info("Using Google Gemini (%s) with safety_settings=BLOCK_NONE", model_id)
-    else:
-        logger.info("Using Anthropic (%s)", model_id)
-
+    logger.info(
+        "resolve_llm [%s] -> Anthropic (key starts %s, len=%d)",
+        model_id, resolved_key[:8], len(resolved_key),
+    )
     return LLM(**llm_kwargs)

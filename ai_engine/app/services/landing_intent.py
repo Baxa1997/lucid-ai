@@ -26,8 +26,6 @@ from typing import Any
 
 import httpx
 
-from app.services.pipeline.constants import _FALLBACK_GEMINI_KEY
-
 # Flash is plenty for an interpretation task — no tools, just JSON.
 _INTENT_MODEL = os.environ.get("LANDING_INTENT_MODEL", "gemini-2.5-flash")
 
@@ -87,6 +85,8 @@ _INTENT_SCHEMA: dict[str, Any] = {
         "tone",
         "language",
         "ambiguity_flags",
+        "clarity_level",
+        "clarification_questions",
     ],
     "properties": {
         "business_category":    {"type": "STRING"},
@@ -121,6 +121,52 @@ _INTENT_SCHEMA: dict[str, Any] = {
             "type": "ARRAY",
             "items": {"type": "STRING"},
         },
+        # Named roles the user mentioned (drivers, designers, chefs, etc.).
+        # Empty for non-hiring purposes. Used by the recruitment research
+        # call and the PURPOSE_DIRECTIVE prompt block.
+        "named_roles": {
+            "type": "ARRAY",
+            "items": {"type": "STRING"},
+        },
+        # Urgency cues in the prompt ("now hiring", "immediately", "ASAP").
+        # Surfaced to Claude to drive copy ("Apply Now" vs "Join Our Team").
+        "urgency_signals": {
+            "type": "ARRAY",
+            "items": {"type": "STRING"},
+        },
+        # Clarity self-assessment. "high" = the prompt is concrete and
+        # actionable on its own. "medium" = some assumptions made, page
+        # will still be reasonable. "low" = the prompt is too vague /
+        # contradictory / a string of unrelated words and Gemini cannot
+        # produce a meaningful page without user input.
+        "clarity_level": {"type": "STRING"},
+        # Up to 3 questions the model wants to ask the user before
+        # research begins. Empty when clarity_level=high. The pipeline
+        # surfaces these as clarification UI; the user's answers are
+        # appended to the prompt context on the next pass.
+        "clarification_questions": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "required": ["key", "question", "options"],
+                "properties": {
+                    "key":       {"type": "STRING"},
+                    "question":  {"type": "STRING"},
+                    "options": {
+                        "type": "ARRAY",
+                        "items": {
+                            "type": "OBJECT",
+                            "required": ["id", "label"],
+                            "properties": {
+                                "id":    {"type": "STRING"},
+                                "label": {"type": "STRING"},
+                                "hint":  {"type": "STRING"},
+                            },
+                        },
+                    },
+                },
+            },
+        },
     },
 }
 
@@ -144,12 +190,35 @@ Return a single JSON object matching the response schema. Apply these rules:
      hero, value_prop, features, products, services, menu, gallery, story, testimonials, trust_signals, press, stats, faq, pricing, comparison, how_it_works, process, team, culture, open_roles, locations, hours, contact, contact_form, booking_form, application_form, signup_form, newsletter, cta
    Order matters — list the order they should appear in the page.
 8. AMBIGUITY FLAGS. List EVERY assumption you made because the prompt was unclear. Examples: "business_subcategory_assumed", "geography_assumed", "audience_assumed", "purpose_assumed".
+9. NAMED ROLES. If primary_purpose is "hiring", extract every job title the user named (e.g. "CDL-A drivers", "owner-operators", "line cooks", "senior backend engineers"). Preserve the exact wording the user used. Empty array when not hiring.
+10. URGENCY SIGNALS. Extract any urgency phrases verbatim from the prompt ("now hiring", "immediately", "ASAP", "this week"). Empty array when none. These drive the CTA tone.
+11. PURPOSE PRIORITY. Named job roles → primary_purpose=hiring (regardless of industry). "get a quote" / "request pricing" / "contact sales" → lead_generation. The PURPOSE is what the user wants visitors to DO; industry is secondary.
+
+12. CLARITY SELF-ASSESSMENT (clarity_level). Set to:
+     • "high"   — the prompt names a concrete business + purpose; you can build a meaningful page without asking anything.
+     • "medium" — you filled gaps with reasonable defaults (assumed audience, geography, sub-segment) but the page will still be coherent.
+     • "low"    — the prompt is too vague to act on: random word salad, contradictory signals, generic categories with multiple equally-valid interpretations that produce very different pages (e.g. "house renting agency" — could be rentals-only OR rentals+sales+management; "fitness app" — workouts vs nutrition vs community).
+   Be honest. Defaulting to "high" on vague prompts produces generic boilerplate.
+
+13. CLARIFICATION QUESTIONS (clarification_questions). When clarity_level is "low", produce 1–3 questions that, if answered, would unlock a great page. Each question:
+     • key:       short snake_case identifier (e.g. "rental_focus", "audience_segment", "primary_offering")
+     • question:  one sentence, plain language. NEVER yes/no.
+     • options:   2–4 mutually-exclusive choices, each with id (snake_case) + label (5–10 words) + optional hint (one sentence on what changes).
+   Pick questions whose answers would PIVOT the page (different sections, different copy, different research direction) — not cosmetic preferences. When clarity_level is "high" or "medium", return an empty array.
+   GOOD question for "house renting agency":
+     {{key:"rental_focus", question:"What does this agency primarily handle?",
+       options:[
+         {{id:"rentals_only",   label:"Rental listings only — tenants searching for places"}},
+         {{id:"rentals_and_management", label:"Rentals + property management for landlords"}},
+         {{id:"rentals_and_sales", label:"Both rentals and home sales"}}]}}
+   BAD question (cosmetic): "What color palette would you prefer?" — this never blocks page generation.
 
 ENUMS — these fields MUST use one of these exact values:
   primary_purpose: {primary_purposes}
   geographic_scope: {geographic_scopes}
   tone: {tones}
   language: ISO 639-1 lowercase code, e.g. "en", "es", "fr"
+  clarity_level: high | medium | low
 
 OUTPUT: just the JSON object. No prose around it.
 """
@@ -157,11 +226,33 @@ OUTPUT: just the JSON object. No prose around it.
 
 # ── Public entry point ────────────────────────────────────────────────
 
+async def _emit_fallback_warning(websocket, reason: str) -> None:
+    """Tell the user — via the workspace chat — that Gemini wasn't reachable.
+
+    Without this, when Gemini fails (bad ADC, quota, transient outage) the
+    pipeline silently uses ``_fallback_intent`` and the user has no clue
+    why their carefully-worded prompt produced a generic placeholder page.
+    """
+    if websocket is None:
+        return
+    try:
+        await websocket.send_json({
+            "type": "warning",
+            "code": "FALLBACK_INTENT",
+            "message": (
+                f"⚠️ Intent analysis unavailable ({reason}). "
+                "Falling back to a generic intent — page may miss domain-specific sections. "
+                "Check ai_engine logs."
+            ),
+        })
+    except Exception:
+        pass
+
+
 async def analyze_intent(
     description: str,
     classification: dict | None = None,
     *,
-    gemini_key: str | None = None,
     websocket: Any = None,
     timeout_s: float = 60.0,
 ) -> dict[str, Any]:
@@ -169,16 +260,12 @@ async def analyze_intent(
 
     Returns a dict matching ``_INTENT_SCHEMA`` with all required fields
     populated. Falls back to ``_fallback_intent`` on any failure so
-    downstream stages never see None.
+    downstream stages never see None. Auth is handled inside ``gemini_post``
+    via Vertex ADC — callers do not pass keys.
     """
     classification = classification or {}
     domain = (classification.get("domain") or "general").strip()
     description = (description or "").strip()
-
-    key = (gemini_key or _FALLBACK_GEMINI_KEY or os.environ.get("GOOGLE_API_KEY", "")).strip()
-    if not key:
-        logger.warning("analyze_intent: no Gemini key — returning fallback intent")
-        return _fallback_intent(description, domain)
 
     if websocket is not None:
         try:
@@ -197,9 +284,10 @@ async def analyze_intent(
         tones=_TONES,
     )
 
-    raw = await _structured_intent_call(prompt, key, timeout_s)
+    raw = await _structured_intent_call(prompt, timeout_s)
     if not raw:
         logger.warning("analyze_intent: Gemini returned empty — fallback")
+        await _emit_fallback_warning(websocket, "Gemini intent call returned empty")
         return _fallback_intent(description, domain)
 
     try:
@@ -207,24 +295,27 @@ async def analyze_intent(
     except json.JSONDecodeError as exc:
         logger.warning("analyze_intent: JSON parse failed (%s) — fallback. Head: %s",
                        exc, raw[:200])
+        await _emit_fallback_warning(websocket, f"Intent JSON parse failed: {str(exc)[:80]}")
         return _fallback_intent(description, domain)
 
     intent = _normalize_intent(parsed, description, domain)
     logger.info(
-        "analyze_intent: ok — category=%r purpose=%s scope=%s tone=%s sections=%d flags=%d",
+        "analyze_intent: ok — category=%r purpose=%s scope=%s tone=%s sections=%d flags=%d clarity=%s questions=%d",
         intent["business_category"],
         intent["primary_purpose"],
         intent["geographic_scope"],
         intent["tone"],
         len(intent["must_have_sections"]),
         len(intent["ambiguity_flags"]),
+        intent["clarity_level"],
+        len(intent["clarification_questions"]),
     )
     return intent
 
 
 # ── Gemini call ───────────────────────────────────────────────────────
 
-async def _structured_intent_call(prompt: str, key: str, timeout_s: float) -> str:
+async def _structured_intent_call(prompt: str, timeout_s: float) -> str:
     """Flash + JSON output, no tools."""
     from app.services.gemini_http import gemini_post
 
@@ -243,7 +334,6 @@ async def _structured_intent_call(prompt: str, key: str, timeout_s: float) -> st
         model=_INTENT_MODEL,
         payload=payload,
         timeout_s=timeout_s,
-        api_key=key,
         label="intent",
     )
     if status != 200 or data is None:
@@ -363,6 +453,57 @@ def _normalize_intent(raw: dict, description: str, domain: str) -> dict:
     ]
     out["ambiguity_flags"] = flags
 
+    # Named roles + urgency signals — additive fields used by the
+    # recruitment research call and the PURPOSE_DIRECTIVE prompt block.
+    # Trimmed to <=8 each so a runaway model doesn't bloat the brief.
+    out["named_roles"] = [
+        r.strip() for r in (raw.get("named_roles") or [])
+        if isinstance(r, str) and r.strip()
+    ][:8]
+    out["urgency_signals"] = [
+        u.strip() for u in (raw.get("urgency_signals") or [])
+        if isinstance(u, str) and u.strip()
+    ][:6]
+
+    # Clarity self-assessment + clarification questions. Coerce to one of
+    # the three allowed values; anything unknown falls back to "medium" so
+    # the pipeline never blocks on a missing field.
+    clarity = (raw.get("clarity_level") or "").strip().lower()
+    out["clarity_level"] = clarity if clarity in ("high", "medium", "low") else "medium"
+
+    raw_qs = raw.get("clarification_questions") or []
+    norm_qs: list[dict[str, Any]] = []
+    for q in raw_qs[:3]:
+        if not isinstance(q, dict):
+            continue
+        key = (q.get("key") or "").strip().lower().replace(" ", "_")
+        question = (q.get("question") or "").strip()
+        if not key or not question:
+            continue
+        opts_raw = q.get("options") or []
+        opts: list[dict[str, str]] = []
+        for o in opts_raw[:4]:
+            if not isinstance(o, dict):
+                continue
+            oid = (o.get("id") or "").strip().lower().replace(" ", "_")
+            label = (o.get("label") or "").strip()
+            if not oid or not label:
+                continue
+            entry: dict[str, str] = {"id": oid, "label": label}
+            hint = (o.get("hint") or "").strip()
+            if hint:
+                entry["hint"] = hint
+            opts.append(entry)
+        if len(opts) < 2:
+            continue
+        norm_qs.append({"key": key, "question": question, "options": opts})
+    out["clarification_questions"] = norm_qs
+
+    # If the model said clarity=low but supplied no usable questions,
+    # demote to medium so the pipeline doesn't deadlock.
+    if out["clarity_level"] == "low" and not out["clarification_questions"]:
+        out["clarity_level"] = "medium"
+
     return out
 
 
@@ -420,4 +561,8 @@ def _fallback_intent(description: str, domain: str) -> dict:
         "tone":                 "friendly",
         "language":             "en",
         "ambiguity_flags":      ["fallback_intent_used"],
+        "named_roles":          [],
+        "urgency_signals":      [],
+        "clarity_level":        "medium",
+        "clarification_questions": [],
     }

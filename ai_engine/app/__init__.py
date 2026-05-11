@@ -79,32 +79,61 @@ async def lifespan(_app: FastAPI):
     except Exception as exc:
         logger.info("Docker check skipped: %s", exc)
 
-    if not settings.LLM_API_KEY and not settings.GOOGLE_API_KEY and not settings.ANTHROPIC_API_KEY:
-        logger.warning("No LLM API keys set — agent will not function")
+    if not settings.LLM_API_KEY and not settings.ANTHROPIC_API_KEY:
+        logger.warning("No Anthropic / LLM keys set — agent will not function")
 
     # ── AI backend banner ───────────────────────────────────
+    # All Gemini traffic goes through Vertex AI via ADC. AI Studio is
+    # not supported.
     import os as _os
     _ADC = "/root/.config/gcloud/application_default_credentials.json"
-    if settings.USE_VERTEX_AI:
-        _adc_ok = _os.path.isfile(_ADC)
-        logger.info(
-            "🔷 VERTEX AI ACTIVE | project=%s | location=%s | ADC file=%s",
-            settings.GOOGLE_CLOUD_PROJECT or "(not set)",
-            settings.GOOGLE_CLOUD_LOCATION,
-            "✅ found" if _adc_ok else "❌ MISSING — mount secrets/gcloud-adc.json",
-        )
-        if not _adc_ok:
-            logger.warning(
-                "ADC file not found at %s. "
-                "Run: scp ~/.config/gcloud/application_default_credentials.json "
-                "user@server:/opt/lucid-ai/secrets/gcloud-adc.json",
-                _ADC,
-            )
+    # Distinguish "missing" vs "bind-mounted as a directory" — Docker auto-
+    # creates a directory at the destination if the host source path doesn't
+    # exist, so isfile() alone wouldn't catch an empty-dir mount.
+    if _os.path.isdir(_ADC):
+        _adc_status = "❌ DIR (host secrets/gcloud-adc.json missing — Docker created an empty dir)"
+        _adc_ok = False
+    elif _os.path.isfile(_ADC):
+        _adc_status = "✅ found"
+        _adc_ok = True
     else:
-        logger.info(
-            "🔶 AI STUDIO ACTIVE | GOOGLE_API_KEY=%s",
-            "set" if settings.GOOGLE_API_KEY else "NOT SET",
+        _adc_status = "❌ MISSING — mount secrets/gcloud-adc.json"
+        _adc_ok = False
+
+    logger.info(
+        "🔷 VERTEX AI ACTIVE | project=%s | location=%s | ADC=%s",
+        settings.GOOGLE_CLOUD_PROJECT or "(not set)",
+        settings.GOOGLE_CLOUD_LOCATION,
+        _adc_status,
+    )
+    if not _adc_ok:
+        logger.error(
+            "ADC file not found at %s. Every Gemini call will fail and the "
+            "pipeline will silently emit placeholder content (\"Built for "
+            "what's next\"). Fix: cp ~/.config/gcloud/application_default_credentials.json "
+            "<repo>/secrets/gcloud-adc.json (delete the empty dir at that path first).",
+            _ADC,
         )
+    if not settings.GOOGLE_CLOUD_PROJECT:
+        logger.error(
+            "GOOGLE_CLOUD_PROJECT is empty — Vertex calls will fail. "
+            "Set it in .env / docker-compose.yml."
+        )
+
+    # ── Active ADC self-test ──────────────────────────────────
+    # `isfile` only catches the path; a real token fetch verifies the
+    # credentials are valid AND the project is reachable. Caught silently
+    # before — first user prompt failed with no obvious cause.
+    if _adc_ok and settings.GOOGLE_CLOUD_PROJECT:
+        try:
+            from app.services.gemini_http import _get_adc_token  # internal helper
+            await asyncio.to_thread(_get_adc_token)
+            logger.info("✅ ADC token fetch succeeded — Vertex AI reachable")
+        except Exception as _adc_exc:
+            logger.error(
+                "❌ ADC token fetch FAILED at startup — Vertex calls will all fall "
+                "back to placeholder content. Error: %s", _adc_exc,
+            )
 
     # Start the background session reaper (cleans up inactive sessions after 2h)
     reaper_task = asyncio.create_task(reap_expired_sessions())

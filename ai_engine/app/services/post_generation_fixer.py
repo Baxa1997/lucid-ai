@@ -349,13 +349,18 @@ def fix_banned_icons(workspace_path: str) -> list[str]:
             svg_components = []
             for icon_name, alias in banned_found.items():
                 svg_markup = _BANNED_ICONS[icon_name]
+                # Splice both className and ...props into the <svg> tag so
+                # callers' onClick / aria-label / data-* attributes survive.
+                spliced_svg = svg_markup.replace(
+                    "<svg ",
+                    "<svg className={className} {...props} ",
+                    1,
+                )
                 component = (
                     f"const {alias} = ({{ className, ...props }}) => (\n"
-                    f"  {svg_markup.replace('<svg ', f'<svg className={{className}} ')}\n"
+                    f"  {spliced_svg}\n"
                     f");"
                 )
-                # Fix: add props spread
-                component = component.replace("</svg>", "</svg>")
                 svg_components.append(component)
             
             # Insert SVG components after the last import statement
@@ -1274,6 +1279,107 @@ def _escape_jsx_text(match: re.Match) -> str:
     text = text.replace("'", "&apos;")
     text = text.replace('"', "&quot;")
     return f">{text}<"
+
+
+def fix_jsx_reveal_imbalance(workspace_path: str) -> list[str]:
+    """Balance <Reveal>…</Reveal> open/close tag counts per file.
+
+    Claude occasionally writes one extra `</Reveal>` (or, more rarely, drops one)
+    when wrapping complex conditional JSX. The next build fails with
+    "Unexpected token" because the imbalance only manifests at JSX parse time.
+
+    Strategy (conservative — only fixes the common case):
+      • Per file under src/components/, count `<Reveal …>` opens vs `</Reveal>` closes.
+      • If they balance, do nothing.
+      • If closes > opens, drop the last (closes − opens) `</Reveal>` lines.
+        Walking from the END of the file is safe because Claude's bug pattern
+        is "extra closing tag after the last real Reveal block ends".
+      • If opens > closes, skip — wrapping with extra closes risks breaking
+        unrelated structure. Log and leave for manual review.
+
+    Returns the list of files modified.
+    """
+    fixed_files = []
+    src_dir = os.path.join(workspace_path, "src")
+    if not os.path.isdir(src_dir):
+        return fixed_files
+
+    open_re = re.compile(r"<Reveal\b")
+    close_re = re.compile(r"</Reveal\s*>")
+
+    for root, _, files in os.walk(src_dir):
+        for name in files:
+            if not (name.endswith(".jsx") or name.endswith(".tsx")):
+                continue
+            path = os.path.join(root, name)
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    content = fh.read()
+            except (OSError, UnicodeDecodeError):
+                continue
+
+            opens = len(open_re.findall(content))
+            closes = len(close_re.findall(content))
+            if opens == closes:
+                continue
+            if opens > closes:
+                logger.warning(
+                    "fix_jsx_reveal_imbalance: %s has %d opens > %d closes — leaving for manual review",
+                    path, opens, closes,
+                )
+                continue
+
+            # closes > opens: drop the trailing (closes - opens) close tags.
+            excess = closes - opens
+            # Walk backwards through the source, removing whole lines that are
+            # JUST a `</Reveal>` (with optional whitespace). This is the bug
+            # shape Claude produces — an orphan closing tag on its own line.
+            lines = content.splitlines(keepends=True)
+            removed = 0
+            i = len(lines) - 1
+            while i >= 0 and removed < excess:
+                if close_re.search(lines[i]) and lines[i].strip() == "</Reveal>":
+                    lines.pop(i)
+                    removed += 1
+                i -= 1
+            if removed == 0:
+                # The orphan close isn't on its own line — fall back to
+                # surgical regex removal of the LAST (excess) close tags.
+                new_content = content
+                for _ in range(excess):
+                    # find last occurrence and remove just the tag
+                    m = None
+                    for m in close_re.finditer(new_content):
+                        pass
+                    if m is None:
+                        break
+                    new_content = new_content[:m.start()] + new_content[m.end():]
+                if new_content != content:
+                    try:
+                        with open(path, "w", encoding="utf-8") as fh:
+                            fh.write(new_content)
+                        fixed_files.append(path)
+                        logger.info(
+                            "fix_jsx_reveal_imbalance: %s — removed %d excess </Reveal> tag(s) inline",
+                            path, excess,
+                        )
+                    except OSError:
+                        pass
+                continue
+
+            new_content = "".join(lines)
+            try:
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(new_content)
+                fixed_files.append(path)
+                logger.info(
+                    "fix_jsx_reveal_imbalance: %s — removed %d orphan </Reveal> line(s) (opens=%d closes=%d)",
+                    path, removed, opens, closes,
+                )
+            except OSError:
+                pass
+
+    return fixed_files
 
 
 def fix_unescaped_entities(workspace_path: str) -> list[str]:
@@ -2888,6 +2994,506 @@ def fix_missing_tailwind_directives(workspace_path: str) -> list[str]:
             logger.warning("fix_missing_tailwind_directives: write failed for %s: %s", rel_path, exc)
 
     return patched
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  FIXER — Visibility / UX guards                            ║
+# ║    • dark overlay on hero <Image fill /> backgrounds       ║
+# ║    • z-50 on absolute/top-full dropdown panels             ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+# A full-bleed hero image: <Image ... fill ... />.
+_HERO_IMAGE_FILL_RE = re.compile(r'<Image\b[^>]*\bfill\b[^>]*?/>', re.DOTALL)
+
+# A darkening overlay anywhere in the file. Any of these means a hero photo
+# already has its contrast guard, so we don't add a second one.
+_DARK_OVERLAY_RE = re.compile(
+    r'bg-black/[1-9]\d?\b'
+    r'|bg-gradient-to-[a-z]+\s+from-(?:black|slate-(?:8|9)\d\d|zinc-(?:8|9)\d\d|neutral-(?:8|9)\d\d|gray-(?:8|9)\d\d|stone-(?:8|9)\d\d)'
+    r'|via-black/[1-9]\d?\b'
+    r'|to-black/[1-9]\d?\b'
+)
+
+# Tailwind text colors that go invisible on a busy stock photo unless an
+# overlay sits between text and image.
+_LOW_CONTRAST_TEXT_RE = re.compile(
+    r'text-(?:white|foreground)/(?:[3-7]0|35|45|55|65|75|80|85)\b'
+    r'|text-muted-foreground\b'
+)
+
+_HERO_OVERLAY_SNIPPET = (
+    '<div aria-hidden="true" className="pointer-events-none absolute inset-0 '
+    'bg-gradient-to-b from-black/40 via-black/40 to-black/70" />'
+)
+
+
+def _next_nonspace_char(s: str, idx: int) -> str:
+    while idx < len(s) and s[idx] in " \t\r\n":
+        idx += 1
+    return s[idx] if idx < len(s) else ""
+
+
+def fix_low_contrast_text_on_image(workspace_path: str) -> list[str]:
+    """Inject a dark gradient overlay over hero <Image fill /> backgrounds
+    when the surrounding text relies on low-contrast classes without one.
+
+    Without an overlay, light/muted text (text-white/60, text-muted-foreground)
+    over busy photos becomes unreadable. The fixer is conservative: it only
+    fires when ALL three are true:
+      • file contains an <Image ... fill ... /> (full-bleed pattern)
+      • file contains at least one low-contrast text class
+      • file contains no existing dark overlay
+
+    JSX-safety: when <Image> is the lone element returned from a ternary
+    branch (`cond ? (<Image .../>) : (<Fallback/>)`) or a JSX expression
+    (`{<Image .../>}`), inserting the overlay as a raw sibling produces
+    SWC "Expected ',', got '<...'" — JSX expressions can return only one
+    element. Detect that context by peeking at the next non-whitespace
+    char after the Image and wrap both in a fragment when needed.
+    """
+    src_dir = os.path.join(workspace_path, "src")
+    if not os.path.isdir(src_dir):
+        src_dir = workspace_path
+
+    fixed: list[str] = []
+
+    for root, dirs, files in os.walk(src_dir):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for fname in files:
+            if os.path.splitext(fname)[1].lower() not in {".jsx", ".tsx"}:
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except Exception:
+                continue
+
+            m = _HERO_IMAGE_FILL_RE.search(content)
+            if not m:
+                continue
+            if not _LOW_CONTRAST_TEXT_RE.search(content):
+                continue
+            if _DARK_OVERLAY_RE.search(content):
+                continue
+
+            # Skip if the matched <Image> carries a `key=` prop — wrapping it
+            # in a shorthand fragment would silently drop the React key.
+            if re.search(r'\bkey\s*=', m.group(0)):
+                continue
+
+            image_start = m.start()
+            image_end = m.end()
+            image_text = m.group(0)
+
+            # Peek at the next non-whitespace char after </>. `)` or `}`
+            # means the Image is the lone child of a JSX expression — must
+            # wrap in fragment. Anything else (a tag `<`, a closing tag
+            # `</`, alphanumeric text) means siblings are already legal.
+            next_char = _next_nonspace_char(content, image_end)
+            needs_fragment = next_char in (")", "}")
+
+            if needs_fragment:
+                replacement = (
+                    "<>"
+                    + image_text
+                    + "\n      "
+                    + _HERO_OVERLAY_SNIPPET
+                    + "</>"
+                )
+                new_content = (
+                    content[:image_start]
+                    + replacement
+                    + content[image_end:]
+                )
+            else:
+                new_content = (
+                    content[:image_end]
+                    + "\n      "
+                    + _HERO_OVERLAY_SNIPPET
+                    + content[image_end:]
+                )
+
+            try:
+                with open(fpath, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                fixed.append(os.path.relpath(fpath, workspace_path))
+                logger.info(
+                    "fix_low_contrast_text_on_image: added hero overlay in %s%s",
+                    os.path.relpath(fpath, workspace_path),
+                    " (fragment-wrapped)" if needs_fragment else "",
+                )
+            except Exception as exc:
+                logger.warning("fix_low_contrast_text_on_image: write failed: %s", exc)
+
+    return fixed
+
+
+# Dropdown / autocomplete panels are typically <div className="absolute top-full ...">.
+# When codegen forgets the z-index they render *behind* sibling buttons that
+# carry their own stacking context (shadow, transform, etc.). The fix:
+# add z-50 if both `absolute` and `top-full` are present and no z-* class is.
+_CLASSNAME_LITERAL_RE = re.compile(r'className="([^"\n]*)"')
+
+
+def _classname_needs_dropdown_zindex(class_str: str) -> bool:
+    classes = class_str.split()
+    if "absolute" not in classes:
+        return False
+    if "top-full" not in classes:
+        return False
+    return not any(c.startswith("z-") for c in classes)
+
+
+def fix_dropdown_zindex(workspace_path: str) -> list[str]:
+    """Add `z-50` to absolute/top-full dropdown panels missing a z-utility.
+
+    Search-filter dropdowns and autocomplete panels render behind hero CTAs
+    when no z-index is set. This fixer is purely additive — it never touches
+    className blocks that already declare a z-* class.
+
+    Only matches simple double-quoted className literals; cn(...) expressions
+    are left untouched (codegen rarely splits dropdown classes that way).
+    """
+    src_dir = os.path.join(workspace_path, "src")
+    if not os.path.isdir(src_dir):
+        src_dir = workspace_path
+
+    fixed: list[str] = []
+
+    for root, dirs, files in os.walk(src_dir):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for fname in files:
+            if os.path.splitext(fname)[1].lower() not in {".jsx", ".tsx"}:
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except Exception:
+                continue
+
+            if "top-full" not in content or "absolute" not in content:
+                continue
+
+            def _replace(m: re.Match) -> str:
+                inner = m.group(1)
+                if _classname_needs_dropdown_zindex(inner):
+                    return f'className="{inner.rstrip()} z-50"'
+                return m.group(0)
+
+            new_content = _CLASSNAME_LITERAL_RE.sub(_replace, content)
+
+            if new_content == content:
+                continue
+
+            try:
+                with open(fpath, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                fixed.append(os.path.relpath(fpath, workspace_path))
+                logger.info(
+                    "fix_dropdown_zindex: added z-50 to dropdown in %s",
+                    os.path.relpath(fpath, workspace_path),
+                )
+            except Exception as exc:
+                logger.warning("fix_dropdown_zindex: write failed: %s", exc)
+
+    return fixed
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  FIXER — Invalid Lucide imports                            ║
+# ║    Drops kebab/snake-case names that produce invalid JS    ║
+# ║    identifiers and would abort the build before SWC runs.  ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+_INVALID_IDENT_RE = re.compile(r"[^A-Za-z0-9_]")
+
+
+def _is_valid_js_ident(name: str) -> bool:
+    return bool(name) and not _INVALID_IDENT_RE.search(name) and not name[0].isdigit()
+
+
+def fix_invalid_lucide_imports(workspace_path: str) -> list[str]:
+    """Drop any kebab/snake-case names from `import {…} from "lucide-react"`.
+
+    `import { shopping-cart } from "lucide-react"` is a JS syntax error before
+    SWC even reaches JSX parsing. The brief layer already PascalCases icons,
+    but a post-gen fixer caught here doubles as insurance against any
+    Claude-emitted import that bypassed the brief contract.
+    """
+    src_dir = os.path.join(workspace_path, "src")
+    if not os.path.isdir(src_dir):
+        src_dir = workspace_path
+
+    fixed: list[str] = []
+
+    for root, dirs, files in os.walk(src_dir):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for fname in files:
+            if os.path.splitext(fname)[1].lower() not in _JSX_EXTENSIONS:
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except Exception:
+                continue
+
+            if "lucide-react" not in content:
+                continue
+
+            changed = False
+
+            def _scrub(match: re.Match) -> str:
+                nonlocal changed
+                names_str = match.group(1)
+                names = [n.strip() for n in names_str.split(",") if n.strip()]
+                kept: list[str] = []
+                for n in names:
+                    head = n.split(" as ")[0].strip()
+                    alias = n.split(" as ")[-1].strip()
+                    if _is_valid_js_ident(head) and _is_valid_js_ident(alias):
+                        kept.append(n)
+                    else:
+                        changed = True
+                if not kept:
+                    return ""  # remove whole import line
+                return f'import {{ {", ".join(kept)} }} from "lucide-react"'
+
+            new_content = _LUCIDE_IMPORT_RE.sub(_scrub, content)
+
+            if not changed:
+                continue
+
+            try:
+                with open(fpath, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                fixed.append(os.path.relpath(fpath, workspace_path))
+                logger.info(
+                    "fix_invalid_lucide_imports: scrubbed invalid identifiers in %s",
+                    os.path.relpath(fpath, workspace_path),
+                )
+            except Exception as exc:
+                logger.warning("fix_invalid_lucide_imports: write failed: %s", exc)
+
+    return fixed
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  FIXER — Hardcoded UNSPLASH_IMAGES dict                    ║
+# ║    Strips local `const UNSPLASH_IMAGES = {…}` hardcodes    ║
+# ║    so components fall back to the runtime landing.json     ║
+# ║    (and the gradient placeholder when a slot is empty).    ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+_HARDCODED_IMG_DICT_RE = re.compile(
+    r"^[\t ]*const\s+(?:UNSPLASH_IMAGES|IMAGE_MAP|IMAGES_BY_KEY|HERO_IMG|HERO_IMAGES)\s*=\s*[\{\"]"
+    r".*?"
+    r"(?:\}\s*;?|\"\s*;?)\s*$",
+    re.MULTILINE | re.DOTALL,
+)
+
+
+def fix_hardcoded_unsplash_dicts(workspace_path: str) -> list[str]:
+    """Strip locally-hardcoded image URL dicts/strings from section files.
+
+    Past failure: Claude defensively emits `const UNSPLASH_IMAGES = {peking_duck:
+    "https://images.unsplash.com/..."}` when section.images appears empty in the
+    brief snapshot. Those URLs go stale and 404. Stripping them forces the
+    component to fall back to `section.images?.[i]` (which the binder fills at
+    runtime) and the gradient placeholder when that's empty.
+    """
+    src_dir = os.path.join(workspace_path, "src")
+    if not os.path.isdir(src_dir):
+        src_dir = workspace_path
+
+    fixed: list[str] = []
+
+    for root, dirs, files in os.walk(src_dir):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for fname in files:
+            if os.path.splitext(fname)[1].lower() not in _JSX_EXTENSIONS:
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except Exception:
+                continue
+
+            if "images.unsplash.com" not in content:
+                continue
+            if not _HARDCODED_IMG_DICT_RE.search(content):
+                continue
+
+            new_content = _HARDCODED_IMG_DICT_RE.sub("", content)
+            if new_content == content:
+                continue
+
+            try:
+                with open(fpath, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                fixed.append(os.path.relpath(fpath, workspace_path))
+                logger.info(
+                    "fix_hardcoded_unsplash_dicts: stripped hardcoded URL dict from %s",
+                    os.path.relpath(fpath, workspace_path),
+                )
+            except Exception as exc:
+                logger.warning("fix_hardcoded_unsplash_dicts: write failed: %s", exc)
+
+    return fixed
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  FIXER — Design-token drift                                ║
+# ║    Validates card/button/image classNames carry the brief's║
+# ║    radius token; logs telemetry; auto-splices when missing ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+_BUTTON_TAG_RE = re.compile(r'<button\b([^>]*)>', re.IGNORECASE)
+_INPUT_TAG_RE = re.compile(r'<(?:input|textarea|select)\b([^>]*?)/?>')
+_CARD_DIV_RE = re.compile(
+    r'<div\b([^>]*\bclassName="[^"]*\bbg-card\b[^"]*"[^>]*)>',
+)
+_HARDCODED_HEX_IN_CLASS_RE = re.compile(
+    r'\b(?:bg|text|from|to|via|border|ring|fill|stroke|shadow|outline|caret|accent|decoration|divide|placeholder)-\[#[0-9A-Fa-f]{3,8}\]'
+)
+_HARDCODED_RGB_IN_CLASS_RE = re.compile(
+    r'\b(?:bg|text|from|to|via|border|ring|fill|stroke|shadow|outline|caret|accent|decoration|divide|placeholder)-\[(?:rgba?|hsla?)\([^)]+\)\]'
+)
+_TAILWIND_PALETTE_NUMBERED_RE = re.compile(
+    r'\b(?:bg|text|from|to|via|border|ring|fill|stroke|shadow|outline|caret|accent|decoration|divide|placeholder)-(?:slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\d{2,3}\b'
+)
+
+
+def _has_radius_class(class_str: str) -> bool:
+    return bool(re.search(r'\brounded(?:-[a-z0-9\[\]/_%.\-]+)?\b', class_str))
+
+
+def _extract_classname_value(attrs: str) -> tuple[str, int, int] | None:
+    m = re.search(r'className\s*=\s*"([^"]*)"', attrs)
+    if not m:
+        return None
+    return m.group(1), m.start(1), m.end(1)
+
+
+def _splice_class(attrs_block: str, addition: str) -> str:
+    """Append `addition` to the className literal of attrs_block (if any).
+    If no className present, leave attrs_block alone — caller decides.
+    """
+    extracted = _extract_classname_value(attrs_block)
+    if not extracted:
+        return attrs_block
+    cur, s, e = extracted
+    new_value = (cur + " " + addition).strip() if cur else addition
+    return attrs_block[:s] + new_value + attrs_block[e:]
+
+
+def fix_design_token_drift(
+    workspace_path: str,
+    design_tokens: dict | None = None,
+) -> dict[str, int]:
+    """Verify generated section files use the brief's radius tokens.
+
+    Reads `design_tokens.{button_radius_class, card_radius_class,
+    image_radius_class}` (passed in or read from landing.json) and:
+      • Splices the radius class into <button>, <Card>-shaped <div>, and
+        <Image>-wrapper divs that don't already carry a `rounded-*` class.
+      • Detects hardcoded color literals (hex/rgb/numbered Tailwind palettes)
+        and warns via telemetry — does NOT auto-rewrite (palette resolution
+        is non-trivial and a wrong rewrite paints the page worse).
+
+    Returns a counters dict — `{drift_fixed: N, hardcoded_color_warnings: M}`.
+    """
+    counters: dict[str, int] = {"drift_fixed": 0, "hardcoded_color_warnings": 0}
+
+    src_dir = os.path.join(workspace_path, "src")
+    if not os.path.isdir(src_dir):
+        return counters
+
+    # Pull tokens from landing.json if not provided.
+    if not design_tokens:
+        landing_path = os.path.join(workspace_path, "src", "content", "landing.json")
+        if os.path.isfile(landing_path):
+            try:
+                import json as _json
+                with open(landing_path, "r", encoding="utf-8") as f:
+                    design_tokens = (_json.load(f) or {}).get("design_tokens") or {}
+            except Exception:
+                design_tokens = {}
+        else:
+            design_tokens = {}
+
+    button_radius = (design_tokens or {}).get("button_radius_class", "rounded-md")
+    card_radius = (design_tokens or {}).get("card_radius_class", "rounded-2xl")
+    image_radius = (design_tokens or {}).get("image_radius_class", "rounded-xl")
+
+    sections_dir = os.path.join(src_dir, "components", "sections")
+    walk_root = sections_dir if os.path.isdir(sections_dir) else src_dir
+
+    for root, dirs, files in os.walk(walk_root):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for fname in files:
+            if os.path.splitext(fname)[1].lower() not in _JSX_EXTENSIONS:
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except Exception:
+                continue
+
+            original = content
+
+            # ── radius drift ────────────────────────────────────────────
+            def _maybe_inject(match: re.Match, radius: str) -> str:
+                attrs = match.group(1)
+                extracted = _extract_classname_value(attrs)
+                if not extracted:
+                    return match.group(0)
+                cur, _s, _e = extracted
+                if _has_radius_class(cur):
+                    return match.group(0)
+                # splice radius class
+                new_attrs = _splice_class(attrs, radius)
+                counters["drift_fixed"] += 1
+                # Reconstruct the original tag string with new attrs.
+                whole = match.group(0)
+                return whole.replace(attrs, new_attrs, 1)
+
+            content = _BUTTON_TAG_RE.sub(lambda m: _maybe_inject(m, button_radius), content)
+            content = _CARD_DIV_RE.sub(lambda m: _maybe_inject(m, card_radius), content)
+            content = _INPUT_TAG_RE.sub(lambda m: _maybe_inject(m, button_radius), content)
+
+            # ── hardcoded color drift (info-level telemetry) ────────────
+            # Status colors (red/green/amber for errors/success/warnings) and
+            # brand-fixed hex (logos, partner badges) are legitimate. We just
+            # count + log at INFO so a maintainer can spot drift without it
+            # flooding warning streams. The post-gen pipeline does NOT auto-
+            # rewrite — picking the right semantic token from a hex requires
+            # palette inference and a wrong rewrite paints the page worse.
+            for pat in (_HARDCODED_HEX_IN_CLASS_RE, _HARDCODED_RGB_IN_CLASS_RE, _TAILWIND_PALETTE_NUMBERED_RE):
+                for m in pat.finditer(original):
+                    counters["hardcoded_color_warnings"] += 1
+                    logger.info(
+                        "design_token_drift: hardcoded color %r in %s",
+                        m.group(0),
+                        os.path.relpath(fpath, workspace_path),
+                    )
+
+            if content != original:
+                try:
+                    with open(fpath, "w", encoding="utf-8") as f:
+                        f.write(content)
+                    logger.info(
+                        "design_token_drift: spliced missing radius classes in %s",
+                        os.path.relpath(fpath, workspace_path),
+                    )
+                except Exception as exc:
+                    logger.warning("design_token_drift: write failed: %s", exc)
+
+    return counters
 
 
 # ╔══════════════════════════════════════════════════════════════╗

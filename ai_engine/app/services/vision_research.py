@@ -219,7 +219,6 @@ preamble, no closing commentary.
 async def _call_gemini_vision(
     prompt: str,
     refs: list[tuple[str, bytes]],
-    gemini_key: str,
     model: str,
     timeout: float = 90.0,
 ) -> Optional[str]:
@@ -255,7 +254,6 @@ async def _call_gemini_vision(
             model=model,
             payload=payload,
             timeout_s=timeout,
-            api_key=gemini_key,
             label="vision",
         )
         if status != 200 or data is None:
@@ -287,7 +285,6 @@ async def vision_enrich_research(
     research_text: str,
     description: str,
     domain: str,
-    gemini_key: str,
     websocket=None,
 ) -> str:
     """Return a ===VISUAL_DNA=== block to append to `research_text`, or "" on any failure.
@@ -335,7 +332,7 @@ async def vision_enrich_research(
             pass
 
     prompt = _build_vision_prompt(description, domain, refs)
-    vision_text = await _call_gemini_vision(prompt, refs, gemini_key, model)
+    vision_text = await _call_gemini_vision(prompt, refs, model)
 
     if not vision_text:
         return ""

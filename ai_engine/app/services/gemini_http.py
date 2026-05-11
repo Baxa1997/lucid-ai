@@ -1,16 +1,18 @@
-"""Single entry point for Gemini REST calls.
+"""Single entry point for Gemini REST calls — Vertex AI only.
 
-Routes between AI Studio (legacy) and Vertex AI based on
-``settings.USE_VERTEX_AI``. The request payload format is identical
-between the two backends for ``generateContent`` — only the URL and
-auth differ:
+All ``generateContent`` traffic routes through Vertex AI. AI Studio
+(``generativelanguage.googleapis.com`` + ``GOOGLE_API_KEY``) is no longer
+supported; the platform standardized on Vertex for compliance, billing,
+and IAM consistency.
 
-  AI Studio:  generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key=...
   Vertex AI:  {location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:generateContent
               + Authorization: Bearer <ADC token>
 
-Response shapes are identical (candidates, usageMetadata, groundingMetadata),
-so existing parsers don't need to change.
+Auth is Application Default Credentials (gcloud login locally, service
+account JSON / Workload Identity in prod).
+
+Response shapes are unchanged from prior versions, so existing parsers
+keep working.
 """
 
 from __future__ import annotations
@@ -65,38 +67,21 @@ def _get_adc_token() -> str:
         return _cached_token
 
 
-def _build_url(model: str, *, vertex: bool) -> str:
-    """Build the right generateContent URL for the chosen backend."""
-    if vertex:
-        location = settings.GOOGLE_CLOUD_LOCATION or "global"
-        project = settings.GOOGLE_CLOUD_PROJECT
-        if not project:
-            raise RuntimeError(
-                "USE_VERTEX_AI=true but GOOGLE_CLOUD_PROJECT is empty"
-            )
-        host = (
-            "aiplatform.googleapis.com"
-            if location == "global"
-            else f"{location}-aiplatform.googleapis.com"
-        )
-        return (
-            f"https://{host}/v1/projects/{project}/locations/{location}"
-            f"/publishers/google/models/{model}:generateContent"
-        )
-    return (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model}:generateContent"
+def _build_url(model: str) -> str:
+    """Build the Vertex generateContent URL for the chosen model."""
+    location = settings.GOOGLE_CLOUD_LOCATION or "global"
+    project = settings.GOOGLE_CLOUD_PROJECT
+    if not project:
+        raise RuntimeError("GOOGLE_CLOUD_PROJECT is empty — Vertex auth requires a project")
+    host = (
+        "aiplatform.googleapis.com"
+        if location == "global"
+        else f"{location}-aiplatform.googleapis.com"
     )
-
-
-def _build_auth(*, vertex: bool, api_key: str) -> tuple[str, dict[str, str]]:
-    """Return (url_query_suffix, headers) for the chosen backend."""
-    if vertex:
-        token = _get_adc_token()
-        return "", {"Authorization": f"Bearer {token}"}
-    if not api_key:
-        raise RuntimeError("AI Studio path requires GOOGLE_API_KEY")
-    return f"?key={api_key}", {}
+    return (
+        f"https://{host}/v1/projects/{project}/locations/{location}"
+        f"/publishers/google/models/{model}:generateContent"
+    )
 
 
 async def gemini_post(
@@ -104,41 +89,35 @@ async def gemini_post(
     model: str,
     payload: dict[str, Any],
     timeout_s: float,
-    api_key: str = "",
     label: str = "gemini",
 ) -> tuple[int, dict[str, Any] | None, str]:
-    """POST to Gemini and return ``(status_code, json_or_none, raw_text)``.
+    """POST to Vertex AI ``generateContent`` and return ``(status, json, raw)``.
 
-    Identical to a manual ``httpx.post`` against the AI Studio endpoint
-    today — callers keep their existing payload-building, response
-    parsing, and token-billing code. The only thing this function hides
-    is which backend (AI Studio vs Vertex) is hit.
+    All Gemini REST traffic must go through this function. Auth is handled
+    inside via cached ADC tokens — callers do NOT pass an API key.
 
     Returns:
       status_code:  HTTP status (-1 on transport error)
       json_or_none: parsed body if response was JSON, else None
       raw_text:     short prefix of the response body for logging
     """
-    vertex = bool(settings.USE_VERTEX_AI)
     try:
-        base = _build_url(model, vertex=vertex)
-        suffix, headers = _build_auth(vertex=vertex, api_key=api_key)
-        url = base + suffix
+        url = _build_url(model)
+        token = _get_adc_token()
+        headers = {"Authorization": f"Bearer {token}"}
     except Exception as exc:
         logger.warning("gemini %s: config error — %s", label, exc)
         return -1, None, str(exc)
 
-    # Vertex requires `role: "user"` on each contents entry; AI Studio is
-    # tolerant. Normalize here so call sites don't need to know the
-    # backend. Mutate a shallow copy to keep the caller's dict pristine.
-    if vertex:
-        contents = payload.get("contents")
-        if isinstance(contents, list):
-            patched = [
-                {**c, "role": c.get("role", "user")} if isinstance(c, dict) else c
-                for c in contents
-            ]
-            payload = {**payload, "contents": patched}
+    # Vertex requires `role: "user"` on each contents entry. Mutate a
+    # shallow copy so we don't tweak the caller's dict.
+    contents = payload.get("contents")
+    if isinstance(contents, list):
+        patched = [
+            {**c, "role": c.get("role", "user")} if isinstance(c, dict) else c
+            for c in contents
+        ]
+        payload = {**payload, "contents": patched}
 
     try:
         async with httpx.AsyncClient(timeout=timeout_s) as client:
@@ -152,11 +131,8 @@ async def gemini_post(
 
     if resp.status_code != 200:
         logger.warning(
-            "gemini %s [%s]: HTTP %d — %s",
-            label,
-            "vertex" if vertex else "ai_studio",
-            resp.status_code,
-            resp.text[:300],
+            "gemini %s [vertex]: HTTP %d — %s",
+            label, resp.status_code, resp.text[:300],
         )
         return resp.status_code, None, resp.text[:500]
 

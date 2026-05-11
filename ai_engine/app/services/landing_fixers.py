@@ -15,6 +15,8 @@ Kept (still useful):
   • fix_next_config_image_domains    — Unsplash domain whitelist (CRITICAL — without it images 404)
   • fix_missing_tailwind_directives  — globals.css must have @tailwind directives
   • fix_unresolved_imports           — stub broken imports rather than failing the build
+  • fix_low_contrast_text_on_image   — dark overlay over hero photos so light text stays readable
+  • fix_dropdown_zindex              — z-50 on absolute/top-full panels so they don't sit behind buttons
 
 Dropped (redundant in new flow):
   • fix_unicode_escapes_in_jsx       — content is JSON, not JSX strings
@@ -66,6 +68,10 @@ async def run_landing_fixers(workspace_path: str, websocket: Any = None) -> dict
     _run("fix_banned_icons", F.fix_banned_icons, workspace_path)
     _run("fix_named_import_default_export_mismatch", F.fix_named_import_default_export_mismatch, workspace_path)
     _run("fix_missing_default_export", F.fix_missing_default_export, workspace_path)
+    # JSX <Reveal> tag balancer — catches Claude over-closing in complex
+    # conditional JSX. Run BEFORE fix_unescaped_entities so balanced trees
+    # are the assumption for everything downstream.
+    _run("fix_jsx_reveal_imbalance", F.fix_jsx_reveal_imbalance, workspace_path)
     # Run apostrophe-in-JS-string FIRST so the JSX-text fixer below
     # doesn't double-escape strings that already became valid double-
     # quoted literals.
@@ -74,10 +80,36 @@ async def run_landing_fixers(workspace_path: str, websocket: Any = None) -> dict
     _run("fix_img_tags", F.fix_img_tags, workspace_path)
     _run("fix_next_config_image_domains", F.fix_next_config_image_domains, workspace_path, count_via_len=False)
     _run("fix_missing_tailwind_directives", F.fix_missing_tailwind_directives, workspace_path)
+    # Visibility / UX guards — run AFTER tailwind directives (no point upgrading
+    # contrast if Tailwind itself isn't loading) and BEFORE unresolved-imports
+    # (which only stubs missing modules and doesn't touch JSX class strings).
+    _run("fix_low_contrast_text_on_image", F.fix_low_contrast_text_on_image, workspace_path)
+    _run("fix_dropdown_zindex", F.fix_dropdown_zindex, workspace_path)
+    # Strip kebab/snake-case lucide imports BEFORE unresolved-imports stubs them.
+    _run("fix_invalid_lucide_imports", F.fix_invalid_lucide_imports, workspace_path)
+    # Strip Claude-emitted hardcoded UNSPLASH_IMAGES dicts so components fall
+    # back to the runtime-bound landing.json + gradient placeholder.
+    _run("fix_hardcoded_unsplash_dicts", F.fix_hardcoded_unsplash_dicts, workspace_path)
     _run("fix_unresolved_imports", F.fix_unresolved_imports, workspace_path)
+    # Design-token drift: validate radius classes match brief, log telemetry
+    # for hardcoded hex/rgb/numbered-palette colors. Returns a dict, not a list.
+    color_warnings = 0
+    try:
+        drift = F.fix_design_token_drift(workspace_path)
+        counts["fix_design_token_drift_radius"] = drift.get("drift_fixed", 0)
+        color_warnings = drift.get("hardcoded_color_warnings", 0)
+    except Exception as exc:
+        logger.warning("landing_fixer fix_design_token_drift failed: %s", exc)
+        counts["fix_design_token_drift_radius"] = 0
 
+    # `total` reports actual file changes only — color warnings are info-level
+    # telemetry (status colors and brand-fixed hex are legitimate).
     total = sum(counts.values())
-    logger.info("landing_fixers: %d total fixes — %s", total, counts)
+    logger.info(
+        "landing_fixers: %d total fixes — %s%s",
+        total, counts,
+        f" — {color_warnings} color drift signals (info)" if color_warnings else "",
+    )
 
     if websocket is not None:
         try:

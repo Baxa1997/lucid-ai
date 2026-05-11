@@ -47,10 +47,9 @@ async def run_landing_pipeline(
     only hard failure is build_landing_brief returning empty sections.
     """
     anthropic_key = validated.get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY", "")
-    gemini_key = validated.get("gemini_api_key") or os.environ.get("GOOGLE_API_KEY", "")
 
-    if not anthropic_key or not gemini_key:
-        await _send(websocket, "error", "❌ Missing API keys (anthropic + gemini required)")
+    if not anthropic_key:
+        await _send(websocket, "error", "❌ Missing ANTHROPIC_API_KEY (Gemini auth via Vertex ADC)")
         return False
 
     # Drive the UI's task-phase indicator from inside this pipeline.
@@ -86,24 +85,92 @@ async def run_landing_pipeline(
     )
     import asyncio
 
+    # Close out Phase 1 (started by ws.py:got_task) before flipping to
+    # Phase 3 — keeps the UI from flickering through interim statuses.
+    await _phase(1, "Preparing workspace", "Workspace ready", "done")
     await _phase(3, "Researching project", "Searching real reference sites + design DNA…", "active")
     await _send(websocket, "progress", "🧠 Researching brand & sections (Gemini)...")
 
-    async def _research_signals() -> tuple[dict | None, dict | None, dict | None]:
-        """intent → parallel(domain, design) → extract. Best-effort — any
-        failure returns (None, None, None) so the legacy brief still ships."""
-        try:
-            intent = await analyze_intent(
-                description, classification,
-                gemini_key=gemini_key, websocket=websocket, timeout_s=60.0,
+    # ── Stage 0: intent + clarifier gate ─────────────────────────────
+    # analyze_intent runs FIRST (sequentially) so we can interrupt the
+    # pipeline if the prompt is too vague to act on. Prior clarification
+    # answers ride in via [LUCID_CLARIFY::key=value] markers prepended
+    # by ws.py on the previous round; we strip them here, feed them as
+    # already-known context to Gemini, and filter out matching questions.
+    from knowledge.loader import extract_clarify_context
+    prior_answers, clean_description = extract_clarify_context(description)
+    intent_input = clean_description
+    if prior_answers:
+        # Append already-known disambiguations as plain prose so Gemini
+        # treats them as constraints rather than re-asks them.
+        hints = "\n".join(f"- {k.replace('_', ' ')}: {v.replace('_', ' ')}" for k, v in prior_answers.items())
+        intent_input = f"{clean_description}\n\nAlready clarified by the user:\n{hints}"
+        logger.info("landing_pipeline: %d prior clarifications applied — %s",
+                    len(prior_answers), list(prior_answers.keys()))
+
+    try:
+        intent = await analyze_intent(
+            intent_input, classification,
+            websocket=websocket, timeout_s=60.0,
+        )
+    except Exception as exc:
+        logger.warning("landing_pipeline: intent failed — proceeding without gate: %s", exc)
+        intent = None
+
+    # Filter out questions whose key was already answered, then decide
+    # whether to gate. We only block on clarity_level=low (low = the
+    # page won't be coherent without input). Medium/high pass through.
+    if intent:
+        remaining_qs = [
+            q for q in intent.get("clarification_questions") or []
+            if q.get("key") and q["key"] not in prior_answers
+        ]
+        if intent.get("clarity_level") == "low" and remaining_qs:
+            # Emit ONE question per round. The frontend bubble + WS
+            # handler ping-pong with [LUCID_CLARIFY::...] markers; on
+            # the next pass this code re-runs, finds the answer in
+            # prior_answers, and either gates again on the next
+            # remaining question or proceeds.
+            q = remaining_qs[0]
+            payload = {
+                "kind": "intent_clarify",
+                "clarify_key": q["key"],
+                "question": q["question"],
+                "options": q["options"],
+                "original_task": clean_description,
+            }
+            try:
+                if chat_session_id:
+                    import json as _json
+                    from app.services.chat import ChatService
+                    await ChatService.add_message(
+                        session_id=chat_session_id, role="agent",
+                        content=_json.dumps(payload),
+                        event_type="ClarificationNeeded",
+                        user_jwt=None,
+                    )
+            except Exception as exc:
+                logger.warning("landing_pipeline: clarify persist failed — %s", exc)
+            try:
+                await websocket.send_json({"type": "clarification_needed", **payload})
+            except Exception:
+                pass
+            logger.info(
+                "landing_pipeline: gating on clarification key=%s (%d remaining)",
+                q["key"], len(remaining_qs),
             )
-        except Exception as exc:
-            logger.warning("landing_pipeline: intent failed (non-fatal) — %s", exc)
+            return False
+
+    async def _research_signals() -> tuple[dict | None, dict | None, dict | None]:
+        """parallel(domain, design) → extract. Best-effort — any failure
+        returns (intent, partial, partial) so the legacy brief still
+        ships. Reuses the intent we computed in Stage 0."""
+        if not intent:
             return None, None, None
         try:
             domain_res, design_res = await asyncio.gather(
-                run_domain_research(intent, gemini_key=gemini_key, websocket=websocket, timeout_s=240.0),
-                run_design_research(intent, gemini_key=gemini_key, websocket=websocket, timeout_s=240.0),
+                run_domain_research(intent, websocket=websocket, timeout_s=240.0),
+                run_design_research(intent, websocket=websocket, timeout_s=240.0),
             )
         except Exception as exc:
             logger.warning("landing_pipeline: research failed (non-fatal) — %s", exc)
@@ -111,7 +178,7 @@ async def run_landing_pipeline(
         try:
             signals = await extract_research_signals(
                 intent, domain_res, design_res,
-                gemini_key=gemini_key, timeout_s=90.0,
+                timeout_s=90.0,
             )
         except Exception as exc:
             logger.warning("landing_pipeline: signal extract failed (non-fatal) — %s", exc)
@@ -121,8 +188,8 @@ async def run_landing_pipeline(
     try:
         brief, research_bundle = await asyncio.gather(
             build_landing_brief(
-                description, classification,
-                gemini_key=gemini_key, websocket=websocket,
+                clean_description, classification,
+                websocket=websocket,
             ),
             _research_signals(),
         )
@@ -150,6 +217,24 @@ async def run_landing_pipeline(
             )
         except Exception as exc:
             logger.warning("landing_pipeline: enrich failed (non-fatal) — %s", exc)
+
+    # Inject the PURPOSE_DIRECTIVE into the brief so section codegen can
+    # render it in every Claude prompt. No-op for purposes the directive
+    # map doesn't cover. Built from the SAME analyze_intent dict the brief
+    # was built from, so named_roles / urgency_signals stay consistent.
+    if _intent:
+        try:
+            from app.services.purpose_research import format_purpose_directive_block
+            _directive = format_purpose_directive_block(_intent)
+            if _directive:
+                brief["purpose_directive"] = _directive
+                logger.info(
+                    "landing_pipeline: brief tagged with purpose=%s roles=%d",
+                    _intent.get("primary_purpose"),
+                    len(_intent.get("named_roles") or []),
+                )
+        except Exception as exc:
+            logger.warning("landing_pipeline: directive injection failed (non-fatal) — %s", exc)
 
     brand_name = (brief.get("brand") or {}).get("name", "")
     await _send(
@@ -223,6 +308,13 @@ async def run_landing_pipeline(
     # the whole object to <Image>, rendering empty. URL strings are the
     # simplest contract, alt-text comes from a section.image_alts parallel
     # array (kept for accessibility) when needed.
+    #
+    # CRITICAL — preserve PARALLEL INDEX with section.items. The codegen
+    # prompt promises Claude that `section.images[i]` corresponds 1:1 to
+    # `section.items[i]`. If the binder failed to fetch image #2 (empty
+    # url), we MUST keep an empty string at index 2 — dropping it shifts
+    # every later image into the wrong slot and Claude's `<Image src=...>`
+    # renders the wrong photo for every later card.
     try:
         import json as _json
         import os as _os
@@ -235,7 +327,8 @@ async def run_landing_pipeline(
                 # If already strings, leave as-is. Otherwise extract `.url`.
                 if _imgs and isinstance(_imgs[0], dict):
                     _s["image_alts"] = [_i.get("alt", "") for _i in _imgs]
-                    _s["images"] = [_i.get("url", "") for _i in _imgs if _i.get("url")]
+                    # KEEP empty strings for missing slots — preserves index.
+                    _s["images"] = [_i.get("url") or "" for _i in _imgs]
             with open(_content_path, "w", encoding="utf-8") as _fh:
                 _json.dump(_content, _fh, indent=2, ensure_ascii=False)
             logger.info("landing_pipeline: flattened section.images to URL strings")
@@ -305,7 +398,14 @@ async def run_landing_pipeline(
 
     # ── Step 6: app/page.jsx shell ───────────────────────────────────
     try:
-        write_landing_page_shell(workspace_path, page_imports, page_renders)
+        from app.services.landing_section_codegen import _resolve_anatomy as _resolve_header_anatomy
+        header_anatomy_text, _ = _resolve_header_anatomy("header", brief.get("visual_dna") or {})
+        write_landing_page_shell(
+            workspace_path,
+            page_imports,
+            page_renders,
+            header_anatomy=header_anatomy_text,
+        )
     except Exception as exc:
         logger.error("landing_pipeline: page shell failed — %s", exc, exc_info=True)
         await _send(websocket, "error", f"❌ Page shell failed: {str(exc)[:160]}")
@@ -360,6 +460,17 @@ async def run_landing_pipeline(
     except Exception as exc:
         logger.warning("landing_pipeline: build_validator failed (non-fatal) — %s", exc)
         await _phase(6, "Building application", "Build check skipped", "done")
+
+    # ── Step 9: Quality gate ─────────────────────────────────────────
+    # Verify the built page actually fulfils its purpose contract
+    # (hiring → form + pay numbers + named roles, etc.). Never blocks
+    # completion — the report is surfaced to the workspace UI so the
+    # user can trigger per-section regeneration if anything is missing.
+    try:
+        from app.services.landing_quality_gate import run_quality_gate
+        await run_quality_gate(workspace_path, _intent, websocket=websocket)
+    except Exception as exc:
+        logger.warning("landing_pipeline: quality_gate failed (non-fatal) — %s", exc)
 
     await _send(websocket, "progress", f"🎉 Landing generated — {len(page_renders)} sections")
 

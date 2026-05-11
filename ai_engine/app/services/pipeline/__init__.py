@@ -11,7 +11,6 @@ needed anywhere in the codebase.
 from .constants import (
     GEMINI_MODEL,
     GEMINI_BLUEPRINT_MODEL,
-    _FALLBACK_GEMINI_KEY,
     PLATFORM_GITHUB_TOKEN,
     _FILE_TREE_EXCLUDE,
     _TEMPLATE_REGISTRY,
@@ -91,7 +90,7 @@ from .orchestrator import run_pipeline
 
 __all__ = [
     # constants
-    "GEMINI_MODEL", "GEMINI_BLUEPRINT_MODEL", "_FALLBACK_GEMINI_KEY",
+    "GEMINI_MODEL", "GEMINI_BLUEPRINT_MODEL",
     "PLATFORM_GITHUB_TOKEN", "_FILE_TREE_EXCLUDE", "_TEMPLATE_REGISTRY", "_PLATFORM_ORG",
     # ws helpers
     "_build_ws_file_tree", "_send_file_tree", "_send_chat_message", "_approve_all_tools",

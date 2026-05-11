@@ -341,6 +341,16 @@ class SessionStore:
                 and not s.is_expired()
             )
 
+    async def list_by_user(self, user_id: str) -> list[AgentSession]:
+        """Return all live, non-expired sessions for a user, oldest first."""
+        async with self._lock:
+            xs = [
+                s for s in self._sessions.values()
+                if s.user_id == user_id and s.is_alive and not s.is_expired()
+            ]
+        xs.sort(key=lambda s: s.created_at)
+        return xs
+
 
 # Module-level singleton — imported by routers and app factory
 store = SessionStore()
@@ -465,14 +475,53 @@ async def create_session(
         raise ValueError("create_session requires a non-empty user_id")
 
     # ── Rate limit: max concurrent sessions per user ─────────
-    user_session_count = await store.count_by_user(user_id)
-    if user_session_count >= MAX_SESSIONS_PER_USER:
-        from fastapi import HTTPException
-        raise HTTPException(
-            status_code=429,
-            detail=f"Session limit reached ({MAX_SESSIONS_PER_USER} concurrent sessions). "
-                   f"Please stop an existing session before starting a new one.",
-        )
+    # When the cap is hit, transparently reclaim slots from sessions whose
+    # WebSocket has dropped (user closed the tab / navigated away). Their
+    # pipelines were preserved on disconnect so an accidental tab-close
+    # could resume; but if the user is starting a new prompt, that previous
+    # workspace is abandoned — kill it instead of blocking the new session.
+    # If all 3 still have a live WS attached, that's truly concurrent use:
+    # surface the 429.
+    user_sessions = await store.list_by_user(user_id)
+    if len(user_sessions) >= MAX_SESSIONS_PER_USER:
+        # Oldest-first: abandoned ones are likely the most stale anyway.
+        reclaimable = [
+            s for s in user_sessions
+            if s.ws_proxy is None or not s.ws_proxy.is_attached
+        ]
+        if reclaimable:
+            victim = reclaimable[0]
+            logger.info(
+                "Session cap hit for user %s — reclaiming abandoned session %s "
+                "(WS detached, started %s)",
+                user_id, victim.session_id, victim.created_at.isoformat(),
+            )
+            # Cancel the running pipeline (if any) before destroying.
+            pt = victim.pipeline_task
+            if pt is not None and not pt.done():
+                pt.cancel()
+                try:
+                    await asyncio.wait_for(pt, timeout=5)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+                except Exception as exc:
+                    logger.warning(
+                        "Reclaim: pipeline_task cancellation raised: %s", exc,
+                    )
+            try:
+                await destroy_session(victim.session_id)
+            except Exception as exc:
+                logger.warning("Reclaim: destroy_session failed: %s", exc)
+        else:
+            from fastapi import HTTPException
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Session limit reached ({MAX_SESSIONS_PER_USER} concurrent "
+                    "sessions, all currently active in another tab). "
+                    "Close one of the other workspaces to start a new prompt."
+                ),
+            )
 
     # ── Always create a real workspace ─────────────────────────
     # NOTE: The old mock gate (sdk.OPENHANDS_AVAILABLE) is removed.

@@ -47,6 +47,7 @@ import {getSupabaseBrowserClient} from "@/lib/supabase/client";
 import ExportCodeModal from "@/components/ExportCodeModal";
 import {WorkspaceContext} from "@/contexts/WorkspaceContext";
 import ChatPanel from "@/components/workspace/ChatPanel";
+import QualityReportPanel from "@/components/workspace/QualityReportPanel";
 import RightPanel from "@/components/workspace/RightPanel";
 
 // ── Main Page Component ────────────────────────────────────
@@ -405,6 +406,8 @@ function ConversationPageInner({params}) {
     rejectPlan,
     submitClarification,
     previewFileMap,
+    qualityReport,
+    dismissQualityReport,
   } = useAgentSession({
     projectId: conversationId,
     token: effectiveToken,
@@ -553,6 +556,25 @@ function ConversationPageInner({params}) {
     setShowExportModal(true);
   };
 
+  // ── Quality-gate "Regenerate" handler ────────────────────────
+  // Until the dedicated /regenerate-section endpoint lands (A6), the
+  // button simply emits a chat message that asks the agent to fix the
+  // missing element. This gives the click an immediate effect (the
+  // agent re-runs against the suggestion) and the report stays mounted
+  // so the user can click further items.
+  const handleQualityRegenerate = useCallback((check) => {
+    if (!check) return;
+    const label = check.label || check.name;
+    const suggestion = check.suggestion || '';
+    const where = Array.isArray(check.where) && check.where.length
+      ? `\nFiles to inspect: ${check.where.slice(0, 3).join(', ')}`
+      : '';
+    const msg = `Please fix this quality-gate finding: "${label}".${suggestion ? `\n\n${suggestion}` : ''}${where}`;
+    try {
+      sendMessage(msg);
+    } catch (_) {}
+  }, [sendMessage]);
+
   // ── ProjectDashboard handlers ──
   // Rename — writes title to chat_sessions via Supabase (same path the chat
   // history uses). Updates local conversation state on success.
@@ -646,11 +668,11 @@ function ConversationPageInner({params}) {
   }, [conversation?.repo_name, conversation?.branch, conversation?.repo_provider, files.length]);
 
   // ── Auto-start wizard task when workspace becomes ready ──
-  // Safety net for wizard handshakes whose `task` field was dropped before
-  // reaching the backend (rare, but the symptom is "workspace ready, no build").
-  // We watch for the bug signature — status=ready, nothing ever ran, wizard
-  // prompt still in sessionStorage, no platform repo on the row — and resend
-  // the prompt as a follow-up message.
+  // Safety net retained for the rare case where the handshake fallback in
+  // agentWSManager (sessionStorage recovery) ALSO comes up empty. Tightened
+  // window (1.5s after ready) and gated to only fire if no chat history was
+  // hydrated — otherwise the recovered handshake already kicked the pipeline
+  // and re-sending here would create the duplicate prompt the user reported.
   const wizardAutoStarted = useRef(false);
   const everStartedRef = useRef(false);
   useEffect(() => {
@@ -663,6 +685,10 @@ function ConversationPageInner({params}) {
     if (status !== "ready") return;
     if (everStartedRef.current) return;
     if (repoInfo.platformRepoUrl || repoInfo.vercelUrl || repoInfo.deployedUrl) return;
+    // If chat already has a user message — either init_msg_0 from the wizard
+    // task being live, or a hydrated history entry — the pipeline is already
+    // tracked; do not double-fire.
+    if (Array.isArray(messages) && messages.some(m => m.role === 'user')) return;
 
     let prompt = "";
     try {
@@ -670,23 +696,24 @@ function ConversationPageInner({params}) {
     } catch (_) {}
     if (!prompt) return;
 
-    // Wait ~2s — on a healthy handshake, ready transitions to updating well
-    // within that window. If we're still in ready after the timer fires,
-    // the handshake-task path is dead and we need to kick the build manually.
     const timer = setTimeout(() => {
       if (everStartedRef.current) return;
       if (wizardAutoStarted.current) return;
+      // Re-check for any user message before firing — the handshake recovery
+      // may have produced one in the intervening 1.5s.
+      if (Array.isArray(messages) && messages.some(m => m.role === 'user')) return;
       wizardAutoStarted.current = true;
       const finalPrompt = wizardTask || prompt;
-      console.warn("[workspace] handshake task missed — falling back to startSession");
+      console.warn("[workspace] handshake + recovery both missed — final fallback startSession");
       startSession(finalPrompt);
-    }, 2000);
+    }, 1500);
     return () => clearTimeout(timer);
   }, [
     status,
     conversationId,
     startSession,
     wizardTask,
+    messages,
     repoInfo.platformRepoUrl,
     repoInfo.vercelUrl,
     repoInfo.deployedUrl,
@@ -1710,6 +1737,15 @@ function ConversationPageInner({params}) {
                 : "border-r-0",
             )}
             style={{width: chatOpen ? chatWidth : 0}}>
+            {/* Quality-gate findings — banner above the chat. Self-collapses
+                via its own X button; renders nothing when the report has
+                no failed checks (or no report yet). Sits OUTSIDE ChatPanel
+                so it doesn't push the input below the visible area. */}
+            <QualityReportPanel
+              report={qualityReport}
+              onDismiss={dismissQualityReport}
+              onRegenerate={handleQualityRegenerate}
+            />
             <ChatPanel />
           </div>
           {/* end chat panel */}

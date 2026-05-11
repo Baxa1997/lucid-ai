@@ -49,15 +49,14 @@ class Settings(BaseSettings):
 
     # ── LLM provider keys ────────────────────────────────────
     ANTHROPIC_API_KEY: str = ""
-    GOOGLE_API_KEY: str = ""
     LLM_API_KEY: str = ""
     LLM_BASE_URL: str | None = None
 
     # ── Vertex AI (Google Cloud) ─────────────────────────────
-    # When USE_VERTEX_AI is true, all Gemini REST calls route to Vertex
-    # using ADC (gcloud login or service-account JSON) instead of
-    # generativelanguage.googleapis.com + GOOGLE_API_KEY.
-    USE_VERTEX_AI: bool = False
+    # All Gemini traffic — REST calls and LiteLLM-routed agent calls —
+    # goes through Vertex AI using ADC (gcloud login locally, or service
+    # account JSON / Workload Identity in prod). AI Studio
+    # (generativelanguage.googleapis.com + GOOGLE_API_KEY) is NOT supported.
     GOOGLE_CLOUD_PROJECT: str = ""
     GOOGLE_CLOUD_LOCATION: str = "global"
 
@@ -196,16 +195,19 @@ settings = Settings()
 #   env_key   – env var that holds the API key for this provider
 #   label     – human-readable name shown in logs / error messages
 MODEL_CONFIGS: dict[str, dict] = {
-    # ── Google Gemini ────────────────────────────────────────
-    "gemini/gemini-3-flash-preview": {
+    # ── Google Gemini (LiteLLM Vertex routing) ──────────────
+    # The "vertex_ai/" prefix tells LiteLLM to authenticate via ADC and
+    # hit the Vertex generateContent endpoint instead of AI Studio.
+    # No API key is required; auth is project + location via ADC.
+    "vertex_ai/gemini-3-flash-preview": {
         "provider": "google",
-        "env_key":  "GOOGLE_API_KEY",
-        "label":    "Gemini 3 Flash Preview",
+        "env_key":  "",  # no API key — Vertex uses ADC
+        "label":    "Gemini 3 Flash Preview (Vertex)",
     },
-    "gemini/gemini-3.1-pro-preview": {
+    "vertex_ai/gemini-3.1-pro-preview": {
         "provider": "google",
-        "env_key":  "GOOGLE_API_KEY",
-        "label":    "Gemini 3 Pro Preview",
+        "env_key":  "",
+        "label":    "Gemini 3 Pro Preview (Vertex)",
     },
     # ── Anthropic Claude ─────────────────────────────────────
     "anthropic/claude-3-5-sonnet-20241022": {
@@ -232,7 +234,7 @@ MODEL_CONFIGS: dict[str, dict] = {
 
 # ── Default model per provider ───────────────────────────────
 DEFAULT_MODEL_PER_PROVIDER: dict[str, str] = {
-    "google":    "gemini/gemini-3-flash-preview",
+    "google":    "vertex_ai/gemini-3-flash-preview",
     "anthropic": "anthropic/claude-3-5-sonnet-20241022",
 }
 

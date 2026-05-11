@@ -20,7 +20,7 @@ Usage
         build_conversation_context,
     )
 
-    pipeline_user = build_pipeline_user(session, api_key, gemini_api_key, pm, user_jwt)
+    pipeline_user = build_pipeline_user(session, api_key, pm, user_jwt)
     enriched = await build_enriched_task(task, session, project_id, user_id, user_jwt)
     result = await agent_orchestrator.execute_task(
         enriched_task=enriched,
@@ -69,7 +69,6 @@ class TaskResult:
 def build_pipeline_user(
     session: AgentSession,
     api_key: str,
-    gemini_api_key: str,
     package_manager: str,
     user_jwt: str | None,
 ) -> dict:
@@ -77,11 +76,11 @@ def build_pipeline_user(
 
     Called before execute_task so the dict is always fresh.  The orchestrator
     may mutate it in-place during _hydrate_repo_url if repo_url was empty.
+    Gemini auth is now Vertex ADC inside gemini_post — no per-call key.
     """
     git_provider = "gitlab" if "gitlab" in (session.repo_url or "").lower() else "github"
     return {
         "anthropic_api_key": api_key,
-        "gemini_api_key": gemini_api_key,
         "git_provider": git_provider,
         "github_repo": session.repo_url or "",
         "github_token": session.git_token or "",

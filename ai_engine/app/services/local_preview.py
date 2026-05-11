@@ -211,6 +211,20 @@ async def _start_local_preview_locked(
     except Exception as _fix_err3:
         logger.debug("local_preview: missing-default-export fixer skipped: %s", _fix_err3)
 
+    # ── Pre-flight: replace banned lucide-react icons with inline SVGs ──
+    # Safety net for files written AFTER landing_fixers ran (e.g. late
+    # post-write callbacks). Without this, MarketingFooter.jsx etc. can
+    # surface "Twitter is not exported from lucide-react" 500s on first
+    # render even though landing_fixers polyfilled the rest.
+    try:
+        from app.services.post_generation_fixer import fix_banned_icons
+        banned_fixed = fix_banned_icons(workspace_path)
+        if banned_fixed:
+            logger.info("local_preview: polyfilled banned lucide icons in %d file(s): %s",
+                        len(banned_fixed), banned_fixed)
+    except Exception as _fix_err4:
+        logger.debug("local_preview: banned-icons fixer skipped: %s", _fix_err4)
+
     # ── Pre-flight: eslint --fix (auto-fixes unescaped entities, etc.) ──
     # Runs after all code fixers so ESLint operates on the corrected files.
     # Fixes are committed in Phase 7, so Vercel also receives clean code.
@@ -235,6 +249,21 @@ async def _start_local_preview_locked(
     # Repos are cloned fresh (no node_modules in git). Without this step
     # Next.js/Vite can't find tailwindcss/postcss → page renders unstyled.
     await _ensure_node_modules(workspace_path, websocket)
+
+    # ── Pre-flight: wipe .next so the RSC client-reference-manifest can't
+    # carry stale module pointers across pre-flight fixers. Without this, the
+    # dev server can serve "Could not find the module …MarketingHeader.jsx#default
+    # in the React Client Manifest" until the user refreshes — files were
+    # rewritten by the fixers above but the on-disk manifest still points at
+    # the pre-fixer chunks.
+    import shutil as _shutil
+    _next_cache_dir = os.path.join(workspace_path, ".next")
+    if os.path.isdir(_next_cache_dir):
+        try:
+            await asyncio.to_thread(_shutil.rmtree, _next_cache_dir, ignore_errors=True)
+            logger.info("local_preview: wiped .next cache before dev server boot")
+        except Exception as _wipe_err:
+            logger.debug("local_preview: .next wipe skipped: %s", _wipe_err)
 
     # ── Port allocation + spawn + health check — retryable on port race ──
     # Between _find_free_port releasing the port and the dev server binding
@@ -1277,18 +1306,32 @@ async def _watch_http_health(
             http5xx_failures += 1
             if http5xx_failures >= _HEALTH_FAIL_THRESHOLD and not surfaced_5xx:
                 surfaced_5xx = True
+                # Read the dev-server stderr tail so the user (and our logs)
+                # can see WHICH route/import is broken instead of a generic
+                # "runtime error" message.
+                stderr_tail = ""
+                stderr_path = entry.get("stderr_path") if entry else None
+                if stderr_path:
+                    try:
+                        raw_tail = _read_stderr(stderr_path) or ""
+                        stderr_tail = _summarize_dev_server_error(raw_tail) or raw_tail[-1500:]
+                    except Exception as _exc:
+                        logger.debug("local_preview: stderr read failed: %s", _exc)
                 logger.warning(
-                    "local_preview: server %s returning %d on root for %d consecutive checks",
-                    conversation_id, status, http5xx_failures,
+                    "local_preview: server %s returning %d on root for %d consecutive checks. stderr tail: %s",
+                    conversation_id, status, http5xx_failures, (stderr_tail or "(empty)")[:500],
                 )
+                _user_msg = (
+                    f"Dev server is up but the app is returning HTTP {status}. "
+                    "Click Restart Preview to retry; if the error persists, the "
+                    "generated code has a runtime error on the root route."
+                )
+                if stderr_tail:
+                    _user_msg = f"{_user_msg}\n\n{stderr_tail[-1500:]}"
                 await _emit(
                     websocket, "preview_error",
                     error_stage="crashed",
-                    message=(
-                        f"Dev server is up but the app is returning HTTP {status}. "
-                        "Click Restart Preview to retry; if the error persists, the "
-                        "generated code likely has a runtime error on the root route."
-                    ),
+                    message=_user_msg,
                 )
         else:
             # Any 2xx/3xx/4xx response means the server is responsive enough

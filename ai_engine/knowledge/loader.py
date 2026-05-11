@@ -115,6 +115,25 @@ _ECOMMERCE_SIGNALS = (
     "product catalog", "buy products", "place orders",
 )
 
+# Strong recruitment signals — phrases that mean "this page recruits".
+# Kept narrow to avoid false-positives on incidental mentions of jobs.
+_HIRING_SIGNALS = (
+    "now hiring", "we're hiring", "we are hiring", "join our team",
+    "apply now", "apply today", "open positions", "open roles",
+    "career opportunities", "recruitment page", "hiring page",
+    "recruit drivers", "recruit operators", "recruiting drivers",
+    "recruiting operators", "hire drivers", "hire operators",
+)
+
+# Brand/marketing signals — explicit framing that the page sells the
+# COMPANY, not the jobs. Generic "company website" doesn't count
+# (too common); we want phrases that explicitly say it's marketing.
+_BRAND_MARKETING_SIGNALS = (
+    "marketing page", "marketing site", "marketing website",
+    "brand page", "brand site", "brand landing", "company brochure",
+    "promotional page", "promotional site",
+)
+
 
 def detect_classification_conflict(task: str) -> Optional[dict]:
     """Detect prompts that mix incompatible archetype signals.
@@ -129,6 +148,8 @@ def detect_classification_conflict(task: str) -> Optional[dict]:
 
     has_landing = any(s in t for s in _LANDING_SIGNALS)
     has_ecom = any(s in t for s in _ECOMMERCE_SIGNALS)
+    has_hiring = any(s in t for s in _HIRING_SIGNALS)
+    has_brand = any(s in t for s in _BRAND_MARKETING_SIGNALS)
 
     if has_landing and has_ecom:
         return {
@@ -146,6 +167,32 @@ def detect_classification_conflict(task: str) -> Optional[dict]:
                 {
                     "id": "single_page_landing",
                     "label": "Marketing landing page only",
+                },
+            ],
+        }
+
+    # Hiring vs brand-marketing — fires when a prompt explicitly frames
+    # itself as marketing AND contains strong recruitment signals. Avoids
+    # false-positives on prompts like "logistics company hiring drivers"
+    # (no marketing-frame keyword → analyze_intent handles it directly).
+    if has_hiring and has_brand:
+        return {
+            "kind": "hiring_vs_brand",
+            "question": (
+                "Should this page focus on RECRUITING (apply now, pay rates, "
+                "open roles) or on MARKETING the company (services, story, "
+                "client trust signals)?"
+            ),
+            "options": [
+                {
+                    "id": "single_page_landing",
+                    "label": "Recruiting page — apply now, pay rates, open roles",
+                    "purpose_hint": "hiring",
+                },
+                {
+                    "id": "single_page_landing",
+                    "label": "Marketing page — services, story, trust signals",
+                    "purpose_hint": "brand_awareness",
                 },
             ],
         }
@@ -174,6 +221,47 @@ def force_archetype_from_task(task: str) -> tuple[Optional[str], str]:
     if not m:
         return None, task
     return m.group(1), task[: m.start()] + task[m.end():]
+
+
+# Generic clarify-context marker. Prepended to the task by the WS layer
+# whenever the user answers a Stage-0 clarification question. Multiple
+# markers can stack (one per answered question) and survive across
+# pipeline re-runs so the analyzer / brief sees the disambiguating
+# context every pass without asking again.
+#
+# Shape: ``[LUCID_CLARIFY::<key>=<value>]`` where both halves are
+# snake_case identifiers. Plain text (no JSON, no quotes) so it remains
+# legible when the orchestrator splices it into prompts.
+CLARIFY_MARKER_PREFIX = "[LUCID_CLARIFY::"
+
+
+def extract_clarify_context(task: str) -> tuple[dict, str]:
+    """Strip every ``[LUCID_CLARIFY::key=value]`` marker out of *task*.
+
+    Returns ``(answers_dict, task_without_markers)``. ``answers_dict``
+    maps ``key`` → ``value`` (last write wins on duplicate keys). When
+    no markers are present, returns ``({}, task)``. The cleaned task is
+    what flows downstream into prompts so the markers themselves never
+    reach Gemini / Claude.
+    """
+    import re as _re
+    if not task or CLARIFY_MARKER_PREFIX not in task:
+        return {}, task or ""
+    answers: dict[str, str] = {}
+    pattern = _re.compile(r"\[LUCID_CLARIFY::([a-z][a-z0-9_]*)=([a-z0-9_\-]+)\]\s*")
+    cleaned = pattern.sub(lambda m: answers.update({m.group(1): m.group(2)}) or "", task)
+    return answers, cleaned
+
+
+def format_clarify_marker(key: str, value: str) -> str:
+    """Build a single ``[LUCID_CLARIFY::key=value]`` marker.
+
+    Both halves are coerced to snake_case lowercase. Caller is responsible
+    for prepending the marker to the task with a trailing space / newline.
+    """
+    safe_key = "".join(c if c.isalnum() else "_" for c in (key or "").strip().lower())
+    safe_val = "".join(c if (c.isalnum() or c == "-") else "_" for c in (value or "").strip().lower())
+    return f"[LUCID_CLARIFY::{safe_key}={safe_val}]"
 
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -429,7 +517,6 @@ def _classify_static(task: str) -> dict:
 
 async def classify_project_type_ai(
     task: str,
-    gemini_api_key: str = "",
     force_archetype: Optional[str] = None,
 ) -> dict:
     """AI-powered project classifier using Gemini Flash.
@@ -456,9 +543,6 @@ async def classify_project_type_ai(
         return _build_rich_classification(
             force_archetype, _detect_domain((task or "").lower()), locked=True
         )
-
-    if not gemini_api_key:
-        return _classify_static(task)
 
     # Fast-path: landing / one-pager synonyms are unambiguous — skip Gemini to save time.
     # Lock the classification so neither Gemini research nor the schema validator can
@@ -513,7 +597,6 @@ JSON:"""
             model="gemini-2.5-flash",
             payload={"contents": [{"parts": [{"text": prompt}]}]},
             timeout_s=10.0,
-            api_key=gemini_api_key,
             label="classifier",
         )
 

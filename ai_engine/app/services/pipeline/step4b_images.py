@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 async def analyze_images(
     images: list,
     task: str,
-    gemini_key: str,
     websocket: WebSocket,
 ) -> str:
     """Analyze user-uploaded images using Gemini Flash Vision.
@@ -33,7 +32,6 @@ async def analyze_images(
     Args:
         images: List of dicts with 'name', 'data', and optionally 'type', 'url'.
         task: The user's task description.
-        gemini_key: Gemini API key.
         websocket: WebSocket for progress updates.
 
     Returns:
@@ -132,7 +130,6 @@ Be specific and technical. Your description will be used by another AI to implem
                         model=GEMINI_MODEL,
                         payload=payload,
                         timeout_s=60.0,
-                        api_key=gemini_key,
                         label="step4b_image",
                     )
                     if status != 200 or data is None:

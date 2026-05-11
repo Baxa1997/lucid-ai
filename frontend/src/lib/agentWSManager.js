@@ -139,6 +139,7 @@ class AgentWSManager {
       this._phasesSnapshot = [];
       this._statusSnapshot = 'idle';
       this._lastEventId = null;
+      this._handshakeTaskSentFor = null;
     }
 
     // CRITICAL FIX: If ws exists but is not OPEN (e.g. CLOSING state),
@@ -186,6 +187,48 @@ class AgentWSManager {
       this._clearConnectTimeout();
       this._startHeartbeat();
 
+      // Wizard handshake fallback: if `task` arrived empty but sessionStorage
+      // still holds the wizard prompt for this project, recover it here. This
+      // avoids the SSR/hydration race where the workspace page's useState
+      // lazy initializer returns '' on the server (sessionStorage absent),
+      // and React reuses that '' on hydration — so the hook is wired with
+      // task='' even though the prompt is sitting in sessionStorage.
+      //
+      // Critical: only fire on the FIRST handshake for this projectId. On
+      // reconnect, all `manager.connect({task: ''})` paths intentionally
+      // send empty task — re-recovering would re-trigger the pipeline.
+      let resolvedTask = task || '';
+      const isFirstHandshake = !this._handshakeTaskSentFor || this._handshakeTaskSentFor !== projectId;
+      if (!resolvedTask && isFirstHandshake && projectId && typeof window !== 'undefined') {
+        try {
+          const stored = window.sessionStorage.getItem(`wizard_prompt_${projectId}`);
+          if (stored) {
+            const metaStr = window.sessionStorage.getItem(`wizard_meta_${projectId}`);
+            const desc = window.sessionStorage.getItem(`wizard_desc_${projectId}`) || '';
+            if (metaStr) {
+              try {
+                const meta = JSON.parse(metaStr);
+                const parts = [
+                  `description=${desc || 'project'}`,
+                  `stack=${meta.stack || 'nextjs'}`,
+                  `backend=${meta.backend || 'none'}`,
+                ];
+                if (meta.projectType) parts.push(`project_type=${meta.projectType}`);
+                if (meta.deployment) parts.push(`deployment=${meta.deployment}`);
+                if (meta.figmaUrl) parts.push(`figma_url=${meta.figmaUrl}`);
+                resolvedTask = `[LUCID_PROJECT] ${parts.join(' | ')}\n\n${stored}`;
+              } catch {
+                resolvedTask = stored;
+              }
+            } else {
+              resolvedTask = stored;
+            }
+            // eslint-disable-next-line no-console
+            console.warn('[WS] handshake task was empty — recovered wizard prompt from sessionStorage');
+          }
+        } catch {}
+      }
+
       ws.send(JSON.stringify({
         token: token || '',
         projectId: projectId || '',
@@ -193,9 +236,12 @@ class AgentWSManager {
         repoUrl: repoUrl || '',
         gitToken: gitToken || '',
         branch: branch || '',
-        task: task || '',
+        task: resolvedTask,
         lastEventId: this._lastEventId || '',
       }));
+      if (resolvedTask) {
+        this._handshakeTaskSentFor = projectId;
+      }
 
       // Flush any messages issued while the socket was reconnecting.
       if (this._pendingSends.length > 0) {

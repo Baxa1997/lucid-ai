@@ -149,6 +149,7 @@ class BuildValidator:
         Returns:
             {"success": True} or {"success": False, "errors": str, "error_count": int}
         """
+        timeout = 180
         try:
             result = await asyncio.to_thread(
                 subprocess.run,
@@ -156,7 +157,7 @@ class BuildValidator:
                 cwd=workspace_path,
                 capture_output=True,
                 text=True,
-                timeout=180,
+                timeout=timeout,
                 env=build_env,
             )
 
@@ -244,6 +245,12 @@ Rules:
 - If 'is not defined' -> add missing import or fix variable name
 - If 'SyntaxError' or type errors -> fix the JavaScript/TypeScript syntax
 - If missing 'use client' -> add it at the top of the file (Next.js only)
+- If "Expected ',', got '<...>'" or "Expected ',', got 'aria'" / "Expected ',', got <attrName>"
+  in a .jsx/.tsx file -> this is almost always JSX SIBLINGS WITHOUT A WRAPPER inside a
+  ternary or .map() callback. Wrap the siblings in a fragment or div:
+    BAD:  {{cond ? ( <A/> <B/> ) : ( <X/> )}}
+    GOOD: {{cond ? ( <> <A/> <B/> </> ) : ( <X/> )}}
+  Same fix applies to `items.map(x => <A/> <B/>)` → `items.map(x => <><A/><B/></>)`.
 - Do not change logic, design, or styling — only fix imports and syntax
 - Use RELATIVE imports only (../components/X, ./sections/Y)
 - For Next.js: do NOT use @/ alias

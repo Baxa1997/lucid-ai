@@ -15,19 +15,18 @@ _ADC_PATH = "/root/.config/gcloud/application_default_credentials.json"
 
 
 def _ai_backend_status() -> dict:
-    """Return a dict describing which AI backend is currently active."""
-    if settings.USE_VERTEX_AI:
-        adc_present = os.path.isfile(_ADC_PATH)
-        return {
-            "ai_backend": "VERTEX AI ACTIVE",
-            "gcp_project": settings.GOOGLE_CLOUD_PROJECT or "(not set)",
-            "gcp_location": settings.GOOGLE_CLOUD_LOCATION,
-            "adc_file_present": adc_present,
-            "adc_path": _ADC_PATH,
-        }
+    """Return a dict describing the Vertex AI backend status.
+
+    All Gemini traffic goes through Vertex via ADC; AI Studio is no
+    longer supported.
+    """
+    adc_present = os.path.isfile(_ADC_PATH)
     return {
-        "ai_backend": "AI STUDIO ACTIVE",
-        "google_api_key_set": bool(settings.GOOGLE_API_KEY),
+        "ai_backend": "VERTEX AI",
+        "gcp_project": settings.GOOGLE_CLOUD_PROJECT or "(not set)",
+        "gcp_location": settings.GOOGLE_CLOUD_LOCATION,
+        "adc_file_present": adc_present,
+        "adc_path": _ADC_PATH,
     }
 
 

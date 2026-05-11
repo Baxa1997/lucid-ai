@@ -28,13 +28,10 @@ import json
 import logging
 import os
 import random
+import re
 from typing import Any
 
 import httpx
-
-from app.services.pipeline.constants import (
-    _FALLBACK_GEMINI_KEY,
-)
 
 # Model IDs are env-overridable so we can swap without code changes.
 # Pro for grounded research (better tool-use + citation handling).
@@ -448,6 +445,52 @@ For EVERY section, populate:
     locations / contact / hours →
       Use brand.business_info — no pill-cluster prose.
 
+    ── HIRING / RECRUITMENT SECTIONS (when primary_purpose is hiring) ──
+    These section types appear when the page recruits candidates. Treat
+    image_queries the way you'd treat any other visual section — empty
+    queries here are why hiring pages currently render as text walls.
+
+    hero (when purpose=hiring) →
+      image_queries REQUIRED, 1: a SUBJECT noun rooted in the work itself.
+      For drivers: "freight truck highway sunset" / "cdl driver smiling cab".
+      For restaurant kitchen: "line cook plating busy kitchen".
+      For nurses: "nurse hospital corridor smiling".
+      Show the WORK or the WORKER, not a generic office.
+
+    open_roles / open_positions / job_openings →
+      items REQUIRED, parallel to named_roles when known: each
+        {{title: role name (e.g. "CDL-A Driver"),
+         description: 12-20-word duty / route / shift summary,
+         value: pay range (e.g. "$0.65-0.78 CPM" or "$65k-90k/yr"),
+         label: shift type / route type / location}}.
+      image_queries: 0 (cards render with icon + text, not photos).
+
+    compensation / pay / benefits →
+      items REQUIRED, 3-6: each {{title: benefit name (e.g. "Health Insurance",
+        "Sign-On Bonus"), description: 12-20-word concrete detail,
+        value: dollar / day / mile figure when relevant}}.
+      image_queries: 0.
+
+    requirements / qualifications →
+      items REQUIRED, 4-8 short bullet strings (each ≤80 chars). Each
+      is one requirement (CDL class, years exp, clean MVR, etc.).
+      image_queries: 0.
+
+    culture / why_work_here / day_in_life →
+      image_queries REQUIRED, 2-4: real-work imagery (truck cab interior,
+      driver lounge, fleet garage, route map detail).
+      items optional: 2-4 short culture pillars.
+
+    testimonials_employees / driver_voices →
+      items REQUIRED, 3-5: each {{title: employee name, description: 18-30-word
+      direct quote about the work / equipment / home time, label: role+tenure
+      e.g. "OTR Driver, 4 yrs"}}.
+      image_queries: 3-5 driver portraits when employees aren't real people
+      (otherwise leave images empty and let the brand supply real photos).
+
+    application_form / apply →
+      image_queries: 0. Render as a working form, not a banner.
+
   ── BANNED COPY PATTERNS (do not write these in headline / subheadline / body / item.description) ──
   • CURLY-BRACE PLACEHOLDERS — NEVER write copy with `{{adjective}}` / `{{noun}}` inline,
     e.g. "Featured in {{culinary publications}} and praised for our {{passionate craft}}."
@@ -501,11 +544,33 @@ HARD CONSTRAINTS
 
 # ── Public entry point ─────────────────────────────────────────────────
 
+async def _emit_fallback_warning(websocket, reason: str) -> None:
+    """Surface fallback-brief usage to the user.
+
+    Without this, when Gemini is unreachable (bad ADC, quota, etc.) the
+    pipeline silently produces a placeholder page (\"Built for what's next\")
+    and the user has no idea their AI calls aren't actually firing.
+    """
+    if websocket is None:
+        return
+    try:
+        await websocket.send_json({
+            "type": "warning",
+            "code": "FALLBACK_BRIEF",
+            "message": (
+                f"⚠️ AI research unavailable ({reason}). "
+                "Generating a placeholder page — check ai_engine logs for the real error "
+                "(usually ADC credentials or Vertex AI quota)."
+            ),
+        })
+    except Exception:
+        pass
+
+
 async def build_landing_brief(
     description: str,
     classification: dict | None = None,
     *,
-    gemini_key: str | None = None,
     websocket: Any = None,
     timeout_s: float = 240.0,
 ) -> dict[str, Any]:
@@ -513,14 +578,10 @@ async def build_landing_brief(
 
     Returns a dict matching ``_BRIEF_SCHEMA``. Falls back to a minimal
     Brief on any unrecoverable failure so downstream code never sees None.
+    Auth is handled inside ``gemini_post`` via Vertex ADC.
     """
     classification = classification or {}
     domain = (classification.get("domain") or "general").strip()
-
-    key = (gemini_key or _FALLBACK_GEMINI_KEY or os.environ.get("GOOGLE_API_KEY", "")).strip()
-    if not key:
-        logger.warning("build_landing_brief: no Gemini key — returning fallback brief")
-        return _fallback_brief(description, domain)
 
     design_seed = random.randint(1000, 9999)
 
@@ -538,8 +599,8 @@ async def build_landing_brief(
     design_prompt = _DESIGN_DNA_RESEARCH_PROMPT.format(description=description.strip(), domain=domain)
 
     structure_text, design_text = await asyncio.gather(
-        _grounded_research(structure_prompt, key, timeout_s, label="structure_research", websocket=websocket),
-        _grounded_research(design_prompt, key, timeout_s, label="design_dna_research", websocket=websocket),
+        _grounded_research(structure_prompt, timeout_s, label="structure_research", websocket=websocket),
+        _grounded_research(design_prompt, timeout_s, label="design_dna_research", websocket=websocket),
     )
 
     # If both research calls failed completely we have nothing to distill;
@@ -568,9 +629,10 @@ async def build_landing_brief(
         design_seed=design_seed,
     )
 
-    raw = await _structured_distill(distill_prompt, key, timeout_s)
+    raw = await _structured_distill(distill_prompt, timeout_s)
     if not raw:
         logger.warning("build_landing_brief: distill returned empty — fallback brief")
+        await _emit_fallback_warning(websocket, "Gemini brief call returned empty")
         return _fallback_brief(description, domain)
 
     try:
@@ -586,6 +648,7 @@ async def build_landing_brief(
         else:
             logger.warning("build_landing_brief: JSON parse failed (%s) — fallback. Head: %s",
                            exc, raw[:200])
+            await _emit_fallback_warning(websocket, f"Brief JSON parse failed: {str(exc)[:80]}")
             return _fallback_brief(description, domain)
 
     normalized = _normalize_brief(brief, description, domain)
@@ -604,7 +667,7 @@ async def build_landing_brief(
 # ── Grounded research call (Pro + google_search tool) ─────────────────
 
 async def _grounded_research(
-    prompt: str, key: str, timeout_s: float, *, label: str, websocket: Any = None,
+    prompt: str, timeout_s: float, *, label: str, websocket: Any = None,
 ) -> str:
     """One Gemini call with google_search grounding. Returns plain text.
 
@@ -630,7 +693,7 @@ async def _grounded_research(
 
     text, grounding = await _post_gemini(
         _RESEARCH_MODEL, payload_grounded, timeout_s,
-        label=f"{label}_grounded", api_key=key,
+        label=f"{label}_grounded",
     )
     sources = _grounding_source_count(grounding)
 
@@ -663,7 +726,7 @@ async def _grounded_research(
     payload_plain.pop("tools", None)
     text2, _ = await _post_gemini(
         _RESEARCH_MODEL, payload_plain, timeout_s,
-        label=f"{label}_plain", api_key=key,
+        label=f"{label}_plain",
     )
     return text2 or ""
 
@@ -683,7 +746,7 @@ def _grounding_source_count(grounding: dict | None) -> int:
     return len(chunks)
 
 
-async def _structured_distill(prompt: str, key: str, timeout_s: float) -> str:
+async def _structured_distill(prompt: str, timeout_s: float) -> str:
     """Final distill call — Flash + JSON output, no tools."""
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -696,20 +759,19 @@ async def _structured_distill(prompt: str, key: str, timeout_s: float) -> str:
     }
     text, _ = await _post_gemini(
         _BRIEF_MODEL, payload, timeout_s,
-        label="brief_distill", api_key=key,
+        label="brief_distill",
     )
     return text
 
 
 async def _post_gemini(
-    model: str, payload: dict, timeout_s: float, *, label: str, api_key: str = "",
+    model: str, payload: dict, timeout_s: float, *, label: str,
 ) -> tuple[str, dict | None]:
     """POST to Gemini and extract text. Logs token usage.
 
     Returns ``(text, grounding_metadata)``. ``grounding_metadata`` is the
     raw ``candidates[0].groundingMetadata`` dict when present, else None.
-    Routes via gemini_http shim — works against AI Studio or Vertex
-    based on settings.USE_VERTEX_AI.
+    Routes via gemini_http (Vertex only).
     """
     from app.services.gemini_http import gemini_post
 
@@ -717,7 +779,6 @@ async def _post_gemini(
         model=model,
         payload=payload,
         timeout_s=timeout_s,
-        api_key=api_key,
         label=f"landing_{label}",
     )
     if status != 200 or data is None:
@@ -901,12 +962,16 @@ def _normalize_design_system(ds: dict | None) -> dict:
 # literals, Claude becomes a layout assembler — not a stylist.
 
 _ACCENT_SHAPE: dict[str, dict[str, str]] = {
-    "squared":  {"card": "rounded-none",  "button": "rounded-none", "image": "rounded-none"},
+    # No accent_shape may produce `rounded-none` — that ships sharp 90° corners
+    # which read as broken UI on every modern motif (Rule 12 in the codegen
+    # prompt). Squared/hairline still feel architectural; we just keep a 4–8px
+    # radius so buttons/cards have a defined edge.
+    "squared":  {"card": "rounded-lg",    "button": "rounded-md",   "image": "rounded-md"},
     "rounded":  {"card": "rounded-xl",    "button": "rounded-md",   "image": "rounded-xl"},
     "pill":     {"card": "rounded-2xl",   "button": "rounded-full", "image": "rounded-2xl"},
     "blob":     {"card": "rounded-3xl",   "button": "rounded-full",
                  "image": "rounded-[40%_60%_70%_30%/40%_50%_60%_50%]"},
-    "hairline": {"card": "rounded-none",  "button": "rounded-none", "image": "rounded-none"},
+    "hairline": {"card": "rounded-lg",    "button": "rounded-md",   "image": "rounded-md"},
 }
 
 _SURFACE: dict[str, str] = {
@@ -933,6 +998,66 @@ _RHYTHM: dict[str, str] = {
     "balanced": "py-16 sm:py-20 lg:py-24",
     "airy":     "py-24 sm:py-32 lg:py-40",
 }
+
+
+# ───────────────────────── icon name normalization ────────────────────────
+# Common lowercase aliases Gemini emits for things that don't match Lucide's
+# PascalCase exports. Anything not in this map falls back to a snake/kebab →
+# PascalCase conversion. Anything that ends up non-alphabetic is dropped.
+_ICON_LOWERCASE_ALIASES: dict[str, str] = {
+    # Social / brand
+    "instagram": "Instagram", "twitter": "Twitter", "facebook": "Facebook",
+    "linkedin": "Linkedin", "youtube": "Youtube", "github": "Github",
+    "tiktok": "Music2", "discord": "MessageSquare", "pinterest": "Bookmark",
+    # Contact
+    "email": "Mail", "telephone": "Phone", "location": "MapPin",
+    "world": "Globe", "website": "Globe",
+    # Common UI
+    "close": "X", "loader": "Loader2", "spinner": "Loader2",
+    "external": "ExternalLink",
+    # Domain
+    "cart": "ShoppingCart", "bag": "ShoppingBag",
+    "logout": "LogOut", "login": "LogIn",
+}
+
+
+def _normalize_icon_name(raw: str | None) -> str:
+    """Convert any reasonable icon-name input to a Lucide-compatible PascalCase
+    identifier. Returns "" if normalization can't produce a valid JS identifier
+    (caller drops the icon rather than emitting a broken import).
+
+    Examples:
+      "shopping-cart" → "ShoppingCart"
+      "shopping_cart" → "ShoppingCart"
+      "ShoppingCart"  → "ShoppingCart"
+      "instagram"     → "Instagram"        (via aliases)
+      "tiktok"        → "Music2"           (alias)
+      "weird name!"   → ""                 (invalid → drop)
+    """
+    if not raw:
+        return ""
+    s = str(raw).strip()
+    if not s:
+        return ""
+    # Reject strings with disallowed characters — only letters, digits, and
+    # the conventional separators ` _-` can produce a safe identifier.
+    if re.search(r"[^A-Za-z0-9 _\-]", s):
+        return ""
+    # Already PascalCase + alphanumeric? Trust it.
+    if re.fullmatch(r"[A-Z][A-Za-z0-9]+", s):
+        return s
+    lowered = s.lower().replace(" ", "_").replace("-", "_")
+    # Alias lookup for single-word lowercase names.
+    if lowered in _ICON_LOWERCASE_ALIASES:
+        return _ICON_LOWERCASE_ALIASES[lowered]
+    # Generic snake/kebab → PascalCase.
+    parts = [p for p in lowered.split("_") if p and p.isalnum()]
+    if not parts:
+        return ""
+    pascal = "".join(p[0].upper() + p[1:] for p in parts)
+    if not re.fullmatch(r"[A-Z][A-Za-z0-9]+", pascal):
+        return ""
+    return pascal
 
 
 def _build_design_tokens(ds: dict | None) -> dict[str, str]:
@@ -979,15 +1104,22 @@ def _build_design_tokens(ds: dict | None) -> dict[str, str]:
 def _normalize_brief(brief: dict, description: str, domain: str) -> dict:
     out = dict(brief)
 
-    out["brand"] = {**_default_brand(description, domain), **(brief.get("brand") or {})}
-    out["palette"] = {**_default_palette(), **(brief.get("palette") or {})}
-    out["typography"] = {**_default_typography(), **(brief.get("typography") or {})}
+    # Gemini sometimes returns explicit `null` for palette / brand slots; a
+    # plain dict-merge would overwrite the safe defaults with None and ship
+    # `--primary: None;` into globals.css, breaking every Tailwind class
+    # bound to that token. Strip None values from the override side first.
+    def _drop_nones(d: dict | None) -> dict:
+        return {k: v for k, v in (d or {}).items() if v is not None}
+
+    out["brand"] = {**_default_brand(description, domain), **_drop_nones(brief.get("brand"))}
+    out["palette"] = {**_default_palette(), **_drop_nones(brief.get("palette"))}
+    out["typography"] = {**_default_typography(), **_drop_nones(brief.get("typography"))}
     out["motif"] = (brief.get("motif") or "minimal").strip().lower()
     # Normalize Gemini's freeform design_system values to valid enums BEFORE
     # they reach Claude's prompt or _build_design_tokens. See
     # _normalize_design_system for the coercion logic.
     out["design_system"] = _normalize_design_system(
-        {**_default_design_system(), **(brief.get("design_system") or {})}
+        {**_default_design_system(), **_drop_nones(brief.get("design_system"))}
     )
     out["domain_keywords"] = list(brief.get("domain_keywords") or []) or [domain]
 
@@ -1035,6 +1167,24 @@ def _normalize_brief(brief: dict, description: str, domain: str) -> dict:
         s.setdefault("items", [])
         s.setdefault("image_queries", [])
         s.setdefault("interactivity", "")
+
+        # Normalize each item.icon to a PascalCase Lucide identifier. Gemini
+        # frequently emits kebab-case ("shopping-cart") or snake_case
+        # ("shopping_cart") because that's how humans say icon names; both
+        # break `import {{ shopping-cart }} from "lucide-react"` with an
+        # invalid-identifier syntax error before the build even starts.
+        items = s.get("items") or []
+        if isinstance(items, list):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                normalized = _normalize_icon_name(item.get("icon"))
+                if normalized:
+                    item["icon"] = normalized
+                elif "icon" in item:
+                    # Drop unrecognized icons — codegen falls back to the
+                    # icon-less variant rather than emitting a broken import.
+                    item.pop("icon", None)
 
     if not any((s.get("type") or "").lower() == "hero" for s in sections):
         sections.insert(0, _default_hero(out["brand"]["name"], out["brand"]["tagline"]))

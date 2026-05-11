@@ -149,7 +149,6 @@ async def push_with_openhands(
         conversation = await openhands_manager.create_conversation(
             task_id=f"{task_id}_push",
             workspace=workspace_path,
-            gemini_key=validated["gemini_api_key"],
             tools=["terminal"],
         )
 

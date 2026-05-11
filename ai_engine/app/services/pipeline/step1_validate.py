@@ -14,7 +14,6 @@ from fastapi import WebSocket
 
 from .constants import (
     PLATFORM_GITHUB_TOKEN,
-    _FALLBACK_GEMINI_KEY,
 )
 from .github import (
     is_fine_grained_token,
@@ -77,12 +76,7 @@ async def validate_inputs(
             })
             return None
 
-        # ── Gemini API key ────────────────────────────────
-        gemini_key = user.get("gemini_api_key")
-        if gemini_key is None or str(gemini_key).strip() in ("", "None"):
-            # Fallback to platform key — don't block the user
-            gemini_key = _FALLBACK_GEMINI_KEY
-            logger.info("User has no Gemini key — using platform fallback")
+        # Gemini auth is now Vertex ADC inside gemini_post — no per-user key.
 
         # ══════════════════════════════════════════════════════════════════
         # ── EARLY EXIT: [LUCID_PROJECT] wizard header detected ────────────
@@ -171,7 +165,6 @@ async def validate_inputs(
 
             return {
                 "anthropic_api_key": str(api_key).strip(),
-                "gemini_api_key":    str(gemini_key).strip(),
                 "git_provider":      "github",
                 "repo_url":          "",
                 "branch":            "main",
@@ -380,7 +373,6 @@ async def validate_inputs(
         # new_project_mode is always False here — wizard tasks returned early above.
         validated = {
             "anthropic_api_key": str(api_key).strip(),
-            "gemini_api_key": str(gemini_key).strip(),
             "git_provider": git_provider,
             "repo_url": repo_url or "",
             "branch": branch,

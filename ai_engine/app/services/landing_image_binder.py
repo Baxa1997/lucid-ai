@@ -15,6 +15,7 @@ Why this lives separately from the legacy image binder:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -22,6 +23,26 @@ import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+# Number of Unsplash candidates to request per query so we can pick a
+# project-stable offset into the list. 5 is enough variety to avoid
+# collisions across briefs with the same query without burning rate budget.
+_CANDIDATE_POOL = 5
+
+
+def _project_offset(seed: str, query: str, modulo: int) -> int:
+    """Deterministic offset into the Unsplash result list.
+
+    Same project + same query → same photo (so re-running a generation
+    doesn't shuffle hero images on the user). Different project + same
+    query → different photo (so two real-estate briefs don't share the
+    same Unsplash top hit).
+    """
+    if modulo <= 1:
+        return 0
+    h = hashlib.md5(f"{seed}::{query}".encode("utf-8")).hexdigest()
+    return int(h[:8], 16) % modulo
 
 
 # Abstract single-word queries return random unrelated stock photos. We either
@@ -155,6 +176,11 @@ async def bind_landing_images(
     domain_suffix = " ".join(domain_terms[:3]).strip()
     cuisine_anchor = " ".join(domain_terms[:2]).strip() or "restaurant"
 
+    # Project-stable seed for the per-photo offset. Brand name is project-unique
+    # (each generation gets its own brand), tagline adds entropy so two brands
+    # that happen to share a name (e.g. "Elite Estates") still pick differently.
+    project_seed = f"{name}|{(brand_block.get('tagline') or '')[:80]}".strip().lower()
+
     def _sanitise(q: str) -> str:
         """Drop curly-brace placeholders, brand-name tokens, and pure-abstract words."""
         q = _strip_placeholders(q)
@@ -183,6 +209,41 @@ async def bind_landing_images(
             return cleaned
         return f"{cleaned} {domain_suffix}".strip()
 
+    # Per-item image_query synthesis ────────────────────────────────────
+    # Gemini's brief frequently puts image queries on `items[i].image_query`
+    # without also seeding a parallel `section.images[i]` placeholder.
+    # The codegen prompt tells Claude that per-item images live at
+    # `section.images[i].url` (parallel-indexed with items), so without
+    # this synthesis the JSX renders a hardcoded fallback or a broken `?`.
+    # Mirror item queries into images[] so the existing fetch loop covers
+    # them. We only fill empty / missing slots — never overwrite a URL the
+    # brief already pinned.
+    for section in sections:
+        items = section.get("items") or []
+        if not isinstance(items, list) or not items:
+            continue
+        existing_images = section.get("images") or []
+        if not isinstance(existing_images, list):
+            existing_images = []
+        synthesized_any = False
+        for it_idx, item in enumerate(items):
+            if not isinstance(item, dict):
+                continue
+            iq = (item.get("image_query") or "").strip()
+            if not iq:
+                continue
+            while len(existing_images) <= it_idx:
+                existing_images.append({})
+            slot = existing_images[it_idx]
+            if not isinstance(slot, dict):
+                continue
+            if not slot.get("url"):
+                slot.setdefault("query", iq)
+                slot.setdefault("alt", item.get("title") or iq)
+                synthesized_any = True
+        if synthesized_any:
+            section["images"] = existing_images
+
     # Collect every (section_idx, image_idx, query, is_hero) tuple
     jobs: list[tuple[int, int, str, bool]] = []
     for s_idx, section in enumerate(sections):
@@ -194,6 +255,10 @@ async def bind_landing_images(
             continue
         images = section.get("images") or []
         for i_idx, img in enumerate(images):
+            if not isinstance(img, dict):
+                continue
+            if img.get("url"):
+                continue  # already bound — skip
             query = (img.get("query") or img.get("alt") or "").strip()
             if not query and fallback_keywords:
                 query = fallback_keywords[0]
@@ -239,7 +304,7 @@ async def bind_landing_images(
         from app.services.unsplash import search_photos
         async with sem:
             try:
-                photos = await search_photos(query, count=1, orientation="landscape")
+                photos = await search_photos(query, count=_CANDIDATE_POOL, orientation="landscape")
             except Exception as exc:
                 logger.debug("bind_landing_images: search '%s' failed: %s", query, exc)
                 photos = []
@@ -248,7 +313,7 @@ async def bind_landing_images(
                 fallback_q = _simplify(query)
                 if fallback_q and fallback_q.lower() != query.lower():
                     try:
-                        photos = await search_photos(fallback_q, count=1, orientation="landscape")
+                        photos = await search_photos(fallback_q, count=_CANDIDATE_POOL, orientation="landscape")
                         if photos:
                             logger.info(
                                 "bind_landing_images: retry '%s' -> '%s' succeeded",
@@ -261,7 +326,9 @@ async def bind_landing_images(
                         )
         if not photos:
             return ""
-        return photos[0]["url_hero"] if is_hero else photos[0]["url_card"]
+        idx = _project_offset(project_seed, query, len(photos))
+        chosen = photos[idx]
+        return chosen["url_hero"] if is_hero else chosen["url_card"]
 
     fetched = await asyncio.gather(
         *(_fetch(q, hero) for _, _, q, hero in jobs),

@@ -26,7 +26,6 @@ import os
 from typing import Any
 
 from app.services.landing_gemini import grounded_research, looks_degenerate
-from app.services.pipeline.constants import _FALLBACK_GEMINI_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -263,13 +262,12 @@ HARD RULES:
 async def run_design_research(
     intent: dict,
     *,
-    gemini_key: str | None = None,
     websocket: Any = None,
     timeout_s: float = 240.0,
 ) -> dict[str, Any]:
     """Stage 3 — run 4 parallel grounded design research calls.
 
-    Returns a dict shaped:
+    Auth handled by gemini_post via Vertex ADC. Returns a dict shaped:
       {
         "visual":     {"text": str, "sources": int, "urls": [...]},
         "typography": {"text": str, "sources": int, "urls": [...]},
@@ -282,14 +280,7 @@ async def run_design_research(
           "calls_degenerate": int,
         },
       }
-
-    Empty result on missing API key — caller decides how to recover.
     """
-    key = (gemini_key or _FALLBACK_GEMINI_KEY or os.environ.get("GOOGLE_API_KEY", "")).strip()
-    if not key:
-        logger.warning("run_design_research: no Gemini key — skipping research")
-        return _empty_result()
-
     fmt_args = _format_args(intent)
 
     if websocket is not None:
@@ -307,10 +298,10 @@ async def run_design_research(
     layout_prompt     = _LAYOUT_RESEARCH_PROMPT.format(**fmt_args)
 
     visual, typography, color, layout = await asyncio.gather(
-        grounded_research(visual_prompt,     key, timeout_s, label="visual_research",     websocket=websocket),
-        grounded_research(typography_prompt, key, timeout_s, label="typography_research", websocket=websocket),
-        grounded_research(color_prompt,      key, timeout_s, label="color_research",      websocket=websocket),
-        grounded_research(layout_prompt,     key, timeout_s, label="layout_research",     websocket=websocket),
+        grounded_research(visual_prompt,     timeout_s, label="visual_research",     websocket=websocket),
+        grounded_research(typography_prompt, timeout_s, label="typography_research", websocket=websocket),
+        grounded_research(color_prompt,      timeout_s, label="color_research",      websocket=websocket),
+        grounded_research(layout_prompt,     timeout_s, label="layout_research",     websocket=websocket),
     )
 
     result = {

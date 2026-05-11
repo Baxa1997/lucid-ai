@@ -36,7 +36,6 @@ import os
 from typing import Any
 
 from app.services.landing_gemini import structured_distill
-from app.services.pipeline.constants import _FALLBACK_GEMINI_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +95,115 @@ _DOMAIN_SIGNALS_SCHEMA: dict[str, Any] = {
         "white_space": {
             "type": "ARRAY",
             "items": {"type": "STRING"},
+        },
+    },
+}
+
+
+# Visual DNA — concrete cultural / category-specific visual cues.
+#
+# This is the answer to "every restaurant looks the same." The legacy
+# design_signals schema compresses 50KB of grounded research into a few
+# enum-ish fields (dominant_paradigm: "editorial-warm", motif: "luxe").
+# By the time Claude sees them, all the *Chinese-vs-Italian* visual
+# specificity has been erased — both projects look identically luxe.
+#
+# visual_dna preserves the cultural texture as RICH, CONCRETE strings
+# Claude can act on directly: "ink-wash gradient as section divider",
+# "lantern silhouette icon", "rice-paper grain over hero photo". No
+# enum compression. No paradigm-name shorthand.
+#
+# `cultural_intensity` is a single dial Gemini sets per project — it
+# decides whether the cultural cues sit in restrained accent positions
+# ("subtle" — modern luxe with a red seal-stamp) or take over the page
+# ("bold" — full-bleed rice-paper texture, calligraphy headers).
+_VISUAL_DNA_SCHEMA: dict[str, Any] = {
+    "type": "OBJECT",
+    "required": [
+        "decorative_motifs",
+        "signature_textures",
+        "iconography_anchors",
+        "photography_style",
+        "layout_signature",
+        "cultural_palette_emphasis",
+        "typography_voice",
+        "section_flavors",
+        "section_anatomies",
+        "cultural_intensity",
+    ],
+    "properties": {
+        "decorative_motifs": {
+            "type": "ARRAY",
+            "items": {"type": "STRING"},
+        },
+        "signature_textures": {
+            "type": "ARRAY",
+            "items": {"type": "STRING"},
+        },
+        "iconography_anchors": {
+            "type": "ARRAY",
+            "items": {"type": "STRING"},
+        },
+        "photography_style":         {"type": "STRING"},
+        "layout_signature":          {"type": "STRING"},
+        "cultural_palette_emphasis": {"type": "STRING"},
+        "typography_voice":          {"type": "STRING"},
+        "section_flavors": {
+            "type": "OBJECT",
+            "properties": {
+                "hero":         {"type": "STRING"},
+                "menu":         {"type": "STRING"},
+                "gallery":      {"type": "STRING"},
+                "story":        {"type": "STRING"},
+                "philosophy":   {"type": "STRING"},
+                "testimonials": {"type": "STRING"},
+                "value_prop":   {"type": "STRING"},
+                "reservations": {"type": "STRING"},
+                "features":     {"type": "STRING"},
+                "process":      {"type": "STRING"},
+            },
+        },
+        # ── Per-section structural anatomy (research-driven) ──────────────
+        # Concrete layout spec per section type — where things go, what
+        # shapes, what scale, which decorative cues land where. Each entry
+        # is 80-150 words written in the same format as a developer-facing
+        # design spec. Codegen reads this VERBATIM as the section's
+        # "ARCHETYPE" anatomy block (replacing the formerly-hardcoded
+        # _HERO_ARCHETYPES / _MENU_ARCHETYPES / etc. libraries). Empty or
+        # missing entries fall back to the minimal _FALLBACK_SKELETONS
+        # in landing_section_codegen.py — pipeline never blocks on a
+        # missing anatomy. Keys correspond to section.type values used
+        # in the brief's sections array.
+        "section_anatomies": {
+            "type": "OBJECT",
+            "properties": {
+                "hero":         {"type": "STRING"},
+                "menu":         {"type": "STRING"},
+                "gallery":      {"type": "STRING"},
+                "story":        {"type": "STRING"},
+                "philosophy":   {"type": "STRING"},
+                "testimonials": {"type": "STRING"},
+                "value_prop":   {"type": "STRING"},
+                "features":     {"type": "STRING"},
+                "process":      {"type": "STRING"},
+                "how_it_works": {"type": "STRING"},
+                "press":        {"type": "STRING"},
+                "team":         {"type": "STRING"},
+                "pricing":      {"type": "STRING"},
+                "faq":          {"type": "STRING"},
+                "cta":          {"type": "STRING"},
+                "stats":        {"type": "STRING"},
+                "locations":    {"type": "STRING"},
+                "reservation":  {"type": "STRING"},
+                "contact":      {"type": "STRING"},
+                "newsletter":   {"type": "STRING"},
+                "header":       {"type": "STRING"},
+                "footer":       {"type": "STRING"},
+            },
+        },
+        "cultural_intensity": {
+            "type": "STRING",
+            "enum": ["subtle", "bold"],
         },
     },
 }
@@ -170,6 +278,99 @@ _DESIGN_SIGNALS_SCHEMA: dict[str, Any] = {
 
 
 # ── Prompts ──────────────────────────────────────────────────────────
+
+_VISUAL_DNA_EXTRACT_PROMPT = """You are extracting the VISUAL DNA — the concrete, culturally-specific visual elements — that distinguish a {category} ({subcategory}) brand serving {audience_primary} in {geo_specifics}.
+
+Brand personality: {personality}
+Tone: {tone}
+
+Below are FOUR grounded research dumps. Use them as the primary source. Pull specifics from the research; do not invent generic SaaS-style elements. The output must look DIFFERENT from a generic "modern luxe" brand — every field should make this brand feel like THIS category in THIS region, not Stripe or Linear.
+
+===VISUAL_RESEARCH===
+{visual}
+
+===TYPOGRAPHY_RESEARCH===
+{typography}
+
+===COLOR_RESEARCH===
+{color}
+
+===LAYOUT_RESEARCH===
+{layout}
+
+EXTRACT into JSON matching the schema. Every string must be CONCRETE and ACTIONABLE — Claude reads these directly and renders them as JSX.
+
+• decorative_motifs (3-5 items): SPECIFIC decorative ELEMENTS this brand should use as visual accents. Each is a thing, not an adjective. Examples by category:
+    Chinese fine dining: "red seal-stamp accent under headlines", "ink-wash gradient as section divider", "lantern silhouette as bullet marker"
+    Italian trattoria:   "olive-branch hand-drawn flourish next to CTAs", "wood-grain hint on card edges", "chalkboard-script eyebrow tags"
+    Spanish tapas bar:   "azulejo tile pattern band between sections", "small flamenco fan ornament next to menu sections", "warm sun-rays radiating behind hero headline"
+    SaaS fintech:        "thin gradient ring around stat numbers", "monospace ticker line under hero", "subtle grid mesh background"
+  Avoid generic items ("rounded corners", "drop shadow") — every motif must reference the brand's actual cultural / category context.
+
+• signature_textures (2-3 items): textural backgrounds or surface treatments that fit this brand. Be concrete: "rice-paper grain over hero photo at 8% opacity", "azulejo tile band as section bg", "wood-grain hint on cards via bg-[url(/textures/wood.svg)]". If no specific texture fits, return an empty array — do NOT pad with "subtle gradient".
+
+• iconography_anchors (4-6 items): culturally-resonant ICONOGRAPHY this brand should reference. NOT Lucide icon names — IDEAS for icons that match the cultural context. Examples:
+    Chinese: "lantern", "tea cup", "jade dot", "bamboo stem", "calligraphy stroke"
+    Italian: "olive branch", "wine glass", "pasta swirl", "tomato outline", "pizza-peel silhouette"
+    Spanish: "olive", "jamón leg outline", "sherry glass", "fan", "flamenco-frill line"
+
+• photography_style (1-2 sentences): the dominant photography mood. Be specific about subject, lighting, and tone.
+    Example (Chinese): "Communal round tables with shared dishes, lantern-warm lighting, steam rising off bowls, intimate dim ambiance — never bright commercial product shots."
+    Example (Italian): "Hand-tossed dough on flour-dusted wood, golden hour light through restaurant windows, vineyards at dusk, simple white plates with vivid pasta colors."
+
+• layout_signature (1-2 sentences): the LAYOUT idiom this brand should commit to.
+    Example (Chinese fine dining): "Asymmetric balance with generous negative space (the 'ma' principle), vertical reading rhythm, off-center hero composition, restrained content density."
+    Example (Italian trattoria): "Confident left-aligned hero, hand-drawn accents in margins, slightly imperfect spacing that reads warm/handcrafted, blackboard-style menu typography."
+
+• cultural_palette_emphasis (1 sentence): which 2-3 colors should dominate the visual experience and why.
+    Example: "Red lacquer (primary) + gold leaf (accent) + jade green (secondary) — symbolizing prosperity and ceremonial luxury in Chinese fine dining tradition."
+
+• typography_voice (1-2 sentences): what the TYPE should FEEL like, beyond just font names.
+    Example (Chinese): "Brush-stroke serifs evoking calligraphy in headings, paired with confident clean sans for body. Eyebrow tags use uppercase tracking-widest for ceremonial precision."
+    Example (Italian trattoria): "Warm humanist serifs for headings (Cormorant or Crimson Pro), italic accent words for menu names, hand-drawn script eyebrows."
+
+• section_flavors: per-section concrete cultural notes Claude should apply when generating that section. Each is 1 sentence describing how to flavor that specific section type.
+    hero:         "...specific hero treatment for this brand..."
+    menu:         "...how the menu should feel culturally..."
+    gallery:      "...what the gallery should evoke..."
+    story / philosophy / value_prop / testimonials / reservations: same pattern.
+  Skip section types not relevant to this brand's archetype.
+
+• section_anatomies: per-section STRUCTURAL anatomy spec (the actual layout blueprint Claude implements). Each entry is 80–150 words describing WHERE things go, what shapes, what scale tokens, and which decorative cues from this VISUAL DNA land where. Format like a developer-facing design spec. Anchor to the visual_research / layout_research above — pull from real reference patterns the research surfaced. Each anatomy MUST include:
+    1. Outer <section> structural rules (overflow-hidden when decorative bleeds present, min-h, padding tokens).
+    2. Composition: column count / grid shape / asymmetry / where copy and media land.
+    3. Concrete decorative integration: which 1-2 motifs / textures / iconography_anchors from above appear, and exactly where (eyebrow ornament, divider, image-frame border, hero overlay, card edge, etc.).
+    4. Typography scale (e.g. text-5xl md:text-6xl lg:text-7xl on h1) tied to typography_voice.
+    5. Photography treatment when applicable (overlay, duotone, mask, etc.).
+  Per-section guidance:
+    hero:         dominant pattern (full-bleed photo + overlay / oversized headline + product image / asymmetric split / etc.) chosen from research, not a generic SaaS centered hero.
+    menu:         photo cards vs editorial dotted-leader vs categorized rows — pick what fits cultural_intensity + cuisine. Include category-header treatment + price-line shape.
+    gallery:      grid shape (asymmetric 12-col, bento mosaic, marquee scroll) + tile aspect rotation + caption treatment.
+    testimonials: card style (glass-on-photo / marquee / big-quote-portrait) + star treatment + avatar shape.
+    features:     icon-grid vs split-image-bullets vs numbered-stepper vs editorial-numbered-list — pick from layout_research.
+    story:        narrative split (asymmetric image-left / quote-dominant / timeline) — pick what fits the brand's voice.
+    press:        FLAT logo strip + pull-quote (NEVER overlapping rotated cards).
+    cta / process / stats / faq / pricing / locations / reservation / contact / newsletter: include only if the section appears in this brief; otherwise skip.
+    header:       (top-bar archetype) sticky-bar | transparent-pill | centered-logo | mega-menu | side-rail. Pick what fits the brand category. Specify scroll behavior.
+    footer:       (footer archetype) mega-columns | minimalist-row | cta-band | centered-stack. Pick what fits brand voice. Specify column structure + social row.
+  Skip section types not relevant to this brand. Each anatomy is COMPLETE in itself — Claude reads it as the spec without seeing the others.
+
+• cultural_intensity: ONE word — "subtle" or "bold".
+    "subtle"  = cultural cues sit in accent positions only (a small red seal-stamp, a lantern silhouette as a divider). Modern restraint stays. Page reads upscale-modern with cultural FLAVOR.
+    "bold"    = larger cultural textures (rice-paper over hero, calligraphy-stroke headers, full-bleed cultural patterns), more 'wow', less restraint. Page reads unmistakably traditional.
+  Pick based on the brand's tone ({tone}) and personality ({personality}). Restrained, refined, minimalist, sophisticated → subtle. Festive, traditional, immersive, theatrical, expressive → bold. When in doubt, pick subtle.
+
+OUTPUT BUDGET — be COMPACT but section_anatomies needs room. Whole JSON should fit in ~6000 chars. Concretely:
+  • Each string field (photography_style, layout_signature, cultural_palette_emphasis, typography_voice): 1-2 sentences, MAX ~200 chars each.
+  • decorative_motifs: 3-5 items. Each item ≤80 chars.
+  • signature_textures: 2-3 items. Each item ≤80 chars.
+  • iconography_anchors: 4-6 items. Each item is a SHORT noun (≤25 chars: "lantern", "tea cup", "olive branch") — no descriptions.
+  • section_flavors: 1 sentence per section type, MAX ~150 chars each. Skip section types not relevant.
+  • section_anatomies: 80-150 words PER section, ~700-1200 chars each. ONLY include section types relevant to this brief — fewer richer entries beats many thin ones. Aim for 5-8 entries total (always include hero + header + footer; the rest match what the brand needs).
+Stop early. Do not pad with extra commentary, examples, or rationale prose. Concrete and tight beats expansive every time.
+
+OUTPUT: just the JSON. No markdown wrapper. Every string concrete and actionable — no abstract design jargon, no SaaS-flavored boilerplate."""
+
 
 _DOMAIN_EXTRACT_PROMPT = """You are distilling 4 grounded research dumps about a {category} business in {geo_specifics} into a structured JSON object.
 
@@ -249,24 +450,19 @@ async def extract_research_signals(
     domain_research: dict,
     design_research: dict,
     *,
-    gemini_key: str | None = None,
     timeout_s: float = 90.0,
 ) -> dict[str, Any]:
     """Two parallel Flash calls → structured signal dict.
 
-    Returns ``{"domain": {...}, "design": {...}, "_meta": {...}}``.
-    On any failure, returns empty signal dicts so caller can no-op the
-    enrichment cleanly.
+    Auth handled by gemini_post via Vertex ADC. Returns
+    ``{"domain": {...}, "design": {...}, "_meta": {...}}``. On any failure,
+    returns empty signal dicts so caller can no-op the enrichment cleanly.
     """
-    key = (gemini_key or _FALLBACK_GEMINI_KEY or os.environ.get("GOOGLE_API_KEY", "")).strip()
-    if not key:
-        logger.warning("extract_research_signals: no Gemini key — empty signals")
-        return _empty_result()
-
     audience = intent.get("target_audience") or {}
     personality = intent.get("brand_personality") or []
     fmt = {
         "category":         (intent.get("business_category") or "general business").strip(),
+        "subcategory":      (intent.get("business_subcategory") or "").strip() or "general",
         "geo_specifics":    (intent.get("geographic_specifics") or "United States").strip(),
         "audience_primary": (audience.get("primary") or "general consumers").strip(),
         "personality":      ", ".join(personality) if personality else "modern, clear, trustworthy",
@@ -274,7 +470,7 @@ async def extract_research_signals(
     }
 
     domain_prompt = _DOMAIN_EXTRACT_PROMPT.format(
-        **fmt,
+        **{k: fmt[k] for k in ("category", "geo_specifics", "audience_primary", "personality", "tone")},
         business=_clip(domain_research.get("business", {}).get("text", ""), 8000),
         audience=_clip(domain_research.get("audience", {}).get("text", ""), 8000),
         regional=_clip(domain_research.get("regional", {}).get("text", ""), 6000),
@@ -282,6 +478,14 @@ async def extract_research_signals(
     )
 
     design_prompt = _DESIGN_EXTRACT_PROMPT.format(
+        **{k: fmt[k] for k in ("category", "geo_specifics", "audience_primary", "personality", "tone")},
+        visual=_clip(design_research.get("visual", {}).get("text", ""), 8000),
+        typography=_clip(design_research.get("typography", {}).get("text", ""), 6000),
+        color=_clip(design_research.get("color", {}).get("text", ""), 6000),
+        layout=_clip(design_research.get("layout", {}).get("text", ""), 8000),
+    )
+
+    visual_dna_prompt = _VISUAL_DNA_EXTRACT_PROMPT.format(
         **fmt,
         visual=_clip(design_research.get("visual", {}).get("text", ""), 8000),
         typography=_clip(design_research.get("typography", {}).get("text", ""), 6000),
@@ -289,37 +493,69 @@ async def extract_research_signals(
         layout=_clip(design_research.get("layout", {}).get("text", ""), 8000),
     )
 
-    domain_raw, design_raw = await asyncio.gather(
+    async def _visual_dna_call() -> str:
+        """Visual DNA call wrapped so we can retry once when section_anatomies
+        comes back empty. The anatomies are now load-bearing for codegen — when
+        they're missing every section falls back to the generic skeleton, so
+        a single extra distill call (~5s, cheap Flash tokens) is worth it.
+        """
+        return await structured_distill(
+            visual_dna_prompt, timeout_s,
+            label="visual_dna", response_schema=_VISUAL_DNA_SCHEMA, max_tokens=16384,
+        )
+
+    domain_raw, design_raw, visual_dna_raw = await asyncio.gather(
         structured_distill(
-            domain_prompt, key, timeout_s,
+            domain_prompt, timeout_s,
             label="domain_signals", response_schema=_DOMAIN_SIGNALS_SCHEMA, max_tokens=4096,
         ),
         structured_distill(
-            design_prompt, key, timeout_s,
+            design_prompt, timeout_s,
             label="design_signals", response_schema=_DESIGN_SIGNALS_SCHEMA, max_tokens=4096,
         ),
+        _visual_dna_call(),
     )
 
     domain = _parse_json(domain_raw, label="domain_signals") or {}
     design = _parse_json(design_raw, label="design_signals") or {}
+    visual_dna = _parse_json(visual_dna_raw, label="visual_dna") or {}
+
+    # One-retry fallback: if section_anatomies is missing/empty, the codegen
+    # falls back to generic skeletons — a 5s retry is cheap insurance.
+    if not (visual_dna.get("section_anatomies") or {}):
+        try:
+            logger.info("extract_research_signals: visual_dna.section_anatomies empty — retrying once")
+            visual_dna_retry_raw = await _visual_dna_call()
+            visual_dna_retry = _parse_json(visual_dna_retry_raw, label="visual_dna_retry") or {}
+            if visual_dna_retry.get("section_anatomies"):
+                visual_dna = visual_dna_retry
+        except Exception as exc:
+            logger.warning("extract_research_signals: visual_dna retry failed (%s) — using first attempt", exc)
 
     # Persist for diagnostics
     try:
         with open("/tmp/landing_signals.json", "w") as fh:
-            json.dump({"domain": domain, "design": design}, fh, indent=2, ensure_ascii=False)
+            json.dump(
+                {"domain": domain, "design": design, "visual_dna": visual_dna},
+                fh, indent=2, ensure_ascii=False,
+            )
     except Exception:
         pass
 
+    anatomies_count = len((visual_dna.get("section_anatomies") or {}))
     logger.info(
-        "extract_research_signals: ok — domain_keys=%d design_keys=%d",
-        len(domain), len(design),
+        "extract_research_signals: ok — domain_keys=%d design_keys=%d visual_dna_keys=%d anatomies=%d intensity=%s",
+        len(domain), len(design), len(visual_dna), anatomies_count,
+        (visual_dna.get("cultural_intensity") or "?"),
     )
     return {
         "domain": domain,
         "design": design,
+        "visual_dna": visual_dna,
         "_meta": {
-            "domain_extracted": bool(domain),
-            "design_extracted": bool(design),
+            "domain_extracted":     bool(domain),
+            "design_extracted":     bool(design),
+            "visual_dna_extracted": bool(visual_dna),
         },
     }
 
@@ -363,36 +599,28 @@ def enrich_brief_with_signals(brief: dict, signals: dict) -> dict:
         }
         brief.setdefault("_research", {})["typography_rationale"] = typo.get("rationale", "")
 
-    # Motif from paradigm — keep as one short word for legacy compat
+    # Paradigm telemetry only. We INTENTIONALLY do not overwrite brief.motif
+    # here: motif is paired with brief.personality.vibe_keywords on the plan
+    # card, and the two come from the same Gemini distill call. Overriding
+    # motif from a different research track produces an incoherent design
+    # line ("utilitarian motif · premium, approachable, modern"). The
+    # paradigm string is still kept under _research for codegen context.
     paradigm = (design.get("dominant_paradigm") or "").strip().lower()
     if paradigm:
-        brief["motif"] = paradigm.split("-")[0] or brief.get("motif", "minimal")
         brief.setdefault("_research", {})["paradigm"] = paradigm
 
-    # Hero archetype — substring match on the research-named pattern
-    # against our allowed enum set. First match wins.
-    hero_arch_allowed = [
-        "full-bleed-overlay", "oversized-watermark", "asymmetric-split",
-        "type-wrapping-product", "video-mask", "card-stack",
-    ]
+    # Hero pattern — kept as a metadata breadcrumb only.
+    # Section structure is now driven by visual_dna.section_anatomies (Gemini-
+    # written from grounded research). The legacy hero `archetype` field is
+    # no longer load-bearing for codegen, but research-derived rationale is
+    # still useful in _research for debugging and downstream consumers.
     hero = design.get("hero_pattern") or {}
-    hero_name_raw = (hero.get("name") or "").strip().lower()
-    # Normalize separators so "Asymmetric Split with strong imagery" → "asymmetric-split-..."
-    hero_name = hero_name_raw.replace(" ", "-").replace("_", "-")
-    # Extra fuzzy aliases for phrasings that don't contain our slug literally
-    if "video" in hero_name and "background" in hero_name:
-        hero_name = "video-mask"
-    elif "minimalist" in hero_name and ("typograph" in hero_name or "type" in hero_name):
-        hero_name = "oversized-watermark"
-    elif "centered" in hero_name and ("cta" in hero_name or "headline" in hero_name):
-        hero_name = "full-bleed-overlay"
-
-    matched = next((a for a in hero_arch_allowed if a in hero_name), None)
-    if matched:
+    if hero.get("rationale"):
         for s in brief.get("sections") or []:
             if (s.get("type") or "").lower() == "hero":
-                s["archetype"] = matched
                 s.setdefault("_research", {})["hero_rationale"] = hero.get("rationale", "")
+                if hero.get("name"):
+                    s.setdefault("_research", {})["hero_pattern_name"] = hero["name"]
                 break
 
     # Per-section approaches — soft overrides via _research breadcrumb;
@@ -414,6 +642,15 @@ def enrich_brief_with_signals(brief: dict, signals: dict) -> dict:
         brief["industry_terms"] = list(domain["industry_terms"])[:10]
     if domain.get("white_space"):
         brief["white_space"] = list(domain["white_space"])[:5]
+
+    # Visual DNA — concrete, culturally-specific visual cues. The codegen
+    # prompt reads brief["visual_dna"] as the PRIMARY visual directive
+    # (replacing the abstract motion/accent_shape/surface enums as the lead
+    # design signal). Empty when extraction failed; codegen falls back to
+    # the legacy enums-only path.
+    visual_dna = signals.get("visual_dna") or {}
+    if visual_dna:
+        brief["visual_dna"] = visual_dna
 
     # Merge top_competitors into references (legacy brief.references)
     top = domain.get("top_competitors") or []
@@ -452,8 +689,66 @@ def _parse_json(raw: str, *, label: str) -> dict | None:
     try:
         return json.loads(raw)
     except json.JSONDecodeError as exc:
+        # Salvage attempt for responses truncated mid-string (max_tokens hit).
+        # Walk back to the last well-formed object/array boundary and close
+        # any open brackets so we get partial signal instead of dropping
+        # everything. Better partial visual_dna than nothing.
+        salvaged = _salvage_truncated_json(raw)
+        if salvaged is not None:
+            logger.warning(
+                "extract_research_signals %s: JSON parse failed (%s); SALVAGED %d keys",
+                label, exc, len(salvaged) if isinstance(salvaged, dict) else 0,
+            )
+            return salvaged
         logger.warning("extract_research_signals %s: JSON parse failed (%s) — head: %s",
                        label, exc, raw[:200])
+        return None
+
+
+def _salvage_truncated_json(raw: str) -> dict | None:
+    """Recover partial JSON from a response truncated mid-string.
+
+    Strategy: scan the raw text left-to-right tracking brace/bracket depth
+    and string state. Remember the LAST byte position where we were at
+    depth=1 (just inside the top-level object) and not inside a string.
+    Truncate there, append `}`, parse. Returns None if salvage fails.
+    """
+    if not raw or "{" not in raw:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    last_safe = -1  # last position at depth 1 outside a string after a comma
+    for i, ch in enumerate(raw):
+        if escape:
+            escape = False
+            continue
+        if in_string:
+            if ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+            if depth == 1:
+                last_safe = i + 1  # right after a closing bracket at depth 2
+        elif ch == "," and depth == 1:
+            last_safe = i  # before the comma
+    if last_safe <= 0:
+        return None
+    candidate = raw[:last_safe].rstrip()
+    if candidate.endswith(","):
+        candidate = candidate[:-1]
+    candidate += "}"
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
         return None
 
 
@@ -528,19 +823,18 @@ async def extract_multipage_voice_signals(
     research_blob: str,
     classification: dict,
     *,
-    gemini_key: str | None = None,
     timeout_s: float = 60.0,
 ) -> dict[str, Any]:
     """One Flash call → 4 voice signals for the multi-page generator.
 
-    Returns ``{voice_phrases, industry_terms, regional_refs, white_space}``
-    or an empty dict on failure (caller should no-op the injection).
+    Auth handled by gemini_post via Vertex ADC. Returns
+    ``{voice_phrases, industry_terms, regional_refs, white_space}`` or an
+    empty dict on failure (caller should no-op the injection).
     """
-    key = (gemini_key or _FALLBACK_GEMINI_KEY or os.environ.get("GOOGLE_API_KEY", "")).strip()
-    if not key or not research_blob or len(research_blob) < 500:
+    if not research_blob or len(research_blob) < 500:
         logger.info(
-            "extract_multipage_voice_signals: skip (key=%s blob=%d)",
-            bool(key), len(research_blob or ""),
+            "extract_multipage_voice_signals: skip (blob=%d)",
+            len(research_blob or ""),
         )
         return {}
 
@@ -551,7 +845,7 @@ async def extract_multipage_voice_signals(
     )
 
     raw = await structured_distill(
-        prompt, key, timeout_s,
+        prompt, timeout_s,
         label="multipage_voice",
         response_schema=_MULTIPAGE_VOICE_SCHEMA,
         max_tokens=2048,

@@ -254,13 +254,22 @@ export async function POST(req, { params }) {
       throw new Error(`Unexpected GitHub error on main check: ${mainRefRes.status} ${txt.slice(0, 150)}`);
     }
 
-    // ── 4. Fire-and-forget Vercel project ensure + deploy ───────
+    // ── 4. Vercel project ensure + deploy ───────────────────────
     // ALWAYS call this — first-publish creates the project and deploys,
     // republish just triggers a new deploy on the existing project.
     // Vercel's webhook doesn't fire reliably for our flow because we push
     // to main *before* the project link, so we trigger deploys explicitly.
+    //
+    // CRITICAL: this MUST be awaited. A previous version was fire-and-forget
+    // (.catch() with no await), which let the publish response return before
+    // Vercel had actually queued the deploy. Symptom: the very first click
+    // after generation appeared to succeed but didn't deploy; the second
+    // click triggered the deploy because by then the project existed on
+    // Vercel and the second call hit the fast path. Awaiting guarantees
+    // the deploy is queued before we tell the user "Published!".
     const vercelToken = process.env.VERCEL_TOKEN;
     let resolvedVercelUrl = null;
+    let vercelEnsureError = null;
     if (vercelToken) {
       const teamId = process.env.VERCEL_TEAM_ID || '';
       const projectSlug = repo.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 50);
@@ -273,20 +282,33 @@ export async function POST(req, { params }) {
         token: vercelToken, teamId, projectSlug,
       });
 
+      try {
+        await ensureVercelProject({
+          token: vercelToken,
+          teamId,
+          projectSlug,
+          owner,
+          repo,
+          ghToken: platformToken,
+        });
+        // The project may have been created in this call. Re-resolve the
+        // canonical alias now that Vercel has had a moment to assign it,
+        // so the saved/returned URL is the real one rather than a guess.
+        if (!resolvedVercelUrl) {
+          resolvedVercelUrl = await resolveVercelProductionUrl({
+            token: vercelToken, teamId, projectSlug,
+          });
+        }
+      } catch (e) {
+        vercelEnsureError = e?.message || String(e);
+        console.warn('[publish] Vercel ensure+deploy failed:', vercelEnsureError);
+      }
+
       // Fallback chain: prefer freshly-resolved alias, then whatever was saved
       // on a prior publish, finally a best-guess prediction (last resort, may 404).
       if (!resolvedVercelUrl) {
         resolvedVercelUrl = session.vercel_url || `https://${projectSlug}.vercel.app`;
       }
-
-      ensureVercelProject({
-        token: vercelToken,
-        teamId,
-        projectSlug,
-        owner,
-        repo,
-        ghToken: platformToken,
-      }).catch((e) => console.warn('[publish] Vercel ensure+deploy failed (non-fatal):', e.message));
     }
 
     // ── 5. Save deployment record ────────────────────────
@@ -315,6 +337,23 @@ export async function POST(req, { params }) {
         .eq('project_id', projectId);
     }
 
+    let message;
+    if (vercelEnsureError) {
+      message = (
+        'Code is live on main, but the Vercel deploy could not be queued. ' +
+        'Click Publish again in a minute — Vercel sometimes takes a moment ' +
+        'to recognize a freshly-created repo.'
+      );
+    } else if (syncResult.changed) {
+      message = (
+        `Published! ${syncResult.filesPushed} workspace file change` +
+        `${syncResult.filesPushed === 1 ? '' : 's'} pushed and Vercel is ` +
+        `rebuilding — check back in a minute.`
+      );
+    } else {
+      message = 'Published! Your code is live on main. Vercel is building in the background — check back in a minute.';
+    }
+
     return NextResponse.json({
       ok: true,
       repoUrl: session.platform_repo_url,
@@ -322,9 +361,8 @@ export async function POST(req, { params }) {
       visibility,
       synced: syncResult.changed,
       filesPushed: syncResult.filesPushed,
-      message: syncResult.changed
-        ? `Published! ${syncResult.filesPushed} workspace file change${syncResult.filesPushed === 1 ? '' : 's'} pushed and Vercel is rebuilding — check back in a minute.`
-        : 'Published! Your code is live on main. Vercel is building in the background — check back in a minute.',
+      vercelDeployFailed: !!vercelEnsureError,
+      message,
     });
   } catch (err) {
     console.error('[publish] error:', err);

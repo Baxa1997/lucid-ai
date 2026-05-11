@@ -74,13 +74,26 @@ function ClarificationBubble({ msg }) {
   const { submitClarification } = useWorkspace() || {};
   const answered = !!c.answered;
 
+  // Two-step interaction: clicking an option only *selects* it. The user
+  // then has to click "Confirm" to actually submit. This avoids the previous
+  // foot-gun where one stray click locked in a wrong choice.
+  const [selectedId, setSelectedId] = useState(null);
+  const selectedOpt = options.find((o) => o.id === selectedId) || null;
+
   const handlePick = (opt) => {
-    if (answered || !submitClarification) return;
+    if (answered) return;
+    setSelectedId(opt.id);
+  };
+
+  const handleConfirm = () => {
+    if (answered || !selectedOpt || !submitClarification) return;
     submitClarification({
       messageId: msg.id,
-      archetype: opt.id,
-      label: opt.label,
+      archetype: selectedOpt.id,
+      label: selectedOpt.label,
       originalTask: c.originalTask || '',
+      kind: c.kind || '',
+      clarifyKey: c.clarifyKey || '',
     });
   };
 
@@ -102,28 +115,44 @@ function ClarificationBubble({ msg }) {
             </p>
             <div className="flex flex-col gap-2">
               {options.map((opt) => {
-                const isPicked = answered && c.answerLabel === opt.label;
+                const isSubmitted = answered && c.answerLabel === opt.label;
+                const isSelected = !answered && selectedId === opt.id;
+                const isHighlighted = isSubmitted || isSelected;
                 return (
                   <button
                     key={opt.id}
                     type="button"
                     onClick={() => handlePick(opt)}
                     disabled={answered}
+                    aria-pressed={isHighlighted}
                     className={cn(
                       'text-left px-3 py-2 rounded-lg border text-[13px] leading-snug transition-colors',
                       answered
-                        ? (isPicked
+                        ? (isSubmitted
                             ? 'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-700/60 dark:bg-emerald-900/20 dark:text-emerald-200'
                             : 'border-slate-100 bg-slate-50 text-slate-400 dark:border-[#2d333b] dark:bg-[#161b22] dark:text-slate-500')
-                        : 'border-slate-200 bg-white hover:border-orange-300 hover:bg-orange-50 text-slate-700 dark:border-[#2d333b] dark:bg-[#0d1117] dark:hover:border-orange-700/60 dark:hover:bg-orange-900/10 dark:text-slate-200 cursor-pointer'
+                        : isSelected
+                          ? 'border-orange-400 bg-orange-50 text-orange-900 dark:border-orange-600/70 dark:bg-orange-900/20 dark:text-orange-100 cursor-pointer'
+                          : 'border-slate-200 bg-white hover:border-orange-300 hover:bg-orange-50 text-slate-700 dark:border-[#2d333b] dark:bg-[#0d1117] dark:hover:border-orange-700/60 dark:hover:bg-orange-900/10 dark:text-slate-200 cursor-pointer'
                     )}
                   >
-                    {isPicked && <Check className="w-3.5 h-3.5 inline-block mr-1.5 text-emerald-600" />}
+                    {isHighlighted && <Check className="w-3.5 h-3.5 inline-block mr-1.5 text-emerald-600" />}
                     {opt.label}
                   </button>
                 );
               })}
             </div>
+            {!answered && selectedOpt && (
+              <div className="flex items-center justify-end pt-1">
+                <button
+                  type="button"
+                  onClick={handleConfirm}
+                  className="px-3 py-1.5 rounded-lg bg-orange-500 hover:bg-orange-600 text-white text-[12px] font-medium transition-colors cursor-pointer shadow-sm shadow-orange-500/20"
+                >
+                  Confirm
+                </button>
+              </div>
+            )}
             {answered && (
               <p className="text-[11px] text-slate-400 dark:text-slate-500">
                 Choice received — generation continuing.

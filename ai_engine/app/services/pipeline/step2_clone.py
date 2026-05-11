@@ -42,7 +42,6 @@ async def clone_with_openhands(
 
         repo_url = validated["repo_url"]
         branch = validated["branch"]
-        gemini_key = validated["gemini_api_key"]
 
         # Create workspace directory
         os.makedirs(workspace_path, exist_ok=True)
@@ -51,7 +50,6 @@ async def clone_with_openhands(
         conversation = await openhands_manager.create_conversation(
             task_id=f"{task_id}_clone",
             workspace=workspace_path,
-            gemini_key=gemini_key,
             tools=["terminal"],
         )
 

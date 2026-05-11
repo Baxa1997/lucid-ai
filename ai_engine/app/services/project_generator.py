@@ -2065,15 +2065,16 @@ def _extract_layout_archetype(research: str, fallback_classification: dict) -> d
 # ║  before we burn 3-5 minutes generating nonsense.            ║
 # ╚══════════════════════════════════════════════════════════════╝
 
-async def _validate_project_intent(description: str, gemini_key: str) -> dict:
+async def _validate_project_intent(description: str) -> dict:
     """Score whether the input is a real project description.
 
-    Returns ``{"is_project": bool, "score": int, "ask_user": str}``.
+    Auth handled by gemini_post via Vertex ADC. Returns
+    ``{"is_project": bool, "score": int, "ask_user": str}``.
       • ``score`` 0–10. Below 5 = clearly not a project.
       • ``ask_user`` is a one-sentence clarifying prompt the caller can
         send straight to the chat when ``is_project`` is False.
 
-    Fail-soft: any error (no key, Gemini down, malformed reply) returns
+    Fail-soft: any error (Gemini down, malformed reply) returns
     ``is_project=True`` so the existing pipeline keeps working — we only
     BLOCK on a confident "no", never on uncertainty.
     """
@@ -2087,8 +2088,6 @@ async def _validate_project_intent(description: str, gemini_key: str) -> dict:
             "ask_user": "Could you describe what you'd like to build? "
                         "Try: \"a [type of site/app] for [audience] that [main feature]\".",
         }
-    if not gemini_key:
-        return {"is_project": True, "score": 10, "ask_user": ""}
 
     prompt = f"""You are a triage assistant for a website-generation tool.
 
@@ -2116,7 +2115,6 @@ Return ONLY this JSON, no markdown:
             model="gemini-2.5-flash",
             payload={"contents": [{"parts": [{"text": prompt}]}]},
             timeout_s=10.0,
-            api_key=gemini_key,
             label="intent_gate",
         )
         if _status != 200 or _resp_json is None:
@@ -2160,7 +2158,6 @@ async def _expand_short_prompt(
     description: str,
     layout_archetype: str,
     domain: str,
-    gemini_key: str,
     websocket=None,
 ) -> str:
     """Expand a very short user prompt into a richer brief for downstream stages.
@@ -2218,7 +2215,6 @@ async def _expand_short_prompt(
             model=_model,
             payload=payload,
             timeout_s=20.0,
-            api_key=gemini_key,
             label="expand_prompt",
         )
         if _r_status != 200 or data is None:
@@ -2312,14 +2308,13 @@ async def _call_gemini_single(
     websocket,
     label: str,
     max_tokens: int = 10000,
-    api_key: str = "",
 ) -> str:
     """Single Gemini REST call with retry+backoff. Returns response text.
 
-    Each call acquires its own _gemini_semaphore slot so two parallel calls
-    from the same project both proceed concurrently (semaphore value=2) while
-    a third concurrent project waits, keeping us inside Gemini rate limits.
-    Routes via gemini_http shim — works against AI Studio or Vertex.
+    Auth handled by gemini_post via Vertex ADC. Each call acquires its own
+    _gemini_semaphore slot so two parallel calls from the same project
+    both proceed concurrently (semaphore value=2) while a third concurrent
+    project waits, keeping us inside Gemini rate limits.
     """
     from app.services.gemini_http import gemini_post
 
@@ -2365,7 +2360,6 @@ async def _call_gemini_single(
                         model=model,
                         payload=payload,
                         timeout_s=280.0,
-                        api_key=api_key,
                         label=label,
                     ),
                     timeout=300.0,
@@ -2543,13 +2537,13 @@ async def enrich_research_with_deep_dives(
     domain: str,
     brand_name: str,
     websocket,
-    gemini_key: str,
 ) -> str:
     """Fan out per-unit Gemini calls; append ===ENTITY_DEEP=== / ===PAGE_DEEP=== blocks.
 
-    Returns the enriched research blob (or the original blob unchanged on any
-    catastrophic failure). Per-unit failures just omit that one block — the
-    rest of the blob is unaffected.
+    Auth handled by gemini_post via Vertex ADC. Returns the enriched
+    research blob (or the original blob unchanged on any catastrophic
+    failure). Per-unit failures just omit that one block — the rest of
+    the blob is unaffected.
 
     Why a flat ``===NAME===`` append rather than mutating the schema:
       • Phase 2 prompts already read research with `_extract_research_section`.
@@ -2560,8 +2554,6 @@ async def enrich_research_with_deep_dives(
     """
     if not research or not isinstance(schema, dict):
         return research or ""
-    if not gemini_key:
-        return research
 
     archetype = (layout_archetype or "").lower()
     units: list[tuple[str, str, str]] = []  # (kind, name, prompt)
@@ -2617,7 +2609,6 @@ async def enrich_research_with_deep_dives(
                         websocket,
                         f"deep_{kind.lower()}_{name[:24]}",
                         max_tokens=2000,
-                        api_key=gemini_key,
                     ),
                     timeout=_PHASE_D_PER_CALL_TIMEOUT,
                 )
@@ -2820,7 +2811,6 @@ async def gemini_deep_research(
     description: str,
     classification: dict,   # rich dict from classify_project_type_ai
     stack: str,
-    gemini_key: str,
     websocket,
 ) -> str:
     """Ultra-deep product research via Gemini with internet search.
@@ -3979,8 +3969,8 @@ Output ONLY ERA_CALIBRATION, LIVE_UI_RESEARCH, and LAYOUT_BLUEPRINT blocks.
         # truncated mid-block. Multi-page sites with 6-8 pages × rich
         # per-section spec also benefit. We pay only for what's used —
         # this is a CEILING, not a target.
-        _call_gemini_single(research_prompt, _research_model, _is_pro, websocket, "structure", max_tokens=32000, api_key=gemini_key),
-        _call_gemini_single(_design_prompt, _research_model, _is_pro, websocket, "design", max_tokens=12000, api_key=gemini_key),
+        _call_gemini_single(research_prompt, _research_model, _is_pro, websocket, "structure", max_tokens=32000),
+        _call_gemini_single(_design_prompt, _research_model, _is_pro, websocket, "design", max_tokens=12000),
         return_exceptions=True,
     )
 
@@ -5684,6 +5674,46 @@ a phrase. When BOTH a COPY_DECK and a VOICE_GUIDANCE block exist,
 COPY_DECK wins — VOICE_GUIDANCE only fills gaps the deck doesn't.
 
 ───────────────────────────────────────────────────────────────
+PURPOSE_DIRECTIVE — WHAT KIND OF PAGE THIS IS (HIGHEST PRIORITY)
+───────────────────────────────────────────────────────────────
+If a ===PURPOSE_DIRECTIVE=== block is present, READ IT FIRST and
+treat it as the structural law for every section you generate.
+It declares the page's PRIMARY PURPOSE (hiring / lead_generation /
+ecommerce / booking) and contains:
+
+  - PRIMARY CTA / SECONDARY CTA → use these EXACT button labels
+                                   on the hero and recurring CTAs.
+  - TONE                        → governs every headline, body
+                                   paragraph, and microcopy string.
+  - RULES                       → numbered structural rules. Each
+                                   rule is binding — if it says
+                                   "Application form is MANDATORY",
+                                   you MUST emit a working form.
+                                   If it says "Hero leads with the
+                                   job opportunity", the hero
+                                   headline must NOT lead with
+                                   the company brand essay.
+  - FORBIDDEN                   → sections / framings you must NOT
+                                   generate, regardless of what
+                                   COPY_DECK or LAYOUT_BLUEPRINT
+                                   suggest. Skip these entirely.
+
+When the directive references a NAMED ROLES list, every Open
+Positions / Careers / Job Listings section MUST list those exact
+roles (not generic placeholders). If a ===RECRUITMENT_RESEARCH===
+block is also present, pull pay rates and industry vocabulary from
+it — never write "competitive pay" without a number.
+
+PRECEDENCE (highest to lowest):
+  1. PURPOSE_DIRECTIVE        ← page's reason for existing
+  2. COPY_DECK                ← exact strings (when present)
+  3. VOICE_GUIDANCE           ← voice priming (when present)
+  4. LAYOUT_BLUEPRINT         ← visual structure
+The directive overrides COPY_DECK only on STRUCTURAL questions
+(which sections exist, what's forbidden, what's mandatory). The
+deck still owns exact string content for sections that DO exist.
+
+───────────────────────────────────────────────────────────────
 BRAND_MARK, RADIUS_TOKENS, IMAGE_COMPOSITION, ADMIN_UI_LANGUAGE — DIRECTOR BLOCKS
 ───────────────────────────────────────────────────────────────
 If a ===BRAND_MARK=== block is present: every Header/Navbar/Sidebar you
@@ -7218,13 +7248,33 @@ async def _generate_new_project_inner(
     user_jwt: str = "",
 ) -> bool:
     """Inner implementation of generate_new_project (wrapped in try/except above)."""
-    # ── Strip user-clarification archetype lock from the description ──
-    # When the user resolved a classification conflict, the WS handler
-    # prepends [LUCID_FORCE_ARCHETYPE::xxx] to the task so the classifier
-    # can route correctly. The marker is consumed here so it never flows
-    # into research/Claude prompts.
-    from knowledge.loader import force_archetype_from_task
+    # ── Strip user-clarification markers from the description ─────────
+    # Two flavours stack here:
+    #   • [LUCID_FORCE_ARCHETYPE::xxx] from the legacy archetype-conflict
+    #     dialog — consumed once per pipeline.
+    #   • [LUCID_CLARIFY::key=value] from the Stage-0 intent clarifier —
+    #     can stack across rounds. Each survives multiple pipeline
+    #     re-runs so the analyzer / brief sees the disambiguating
+    #     context every pass without re-asking.
+    # Both markers are stripped here so they never flow into research /
+    # Claude prompts; the parsed values are kept for downstream gating
+    # and persona-aware framing.
+    from knowledge.loader import force_archetype_from_task, extract_clarify_context
     _force_archetype, description = force_archetype_from_task(description)
+    _clarify_answers, description = extract_clarify_context(description)
+    if _clarify_answers:
+        # Append already-known disambiguations so the rest of the
+        # pipeline (intent, research, Claude) treats them as constraints
+        # rather than rediscovering them.
+        _hints = "\n".join(
+            f"- {k.replace('_', ' ')}: {v.replace('_', ' ')}"
+            for k, v in _clarify_answers.items()
+        )
+        description = f"{description}\n\nAlready clarified by the user:\n{_hints}"
+        logger.info(
+            "multi-page pipeline: %d prior clarifications applied — %s",
+            len(_clarify_answers), list(_clarify_answers.keys()),
+        )
 
     # ── TEMP timing instrumentation (do not commit) ──────────────────
     import time as _perf_time
@@ -7244,7 +7294,7 @@ async def _generate_new_project_inner(
     # ──────────────────────────────────────────────────────────────────
 
     api_key = validated["anthropic_api_key"]
-    gemini_key = validated["gemini_api_key"]
+    # Gemini auth is now Vertex ADC inside gemini_post — no per-call key.
 
     # generate_new_project is Claude-only (all 3 phases call Anthropic directly).
     # If the user's stored key is a Gemini/Google key (not starting with "sk-ant-"),
@@ -7268,7 +7318,7 @@ async def _generate_new_project_inner(
     # {"is_project": False, ...} only on a CONFIDENT no; any uncertainty or
     # API error passes through, so we don't block legitimate edge cases.
     _phase_begin("intent_gate")
-    _intent = await _validate_project_intent(description, gemini_key)
+    _intent = await _validate_project_intent(description)
     _phase_end("intent_gate")
     if not _intent.get("is_project", True):
         ask = _intent.get("ask_user") or (
@@ -7288,6 +7338,62 @@ async def _generate_new_project_inner(
             pass
         return False
 
+    # ── Step 0.5: Stage-0 clarifier gate ─────────────────────────────
+    # The Step-0 intent gate above only catches OBVIOUS junk (random
+    # strings, single greetings). This second gate runs the full
+    # analyze_intent and asks the user up to 3 mutually-exclusive
+    # disambiguation questions when the prompt is concrete enough to
+    # not be junk but still ambiguous enough that the page would land
+    # generic — e.g. "house renting agency" → rentals only? rentals +
+    # management? rentals + sales? Each round emits ONE question; the
+    # WS handler prepends [LUCID_CLARIFY::key=value] markers across
+    # re-runs (already stripped above) so prior answers carry through.
+    # Fail-soft: any error here just continues the pipeline as before.
+    try:
+        from app.services.landing_intent import analyze_intent as _stage0_intent
+        _phase_begin("clarifier_gate")
+        _coarse_intent = await _stage0_intent(
+            description, {"domain": ""},
+            timeout_s=30.0,
+        )
+        _phase_end("clarifier_gate")
+        _remaining_qs = [
+            q for q in (_coarse_intent.get("clarification_questions") or [])
+            if q.get("key") and q["key"] not in _clarify_answers
+        ]
+        if _coarse_intent.get("clarity_level") == "low" and _remaining_qs:
+            q = _remaining_qs[0]
+            _payload = {
+                "kind": "intent_clarify",
+                "clarify_key": q["key"],
+                "question": q["question"],
+                "options": q["options"],
+                "original_task": description.split("\n\nAlready clarified")[0],
+            }
+            try:
+                if chat_session_id:
+                    import json as _json_cl
+                    from app.services.chat import ChatService as _ChatService
+                    await _ChatService.add_message(
+                        session_id=chat_session_id, role="agent",
+                        content=_json_cl.dumps(_payload),
+                        event_type="ClarificationNeeded",
+                        user_jwt=None,
+                    )
+            except Exception as _exc:
+                logger.warning("multi-page pipeline: clarify persist failed — %s", _exc)
+            try:
+                await websocket.send_json({"type": "clarification_needed", **_payload})
+            except Exception:
+                pass
+            logger.info(
+                "multi-page pipeline: gating on clarification key=%s (%d remaining)",
+                q["key"], len(_remaining_qs),
+            )
+            return False
+    except Exception as _stage0_exc:
+        logger.warning("multi-page pipeline: clarifier gate failed (non-fatal): %s", _stage0_exc)
+
     # ── Step 1: Classify app type (AI-powered) ──
     # Gemini Flash classifies the description accurately so the research prompt
     # outputs the correct structural blocks (===SECTIONS=== vs ===PAGES=== vs
@@ -7296,7 +7402,7 @@ async def _generate_new_project_inner(
     from knowledge.loader import classify_project_type_ai
     _phase_begin("classify")
     _classification = await classify_project_type_ai(
-        description, gemini_key, force_archetype=_force_archetype,
+        description, force_archetype=_force_archetype,
     )
     _phase_end("classify")
     app_type = _classification["app_type"]
@@ -7337,7 +7443,7 @@ async def _generate_new_project_inner(
     # into downstream fields). When no expansion happens, the two are identical.
     original_description = description.split("\n\n---\n\n")[0].strip()
     description = await _expand_short_prompt(
-        description, _layout_archetype, _domain, gemini_key, websocket,
+        description, _layout_archetype, _domain, websocket,
     )
 
     # ── Step 2: Read template context ──
@@ -7366,6 +7472,11 @@ async def _generate_new_project_inner(
     await _ws_send(websocket, "progress", "📚 Loading component skills...")
     
     # ── Step 3: Gemini research (all project types) ──
+    # Close out Phase 1 (Preparing workspace) and flip to Phase 3 (research)
+    # — keeps the UI on a stable status instead of flickering through
+    # interim progress messages between classifier and research start.
+    await _send_phase(websocket, 1, "Preparing workspace", "Workspace ready", "done")
+    await _send_phase(websocket, 3, "Researching project", "Researching real products in this domain…", "active")
     await _ws_send(websocket, "progress", "🔬 Researching real products in this domain...")
     research_quality = "full"
 
@@ -7399,6 +7510,12 @@ async def _generate_new_project_inner(
     # fall through to safe minimal defaults — which is what made cached runs
     # look visually flat before. The sidecar fixes that.
     _design: dict | None = None
+    # _intent holds the purpose/audience/named_roles dict from analyze_intent.
+    # Drives purpose-aware research (e.g. recruitment) and PURPOSE_DIRECTIVE
+    # injection into Claude prompts. Empty dict on failure or cache-hit-without-
+    # intent-sidecar — downstream code treats {} as "no purpose-aware tweaks".
+    _intent: dict = {}
+    _intent_cache_path = f"{_cache_dir}/{_cache_key}.intent.json"
     try:
         import os as _os_cache
         _os_cache.makedirs(_cache_dir, exist_ok=True)
@@ -7433,16 +7550,117 @@ async def _generate_new_project_inner(
                             "Design sidecar load failed (non-fatal, will use defaults): %s",
                             _dd_load_exc,
                         )
+                    # Intent sidecar — recovers purpose/named_roles for cache hits.
+                    try:
+                        if _os_cache.path.exists(_intent_cache_path):
+                            import json as _json_int
+                            with open(_intent_cache_path, "r", encoding="utf-8") as _icf:
+                                _intent_loaded = _json_int.load(_icf)
+                            if isinstance(_intent_loaded, dict) and _intent_loaded:
+                                _intent = _intent_loaded
+                                logger.info(
+                                    "Intent loaded from cache (%s) — purpose=%s roles=%d",
+                                    _cache_key,
+                                    _intent.get("primary_purpose"),
+                                    len(_intent.get("named_roles") or []),
+                                )
+                    except Exception as _int_load_exc:
+                        logger.warning(
+                            "Intent sidecar load failed (non-fatal): %s",
+                            _int_load_exc,
+                        )
+                    # Forward-compat: if we have an intent but the cached
+                    # research lacks the PURPOSE_DIRECTIVE block (e.g. cached
+                    # before this feature shipped), append it now.
+                    if _intent and "===PURPOSE_DIRECTIVE===" not in research:
+                        try:
+                            from app.services.purpose_research import format_purpose_directive_block
+                            _dir_late = format_purpose_directive_block(_intent)
+                            if _dir_late:
+                                research = research.rstrip() + "\n" + _dir_late
+                        except Exception:
+                            pass
     except Exception:
         pass  # Cache miss is fine — just proceed with fresh research
 
     if research is None:
         try:
             _phase_begin("research_gemini")
-            research = await gemini_deep_research(
-                description, _classification, stack, gemini_key, websocket,
+
+            # Run intent analysis in parallel with deep research.
+            # Intent gives us primary_purpose + named_roles + urgency_signals;
+            # we use these downstream for purpose-specific research (e.g. the
+            # recruitment call) and the PURPOSE_DIRECTIVE prompt block.
+            # Fail-soft: empty dict on failure so downstream code treats it
+            # as "no purpose-aware tweaks" and falls through to existing flow.
+            async def _safe_intent() -> dict:
+                try:
+                    from app.services.landing_intent import analyze_intent
+                    return await analyze_intent(
+                        description, _classification,
+                        timeout_s=30.0,
+                    )
+                except Exception as _exc:
+                    logger.warning("multi-page intent analysis failed (non-fatal): %s", _exc)
+                    return {}
+
+            research, _intent = await asyncio.gather(
+                gemini_deep_research(
+                    description, _classification, stack, websocket,
+                ),
+                _safe_intent(),
             )
             _phase_end("research_gemini")
+
+            # Persist intent sidecar so cache-hit retries get the same
+            # purpose-aware behavior without re-running the Flash call.
+            if _intent:
+                try:
+                    import json as _json_int
+                    with open(_intent_cache_path, "w", encoding="utf-8") as _icf:
+                        _json_int.dump(_intent, _icf, ensure_ascii=False)
+                except Exception:
+                    pass
+
+            # ── Purpose-specific research augmentation ──
+            # When the prompt is recruitment/booking/etc., the generic
+            # Pro+google_search call doesn't surface specifics like pay
+            # rates or driver pain points. maybe_run_purpose_research
+            # dispatches to a targeted call when the purpose warrants it
+            # (currently: hiring). Fail-soft — empty string on any failure.
+            try:
+                from app.services.purpose_research import (
+                    maybe_run_purpose_research,
+                    format_purpose_directive_block,
+                )
+                _phase_begin("purpose_research")
+                _purpose_block = await maybe_run_purpose_research(
+                    intent=_intent,
+                    classification=_classification,
+                    websocket=websocket,
+                )
+                _phase_end("purpose_research")
+                if _purpose_block:
+                    research = research.rstrip() + "\n\n" + _purpose_block + "\n"
+
+                # Always emit a PURPOSE_DIRECTIVE block when a purpose was
+                # detected — the directive is what tells Claude "this is a
+                # hiring page", independent of whether grounded recruitment
+                # research succeeded.
+                _directive_block = format_purpose_directive_block(_intent)
+                if _directive_block:
+                    research = research.rstrip() + "\n" + _directive_block
+
+                if _purpose_block or _directive_block:
+                    # Update the on-disk research cache so retries don't
+                    # re-spend the call inside the 10-min TTL.
+                    try:
+                        with open(_cache_path, "w", encoding="utf-8") as _cf:
+                            _cf.write(research)
+                    except Exception:
+                        pass
+            except Exception as _pexc:
+                logger.warning("purpose_research dispatch failed (non-fatal): %s", _pexc)
             if len(research) < 200:
                 research_quality = "minimal"
                 logger.warning("Research returned minimal content (%d chars)", len(research))
@@ -7463,7 +7681,6 @@ async def _generate_new_project_inner(
                             research_text=research,
                             description=description,
                             domain=_domain,
-                            gemini_key=gemini_key,
                             websocket=websocket,
                         )
                     except Exception as _vision_exc:
@@ -7492,7 +7709,6 @@ async def _generate_new_project_inner(
                                 vibe=_vibe,
                                 cultural_atmosphere=_cultural,
                                 api_key=api_key,
-                                gemini_key=gemini_key,
                                 websocket=websocket,
                             ),
                             timeout=260.0,
@@ -7572,7 +7788,7 @@ async def _generate_new_project_inner(
             )
             _phase_begin("voice_signals")
             _voice_signals = await extract_multipage_voice_signals(
-                research, _classification, gemini_key=gemini_key,
+                research, _classification,
             )
             _phase_end("voice_signals")
             _voice_block = format_voice_guidance_block(_voice_signals)
@@ -7895,7 +8111,6 @@ async def _generate_new_project_inner(
                 domain=_domain,
                 brand_name=_brand_name_for_deep,
                 websocket=websocket,
-                gemini_key=gemini_key,
             )
             # Now that Phase D appended ===ENTITY_DEEP::Name=== / ===PAGE_DEEP::Name===
             # blocks, attach each block to its schema entity/page so the per-unit

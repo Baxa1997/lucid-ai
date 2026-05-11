@@ -1420,16 +1420,13 @@ async def _gemini_design_critic(
     layout_archetype: str,
     vibe: str,
     cultural_atmosphere: str,
-    gemini_key: str,
 ) -> Optional[dict]:
     """Ask Gemini whether this design fits the domain.
 
-    Returns ``{"verdict": "pass"|"revise", "issues": [...], "changes": [...]}``
-    or None on any failure (caller treats None as pass — fail-soft).
+    Auth handled by gemini_post via Vertex ADC. Returns
+    ``{"verdict": "pass"|"revise", "issues": [...], "changes": [...]}`` or
+    None on any failure (caller treats None as pass — fail-soft).
     """
-    if not gemini_key:
-        return None
-
     import json as _json
     import re as _re
 
@@ -1500,7 +1497,6 @@ Be picky but not pedantic — only flag issues a senior designer would call out.
                 "generationConfig": {"temperature": 0.4},
             },
             timeout_s=_GEMINI_CRITIC_TIMEOUT,
-            api_key=gemini_key,
             label="design_critic",
         )
         if status != 200 or data is None:
@@ -1627,7 +1623,6 @@ async def build_design_system(
     api_key: str,
     vibe: str = "",
     cultural_atmosphere: str = "",
-    gemini_key: str = "",
     websocket=None,
 ) -> Optional[dict]:
     """One Claude call that designs a bespoke, validated design system.
@@ -1727,7 +1722,6 @@ async def build_design_system(
         vibe=vibe,
         cultural_atmosphere=cultural_atmosphere,
         api_key=api_key,
-        gemini_key=gemini_key,
         websocket=websocket,
     )
 
@@ -1754,17 +1748,14 @@ async def _apply_gemini_critic(
     vibe: str,
     cultural_atmosphere: str,
     api_key: str,
-    gemini_key: str,
     websocket,
 ) -> dict:
     """Run Gemini taste critic; on 'revise' verdict, ask Claude for one more pass.
 
-    Always returns a design dict — never None. If anything fails, returns
-    the original ``design`` unchanged.
+    Auth handled by gemini_post via Vertex ADC. Always returns a design
+    dict — never None. If anything fails, returns the original ``design``
+    unchanged.
     """
-    if not gemini_key:
-        return design
-
     if websocket is not None:
         try:
             await websocket.send_json({
@@ -1781,7 +1772,6 @@ async def _apply_gemini_critic(
         layout_archetype=layout_archetype,
         vibe=vibe,
         cultural_atmosphere=cultural_atmosphere,
-        gemini_key=gemini_key,
     )
 
     if not critic or critic.get("verdict") != "revise":

@@ -26,7 +26,6 @@ class OpenHandsManager:
         conv = await openhands_manager.create_conversation(
             task_id="abc123",
             workspace="/tmp/lucid_abc123",
-            gemini_key="...",
             tools=["terminal"],
         )
         # ... use conversation ...
@@ -70,7 +69,6 @@ class OpenHandsManager:
         self,
         task_id: str,
         workspace: str,
-        gemini_key: str,
         tools: list[str],
     ) -> Any:
         """Create a new OpenHands V1 Conversation.
@@ -81,8 +79,6 @@ class OpenHandsManager:
             Unique identifier for this conversation.
         workspace : str
             Local filesystem path for the workspace.
-        gemini_key : str
-            Gemini API key for the LLM (used for clone/push agent).
         tools : list[str]
             Tool names to enable (e.g. ["terminal"]).
 
@@ -96,9 +92,10 @@ class OpenHandsManager:
                 await self._destroy_unlocked(task_id)
 
             try:
-                from openhands.sdk import LLM, Agent, Conversation, Tool
+                from openhands.sdk import Agent, Conversation, Tool
                 from openhands.tools.terminal import TerminalTool
                 from openhands.tools.file_editor import FileEditorTool
+                from app.services.llm import resolve_llm
 
                 # Build tool list
                 tool_instances = []
@@ -108,11 +105,8 @@ class OpenHandsManager:
                     elif t == "file_editor":
                         tool_instances.append(Tool(name=FileEditorTool.name))
 
-                # Create LLM — use Gemini Flash for git operations (cheap)
-                llm = LLM(
-                    model="gemini/gemini-2.5-flash",
-                    api_key=str(gemini_key).strip(),
-                )
+                # Vertex AI Gemini Flash (ADC auth — no API key) for git ops.
+                llm = resolve_llm("vertex_ai/gemini-3-flash-preview")
 
                 # Create Agent with minimal tools
                 agent = Agent(

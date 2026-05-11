@@ -91,6 +91,10 @@ def build_landing_content(brief: dict[str, Any]) -> dict[str, Any]:
             "footer_archetype": (brief.get("footer_archetype") or "").strip(),
         },
         "references": list(brief.get("references") or [])[:5],
+        # Persist visual_dna so the frontend / diagnostics can read it, and
+        # so re-generating from this workspace later (without re-running
+        # research) doesn't lose the per-section anatomies.
+        "visual_dna": dict(brief.get("visual_dna") or {}),
         "nav": nav,
         "ctas": {
             "primary": ctas.get("primary") or {"label": "Get started", "href": "#contact"},

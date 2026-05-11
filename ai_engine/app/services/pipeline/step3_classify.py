@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 async def classify_task(
     task: str,
-    gemini_key: str,
     websocket: WebSocket,
 ) -> dict:
     """Use Gemini Flash to classify task complexity.
@@ -162,7 +161,6 @@ Better to give too many than too few.
                 model=GEMINI_MODEL,
                 payload=_payload,
                 timeout_s=60.0,
-                api_key=gemini_key,
                 label="step3_classify",
             )
             if status != 200 or data is None:

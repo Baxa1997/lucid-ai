@@ -44,8 +44,9 @@ def _print_block(label: str, block: dict) -> None:
 
 
 async def main() -> None:
-    key = os.environ.get("GOOGLE_API_KEY", "").strip()
-    print(f"GOOGLE_API_KEY present: {bool(key)} (len={len(key)})")
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
+    location = os.environ.get("GOOGLE_CLOUD_LOCATION", "").strip() or "global"
+    print(f"Vertex project: {project or '(unset)'} location={location}")
     print(f"PROMPT: {PROMPT!r}")
     print(f"CLASSIFICATION: {CLASSIFICATION}")
 
@@ -56,7 +57,7 @@ async def main() -> None:
     t0 = time.time()
     intent = await analyze_intent(
         PROMPT, CLASSIFICATION,
-        gemini_key=key or None, websocket=None, timeout_s=60.0,
+        websocket=None, timeout_s=60.0,
     )
     t1 = time.time()
     print(f"⏱  intent stage: {t1 - t0:.1f}s")
@@ -77,7 +78,7 @@ async def main() -> None:
     t2 = time.time()
     research = await run_domain_research(
         intent,
-        gemini_key=key or None, websocket=None, timeout_s=240.0,
+        websocket=None, timeout_s=240.0,
     )
     t3 = time.time()
     print(f"⏱  domain research stage: {t3 - t2:.1f}s")

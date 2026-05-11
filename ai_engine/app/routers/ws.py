@@ -253,9 +253,6 @@ async def websocket_agent(websocket: WebSocket):
         
         logger.info("[%s] Using model: %s, api_key prefix: %s (len=%d)", project_id or "new-session", model_provider, str(api_key or "")[:15], len(str(api_key or "")))
 
-        # Resolve Gemini API key for pre-exploration
-        gemini_api_key = os.environ.get("GOOGLE_API_KEY") or settings.GOOGLE_API_KEY or ""
-
         # ── 2. Try to reconnect to existing session ───────
         existing = await session_store.find_by_user_and_project(user_id, project_id) if project_id else None
 
@@ -1639,10 +1636,21 @@ async def websocket_agent(websocket: WebSocket):
                     "type": "step", "step": "understanding",
                     "label": "Understanding the project", "done": True,
                 })
+                # Phase 1 — covers everything from here through cloning the
+                # template, classifying the project, and analysing intent.
+                # Holding it as ACTIVE prevents the UI from flickering through
+                # 5+ short status messages before research begins.
+                await websocket.send_json({
+                    "type": "task_phase",
+                    "phase": 1,
+                    "title": "Preparing workspace",
+                    "description": "Understanding the prompt, cloning template, classifying project…",
+                    "status": "active",
+                })
 
                 # ── Build enriched task + run pipeline via orchestrator ──
                 enriched_task = await build_enriched_task(task, session, project_id, user_id, user_jwt)
-                pipeline_user = build_pipeline_user(session, api_key, gemini_api_key, user_package_manager, user_jwt)
+                pipeline_user = build_pipeline_user(session, api_key, user_package_manager, user_jwt)
                 _task_result: TaskResult = await agent_orchestrator.execute_task(
                     enriched_task=enriched_task,
                     session=session,
@@ -1784,25 +1792,59 @@ async def websocket_agent(websocket: WebSocket):
             if msg_type == "clarification_response":
                 from knowledge.loader import (
                     ARCHETYPE_LOCK_PREFIX, LAYOUT_ARCHETYPES,
+                    format_clarify_marker,
                 )
-                _archetype = (data.get("archetype") or data.get("id") or "").strip()
+                _kind = (data.get("kind") or "").strip()
+                _clarify_key = (data.get("clarify_key") or "").strip()
+                _option_id = (data.get("archetype") or data.get("id") or "").strip()
                 _original = (data.get("task") or data.get("original_task") or "").strip()
-                if _archetype not in LAYOUT_ARCHETYPES or not _original:
-                    logger.warning(
-                        "[%s] Bad clarification_response (archetype=%r task_len=%d)",
-                        getattr(session, "session_id", "?"),
-                        _archetype, len(_original),
-                    )
-                    try:
-                        await websocket.send_json({
-                            "type": "warning",
-                            "message": "Clarification response was malformed — please try again.",
-                        })
-                    except Exception:
-                        pass
-                    continue
 
-                _option_label = data.get("option_label") or _archetype
+                # Two clarification flavours share this handler:
+                #   (1) Legacy archetype-conflict — option_id must be a
+                #       known LAYOUT_ARCHETYPES value, locked via
+                #       [LUCID_FORCE_ARCHETYPE::xxx].
+                #   (2) New Stage-0 intent clarifier — option_id is an
+                #       arbitrary snake_case identifier from the question,
+                #       locked via [LUCID_CLARIFY::key=value]. Multiple
+                #       keys can stack across rounds; each round prepends
+                #       one more marker to the original task.
+                _is_intent_clarify = _kind == "intent_clarify" or bool(_clarify_key)
+
+                if _is_intent_clarify:
+                    if not _clarify_key or not _option_id or not _original:
+                        logger.warning(
+                            "[%s] Bad intent clarification_response (key=%r id=%r task_len=%d)",
+                            getattr(session, "session_id", "?"),
+                            _clarify_key, _option_id, len(_original),
+                        )
+                        try:
+                            await websocket.send_json({
+                                "type": "warning",
+                                "message": "Clarification response was malformed — please try again.",
+                            })
+                        except Exception:
+                            pass
+                        continue
+                    _marker = format_clarify_marker(_clarify_key, _option_id)
+                    _locked_task = f"{_marker} {_original}"
+                else:
+                    if _option_id not in LAYOUT_ARCHETYPES or not _original:
+                        logger.warning(
+                            "[%s] Bad clarification_response (archetype=%r task_len=%d)",
+                            getattr(session, "session_id", "?"),
+                            _option_id, len(_original),
+                        )
+                        try:
+                            await websocket.send_json({
+                                "type": "warning",
+                                "message": "Clarification response was malformed — please try again.",
+                            })
+                        except Exception:
+                            pass
+                        continue
+                    _locked_task = f"{ARCHETYPE_LOCK_PREFIX}{_option_id}] {_original}"
+
+                _option_label = data.get("option_label") or _option_id
                 if chat_session_id:
                     try:
                         await ChatService.add_message(
@@ -1814,10 +1856,10 @@ async def websocket_agent(websocket: WebSocket):
                     except Exception as exc:
                         logger.warning("Failed to persist clarification reply: %s", exc)
 
-                _locked_task = f"{ARCHETYPE_LOCK_PREFIX}{_archetype}] {_original}"
                 logger.info(
-                    "[%s] User chose archetype=%s — resuming pipeline",
-                    getattr(session, "session_id", "?"), _archetype,
+                    "[%s] User answered clarification (%s=%s) — resuming pipeline",
+                    getattr(session, "session_id", "?"),
+                    _clarify_key or "archetype", _option_id,
                 )
 
                 await ws_transition(
@@ -1841,7 +1883,7 @@ async def websocket_agent(websocket: WebSocket):
                     _locked_task, session, project_id, user_id, user_jwt,
                 )
                 pipeline_user = build_pipeline_user(
-                    session, api_key, gemini_api_key, user_package_manager, user_jwt,
+                    session, api_key, user_package_manager, user_jwt,
                 )
                 _task_result: TaskResult = await agent_orchestrator.execute_task(
                     enriched_task=enriched_task,
@@ -2020,7 +2062,7 @@ async def websocket_agent(websocket: WebSocket):
             )
 
             # Run follow-up pipeline via orchestrator (handles hydration + stop + completion)
-            pipeline_user = build_pipeline_user(session, api_key, gemini_api_key, user_package_manager, user_jwt)
+            pipeline_user = build_pipeline_user(session, api_key, user_package_manager, user_jwt)
             _followup_result: TaskResult = await agent_orchestrator.execute_task(
                 enriched_task=full_task,
                 session=session,

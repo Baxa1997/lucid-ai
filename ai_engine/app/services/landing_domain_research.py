@@ -34,7 +34,6 @@ import os
 from typing import Any
 
 from app.services.landing_gemini import grounded_research, looks_degenerate
-from app.services.pipeline.constants import _FALLBACK_GEMINI_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -240,13 +239,12 @@ Plain list of every URL cited (deduped). Minimum 8 distinct competitor domains a
 async def run_domain_research(
     intent: dict,
     *,
-    gemini_key: str | None = None,
     websocket: Any = None,
     timeout_s: float = 240.0,
 ) -> dict[str, Any]:
     """Stage 2 — run 4 parallel grounded research calls.
 
-    Returns a dict shaped:
+    Auth handled by gemini_post via Vertex ADC. Returns a dict shaped:
       {
         "business":    {"text": str, "sources": int, "urls": [...]},
         "audience":    {"text": str, "sources": int, "urls": [...]},
@@ -258,14 +256,7 @@ async def run_domain_research(
           "calls_succeeded": int, # how many returned non-empty text
         },
       }
-
-    Empty dict on missing API key — caller decides how to recover.
     """
-    key = (gemini_key or _FALLBACK_GEMINI_KEY or os.environ.get("GOOGLE_API_KEY", "")).strip()
-    if not key:
-        logger.warning("run_domain_research: no Gemini key — skipping research")
-        return _empty_result()
-
     fmt_args = _format_args(intent)
 
     if websocket is not None:
@@ -283,10 +274,10 @@ async def run_domain_research(
     competitive_prompt = _COMPETITIVE_RESEARCH_PROMPT.format(**fmt_args)
 
     business, audience, regional, competitive = await asyncio.gather(
-        grounded_research(business_prompt,    key, timeout_s, label="business_research",    websocket=websocket),
-        grounded_research(audience_prompt,    key, timeout_s, label="audience_research",    websocket=websocket),
-        grounded_research(regional_prompt,    key, timeout_s, label="regional_research",    websocket=websocket),
-        grounded_research(competitive_prompt, key, timeout_s, label="competitive_research", websocket=websocket),
+        grounded_research(business_prompt,    timeout_s, label="business_research",    websocket=websocket),
+        grounded_research(audience_prompt,    timeout_s, label="audience_research",    websocket=websocket),
+        grounded_research(regional_prompt,    timeout_s, label="regional_research",    websocket=websocket),
+        grounded_research(competitive_prompt, timeout_s, label="competitive_research", websocket=websocket),
     )
 
     result = {

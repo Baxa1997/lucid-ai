@@ -50,6 +50,9 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   const [files, setFiles] = useState([]);
   const [error, setError] = useState(null);
   const historyLoadedRef = useRef(false);
+  // Mirror of chatMessages that callbacks (chat_message dedup, etc.) can
+  // read synchronously without going through setState. Kept in sync below.
+  const chatMessagesRef = useRef([]);
 
   // ── Structured progress steps for current task ───────────
   // Each step: { id, step, label, done }
@@ -107,6 +110,15 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
 
   // ── Vercel deploy URL (persists after deployment) ────────
   const [deployUrl, setDeployUrl] = useState(null);
+
+  // ── Quality-gate report ──────────────────────────────────
+  // Backend's landing_quality_gate emits one `quality_report` event per
+  // generation when the page is finished. The shape matches
+  // landing_quality_gate.evaluate(): { purpose, checks: [...], summary }.
+  // We hold the latest report so a panel above the chat can surface
+  // failed checks ("application form missing", "no pay numbers") and
+  // wire each one to a future "regenerate this section" action.
+  const [qualityReport, setQualityReport] = useState(null);
 
   // ── Written files in the current agent run (for HMR failure detection) ──
   // Accumulates filenames from file_write_event; reset at the start of each task.
@@ -197,10 +209,24 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
 
   const pushChat = useCallback((role, content, meta = {}) => {
     if (!content || !content.trim()) return;
-    setChatMessages((prev) => [
-      ...prev,
-      { id: uid(), role, content, ts: Date.now(), ...meta },
-    ]);
+    setChatMessages((prev) => {
+      // [DEDUP-DEBUG] Trace every user/agent message append so we can find
+      // who's responsible for the duplicate user prompt on workspace entry.
+      // Stack trace shows the caller (chat_history handler, sendMessage,
+      // the [token] effect, etc.). Remove once the duplicate path is fixed.
+      try {
+        if (typeof window !== 'undefined' && role === 'user') {
+          const preview = (content || '').slice(0, 60).replace(/\s+/g, ' ');
+          const dupCount = prev.filter(p => p.role === 'user' && (p.content || '').slice(0, 60) === preview).length;
+          // eslint-disable-next-line no-console
+          console.warn('[DEDUP-DEBUG] pushChat user msg', { preview, dupCount, prevLen: prev.length, callsite: new Error().stack?.split('\n').slice(2, 6).join(' | ') });
+        }
+      } catch (_) {}
+      return [
+        ...prev,
+        { id: uid(), role, content, ts: Date.now(), ...meta },
+      ];
+    });
   }, []);
 
   const pushLog = useCallback((content, type = 'system') => {
@@ -224,6 +250,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   // Keep refs in sync with state
   useEffect(() => { stepsRef.current = steps; }, [steps]);
   useEffect(() => { phasesRef.current = phases; }, [phases]);
+  useEffect(() => { chatMessagesRef.current = chatMessages; }, [chatMessages]);
 
   // ── Flush current phases + steps into a chat message ─────
   const flushPhasesToChat = useCallback((summary) => {
@@ -1099,11 +1126,50 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
 
           if (hydrated.length > 0) {
             setChatMessages(prev => {
+              // [DEDUP-DEBUG] log what's in prev when WS chat_history hydrates
+              try {
+                if (typeof window !== 'undefined') {
+                  const userPrevs = prev.filter(p => p.role === 'user').map(p => ({ id: p.id, c: (p.content || '').slice(0, 60) }));
+                  const userHydrated = hydrated.filter(p => p.role === 'user').map(p => ({ id: p.id, c: (p.content || '').slice(0, 60) }));
+                  // eslint-disable-next-line no-console
+                  console.warn('[DEDUP-DEBUG] chat_history WS hydrate', { prevUsers: userPrevs, hydratedUsers: userHydrated });
+                }
+              } catch (_) {}
               // Drop init_msg_0 placeholder — WS history is authoritative ordering
               const livePrev = prev.filter(p => p.id !== 'init_msg_0');
               if (livePrev.length === 0) return hydrated;
+              // Dedup on TWO axes:
+              //   1) id — matches re-replays where the backend sent the
+              //      same DB row twice.
+              //   2) role + normalized content — matches the case where the
+              //      user's own freshly-typed prompt already lives in
+              //      `livePrev` with a local uid(), while the backend
+              //      replay carries the same text under a Supabase UUID.
+              // The normalize step strips `prefix::` (which hydrated content
+              // already had stripped at line ~1033) plus whitespace + case,
+              // so a locally-stored "task::do X" matches a hydrated "do X".
+              const norm = (s) => {
+                if (typeof s !== 'string') return '';
+                let v = s.trim();
+                const sep = v.indexOf('::');
+                if (sep !== -1 && sep < 40) v = v.slice(sep + 2).trim();
+                return v.replace(/\s+/g, ' ').toLowerCase().slice(0, 120);
+              };
+              const roleKey = (r) => (r === 'assistant' ? 'agent' : r);
               const existingById = new Map(livePrev.map(p => [p.id, p]));
-              const toAdd = hydrated.filter(h => !existingById.has(h.id));
+              const existingByContent = new Set(
+                livePrev
+                  .filter(p => typeof p.content === 'string' && p.content.trim())
+                  .map(p => `${roleKey(p.role)}::${norm(p.content)}`)
+              );
+              const toAdd = hydrated.filter(h => {
+                if (existingById.has(h.id)) return false;
+                if (typeof h.content === 'string' && h.content.trim()) {
+                  const key = `${roleKey(h.role)}::${norm(h.content)}`;
+                  if (existingByContent.has(key)) return false;
+                }
+                return true;
+              });
               return toAdd.length > 0 ? [...toAdd, ...livePrev] : livePrev;
             });
           }
@@ -1116,9 +1182,23 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         const role = msg.role || 'agent';
         const content = msg.content || '';
 
-        // Structured plan message — rendered as a special plan card in the UI
+        // Structured plan message — rendered as a special plan card in the UI.
+        // Backend re-emits the pending plan on every reconnect (ws.py ~L477),
+        // so each reconnect would otherwise stack another plan card. Dedup
+        // by stable signature (sections + brand + tagline).
         if (msg.messageType === 'plan' && msg.planData) {
+          const planSig = (() => {
+            try {
+              const pd = msg.planData || {};
+              const secs = Array.isArray(pd.sections) ? pd.sections.map(s => s?.title || s?.headline || s?.id || '').join('|') : '';
+              return `${pd.brandName || ''}::${pd.tagline || ''}::${secs}`;
+            } catch { return ''; }
+          })();
+          const dupPlan = chatMessagesRef.current.some(
+            p => p.messageType === 'plan' && p._planSig === planSig
+          );
           setCurrentPlanData(msg.planData);
+          if (dupPlan) return;
           setChatMessages((prev) => [
             ...prev,
             {
@@ -1128,12 +1208,26 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
               planData: msg.planData,
               fileWrites: [],
               ts: Date.now(),
+              _planSig: planSig,
             },
           ]);
           return;
         }
 
         if (content.trim()) {
+          // Dedup: drop a chat_message echo if the trailing chat already
+          // contains an identical role+content within the last 3 entries.
+          // Backend can re-emit a freshly-persisted user prompt (e.g. when
+          // the proxy's bind_chat fires after the handshake task path) and
+          // without this guard the bubble appears twice.
+          const norm = (s) => (typeof s === 'string' ? s.trim().replace(/\s+/g, ' ').toLowerCase().slice(0, 160) : '');
+          const incoming = `${role === 'assistant' ? 'agent' : role}::${norm(content)}`;
+          const tail = chatMessagesRef.current.slice(-3);
+          const isDup = tail.some(p => {
+            const prevKey = `${p.role === 'assistant' ? 'agent' : p.role}::${norm(p.content)}`;
+            return prevKey === incoming;
+          });
+          if (isDup) return;
           pushChat(role, content);
         }
         return;
@@ -1145,6 +1239,18 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         pushLog(text, 'system');
         // Update live status indicator subtext (keep current label)
         setAgentStatus(prev => prev ? { ...prev, subtext: text } : null);
+        return;
+      }
+
+      // ─── Quality gate report ───────────────────────────
+      // Emitted once per landing generation by landing_quality_gate.run.
+      // We just stash it on state — the QualityReportPanel reads it and
+      // renders the failed checks with a per-check "Regenerate" button
+      // (the regen endpoint lands in A6).
+      if (msg.type === 'quality_report') {
+        if (msg.report && typeof msg.report === 'object') {
+          setQualityReport(msg.report);
+        }
         return;
       }
 
@@ -1177,6 +1283,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
             messageType: 'clarification',
             clarification: {
               kind: msg.kind || '',
+              clarifyKey: msg.clarify_key || '',
               question: msg.question || '',
               options: Array.isArray(msg.options) ? msg.options : [],
               originalTask: msg.original_task || '',
@@ -1254,7 +1361,20 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       const snap = manager._statusSnapshot;
       setState(snap && snap !== 'idle' ? snap : 'ready');
       if (manager.sessionId) setSessionId(manager.sessionId);
-      if (manager._chatSnapshot?.length > 0) setChatMessages(manager._chatSnapshot);
+      if (manager._chatSnapshot?.length > 0) {
+        // [DEDUP-DEBUG] mount-snapshot restore replaces chatMessages wholesale.
+        // If the manager-cached snapshot already contains the user prompt and
+        // setInitialMessages/chat_history later run without `historyLoadedRef`
+        // having been set on this fresh hook instance, we'll see duplicates.
+        try {
+          if (typeof window !== 'undefined') {
+            const users = (manager._chatSnapshot || []).filter(p => p.role === 'user').map(p => ({ id: p.id, c: (p.content || '').slice(0, 60) }));
+            // eslint-disable-next-line no-console
+            console.warn('[DEDUP-DEBUG] mount-snapshot restore', { snapUsers: users, historyLoadedRef: historyLoadedRef.current });
+          }
+        } catch (_) {}
+        setChatMessages(manager._chatSnapshot);
+      }
       if (manager._phasesSnapshot?.length > 0) setPhases(manager._phasesSnapshot);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1537,14 +1657,32 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
 
     if (hydrated.length > 0) {
       setChatMessages((prev) => {
+        // [DEDUP-DEBUG] log what's in prev when Supabase setInitialMessages hydrates
+        try {
+          if (typeof window !== 'undefined') {
+            const userPrevs = prev.filter(p => p.role === 'user').map(p => ({ id: p.id, c: (p.content || '').slice(0, 60) }));
+            const userHydrated = hydrated.filter(p => p.role === 'user').map(p => ({ id: p.id, c: (p.content || '').slice(0, 60) }));
+            // eslint-disable-next-line no-console
+            console.warn('[DEDUP-DEBUG] setHistoricalMessages (Supabase)', { prevUsers: userPrevs, hydratedUsers: userHydrated });
+          }
+        } catch (_) {}
         // Drop the pre-populated init_msg_0 — history is the authoritative order.
         // init_msg_0 is the synchronous placeholder added by useState; once real
         // history arrives it must be replaced so the user message appears first.
         const livePrev = prev.filter(p => p.id !== 'init_msg_0');
         if (livePrev.length === 0) return hydrated;
-        // Dedup against existing live WS messages (keep them at the end)
-        const prevKeys = new Set(livePrev.map(p => `${p.role}::${(p.content || '').slice(0, 80)}`));
-        const toAdd = hydrated.filter(h => !prevKeys.has(`${h.role}::${(h.content || '').slice(0, 80)}`));
+        // Same normalize logic as the chat_history WS handler — strips
+        // `prefix::` tags + whitespace + case so locally-stored messages
+        // ("task::do X") dedup correctly against hydrated history ("do X").
+        const norm = (s) => {
+          if (typeof s !== 'string') return '';
+          let v = s.trim();
+          const sep = v.indexOf('::');
+          if (sep !== -1 && sep < 40) v = v.slice(sep + 2).trim();
+          return v.replace(/\s+/g, ' ').toLowerCase().slice(0, 120);
+        };
+        const prevKeys = new Set(livePrev.map(p => `${p.role}::${norm(p.content)}`));
+        const toAdd = hydrated.filter(h => !prevKeys.has(`${h.role}::${norm(h.content)}`));
         return toAdd.length > 0 ? [...toAdd, ...livePrev] : livePrev;
       });
     }
@@ -1610,6 +1748,10 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
 
     // Vercel deploy URL
     deployUrl,
+
+    // Quality-gate report (set once per landing generation)
+    qualityReport,
+    dismissQualityReport: () => setQualityReport(null),
 
     // Files written in the current agent run — used for HMR failure detection
     writtenFiles,
@@ -1690,10 +1832,14 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       }
     }, [pushLog]),
 
-    // Clarification — user answered an archetype-conflict question. Sends
-    // the locked archetype + original task back; backend re-runs the
-    // pipeline with classification short-circuited.
-    submitClarification: useCallback(({ messageId, archetype, label, originalTask }) => {
+    // Clarification — user answered a disambiguation question. Two
+    // flavours share this path: the legacy archetype-conflict question
+    // (kind=undefined, the `archetype` arg is a layout archetype id),
+    // and the Stage-0 intent clarifier (kind="intent_clarify",
+    // `clarifyKey` carries the question key, `archetype` carries the
+    // chosen option id). Both re-run the pipeline server-side with the
+    // appropriate context marker prepended to the original task.
+    submitClarification: useCallback(({ messageId, archetype, label, originalTask, kind, clarifyKey }) => {
       if (!manager) return;
       if (!manager.isOpen && !manager.isConnecting) {
         pushLog('Connection lost — reconnecting before sending answer...', 'system');
@@ -1716,6 +1862,8 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         archetype,
         option_label: label,
         task: originalTask,
+        kind: kind || '',
+        clarify_key: clarifyKey || '',
       });
       if (sent || manager.isConnecting) {
         setChatMessages((prev) => prev.map((m) => (

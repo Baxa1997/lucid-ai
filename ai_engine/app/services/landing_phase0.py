@@ -13,6 +13,7 @@ fallbacks so layout.jsx imports never fail if codegen errored.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any
@@ -118,20 +119,20 @@ import MarketingHeader from "@/components/layout/MarketingHeader";
 import MarketingFooter from "@/components/layout/MarketingFooter";
 import landing from "@/content/landing.json";
 
-// Always pass `weight` — many serif/display fonts (Cormorant Garamond,
-// Playfair Display, EB Garamond, etc.) are NOT variable on next/font and
-// will fail the build with "Missing weight". Passing common weights for
-// every font keeps the import safe across variable + static fonts.
+// Weights are picked per-font — many fonts only support a subset of the
+// 400/500/600/700 ramp (e.g. Lato lacks 500/600, DM_Serif_Display only ships
+// 400). next/font fails the build with "Unknown weight" on a mismatch, so
+// we resolve the allowed weights server-side from a per-font allowlist.
 const heading = {heading_var}({{
   subsets: ["latin"],
   variable: "--font-heading",
-  weight: ["400", "500", "600", "700"],
+  weight: {heading_weights},
   display: "swap",
 }});
 const body    = {body_var}({{
   subsets: ["latin"],
   variable: "--font-body",
-  weight: ["400", "500", "600", "700"],
+  weight: {body_weights},
   display: "swap",
 }});
 
@@ -197,6 +198,40 @@ _FONT_ALIASES = {
 }
 
 
+# Per-font weight allowlist for next/font/google. Variable fonts that span
+# the full 100-900 range can take any of 400/500/600/700, so they're omitted
+# from the map and fall through to the DEFAULT_WEIGHTS list. Static fonts
+# (or variable fonts with restricted ranges) are listed explicitly with the
+# weights known to ship — passing an unsupported weight aborts the build
+# with "Unknown weight `N` for font `X`".
+_FONT_WEIGHTS: dict[str, list[str]] = {
+    "Lato": ["400", "700"],            # 100,300,400,700,900 — no 500/600
+    "Roboto": ["400", "500", "700"],   # 100,300,400,500,700,900 — no 600
+    "Merriweather": ["400", "700"],    # 300,400,700,900 — no 500/600
+    "Crimson_Text": ["400", "600", "700"],
+    "Libre_Baskerville": ["400", "700"],
+    "DM_Serif_Display": ["400"],
+    "DM_Serif_Text": ["400"],
+    "Bebas_Neue": ["400"],
+    "Cardo": ["400", "700"],
+    "Cormorant_Garamond": ["400", "500", "600", "700"],
+    "Cormorant": ["400", "500", "600", "700"],
+    "Lora": ["400", "500", "600", "700"],
+    "Vollkorn": ["400", "500", "600", "700"],
+    "Spectral": ["400", "500", "600", "700"],
+    "Oswald": ["400", "500", "600", "700"],  # variable 200-700 — no 800/900
+}
+
+# Sane default weights for fonts not in the explicit map. 400 (regular) and
+# 700 (bold) ship on virtually every Google Font; 500/600 on most modern
+# variable sans-serifs (Inter, Manrope, DM_Sans, etc.).
+_DEFAULT_WEIGHTS: list[str] = ["400", "500", "600", "700"]
+
+
+def _font_weights(font_var: str) -> list[str]:
+    return _FONT_WEIGHTS.get(font_var, _DEFAULT_WEIGHTS)
+
+
 def _font_var(name: str) -> str:
     """Normalize a font name for `next/font/google` import.
 
@@ -230,10 +265,14 @@ def write_landing_layout(workspace_path: str, brief: dict[str, Any]) -> str:
         font_import = f'import {{ {heading_var} }} from "next/font/google";'
     else:
         font_import = f'import {{ {heading_var}, {body_var} }} from "next/font/google";'
+    heading_weights = json.dumps(_font_weights(heading_var))
+    body_weights = json.dumps(_font_weights(body_var))
     src = _LAYOUT_TEMPLATE.format(
         font_import=font_import,
         heading_var=heading_var,
         body_var=body_var,
+        heading_weights=heading_weights,
+        body_weights=body_weights,
     )
     app_dir = os.path.join(workspace_path, "src", "app")
     os.makedirs(app_dir, exist_ok=True)

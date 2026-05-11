@@ -30,14 +30,13 @@ DISTILL_MODEL  = os.environ.get("LANDING_BRIEF_MODEL",   "gemini-2.5-flash")
 # ── Low-level POST ────────────────────────────────────────────────────
 
 async def post_gemini(
-    model: str, payload: dict, timeout_s: float, *, label: str, api_key: str = "",
+    model: str, payload: dict, timeout_s: float, *, label: str,
 ) -> tuple[str, dict | None]:
     """POST to Gemini and extract text + grounding metadata.
 
     Returns ``(text, grounding_metadata)``. ``grounding_metadata`` is the
     raw ``candidates[0].groundingMetadata`` dict when present, else None.
-    Routes via gemini_http shim — works against AI Studio or Vertex
-    based on settings.USE_VERTEX_AI.
+    Routes via gemini_http (Vertex only).
     """
     from app.services.gemini_http import gemini_post
 
@@ -45,7 +44,6 @@ async def post_gemini(
         model=model,
         payload=payload,
         timeout_s=timeout_s,
-        api_key=api_key,
         label=f"landing_{label}",
     )
     if status != 200 or data is None:
@@ -175,7 +173,6 @@ def grounding_urls(grounding: dict | None) -> list[str]:
 
 async def grounded_research(
     prompt: str,
-    key: str,
     timeout_s: float,
     *,
     label: str,
@@ -203,7 +200,7 @@ async def grounded_research(
 
     text, grounding = await post_gemini(
         RESEARCH_MODEL, payload_grounded, timeout_s,
-        label=f"{label}_grounded", api_key=key,
+        label=f"{label}_grounded",
     )
     sources = grounding_source_count(grounding)
     urls = grounding_urls(grounding)
@@ -232,7 +229,7 @@ async def grounded_research(
     payload_plain.pop("tools", None)
     text2, _ = await post_gemini(
         RESEARCH_MODEL, payload_plain, timeout_s,
-        label=f"{label}_plain", api_key=key,
+        label=f"{label}_plain",
     )
     return text2 or "", 0, []
 
@@ -241,7 +238,6 @@ async def grounded_research(
 
 async def structured_distill(
     prompt: str,
-    key: str,
     timeout_s: float,
     *,
     label: str,
@@ -264,6 +260,6 @@ async def structured_distill(
         "generationConfig": generation_config,
     }
     text, _ = await post_gemini(
-        DISTILL_MODEL, payload, timeout_s, label=label, api_key=key,
+        DISTILL_MODEL, payload, timeout_s, label=label,
     )
     return text
