@@ -1,66 +1,75 @@
-"""Test the clarity agent with diverse prompts.
+"""Test the fully-dynamic clarity agent across all 5 question types.
 
 Run: docker exec -it lucid-ai-ai_engine-1 python /app/test_clarity_agent.py
 """
-import asyncio, sys, json
+import asyncio, sys
 sys.path.insert(0, "/app")
 from app.services.clarity_agent import check_prompt_clarity
 
+# (prompt, already_clarified, expected_key_or_PASS)
 CASES = [
-    # Should ask → missing location
-    ("coffee shop",                          {},                          "ASK: location"),
-    ("yoga studio",                          {},                          "ASK: location or type"),
-    ("restaurant",                           {},                          "ASK: location or cuisine"),
+    # ── Location (fast-path + Gemini) ───────────────────────────────────────
+    ("gym",                                    {},                          "location"),
+    ("spa",                                    {},                          "location"),
+    ("bakery",                                 {},                          "location"),
+    ("hair salon",                             {},                          "location"),
+    ("nightclub",                              {},                          "location"),
+    # Already has location → PASS
+    ("Italian coffee shop in Florence",        {},                          "PASS"),
+    ("sushi restaurant in Tokyo",              {},                          "PASS"),
+    ("gym in New York",                        {},                          "PASS"),
+    ("dentist in Berlin",                      {},                          "PASS"),
 
-    # Should pass → enough context
-    ("Italian coffee shop in Florence",      {},                          "PASS"),
-    ("SaaS invoicing tool for freelancers",  {},                          "PASS"),
-    ("luxury skincare brand for women 40+",  {},                          "PASS"),
-    ("Korean BBQ restaurant in Manhattan",   {},                          "PASS"),
+    # ── Project type ────────────────────────────────────────────────────────
+    ("company website",                        {},                          "project_type"),
+    ("portfolio",                              {},                          "project_type"),
+    ("agency",                                 {},                          "project_type"),
+    # Type clear but location still missing → ask location
+    ("landing page for a coffee shop",         {},                          "location"),
+    ("SaaS invoicing tool for freelancers",    {},                          "PASS"),
+    ("AI writing assistant app",               {},                          "PASS"),
 
-    # Should ask → ambiguous type
-    ("company website",                      {},                          "ASK: page type"),
-    ("portfolio",                            {},                          "ASK: type or field"),
+    # ── Niche ───────────────────────────────────────────────────────────────
+    ("restaurant",                             {"location": "france"},      "niche"),
+    ("studio",                                 {"location": "japan"},       "niche"),
 
-    # Should pass → round 3 reached (max rounds)
-    ("coffee shop",                          {"location": "florence", "style": "rustic", "type": "landing"}, "PASS (max rounds)"),
+    # ── Audience ────────────────────────────────────────────────────────────
+    ("clinic",                                 {},                          "audience"),
+    ("fitness app",                            {},                          "PASS"),  # audience obvious
 
-    # Should pass → already clarified enough
-    ("coffee shop",                          {"location": "florence"},    "PASS or ASK style"),
+    # ── Max rounds → always PASS ────────────────────────────────────────────
+    ("gym",       {"location":"italy","project_type":"landing","niche":"x"}, "PASS"),
+
+    # ── Location answered → ask project_type next ──────────────────────────
+    ("coffee shop", {"location": "italy"},                                  "project_type"),
 ]
 
 async def main():
-    print(f"\n{'='*70}")
-    print("CLARITY AGENT TEST")
-    print('='*70)
-
-    correct = 0
+    ok = 0
     total = len(CASES)
 
-    for prompt, already, expectation in CASES:
-        result = await check_prompt_clarity(prompt, already, timeout_s=15.0)
-        if result is None:
-            verdict = "PASS"
-            detail = "(clear — no question)"
-        else:
-            verdict = "ASK"
-            detail = f"key={result.get('key')!r}  q={result.get('text')!r}"
-            opts = [o.get('label') for o in result.get('options', [])]
-            detail += f"\n     opts={opts}"
+    print(f"\n{'='*72}")
+    print("CLARITY AGENT — DYNAMIC TEST")
+    print('='*72)
 
-        expected_pass = expectation.startswith("PASS")
+    for prompt, already, expected in CASES:
+        result = await check_prompt_clarity(prompt, already, timeout_s=15.0)
+
+        actual_key = result["key"] if result else "PASS"
+        expected_pass = expected == "PASS"
         actual_pass = result is None
         match = "✓" if expected_pass == actual_pass else "✗"
-        if expected_pass == actual_pass:
-            correct += 1
+        if match == "✓":
+            ok += 1
 
-        print(f"\n{match} [{expectation}]")
-        print(f"  prompt: {prompt!r}  already={already}")
-        print(f"  → {verdict}  {detail}")
+        ctx = f" already={list(already.keys())}" if already else ""
+        detail = f"→ key={result['key']!r}  q={result['text']!r}" if result else "→ (clear)"
+        print(f"{match} [{expected:14s}]  {prompt!r:42s}{ctx}")
+        print(f"           {detail}")
 
-    print(f"\n{'='*70}")
-    print(f"SCORE: {correct}/{total} correct")
-    print('='*70)
+    print(f"\n{'='*72}")
+    print(f"SCORE: {ok}/{total}")
+    print('='*72)
 
 if __name__ == "__main__":
     asyncio.run(main())

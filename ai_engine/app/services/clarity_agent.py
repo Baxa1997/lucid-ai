@@ -1,61 +1,66 @@
 """Gemini-powered clarity check for new project prompts.
 
-Analyzes whether a prompt has enough context to generate a high-quality result.
-If not, returns one targeted question (max 3 rounds total across the session).
+Asks up to 3 dynamic questions to understand the real project — what to build,
+who it's for, where it is — so research and routing are accurate.
 Uses the existing clarification_needed / [LUCID_CLARIFY::key=value] infrastructure.
 """
 from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 _MAX_ROUNDS = 3
 
-# Physical business keywords — single/short prompts naming these always need
-# a location question because cultural context flips the entire visual style.
-# Prompts with these words need location — but NOT audience questions first.
-# "clinic" is excluded: audience (luxury vs budget) matters more than location.
+# Valid question keys — snake_case identifiers that map to [LUCID_CLARIFY::key=value]
+# markers stacked on the task. Any key not in this set is rejected (fail-safe).
+_VALID_KEYS = {
+    "project_type",    # landing page / full website / web app / e-commerce
+    "location",        # city or country for physical businesses
+    "audience",        # target demographic when it flips the visual style
+    "niche",           # sub-category when parent is too generic (restaurant → Italian?)
+    "style",           # brand tone when it would flip the design (luxury vs playful)
+}
+
+# Short physical-business prompts — Gemini is inconsistent on ≤5 word prompts.
+# This fast-path guarantees a location question before the API call.
+# "clinic" excluded — audience (luxury vs budget) matters more than location there.
 _PHYSICAL_KEYWORDS = {
     "gym", "spa", "salon", "café", "cafe", "bakery", "barbershop", "bar",
     "pub", "club", "nightclub", "shop", "store", "boutique", "studio",
-    "pharmacy", "hotel", "hostel", "resort", "restaurant",
-    "diner", "bistro", "brasserie", "pizzeria", "trattoria", "tavern",
-    "laundry", "cleaners", "carwash", "garage", "florist",
-    "nursery", "gallery", "museum", "theater", "theatre", "cinema",
-    "library", "church", "mosque", "temple", "school", "academy",
-    "tailor", "jeweler", "jeweller", "optician", "dentist", "vet",
+    "pharmacy", "hotel", "hostel", "resort", "restaurant", "diner",
+    "bistro", "brasserie", "pizzeria", "trattoria", "tavern", "laundry",
+    "cleaners", "carwash", "garage", "florist", "gallery", "museum",
+    "theater", "theatre", "cinema", "library", "church", "mosque",
+    "temple", "school", "academy", "tailor", "jeweler", "jeweller",
+    "optician", "dentist", "vet",
 }
 
-# Location prepositions — if found, the prompt likely already has a location
 _LOCATION_PREPOSITIONS = {"in", "at", "near", "around", "based", "located"}
 
 _PHYSICAL_LOCATION_OPTIONS = [
-    {"id": "united_states", "label": "United States"},
+    {"id": "united_states",  "label": "United States"},
     {"id": "united_kingdom", "label": "United Kingdom"},
     {"id": "western_europe", "label": "Western Europe"},
     {"id": "other",          "label": "Other"},
 ]
 
+
 def _fast_location_check(task: str) -> dict | None:
     """Return a location question for short physical-business prompts.
 
-    Gemini is inconsistent on 1-3 word prompts (e.g. 'gym', 'spa'). This
-    pre-check catches them reliably before the API call.
-    Skipped when the prompt already contains a location preposition.
+    Only fires on ≤5-word prompts with no location preposition already present.
     """
     words = task.lower().split()
-    # Skip if prompt likely already contains a location ("restaurant in Tokyo")
     if any(w.strip(".,!?") in _LOCATION_PREPOSITIONS for w in words):
         return None
-    # Only apply to short prompts (≤ 5 words) — longer ones Gemini handles fine
     if len(words) > 5:
         return None
     for w in words:
-        w_clean = w.strip(".,!?'\"")
-        if w_clean in _PHYSICAL_KEYWORDS:
+        if w.strip(".,!?'\"") in _PHYSICAL_KEYWORDS:
             return {
                 "key": "location",
                 "text": f"Where is your {task.lower()} located?",
@@ -63,45 +68,58 @@ def _fast_location_check(task: str) -> dict | None:
             }
     return None
 
+
 _SYSTEM_PROMPT = """\
-You are a project-intake agent for an AI web design platform.
+You are a smart project intake agent for an AI web design platform.
 
-A user described a project they want built. Decide if ONE specific question would unlock significantly better visual results — or if you have enough to proceed.
+A user described a project. Your job: ask the ONE most important question that would significantly improve the quality of this project — better visual research, better routing, better output.
 
-═══ ONLY ASK ABOUT THESE TWO THINGS ═══
+══ QUESTION PRIORITY ══
+Ask the first item below that is still unclear:
 
-1. LOCATION — ask key="location" when the business is physical (shop, restaurant, café, studio, clinic, gym, hotel, bar) AND no city or country is mentioned.
-   → Options must be specific countries/regions, not continents.
-   → Examples: "Italy", "France", "Spain", "UK", "United States", "Japan", "South Korea", "Mexico", "Brazil", "Other"
-   → Pick the 4 most likely options for that business type, always include "Other"
+1. PROJECT SCOPE (key="project_type") — ask ONLY if it is genuinely unclear whether the user wants:
+   - A single marketing/landing page
+   - A full multi-page website
+   - A web app or dashboard
+   - An e-commerce store with products/cart
+   Do NOT ask this for clear SaaS tools, digital products, or when user said "landing page" / "website".
 
-2. AUDIENCE — ask key="audience" ONLY when the target audience would flip the entire visual style AND it cannot be inferred.
-   → Example: "clinic" alone — could be luxury private or budget public → ask
-   → Example: "SaaS tool for developers" — audience is clear, don't ask
-   → Options: max 4, short labels (3-5 words each)
+2. LOCATION (key="location") — ask when the business is physical (shop, café, studio, gym, clinic, hotel, restaurant, bar, salon) AND no city/country is mentioned.
+   → Options: specific countries, NOT continents. Always include "Other".
+   → Pick the 4 most relevant countries for this business type.
 
-═══ NEVER ASK ABOUT ═══
-- Page type / project type (landing page vs full website) — the platform decides this automatically
-- Colors, fonts, content, features
-- Anything inferable from the prompt
-- Industry or business type when it's explicit
+3. BUSINESS NICHE (key="niche") — ask when the category is too generic for visual research.
+   → "restaurant" alone → what cuisine? Italian, Asian, American BBQ, Fine dining?
+   → "studio" alone → photography? yoga? music? tattoo?
+   → "agency" alone → marketing? design? talent? law?
 
-═══ KEY NAMING RULES ═══
-- Location questions: always key="location"
-- Audience questions: always key="audience"
+4. TARGET AUDIENCE (key="audience") — ask when the demographic would completely flip the visual style.
+   → "clinic" → luxury private vs budget public
+   → "fitness app" → audience is already clear (fitness people), DON'T ask
+   → Keep options specific and visual: "Young professionals", "Families", "Seniors", "Luxury clients"
 
-ROUNDS USED: {rounds_used} of {max_rounds}
-ALREADY ANSWERED: {already_clarified}
+5. STYLE DIRECTION (key="style") — ask ONLY as a last resort when nothing else is unclear but brand tone is completely unknown.
+   → Options: "Luxury / Premium", "Modern / Minimal", "Bold / Playful", "Classic / Traditional"
 
-If rounds >= {max_rounds} OR the prompt is clear enough → return {{"clear": true}}.
+══ NEVER ASK ABOUT ══
+- Colors, fonts, specific content, or features
+- Things clearly stated or strongly implied by the prompt
+- A second question on the same topic already answered
 
-PROMPT:
+══ ALREADY CLARIFIED ══
+{already_clarified}
+
+══ ROUNDS ══
+Used {rounds_used} of {max_rounds}. If rounds >= {max_rounds} OR prompt has enough context → return {{"clear": true}}.
+
+══ PROMPT ══
 {task}
 
-Return JSON only:
+Return JSON only — no prose:
 {{"clear": true}}
 OR
-{{"clear": false, "question": {{"key": "location"|"audience", "text": "Question (max 12 words)", "options": [{{"id": "snake_id", "label": "Label"}}]}}}}
+{{"clear": false, "question": {{"key": "<one of: project_type|location|niche|audience|style>", "text": "<question, max 12 words>", "options": [{{"id": "<snake_id>", "label": "<2-5 word label>"}}]}}}}
+2–4 options maximum.
 """
 
 
@@ -112,9 +130,8 @@ async def check_prompt_clarity(
 ) -> Optional[dict]:
     """Return a question dict if clarification needed, else None.
 
-    The returned dict has keys: key, text, options (list of {id, label}).
-    Returns None when the prompt is clear enough to proceed, or on any error
-    (fail-open so slow AI never blocks generation).
+    Returned dict: {key, text, options: [{id, label}]}.
+    Returns None when prompt is clear or on any error (fail-open).
     """
     from app.services.landing_gemini import structured_distill
     from knowledge.loader import extract_clarify_context, force_archetype_from_task
@@ -131,11 +148,12 @@ async def check_prompt_clarity(
     if not clean_task:
         return None
 
-    # Fast path: short physical-business prompts always need location
-    _fast = _fast_location_check(clean_task)
-    if _fast:
-        logger.info("clarity_agent: fast-path location question for %r", clean_task)
-        return _fast
+    # Fast path: short physical-business prompts always need location first
+    if rounds_used == 0 or "location" not in already_clarified:
+        _fast = _fast_location_check(clean_task)
+        if _fast:
+            logger.info("clarity_agent: fast-path location for %r", clean_task)
+            return _fast
 
     prompt = _SYSTEM_PROMPT.format(
         rounds_used=rounds_used,
@@ -177,7 +195,7 @@ async def check_prompt_clarity(
             timeout_s,
             label="clarity_check",
             response_schema=response_schema,
-            max_tokens=256,
+            max_tokens=300,
             model="gemini-2.5-flash",
         )
         result = json.loads(raw) if isinstance(raw, str) else raw
@@ -192,14 +210,22 @@ async def check_prompt_clarity(
             return None
         if len(q["options"]) < 2:
             return None
-        # Normalize key — only "location" and "audience" are valid
-        key = q.get("key", "").lower().strip()
-        if key not in ("location", "audience"):
-            logger.info("clarity_agent: suppressed question with key=%r — not location/audience", key)
+
+        # Validate key — must be snake_case and in allowed set
+        key = re.sub(r"[^a-z0-9_]", "", q["key"].lower().strip())
+        if key not in _VALID_KEYS:
+            logger.info("clarity_agent: suppressed unknown key=%r", key)
             return None
+
+        # Don't re-ask a key already answered
+        if key in already_clarified:
+            logger.info("clarity_agent: suppressed already-answered key=%r", key)
+            return None
+
         q["key"] = key
         logger.info("clarity_agent: round %d — asking about %r", rounds_used + 1, key)
         return q
+
     except Exception as exc:
-        logger.warning("clarity_agent: check failed (%s) — passing through to pipeline", exc)
+        logger.warning("clarity_agent: check failed (%s) — passing through", exc)
         return None
