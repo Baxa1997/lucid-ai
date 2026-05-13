@@ -285,11 +285,16 @@ async def structured_distill(
     to gemini-2.5-flash sidesteps the bug at the cost of slightly older
     model quality on that one call.
     """
+    # Pro models REQUIRE thinking_budget > 0 (Vertex rejects 0 with
+    # INVALID_ARGUMENT). Flash/Lite models allow 0 to save latency.
+    _model_for_thinking = (model or DISTILL_MODEL or "").lower()
+    _thinking_budget = 1024 if "pro" in _model_for_thinking else 0
+
     generation_config: dict[str, Any] = {
         "temperature": temperature,
         "maxOutputTokens": max_tokens,
         "responseMimeType": "application/json",
-        "thinkingConfig": {"thinkingBudget": 0},
+        "thinkingConfig": {"thinkingBudget": _thinking_budget},
     }
     if response_schema is not None:
         generation_config["responseSchema"] = response_schema

@@ -141,20 +141,23 @@ _VISUAL_DNA_SCHEMA: dict[str, Any] = {
     "properties": {
         "decorative_motifs": {
             "type": "ARRAY",
-            "items": {"type": "STRING"},
+            "items": {"type": "STRING", "maxLength": 100},
+            "maxItems": 5,
         },
         "signature_textures": {
             "type": "ARRAY",
-            "items": {"type": "STRING"},
+            "items": {"type": "STRING", "maxLength": 100},
+            "maxItems": 3,
         },
         "iconography_anchors": {
             "type": "ARRAY",
-            "items": {"type": "STRING"},
+            "items": {"type": "STRING", "maxLength": 40},
+            "maxItems": 6,
         },
-        "photography_style":         {"type": "STRING"},
-        "layout_signature":          {"type": "STRING"},
-        "cultural_palette_emphasis": {"type": "STRING"},
-        "typography_voice":          {"type": "STRING"},
+        "photography_style":         {"type": "STRING", "maxLength": 250},
+        "layout_signature":          {"type": "STRING", "maxLength": 250},
+        "cultural_palette_emphasis": {"type": "STRING", "maxLength": 250},
+        "typography_voice":          {"type": "STRING", "maxLength": 250},
         "section_flavors": {
             "type": "OBJECT",
             "properties": {
@@ -181,31 +184,35 @@ _VISUAL_DNA_SCHEMA: dict[str, Any] = {
         # in landing_section_codegen.py — pipeline never blocks on a
         # missing anatomy. Keys correspond to section.type values used
         # in the brief's sections array.
+        # maxLength=250 on every anatomy is structural — Gemini enforces it
+        # at the schema level so the model literally cannot pad. Solves the
+        # runaway-generation bug where value_prop / pricing would balloon to
+        # thousands of chars and break the JSON parse for other fields.
         "section_anatomies": {
             "type": "OBJECT",
             "properties": {
-                "hero":         {"type": "STRING"},
-                "menu":         {"type": "STRING"},
-                "gallery":      {"type": "STRING"},
-                "story":        {"type": "STRING"},
-                "philosophy":   {"type": "STRING"},
-                "testimonials": {"type": "STRING"},
-                "value_prop":   {"type": "STRING"},
-                "features":     {"type": "STRING"},
-                "process":      {"type": "STRING"},
-                "how_it_works": {"type": "STRING"},
-                "press":        {"type": "STRING"},
-                "team":         {"type": "STRING"},
-                "pricing":      {"type": "STRING"},
-                "faq":          {"type": "STRING"},
-                "cta":          {"type": "STRING"},
-                "stats":        {"type": "STRING"},
-                "locations":    {"type": "STRING"},
-                "reservation":  {"type": "STRING"},
-                "contact":      {"type": "STRING"},
-                "newsletter":   {"type": "STRING"},
-                "header":       {"type": "STRING"},
-                "footer":       {"type": "STRING"},
+                "hero":         {"type": "STRING", "maxLength": 250},
+                "menu":         {"type": "STRING", "maxLength": 250},
+                "gallery":      {"type": "STRING", "maxLength": 250},
+                "story":        {"type": "STRING", "maxLength": 250},
+                "philosophy":   {"type": "STRING", "maxLength": 250},
+                "testimonials": {"type": "STRING", "maxLength": 250},
+                "value_prop":   {"type": "STRING", "maxLength": 250},
+                "features":     {"type": "STRING", "maxLength": 250},
+                "process":      {"type": "STRING", "maxLength": 250},
+                "how_it_works": {"type": "STRING", "maxLength": 250},
+                "press":        {"type": "STRING", "maxLength": 250},
+                "team":         {"type": "STRING", "maxLength": 250},
+                "pricing":      {"type": "STRING", "maxLength": 250},
+                "faq":          {"type": "STRING", "maxLength": 250},
+                "cta":          {"type": "STRING", "maxLength": 250},
+                "stats":        {"type": "STRING", "maxLength": 250},
+                "locations":    {"type": "STRING", "maxLength": 250},
+                "reservation":  {"type": "STRING", "maxLength": 250},
+                "contact":      {"type": "STRING", "maxLength": 250},
+                "newsletter":   {"type": "STRING", "maxLength": 250},
+                "header":       {"type": "STRING", "maxLength": 250},
+                "footer":       {"type": "STRING", "maxLength": 250},
             },
         },
         "cultural_intensity": {
@@ -343,7 +350,7 @@ EXTRACT into JSON matching the schema. Every string must be CONCRETE and ACTIONA
     story / philosophy / value_prop / testimonials / reservations: same pattern.
   Skip section types not relevant to this brand's archetype.
 
-• section_anatomies: per-section STRUCTURAL anatomy spec (the actual layout blueprint Claude implements). Each entry is 80–150 words describing WHERE things go, what shapes, what scale tokens, and which decorative cues from this VISUAL DNA land where. Format like a developer-facing design spec. Anchor to the visual_research / layout_research above — pull from real reference patterns the research surfaced. Each anatomy MUST include:
+• section_anatomies: per-section STRUCTURAL anatomy spec — ONE PARAGRAPH per section, MAX 25 words / 150 characters. Describe WHERE things go, what shapes, what scale tokens, and which decorative cues land where. Format like a tight developer note. NEVER repeat sentences or pad with rationale. Each anatomy MUST include:
     1. Outer <section> structural rules (overflow-hidden when decorative bleeds present, min-h, padding tokens).
     2. Composition: column count / grid shape / asymmetry / where copy and media land.
     3. Concrete decorative integration: which 1-2 motifs / textures / iconography_anchors from above appear, and exactly where (eyebrow ornament, divider, image-frame border, hero overlay, card edge, etc.).
@@ -373,8 +380,14 @@ OUTPUT BUDGET — be COMPACT but section_anatomies needs room. Whole JSON should
   • signature_textures: 2-3 items. Each item ≤80 chars.
   • iconography_anchors: 4-6 items. Each item is a SHORT noun (≤25 chars: "lantern", "tea cup", "olive branch") — no descriptions.
   • section_flavors: 1 sentence per section type, MAX ~150 chars each. Skip section types not relevant.
-  • section_anatomies: 20-30 words PER section MAX, ~150 chars each. 5-7 entries total. THREE MANDATORY KEYS — `hero`, `header`, `footer`. Pick footer variant: minimalist-row | mega-columns | cta-band | centered-stack. Other 2-4 entries from: menu, gallery, story, testimonials, features, pricing, cta.
-HARD LIMIT: entire JSON must fit in 1800 tokens. Stop early if needed. No padding, no rationale.
+  • section_anatomies: 20-25 words PER section, ~150 chars MAX each. 5-7 entries total. THREE MANDATORY KEYS — `hero`, `header`, `footer`. Pick footer variant: minimalist-row | mega-columns | cta-band | centered-stack. Other 2-4 entries from: menu, gallery, story, testimonials, features, pricing, cta, value_prop.
+
+ANTI-RUNAWAY RULES (CRITICAL):
+- NEVER repeat the same sentence or paraphrase twice in any anatomy.
+- NEVER pad with phrases like "The section is designed to...", "The overall effect...", "This creates...".
+- If you find yourself writing more than 150 chars on one anatomy, STOP that anatomy NOW and move to the next.
+- The JSON closing brace `}}` MUST appear within 2500 tokens. If you're approaching the limit, OUTPUT THE CLOSING BRACE IMMEDIATELY.
+HARD LIMIT: entire JSON must fit in 2500 tokens. Compact > complete > verbose.
 
 OUTPUT: just the JSON. No markdown wrapper. Every string concrete and actionable — no abstract design jargon, no SaaS-flavored boilerplate."""
 
@@ -525,18 +538,18 @@ async def extract_research_signals(
     #      compete with the lighter calls for the Vertex per-project
     #      concurrency window.
     _VISUAL_DNA_TIMEOUT_S = 180.0
-    _VISUAL_DNA_MAX_TOKENS = 2048
-    # Pin visual_dna to gemini-2.5-flash. The default DISTILL_MODEL
-    # (gemini-3-flash-preview) exhibits a runaway-generation failure mode
-    # on this call: it fills the entire maxOutputTokens budget without
-    # producing parseable text. Verified across 3 paired tests:
-    #   • run #2 (32k tokens, gather): both brands → TIMEOUT
-    #   • run #3 (16k tokens, sequential): SaaS → MAX_TOKENS empty
-    #   • run #4 (24k tokens, sequential): BOTH brands → MAX_TOKENS
-    #     empty (candidates=24561, thoughts=0, text="")
-    # gemini-2.5-flash returns parseable JSON reliably for both
-    # concrete (restaurant) and abstract (compliance SaaS) briefs.
-    _VISUAL_DNA_MODEL = "gemini-2.5-flash"
+    _VISUAL_DNA_MAX_TOKENS = 4000
+    # Pin visual_dna to gemini-2.5-pro. Pro is ~2× slower than Flash
+    # (~30-45s vs ~15-20s) but follows brevity constraints reliably.
+    # Flash exhibited a runaway-generation pattern on abstract briefs
+    # (SaaS, fintech, dev tools): it would write 4-5 anatomies fine, then
+    # explode into a 6000+ char "philosophical pad" on a later anatomy
+    # (value_prop, pricing, how_it_works), busting the JSON parser and
+    # leaving only the first anatomy recoverable. Pro respects the
+    # 20-25 word / 150-char anatomy limit and outputs all 5-7 anatomies
+    # cleanly. The ~20s latency cost is worth it — visual_dna is the
+    # single most important research artifact downstream.
+    _VISUAL_DNA_MODEL = "gemini-2.5-pro"
 
     async def _visual_dna_call() -> str:
         return await structured_distill(
@@ -969,17 +982,27 @@ def _parse_json(raw: str, *, label: str) -> dict | None:
 def _salvage_truncated_json(raw: str) -> dict | None:
     """Recover partial JSON from a response truncated mid-string.
 
-    Strategy: scan the raw text left-to-right tracking brace/bracket depth
-    and string state. Remember the LAST byte position where we were at
-    depth=1 (just inside the top-level object) and not inside a string.
-    Truncate there, append `}`, parse. Returns None if salvage fails.
+    Two-pass strategy:
+      1. Find the deepest safe truncation point AT ANY DEPTH where we're
+         outside a string and at the end of a complete key/value pair.
+         Close all open braces/brackets up to depth 0.
+      2. Try to parse the reconstructed candidate.
+
+    This recovers anatomies/items that ARE complete inside a parent object
+    whose final entry was runaway-truncated mid-string. The previous
+    depth-1-only approach lost everything inside ``section_anatomies`` when
+    one anatomy ran away.
     """
     if not raw or "{" not in raw:
         return None
-    depth = 0
+
     in_string = False
     escape = False
-    last_safe = -1  # last position at depth 1 outside a string after a comma
+    stack: list[str] = []  # tracks "{" or "[" for each open container
+    # last_safe_at_depth[d] = (position-just-after-complete-entry, stack-snapshot)
+    # for depth d. We pick the deepest non-zero depth that has a safe point.
+    last_safe: list[tuple[int, list[str]]] = []
+
     for i, ch in enumerate(raw):
         if escape:
             escape = False
@@ -989,28 +1012,55 @@ def _salvage_truncated_json(raw: str) -> dict | None:
                 escape = True
             elif ch == '"':
                 in_string = False
+                # End-of-string at depth>0 — record this as a potential safe
+                # point (after closing quote). Only valid when the string was
+                # a *value* (i.e. preceded by ':') not a *key*. We detect by
+                # scanning back: if last non-whitespace char before the
+                # matching opening quote was ':', it's a value.
+                if stack:
+                    # Find opening quote of this string by scanning back
+                    j = i - 1
+                    while j >= 0 and raw[j] != '"':
+                        j -= 1
+                    # Walk further back past whitespace to find the char
+                    # before this string token
+                    k = j - 1
+                    while k >= 0 and raw[k] in " \t\n\r":
+                        k -= 1
+                    if k >= 0 and raw[k] == ":":
+                        # This was a value string — record safe point
+                        last_safe.append((i + 1, stack.copy()))
             continue
         if ch == '"':
             in_string = True
             continue
         if ch in "{[":
-            depth += 1
+            stack.append(ch)
         elif ch in "}]":
-            depth -= 1
-            if depth == 1:
-                last_safe = i + 1  # right after a closing bracket at depth 2
-        elif ch == "," and depth == 1:
-            last_safe = i  # before the comma
-    if last_safe <= 0:
+            if stack:
+                stack.pop()
+            if stack:  # still inside some container
+                last_safe.append((i + 1, stack.copy()))
+
+    if not last_safe:
         return None
-    candidate = raw[:last_safe].rstrip()
-    if candidate.endswith(","):
-        candidate = candidate[:-1]
-    candidate += "}"
-    try:
-        return json.loads(candidate)
-    except json.JSONDecodeError:
-        return None
+
+    # Try from deepest-recorded safe point backwards
+    for pos, stack_snap in reversed(last_safe):
+        candidate = raw[:pos].rstrip()
+        # Drop trailing comma if any
+        if candidate.endswith(","):
+            candidate = candidate[:-1]
+        # Close every open container in stack_snap (in reverse order)
+        for opener in reversed(stack_snap):
+            candidate += "}" if opener == "{" else "]"
+        try:
+            result = json.loads(candidate)
+            if isinstance(result, dict):
+                return result
+        except json.JSONDecodeError:
+            continue
+    return None
 
 
 def _empty_result() -> dict[str, Any]:
