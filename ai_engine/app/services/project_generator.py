@@ -9628,6 +9628,41 @@ Call the write_project_files tool with ALL files.
         and layout_archetype not in {"admin_dashboard", "crm", "tms", "saas_dashboard"}
     )
 
+    # ── Deterministic homepage (full bypass of Claude) ─────────────
+    # When slim mode applies AND the schema has sections, generate the
+    # homepage as a pure composition file. Removes Claude from the critical
+    # path entirely — Phase 1 becomes a no-op and Phase 2 writes the
+    # individual section components.
+    _det_homepage_written = False
+    if _slim_phase1:
+        try:
+            from app.services.homepage_builder import plan_homepage
+            _hp_plan = plan_homepage(project_schema, stack=stack)
+            if _hp_plan:
+                _hp_abs = os.path.join(workspace_path, _hp_plan["rel_path"])
+                # Don't overwrite if a file already exists in the template
+                if not os.path.exists(_hp_abs):
+                    os.makedirs(os.path.dirname(_hp_abs), exist_ok=True)
+                    with open(_hp_abs, "w", encoding="utf-8") as _hpf:
+                        _hpf.write(_hp_plan["contents"])
+                    _det_homepage_written = True
+                    _section_names = [s["component"] for s in _hp_plan["sections"]]
+                    logger.info(
+                        "Deterministic homepage written to %s — %d sections: %s",
+                        _hp_plan["rel_path"], len(_section_names),
+                        ", ".join(_section_names),
+                    )
+                    await _ws_send(
+                        websocket, "progress",
+                        f"🏠 Wrote homepage with {len(_section_names)} sections — skipping Claude Phase 1",
+                    )
+                    # Add to authoritative paths so Phase 2 cannot overwrite it
+                    _authoritative_paths.add(_hp_plan["rel_path"])
+        except Exception as _hp_exc:
+            logger.warning(
+                "Deterministic homepage write failed (non-fatal): %s", _hp_exc,
+            )
+
     if _slim_phase1:
         _slim_sections = project_schema.get("sections") or []
         _slim_section_names = [
@@ -9701,8 +9736,18 @@ OUTPUT FORMAT: {{"files": [{{"path": "src/app/page.js", "content": "..."}}]}}
     _phase1_skeleton_fallback = False
     # Slim mode is 16× smaller — tight 90s timeout, no need for the 6-min cap
     _phase1_initial_timeout = 90.0 if _slim_phase1 else 360.0
+
+    # FULL BYPASS — homepage written deterministically, no Claude needed.
+    # Phase 2 still runs and generates section components + inner pages.
+    if _det_homepage_written:
+        logger.info("Phase 1: SKIPPED entirely — homepage written deterministically")
+        result1 = {"files": []}
+        # Drop straight to the after-Phase-1 logic below
+        # (no try/except wrap needed since we have a result)
+
     try:
-        result1 = await asyncio.wait_for(_phase1_attempt(), timeout=_phase1_initial_timeout)
+        if result1 is None:
+            result1 = await asyncio.wait_for(_phase1_attempt(), timeout=_phase1_initial_timeout)
     except asyncio.TimeoutError:
         _phase1_timed_out_once = True
         logger.warning(
