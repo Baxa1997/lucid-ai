@@ -58,6 +58,16 @@ Only when something CRITICAL for design is missing and not inferable:
 snake_case, descriptive. Common: project_type, location, niche, audience, style.
 Don't ask about keys already in "Already clarified".
 
+══ PROJECT_TYPE OPTION IDS ══
+When asking project_type, options must use these EXACT ids (labels can vary):
+- id="landing_page"   → for a single marketing/promo page
+- id="full_website"   → for a multi-page public website
+- id="web_app"        → for a SaaS app / dashboard / internal tool
+- id="ecommerce"      → for an online store with products/cart
+- id="portfolio"      → for a personal/agency showcase site
+- id="blog"           → for a content publishing site
+The label shown to the user is free-form; only the id needs to match.
+
 ══ EXAMPLES ══
 "SaaS invoicing tool for freelancers" → clear=true (project type=app, audience=freelancers, both stated)
 "AI writing assistant app" → clear=true (says "app", that's enough)

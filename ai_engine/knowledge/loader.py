@@ -264,6 +264,33 @@ def format_clarify_marker(key: str, value: str) -> str:
     return f"[LUCID_CLARIFY::{safe_key}={safe_val}]"
 
 
+def map_project_type_to_archetype(project_type_value: str) -> Optional[str]:
+    """Map a clarity-agent project_type answer to a layout_archetype.
+
+    Tolerant of variations (landing_page, single_page, one_pager, etc.).
+    Returns None if no confident match — caller falls back to classifier.
+    """
+    if not project_type_value:
+        return None
+    v = project_type_value.lower().strip().replace("-", "_")
+    # Order matters: more specific matches first
+    if any(s in v for s in ("ecommerce", "e_commerce", "online_store", "online_shop", "shop", "store")):
+        return "ecommerce"
+    if any(s in v for s in ("landing", "one_page", "one_pager", "single_page", "promo")):
+        return "single_page_landing"
+    if "portfolio" in v:
+        return "portfolio"
+    if "blog" in v or "magazine" in v:
+        return "blog"
+    if "marketplace" in v:
+        return "marketplace"
+    if any(s in v for s in ("dashboard", "saas", "web_app", "webapp", "admin")):
+        return "saas_dashboard"
+    if any(s in v for s in ("full_website", "multi_page", "website", "site")):
+        return "consumer_website"
+    return None
+
+
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  AI-Powered Classifier (Gemini Flash — 2 seconds)           ║
 # ╚══════════════════════════════════════════════════════════════╝
@@ -435,6 +462,14 @@ def _classify_static(task: str) -> dict:
     import re as _re
     task_lower = (task or "").lower()
 
+    # LUCID_CLARIFY::project_type — user explicitly answered → trust it
+    _ctx, _ = extract_clarify_context(task or "")
+    _pt = _ctx.get("project_type")
+    if _pt:
+        _m = map_project_type_to_archetype(_pt)
+        if _m:
+            return _build_rich_classification(_m, _detect_domain(task_lower), locked=True)
+
     # "landing page" OR standalone "landing" word → single_page_landing (HIGHEST priority).
     # Catches: "acca landing", "startup landing", "saas landing", "landing for X", etc.
     if "landing page" in task_lower or _re.search(r'\blanding\b', task_lower):
@@ -543,6 +578,21 @@ async def classify_project_type_ai(
         return _build_rich_classification(
             force_archetype, _detect_domain((task or "").lower()), locked=True
         )
+
+    # ── LUCID_CLARIFY::project_type override ──
+    # When the clarity agent asked "landing page or full website?" and the
+    # user picked one, the answer rides on the task as a marker. Trust it
+    # over keyword/Gemini classification — the user explicitly chose this.
+    _clarify_ctx, _ = extract_clarify_context(task or "")
+    _project_type = _clarify_ctx.get("project_type")
+    if _project_type:
+        _mapped = map_project_type_to_archetype(_project_type)
+        if _mapped:
+            logger.info("classify: user picked project_type=%s → archetype=%s",
+                        _project_type, _mapped)
+            return _build_rich_classification(
+                _mapped, _detect_domain((task or "").lower()), locked=True
+            )
 
     # Fast-path: landing / one-pager synonyms are unambiguous — skip Gemini to save time.
     # Lock the classification so neither Gemini research nor the schema validator can
