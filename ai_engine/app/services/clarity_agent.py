@@ -14,6 +14,55 @@ logger = logging.getLogger(__name__)
 
 _MAX_ROUNDS = 3
 
+# Physical business keywords — single/short prompts naming these always need
+# a location question because cultural context flips the entire visual style.
+# Prompts with these words need location — but NOT audience questions first.
+# "clinic" is excluded: audience (luxury vs budget) matters more than location.
+_PHYSICAL_KEYWORDS = {
+    "gym", "spa", "salon", "café", "cafe", "bakery", "barbershop", "bar",
+    "pub", "club", "nightclub", "shop", "store", "boutique", "studio",
+    "pharmacy", "hotel", "hostel", "resort", "restaurant",
+    "diner", "bistro", "brasserie", "pizzeria", "trattoria", "tavern",
+    "laundry", "cleaners", "carwash", "garage", "florist",
+    "nursery", "gallery", "museum", "theater", "theatre", "cinema",
+    "library", "church", "mosque", "temple", "school", "academy",
+    "tailor", "jeweler", "jeweller", "optician", "dentist", "vet",
+}
+
+# Location prepositions — if found, the prompt likely already has a location
+_LOCATION_PREPOSITIONS = {"in", "at", "near", "around", "based", "located"}
+
+_PHYSICAL_LOCATION_OPTIONS = [
+    {"id": "united_states", "label": "United States"},
+    {"id": "united_kingdom", "label": "United Kingdom"},
+    {"id": "western_europe", "label": "Western Europe"},
+    {"id": "other",          "label": "Other"},
+]
+
+def _fast_location_check(task: str) -> dict | None:
+    """Return a location question for short physical-business prompts.
+
+    Gemini is inconsistent on 1-3 word prompts (e.g. 'gym', 'spa'). This
+    pre-check catches them reliably before the API call.
+    Skipped when the prompt already contains a location preposition.
+    """
+    words = task.lower().split()
+    # Skip if prompt likely already contains a location ("restaurant in Tokyo")
+    if any(w.strip(".,!?") in _LOCATION_PREPOSITIONS for w in words):
+        return None
+    # Only apply to short prompts (≤ 5 words) — longer ones Gemini handles fine
+    if len(words) > 5:
+        return None
+    for w in words:
+        w_clean = w.strip(".,!?'\"")
+        if w_clean in _PHYSICAL_KEYWORDS:
+            return {
+                "key": "location",
+                "text": f"Where is your {task.lower()} located?",
+                "options": _PHYSICAL_LOCATION_OPTIONS,
+            }
+    return None
+
 _SYSTEM_PROMPT = """\
 You are a project-intake agent for an AI web design platform.
 
@@ -79,8 +128,14 @@ async def check_prompt_clarity(
     _, clean_task = extract_clarify_context(clean_task)
     clean_task = clean_task.strip()
 
-    if not clean_task or len(clean_task) < 4:
+    if not clean_task:
         return None
+
+    # Fast path: short physical-business prompts always need location
+    _fast = _fast_location_check(clean_task)
+    if _fast:
+        logger.info("clarity_agent: fast-path location question for %r", clean_task)
+        return _fast
 
     prompt = _SYSTEM_PROMPT.format(
         rounds_used=rounds_used,
