@@ -7433,6 +7433,33 @@ async def _generate_new_project_inner(
         )
         return ok
 
+    # ── Website pipeline v2 — feature-flagged ──────────────────────
+    # Per-page parallel Claude calls with visual_dna-driven design.
+    # Gated by env var so we can roll out without breaking existing
+    # consumer_website flow. Set WEBSITE_PIPELINE_V2_ENABLED=true to enable.
+    # Currently scoped to consumer_website only; admin layouts still use
+    # the legacy 3-phase flow since their Sidebar isn't yet deterministic.
+    if (
+        os.environ.get("WEBSITE_PIPELINE_V2_ENABLED", "").lower() in ("1", "true", "yes")
+        and _layout_archetype in {"consumer_website", "portfolio", "blog", "marketplace"}
+    ):
+        from app.services.website_pipeline import run_website_pipeline
+        _phase_begin("website_pipeline_v2")
+        ok = await run_website_pipeline(
+            description=description,
+            classification=_classification,
+            workspace_path=workspace_path,
+            validated=validated,
+            websocket=websocket,
+            chat_session_id=chat_session_id,
+        )
+        _phase_end("website_pipeline_v2")
+        logger.info(
+            "⏱️  [TIMING] TOTAL website pipeline v2: %.2fs",
+            _perf_time.perf_counter() - _t_total,
+        )
+        return ok
+
     # ── Step 2.5: Expand very short prompts ──
     # "ACCA website" or "yoga studio" yields empty research blocks because Gemini
     # has nothing concrete to anchor on. Expanding here propagates richer context
