@@ -229,6 +229,35 @@ async def run_website_pipeline(
             websocket, "warning",
             f"⚠️ {len(failed_routes)}/{total_pages} page(s) failed: {', '.join(failed_routes)}",
         )
+
+    # ── Stage 7: Post-generation verification ──────────────────────
+    # Static audit of file structure + imports. Catches Claude
+    # contract violations before the dev server starts.
+    await _send(websocket, "progress", "🔍 Stage 7/7 — Verifying file structure + imports…")
+
+    from app.services.website_verification import audit_generated_website
+    try:
+        audit = audit_generated_website(
+            workspace_path, plan,
+            expect_header=result.get("header_ok") is True,
+            expect_footer=result.get("footer_ok") is True,
+        )
+        logger.info("website_pipeline: %s", audit["summary"])
+        if audit["ok"]:
+            await _send(websocket, "progress", f"✅ {audit['summary']}")
+        else:
+            issue_lines: list[str] = []
+            for key, val in audit["issues"].items():
+                if val:
+                    sample = val[:3]
+                    issue_lines.append(f"  • {key}: {len(val)} (e.g. {sample})")
+            await _send(
+                websocket, "warning",
+                "⚠️ Verification found issues — site may still run but has gaps:\n" + "\n".join(issue_lines),
+            )
+    except Exception as exc:
+        logger.warning("website_pipeline: verification threw (non-fatal) — %s", exc)
+
     await _send(
         websocket, "progress",
         f"✅ Website generated — {written} files, {successful_pages}/{total_pages} pages ok",
