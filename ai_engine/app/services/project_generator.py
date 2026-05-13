@@ -9611,62 +9611,174 @@ Call the write_project_files tool with ALL files.
         )
 
     _phase_begin("claude_phase1")
-    # Phase 1 is the critical path. Two-attempt strategy:
-    #   • Attempt 1: 6-min wall-clock cap. Inner httpx read=60s already
-    #     catches truly stalled connections; the wall-clock catches any
-    #     other local hang (JSON parse loop, async deadlock, etc.).
-    #   • Attempt 2 (only on timeout, not on other failures): immediate
-    #     retry with a fresh request. Anthropic per-request slowness is
-    #     uncorrelated, so a retry usually succeeds in normal duration.
-    #     Total worst-case: ~12 min; typical recovery: 2-4 min.
-    # Other failures (auth, rate-limit, content-blocked) are NOT retried —
-    # they're not transient and a retry would just burn another credit.
-    async def _phase1_attempt() -> Optional[dict]:
-        return await call_claude_for_json(
-            system_prompt=_system_prompt_for_phase(1),
-            user_prompt=_phase_rules_prefix(1) + "\n" + phase1_prompt,
-            api_key=api_key,
-            websocket=websocket,
-            max_tokens=PHASE1_MAX_TOKENS,
-            model=MODEL,
-            extended_output=PHASE1_EXTENDED,
+
+    # ── Slim-mode Phase 1 ────────────────────────────────────────────
+    # When every foundation file has been written deterministically, the
+    # ONLY remaining Phase 1 work is the homepage (src/app/page.js) and
+    # — for admin layouts — the Sidebar. Sending the full ~10K-token Phase 1
+    # prompt for that is wasteful and is the main cause of timeouts on slow
+    # provider days. Replace the prompt with a focused homepage-only one.
+    _slim_phase1 = (
+        _det_globals_written
+        and _det_design_system_written
+        and _det_site_config_written
+        and _det_navigation_written
+        and _det_footer_written
+        and _det_header_written
+        and layout_archetype not in {"admin_dashboard", "crm", "tms", "saas_dashboard"}
+    )
+
+    if _slim_phase1:
+        _slim_sections = project_schema.get("sections") or []
+        _slim_section_names = [
+            s.get("name") or s.get("id") or "" for s in _slim_sections if s
+        ]
+        _slim_section_names = [n for n in _slim_section_names if n]
+
+        _slim_prompt = f"""HOMEPAGE GENERATION ONLY — all foundation files already written deterministically.
+
+You MUST output ONLY ONE file: the homepage at src/app/page.js (Next.js) or src/pages/index.jsx (Vite).
+
+CONTEXT:
+- Brand: {project_schema.get('brand', {}).get('name', description[:40])}
+- Tagline: {project_schema.get('brand', {}).get('tagline', '')}
+- Domain: {classification.get('domain', 'general')}
+- Stack: {stack}
+- Already imported globally (do NOT regenerate): globals.css, design-system.js, site.js, navigation.js, MarketingHeader, MarketingFooter
+
+HOMEPAGE STRUCTURE — compose these sections in order:
+{chr(10).join(f'  {i+1}. {n}' for i, n in enumerate(_slim_section_names)) if _slim_section_names else '  (Use hero + features + cta as default)'}
+
+RULES:
+- Import sections from src/components/sections/ (Phase 2 will write them — use the names from the list above)
+- Import: {{ siteConfig }} from '@/config/site'
+- Tailwind classes ONLY, no inline styles, no CSS variables
+- Use {{ ds }} from '@/lib/design-system' for spacing/typography classes
+- Keep the file short (~50-80 lines) — it's just the composition
+
+OUTPUT FORMAT: {{"files": [{{"path": "src/app/page.js", "content": "..."}}]}}
+"""
+
+        async def _phase1_attempt() -> Optional[dict]:
+            return await call_claude_for_json(
+                system_prompt=_system_prompt_for_phase(1),
+                user_prompt=_phase_rules_prefix(1) + "\n" + _slim_prompt,
+                api_key=api_key,
+                websocket=websocket,
+                max_tokens=4000,           # 16× smaller than full Phase 1
+                model=MODEL,
+                extended_output=False,
+            )
+        logger.info("Phase 1: SLIM mode — all foundation deterministic, only homepage needed")
+        await _ws_send(
+            websocket, "progress",
+            "⚡ Foundation pre-built — running fast homepage-only generation",
         )
+    else:
+        # Phase 1 is the critical path. Two-attempt strategy:
+        #   • Attempt 1: 6-min wall-clock cap. Inner httpx read=60s already
+        #     catches truly stalled connections; the wall-clock catches any
+        #     other local hang (JSON parse loop, async deadlock, etc.).
+        #   • Attempt 2 (only on timeout, not on other failures): immediate
+        #     retry with a fresh request. Anthropic per-request slowness is
+        #     uncorrelated, so a retry usually succeeds in normal duration.
+        #     Total worst-case: ~12 min; typical recovery: 2-4 min.
+        # Other failures (auth, rate-limit, content-blocked) are NOT retried —
+        # they're not transient and a retry would just burn another credit.
+        async def _phase1_attempt() -> Optional[dict]:
+            return await call_claude_for_json(
+                system_prompt=_system_prompt_for_phase(1),
+                user_prompt=_phase_rules_prefix(1) + "\n" + phase1_prompt,
+                api_key=api_key,
+                websocket=websocket,
+                max_tokens=PHASE1_MAX_TOKENS,
+                model=MODEL,
+                extended_output=PHASE1_EXTENDED,
+            )
 
     result1 = None
     _phase1_timed_out_once = False
+    _phase1_skeleton_fallback = False
+    # Slim mode is 16× smaller — tight 90s timeout, no need for the 6-min cap
+    _phase1_initial_timeout = 90.0 if _slim_phase1 else 360.0
     try:
-        result1 = await asyncio.wait_for(_phase1_attempt(), timeout=360.0)
+        result1 = await asyncio.wait_for(_phase1_attempt(), timeout=_phase1_initial_timeout)
     except asyncio.TimeoutError:
         _phase1_timed_out_once = True
         logger.warning(
-            "Phase 1 hit 6-min wall-clock on attempt 1 — retrying once "
-            "(Anthropic slowness is usually uncorrelated)"
+            "Phase 1 hit %ds wall-clock on attempt 1 — waiting 30s before retry "
+            "(Anthropic slowness is usually transient)",
+            int(_phase1_initial_timeout),
         )
         await _ws_send(
             websocket, "progress",
-            "⏳ Phase 1 was slow — retrying with a fresh request...",
+            "⏳ AI provider is slow — waiting 30s before retrying...",
         )
+        await asyncio.sleep(30)
         try:
-            result1 = await asyncio.wait_for(_phase1_attempt(), timeout=360.0)
+            result1 = await asyncio.wait_for(_phase1_attempt(), timeout=300.0)
         except asyncio.TimeoutError:
-            logger.error(
-                "Phase 1 hit 6-min wall-clock on attempt 2 — aborting pipeline"
+            logger.warning(
+                "Phase 1 hit 5-min wall-clock on attempt 2 — trying compact generation"
             )
-            from app.services.llm_retry import emit_pipeline_failure
-            await emit_pipeline_failure(
-                websocket,
-                phase="execute",
-                code="timeout",
-                message=(
-                    "Code generation took too long even after retry. The AI "
-                    "provider seems to be having issues right now. Please try "
-                    "again in a few minutes."
-                ),
-                retriable=True,
+            await _ws_send(
+                websocket, "progress",
+                "⏳ Still slow — trying compact mode (smaller output)...",
             )
-            await _ws_send(websocket, "error", "❌ Phase 1 timed out twice — please retry")
-            return False
-    if _phase1_timed_out_once and result1:
+            await asyncio.sleep(30)
+
+            # Attempt 3: cap at 24K tokens, ask for concise output.
+            # Shorter output = faster response = beats the timeout.
+            _compact_max = min(24000, PHASE1_MAX_TOKENS)
+
+            async def _phase1_compact() -> Optional[dict]:
+                _compact_prompt = (
+                    _phase_rules_prefix(1) + "\n" + phase1_prompt
+                    + "\n\nNOTE: Due to provider load, keep file content concise. "
+                    "Prioritize working code over comments or lengthy examples."
+                )
+                return await call_claude_for_json(
+                    system_prompt=_system_prompt_for_phase(1),
+                    user_prompt=_compact_prompt,
+                    api_key=api_key,
+                    websocket=websocket,
+                    max_tokens=_compact_max,
+                    model=MODEL,
+                    extended_output=False,
+                )
+
+            try:
+                result1 = await asyncio.wait_for(_phase1_compact(), timeout=240.0)
+                if result1:
+                    logger.info("Phase 1 succeeded on compact attempt 3")
+            except asyncio.TimeoutError:
+                # All three attempts timed out — proceed with skeleton fallback.
+                # The skeleton files are already on disk; Phase 1 generates
+                # nothing new, and Phase 2 customizes on top of the skeleton.
+                logger.error(
+                    "Phase 1 timed out on all 3 attempts — falling back to skeleton foundation"
+                )
+                result1 = {"files": []}
+                _phase1_skeleton_fallback = True
+                await _ws_send(
+                    websocket, "warning",
+                    "⚠️ AI provider is slow — continuing with template foundation. "
+                    "Phase 2 will customize it for your project.",
+                )
+                try:
+                    await websocket.send_json({
+                        "type": "chat_message",
+                        "role": "system",
+                        "content": (
+                            "⚠️ The AI provider was too slow to generate a custom foundation. "
+                            "I'm using the template skeleton as a base and will customize it in Phase 2. "
+                            "The result may be slightly more generic — you can ask me to refine specific parts afterward."
+                        ),
+                    })
+                except Exception:
+                    pass
+
+    if _phase1_timed_out_once and result1 and not _phase1_skeleton_fallback:
         logger.info("Phase 1 succeeded on attempt 2 after attempt 1 timeout")
     if result1:
         # Step 4: drop any Claude-emitted file whose path is owned by the
@@ -9688,7 +9800,10 @@ Call the write_project_files tool with ALL files.
         written = write_files_from_json(result1, workspace_path)
         await _emit_file_writes(websocket, written)
         total_files += written
-        await _ws_send(websocket, "progress", f"✅ Foundation: {len(written)} files")
+        if _phase1_skeleton_fallback:
+            await _ws_send(websocket, "progress", "✅ Foundation: template skeleton (AI fallback)")
+        else:
+            await _ws_send(websocket, "progress", f"✅ Foundation: {len(written)} files")
     else:
         from app.services.llm_retry import emit_pipeline_failure
         await emit_pipeline_failure(
