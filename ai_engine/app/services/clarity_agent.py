@@ -15,45 +15,44 @@ logger = logging.getLogger(__name__)
 _MAX_ROUNDS = 3
 
 _SYSTEM_PROMPT = """\
-You are a project-intake agent for an AI web design platform. A user just described a project they want built.
+You are a project-intake agent for an AI web design platform.
 
-Your job: decide if the prompt has enough context to generate a great website/landing page, OR if one short targeted question would unlock significantly better results.
+A user described a project they want built. Decide if ONE specific question would unlock significantly better visual results — or if you have enough to proceed.
 
-QUESTION RULES — only ask if the answer would change the design in a major way:
-- Missing business location (physical shops, restaurants, studios need a city/country for cultural style)
-- Ambiguous project type (could be a landing page OR a full multi-page site)
-- Missing target audience when it would flip the visual approach entirely (luxury vs budget, B2B vs consumer)
+═══ ONLY ASK ABOUT THESE TWO THINGS ═══
 
-NEVER ask about:
-- Colors, fonts, or content details
-- Anything clearly implied by the prompt
-- Things you could assume reasonably from context
+1. LOCATION — ask key="location" when the business is physical (shop, restaurant, café, studio, clinic, gym, hotel, bar) AND no city or country is mentioned.
+   → Options must be specific countries/regions, not continents.
+   → Examples: "Italy", "France", "Spain", "UK", "United States", "Japan", "South Korea", "Mexico", "Brazil", "Other"
+   → Pick the 4 most likely options for that business type, always include "Other"
 
-ROUNDS: {rounds_used} of {max_rounds} clarification rounds already used.
+2. AUDIENCE — ask key="audience" ONLY when the target audience would flip the entire visual style AND it cannot be inferred.
+   → Example: "clinic" alone — could be luxury private or budget public → ask
+   → Example: "SaaS tool for developers" — audience is clear, don't ask
+   → Options: max 4, short labels (3-5 words each)
+
+═══ NEVER ASK ABOUT ═══
+- Page type / project type (landing page vs full website) — the platform decides this automatically
+- Colors, fonts, content, features
+- Anything inferable from the prompt
+- Industry or business type when it's explicit
+
+═══ KEY NAMING RULES ═══
+- Location questions: always key="location"
+- Audience questions: always key="audience"
+
+ROUNDS USED: {rounds_used} of {max_rounds}
 ALREADY ANSWERED: {already_clarified}
 
-If rounds >= {max_rounds}, OR the prompt is specific enough to proceed, return {{"clear": true}}.
+If rounds >= {max_rounds} OR the prompt is clear enough → return {{"clear": true}}.
 
-PROMPT TO ANALYZE:
+PROMPT:
 {task}
 
-Respond ONLY with JSON matching this exact shape:
-{{
-  "clear": true
-}}
-OR:
-{{
-  "clear": false,
-  "question": {{
-    "key": "snake_case_key",
-    "text": "The question to show the user (max 15 words)",
-    "options": [
-      {{"id": "snake_case_id", "label": "Human-readable label"}},
-      {{"id": "snake_case_id2", "label": "Label 2"}}
-    ]
-  }}
-}}
-Max 4 options. Keep option labels short (2-5 words).
+Return JSON only:
+{{"clear": true}}
+OR
+{{"clear": false, "question": {{"key": "location"|"audience", "text": "Question (max 12 words)", "options": [{{"id": "snake_id", "label": "Label"}}]}}}}
 """
 
 
@@ -138,7 +137,13 @@ async def check_prompt_clarity(
             return None
         if len(q["options"]) < 2:
             return None
-        logger.info("clarity_agent: round %d — asking about %r", rounds_used + 1, q["key"])
+        # Normalize key — only "location" and "audience" are valid
+        key = q.get("key", "").lower().strip()
+        if key not in ("location", "audience"):
+            logger.info("clarity_agent: suppressed question with key=%r — not location/audience", key)
+            return None
+        q["key"] = key
+        logger.info("clarity_agent: round %d — asking about %r", rounds_used + 1, key)
         return q
     except Exception as exc:
         logger.warning("clarity_agent: check failed (%s) — passing through to pipeline", exc)
