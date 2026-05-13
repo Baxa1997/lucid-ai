@@ -85,6 +85,24 @@ def test_normalize_synthesizes_home_if_missing():
     print("  ✓ normalize: synthesizes home when missing")
 
 
+def test_normalize_drops_forbidden_routes():
+    plan = {
+        "brand": {"name": "X"},
+        "pages": [
+            {"route": "/",        "title": "Home",    "sections": [{"type": "hero"}]},
+            {"route": "/about",   "title": "About",   "sections": [{"type": "story"}]},
+            {"route": "/privacy", "title": "Privacy", "sections": [{"type": "hero"}]},  # forbidden
+            {"route": "/blog",    "title": "Blog",    "sections": [{"type": "hero"}]},  # forbidden
+            {"route": "/login",   "title": "Login",   "sections": [{"type": "hero"}]},  # forbidden
+            {"route": "/contact", "title": "Contact", "sections": [{"type": "contact"}]},
+        ],
+    }
+    out = _normalize(plan)
+    routes = [p["route"] for p in out["pages"]]
+    assert routes == ["/", "/about", "/contact"], routes
+    print(f"  ✓ normalize: drops forbidden routes (/privacy, /blog, /login)")
+
+
 def test_normalize_lowercases_section_types():
     plan = {
         "brand": {"name": "X"},
@@ -207,6 +225,7 @@ def main():
         test_normalize_moves_home_first,
         test_normalize_dedupes,
         test_normalize_synthesizes_home_if_missing,
+        test_normalize_drops_forbidden_routes,
         test_normalize_lowercases_section_types,
         test_fallback_uses_intent,
         test_site_config,

@@ -107,9 +107,17 @@ PAGE GUIDANCE BY DOMAIN
 - hospitality_travel:  /, /rooms, /dining, /experiences, /contact
 - services_local:      /, /services, /portfolio, /about, /contact
 - retail_fashion:      /, /shop, /collections, /lookbook, /about, /contact
-- saas:                /, /features, /pricing, /docs (or /resources), /about
+- saas:                /, /features, /pricing, /about, /contact   (NOT /docs or /blog)
 - creative_arts:       /, /work, /process, /about, /contact
-- portfolio:           /, /work, /services, /journal, /about, /contact
+- portfolio:           /, /work, /services, /about, /contact      (NOT /journal/blog)
+
+══ FORBIDDEN PAGES ══ (these are NOT marketing-style pages, never include them)
+- /privacy, /terms, /legal     → these are compliance boilerplate (footer links only)
+- /blog, /journal, /news        → these imply a full content system, not one designed page
+- /login, /signup, /dashboard   → these are app routes, not marketing pages
+- /docs, /api, /reference       → these are docs systems (different generator pattern)
+- /faq                          → use a `faq` section on /about or / instead
+- /admin, /settings, /account   → these are app routes
 
 SECTION TYPES (pick from these — they map to known anatomies)
   hero, menu, gallery, story, philosophy, testimonials, value_prop,
@@ -221,14 +229,28 @@ def _looks_valid(plan: Any) -> bool:
     return True
 
 
+_FORBIDDEN_ROUTES = {
+    "/privacy", "/privacy-policy", "/terms", "/terms-of-service", "/legal",
+    "/cookie-policy", "/cookies",
+    "/blog", "/journal", "/news", "/articles", "/posts",
+    "/login", "/signup", "/sign-up", "/register", "/dashboard",
+    "/docs", "/documentation", "/api", "/reference",
+    "/faq", "/help",  # use sections instead
+    "/admin", "/settings", "/account", "/profile",
+}
+
+
 def _normalize(plan: dict) -> dict:
-    """Ensure home is first, dedupe routes, lowercase types."""
+    """Ensure home is first, dedupe routes, drop forbidden routes, lowercase types."""
     pages = plan.get("pages") or []
     seen: set[str] = set()
     home_pages: list[dict] = []
     other_pages: list[dict] = []
     for p in pages:
         route = (p.get("route") or "/").strip()
+        if route.lower().rstrip("/") in _FORBIDDEN_ROUTES:
+            logger.info("website_plan: dropping forbidden route %r", route)
+            continue
         if route in seen:
             continue
         seen.add(route)
