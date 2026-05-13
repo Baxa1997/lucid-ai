@@ -36,8 +36,8 @@ import httpx
 # Model IDs are env-overridable so we can swap without code changes.
 # Pro for grounded research (better tool-use + citation handling).
 # Flash for the distill — small structured-output task, no tools.
-_RESEARCH_MODEL = os.environ.get("LANDING_RESEARCH_MODEL", "gemini-2.5-pro")
-_BRIEF_MODEL = os.environ.get("LANDING_BRIEF_MODEL", "gemini-2.5-flash")
+_RESEARCH_MODEL = os.environ.get("LANDING_RESEARCH_MODEL", "gemini-3.1-pro-preview")
+_BRIEF_MODEL = os.environ.get("LANDING_BRIEF_MODEL", "gemini-3-flash-preview")
 
 logger = logging.getLogger(__name__)
 
@@ -1101,58 +1101,118 @@ def _build_design_tokens(ds: dict | None) -> dict[str, str]:
     }
 
 
-def _normalize_brief(brief: dict, description: str, domain: str) -> dict:
+def _normalize_brief(brief: Any, description: str, domain: str) -> dict:
+    # Gemini occasionally returns the brief wrapped in a single-element
+    # array (`[{...}]`) instead of a bare object, despite responseMimeType
+    # = application/json. Unwrap so downstream code sees a dict.
+    if isinstance(brief, list):
+        if len(brief) == 1 and isinstance(brief[0], dict):
+            brief = brief[0]
+        elif all(isinstance(item, dict) for item in brief):
+            logger.warning(
+                "normalize_brief: Gemini returned a top-level section array — wrapping as sections"
+            )
+            brief = {"sections": brief}
+        else:
+            logger.warning(
+                "normalize_brief: unsupported top-level list shape (%d items) — fallback",
+                len(brief),
+            )
+            return _fallback_brief(description, domain)
+    if isinstance(brief, dict):
+        for wrapper_key in ("brief", "landing_brief", "landingBrief", "data", "result"):
+            wrapped = brief.get(wrapper_key)
+            if isinstance(wrapped, dict):
+                logger.info("normalize_brief: unwrapped Gemini %s envelope", wrapper_key)
+                brief = wrapped
+                break
+    else:
+        logger.warning(
+            "normalize_brief: expected dict, got %s — fallback",
+            type(brief).__name__,
+        )
+        return _fallback_brief(description, domain)
     out = dict(brief)
 
     # Gemini sometimes returns explicit `null` for palette / brand slots; a
     # plain dict-merge would overwrite the safe defaults with None and ship
     # `--primary: None;` into globals.css, breaking every Tailwind class
     # bound to that token. Strip None values from the override side first.
-    def _drop_nones(d: dict | None) -> dict:
-        return {k: v for k, v in (d or {}).items() if v is not None}
+    def _as_dict(value: Any) -> dict:
+        return value if isinstance(value, dict) else {}
+
+    def _as_list(value: Any) -> list:
+        if isinstance(value, list):
+            return value
+        if isinstance(value, tuple):
+            return list(value)
+        if isinstance(value, dict):
+            return [value]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
+
+    def _as_str(value: Any, default: str = "") -> str:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            return value
+        return str(value)
+
+    def _as_string_list(value: Any) -> list[str]:
+        out_values: list[str] = []
+        for item in _as_list(value):
+            if isinstance(item, (str, int, float)):
+                text = str(item).strip()
+                if text:
+                    out_values.append(text)
+        return out_values
+
+    def _drop_nones(d: Any) -> dict:
+        return {k: v for k, v in _as_dict(d).items() if v is not None}
 
     out["brand"] = {**_default_brand(description, domain), **_drop_nones(brief.get("brand"))}
     out["palette"] = {**_default_palette(), **_drop_nones(brief.get("palette"))}
     out["typography"] = {**_default_typography(), **_drop_nones(brief.get("typography"))}
-    out["motif"] = (brief.get("motif") or "minimal").strip().lower()
+    out["motif"] = _as_str(brief.get("motif"), "minimal").strip().lower() or "minimal"
     # Normalize Gemini's freeform design_system values to valid enums BEFORE
     # they reach Claude's prompt or _build_design_tokens. See
     # _normalize_design_system for the coercion logic.
     out["design_system"] = _normalize_design_system(
         {**_default_design_system(), **_drop_nones(brief.get("design_system"))}
     )
-    out["domain_keywords"] = list(brief.get("domain_keywords") or []) or [domain]
+    out["domain_keywords"] = _as_string_list(brief.get("domain_keywords")) or [domain]
 
     # Personality
-    pers = brief.get("personality") or {}
+    pers = _as_dict(brief.get("personality"))
     out["personality"] = {
-        "tone": (pers.get("tone") or "confident").strip(),
-        "vibe_keywords": list(pers.get("vibe_keywords") or [])[:5] or ["modern", "clear", "trustworthy"],
-        "energy": (pers.get("energy") or "medium").strip().lower(),
+        "tone": _as_str(pers.get("tone"), "confident").strip() or "confident",
+        "vibe_keywords": _as_string_list(pers.get("vibe_keywords"))[:5] or ["modern", "clear", "trustworthy"],
+        "energy": _as_str(pers.get("energy"), "medium").strip().lower() or "medium",
     }
 
     # Header / footer archetypes
-    h_arch = (brief.get("header_archetype") or "").strip().lower()
+    h_arch = _as_str(brief.get("header_archetype")).strip().lower()
     out["header_archetype"] = h_arch if h_arch in _HEADER_ARCHETYPES else random.choice(_HEADER_ARCHETYPES)
-    f_arch = (brief.get("footer_archetype") or "").strip().lower()
+    f_arch = _as_str(brief.get("footer_archetype")).strip().lower()
     out["footer_archetype"] = f_arch if f_arch in _FOOTER_ARCHETYPES else random.choice(_FOOTER_ARCHETYPES)
 
     # References
-    out["references"] = list(brief.get("references") or [])[:6]
+    out["references"] = _as_list(brief.get("references"))[:6]
 
-    ctas = brief.get("ctas") or {}
+    ctas = _as_dict(brief.get("ctas"))
     out["ctas"] = {
         "primary": ctas.get("primary") or {"label": "Get started", "href": "#contact"},
         "secondary": ctas.get("secondary") or {"label": "Learn more", "href": "#features"},
     }
 
-    sections = list(brief.get("sections") or [])
+    sections = [s for s in _as_list(brief.get("sections")) if isinstance(s, dict)]
     if not sections:
         sections = _default_sections()
 
     seen_ids: set[str] = set()
     for s in sections:
-        sid = (s.get("id") or s.get("type") or "section").strip().lower().replace(" ", "-")
+        sid = _as_str(s.get("id") or s.get("type"), "section").strip().lower().replace(" ", "-") or "section"
         base = sid
         n = 2
         while sid in seen_ids:
@@ -1164,8 +1224,8 @@ def _normalize_brief(brief: dict, description: str, domain: str) -> dict:
         s.setdefault("role", "")
         s.setdefault("headline", "")
         s.setdefault("layout_hint", "centered-stack")
-        s.setdefault("items", [])
-        s.setdefault("image_queries", [])
+        s["items"] = _as_list(s.get("items"))
+        s["image_queries"] = _as_list(s.get("image_queries"))
         s.setdefault("interactivity", "")
 
         # Normalize each item.icon to a PascalCase Lucide identifier. Gemini
@@ -1203,11 +1263,11 @@ def _normalize_brief(brief: dict, description: str, domain: str) -> dict:
         "process":      ["numbered-stepper", "icon-grid-3", "split-image-bullets"],
     }
     for s in sections:
-        stype = (s.get("type") or "").lower()
+        stype = _as_str(s.get("type")).lower()
         if stype not in _ARCH_LIBRARY:
             continue
         valid = _ARCH_LIBRARY[stype]
-        arch = (s.get("archetype") or "").strip().lower()
+        arch = _as_str(s.get("archetype")).strip().lower()
         if arch not in valid:
             if arch:
                 logger.info("normalize_brief: unknown %s archetype %r — random fallback", stype, arch)
@@ -1221,7 +1281,7 @@ def _normalize_brief(brief: dict, description: str, domain: str) -> dict:
     seen_form = False
     deduped: list[dict] = []
     for s in sections:
-        t = (s.get("type") or "").lower()
+        t = _as_str(s.get("type")).lower()
         if t in _FORMS:
             if seen_form:
                 logger.info("normalize_brief: dropping duplicate form section %r", s.get("id"))

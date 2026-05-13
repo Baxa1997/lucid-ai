@@ -564,9 +564,14 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       // ─── Status updates ───────────────────────────
       if (msg.type === 'status') {
         const st = msg.status;
-        if (['initializing', 'cloning'].includes(st)) {
-          // Show a dedicated "cloning" state so the UI can display
-          // "Cloning your codebase..." rather than the generic preparing label.
+        if (st === 'initializing') {
+          // Initial handshake/setup is not necessarily a repository clone.
+          // Keeping this as "preparing" avoids the workspace briefly saying
+          // "Cloning repository..." before the resolver has chosen a path.
+          setState('preparing');
+          if (msg.message) pushLog(msg.message, 'system');
+        } else if (st === 'cloning') {
+          // Show a dedicated "cloning" state only for real clone progress.
           setState('cloning');
           if (msg.message) pushLog(msg.message, 'system');
         } else if (st === 'preparing') {

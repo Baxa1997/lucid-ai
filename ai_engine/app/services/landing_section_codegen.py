@@ -155,21 +155,173 @@ _FALLBACK_SKELETONS: dict[str, str] = {
         "  • Centered band: heading + 1-line description + inline email input + submit button.\n"
         "  • Real email validation + success state. Optional GDPR/privacy line below."
     ),
-    "header": (
-        "STRUCTURAL FLOOR — site header (sticky-bar fallback):\n"
+    # NOTE: "footer" intentionally NOT listed here. Footer fallback is
+    # selected dynamically from _FOOTER_VARIANTS by `_pick_footer_variant`
+    # so the shape varies with brand personality / category rather than
+    # collapsing every project into the same minimalist row.
+}
+
+
+# ── Header fallback variants ─────────────────────────────────────────
+# Same idea as footer variants: when Gemini omits visual_dna.header, do
+# not collapse every project into the same sticky 3-part bar.
+_HEADER_VARIANTS: dict[str, str] = {
+    "solid-bar": (
+        "STRUCTURAL FLOOR — site header (solid sticky bar):\n"
         "  • <header> is `sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80`.\n"
-        "  • Inner: `container mx-auto flex h-16 items-center justify-between px-4 sm:px-6 lg:px-8` — brand left, nav center (gap-8 text-sm, max 6 links), CTA right (primary button).\n"
+        "  • Inner: `container mx-auto flex h-16 items-center justify-between px-4 sm:px-6 lg:px-8` — brand left, nav center (gap-8 text-sm, max 6 links), CTA right.\n"
         "  • Mobile drawer below the bar when hamburger toggled. ESC closes; click outside closes.\n"
-        "  • Brand mark, nav typography, and CTA pill flavor come from visual_dna.typography_voice."
+        "  • Best for straightforward professional brands."
     ),
-    "footer": (
-        "STRUCTURAL FLOOR — site footer (minimalist fallback):\n"
+    "utility-split": (
+        "STRUCTURAL FLOOR — site header (utility row + main nav):\n"
+        "  • TWO rows on desktop. Top utility row: `h-9 border-b border-border bg-muted/40 text-xs` showing 1-2 business_info items (email/phone/location) from landing.brand.business_info and social links when present.\n"
+        "  • Main row: `h-16 bg-background/95 backdrop-blur` with brand left, nav center, CTA right.\n"
+        "  • Mobile collapses to one sticky row with brand, CTA, hamburger; utility details move inside the drawer.\n"
+        "  • Best for schools, academies, clinics, service businesses, and local venues where contact/location matter."
+    ),
+    "centered-logo": (
+        "STRUCTURAL FLOOR — site header (centered-logo editorial):\n"
+        "  • Desktop row uses left nav group, centered wordmark, right nav/CTA group. Height `h-20`; background `bg-background/90 backdrop-blur` with a soft border.\n"
+        "  • Wordmark uses heading font and one restrained motif accent. Nav is uppercase, small, evenly spaced.\n"
+        "  • Mobile collapses to brand left + hamburger right.\n"
+        "  • Best for refined, elegant, boutique, and ceremonial brands."
+    ),
+    "floating-pill": (
+        "STRUCTURAL FLOOR — site header (floating pill):\n"
+        "  • <header> is `fixed top-4 inset-x-0 z-50 px-4`. Inner shell is `container mx-auto flex h-14 items-center justify-between rounded-full border border-border bg-background/85 px-4 shadow-lg backdrop-blur-md`.\n"
+        "  • Brand left, compact nav center, CTA right as solid primary pill. On scroll, increase opacity and shadow.\n"
+        "  • Mobile drawer opens as a rounded panel below the floating shell.\n"
+        "  • Best for high-energy, SaaS, creator, event, and conversion-heavy landing pages."
+    ),
+}
+
+
+# ── Footer fallback variants ─────────────────────────────────────────
+# When `visual_dna.section_anatomies.footer` is missing, we pick ONE of
+# these patterns based on brand personality + category. This prevents the
+# same 4-column megacolumn footer appearing on every generation. Each
+# entry is a structural floor — visual_dna composes the actual look on
+# top (decorative motifs, surface treatment, typography flavor).
+_FOOTER_VARIANTS: dict[str, str] = {
+    "minimalist-row": (
+        "STRUCTURAL FLOOR — site footer (minimalist single row):\n"
         "  • `border-t border-border bg-background`.\n"
         "  • Inner: `container mx-auto flex flex-col gap-4 px-6 py-8 sm:flex-row sm:items-center sm:justify-between`.\n"
         "  • Left: brand monogram + © year. Center (sm+): inline links from landing.footer.links (text-xs uppercase tracking-widest). Right: 3-4 social icons.\n"
-        "  • Optional accent motif from visual_dna.decorative_motifs as the only flourish."
+        "  • Optional single accent motif from visual_dna.decorative_motifs as the only flourish.\n"
+        "  • NO multi-column grid; NO newsletter form; NO contact column. This footer says LESS on purpose."
+    ),
+    "mega-columns": (
+        "STRUCTURAL FLOOR — site footer (4-column mega-columns):\n"
+        "  • `border-t border-border bg-background` OR `bg-foreground text-background` if visual_dna.cultural_palette_emphasis suggests dark surface.\n"
+        "  • Inner: `container mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-10 px-6 py-14`.\n"
+        "  • Column 1: brand mark + tagline + short description from landing.brand. 2-3 social icons below.\n"
+        "  • Column 2: 'Explore' (or category-specific label) — links from landing.footer.links (text-sm).\n"
+        "  • Column 3: 'Visit' — business_info: address (with MapPin icon), phone (tel:), email (mailto:), hours.\n"
+        "  • Column 4: newsletter signup OR a single editorial pull-quote/tagline.\n"
+        "  • Bottom strip: `border-t border-border/50 mt-12 pt-6 flex flex-col sm:flex-row items-center justify-between text-xs text-muted-foreground`. © year + brand on left; small links (Privacy / Terms) on right."
+    ),
+    "cta-band": (
+        "STRUCTURAL FLOOR — site footer (CTA band + thin footer bar):\n"
+        "  • TWO bands stacked.\n"
+        "  • UPPER BAND: full-width `bg-primary text-primary-foreground` panel, py-16 lg:py-20. Centered: oversized invitation headline (text-3xl md:text-5xl font-bold, max-w-3xl), short supporting line, ONE primary CTA pill (use landing.ctas.primary). Optional decorative motif from visual_dna in a corner.\n"
+        "  • LOWER BAND: thin minimalist bar `bg-background border-t border-border py-6`. Inner: `container mx-auto flex flex-col gap-3 px-6 sm:flex-row sm:items-center sm:justify-between`. Brand + © year left, social icon row right, small Privacy/Terms links if relevant.\n"
+        "  • Suited to brands with assertive/high-energy personality — the footer is a final pitch, not a directory."
+    ),
+    "centered-stack": (
+        "STRUCTURAL FLOOR — site footer (centered stack):\n"
+        "  • `border-t border-border bg-background` (or a soft cream/muted surface if visual_dna calls for it).\n"
+        "  • Inner: `container mx-auto flex flex-col items-center gap-6 px-6 py-16 text-center`.\n"
+        "  • TOP: large brand mark / wordmark (font-serif text-3xl md:text-4xl, can carry a decorative motif from visual_dna as ornament above/below).\n"
+        "  • MIDDLE: single line of inline nav links (gap-6 text-sm tracking-widest uppercase), then optional contact line (city · phone · email), then a row of 4-5 social icons.\n"
+        "  • BOTTOM: small © year + tagline.\n"
+        "  • Suited to refined/minimal/sophisticated personalities — a quiet, ceremonial close."
     ),
 }
+
+
+def _pick_footer_variant(brief: dict | None) -> str:
+    """Deterministically pick a footer skeleton key based on brand context.
+
+    The pick is stable per-brand (same brief → same variant) and skewed
+    toward the variant that best fits the brand's personality + category.
+    Falls back to minimalist-row when context is missing.
+    """
+    b = brief or {}
+    pers = (b.get("personality") or {})
+    energy = (pers.get("energy") or "").strip().lower()
+    tone = (pers.get("tone") or "").strip().lower()
+    vibe = " ".join(pers.get("vibe_keywords") or []).lower()
+    category = (b.get("category") or "").strip().lower()
+    purpose = ((b.get("_research") or {}).get("primary_purpose") or "").lower()
+    brand = b.get("brand") or {}
+    info = brand.get("business_info") or {}
+    social = brand.get("social") or []
+    sections = b.get("sections") or []
+    info_count = sum(1 for k in ("address", "phone", "email", "hours", "city") if info.get(k))
+    navish_section_count = len([
+        s for s in sections
+        if (s.get("type") or "").lower() not in {"hero", "footer", "cta", "cta_band", "newsletter"}
+    ])
+
+    # Heuristics — order matters; first match wins.
+    # cta-band: assertive, high-energy, conversion-driven brands
+    if energy == "high" or any(w in vibe for w in ("bold", "assertive", "energetic", "playful")) \
+       or purpose in ("lead-gen", "signup", "convert"):
+        return "cta-band"
+
+    # centered-stack: refined / sophisticated / ceremonial brands
+    if any(w in tone for w in ("refined", "elegant", "sophisticated", "minimal")) \
+       or any(w in vibe for w in ("refined", "elegant", "minimal", "sophisticated", "quiet", "understated")):
+        return "centered-stack"
+
+    # mega-columns: content-heavy or contact-heavy brands. Lots of info to
+    # surface in the footer. This intentionally catches education/language/
+    # tutoring sites like LinguistFlow — otherwise they collapse to the same
+    # minimalist row despite having address, phone, email, social, and many nav
+    # targets.
+    if (
+        category in (
+            "restaurant", "hotel", "resort", "hospitality", "spa", "retail",
+            "ecommerce", "marketplace", "agency", "studio", "education",
+            "school", "academy", "language", "tutoring", "course", "coaching",
+            "clinic", "healthcare", "fitness", "wellness", "real estate",
+            "nonprofit", "community",
+        )
+        or info_count >= 2
+        or bool(social)
+        or navish_section_count >= 5
+    ):
+        return "mega-columns"
+
+    # minimalist-row: low-energy or info-light brands; safe default
+    return "minimalist-row"
+
+
+def _pick_header_variant(brief: dict | None) -> str:
+    """Deterministically pick a fallback header skeleton by brand context."""
+    b = brief or {}
+    pers = (b.get("personality") or {})
+    energy = (pers.get("energy") or "").strip().lower()
+    tone = (pers.get("tone") or "").strip().lower()
+    vibe = " ".join(pers.get("vibe_keywords") or []).lower()
+    category = (b.get("category") or "").strip().lower()
+    brand = b.get("brand") or {}
+    info = brand.get("business_info") or {}
+    info_count = sum(1 for k in ("address", "phone", "email", "hours", "city") if info.get(k))
+
+    if energy == "high" or any(w in vibe for w in ("bold", "energetic", "playful", "launch")):
+        return "floating-pill"
+    if any(w in tone for w in ("refined", "elegant", "sophisticated", "minimal")) \
+       or any(w in vibe for w in ("refined", "elegant", "minimal", "sophisticated", "quiet")):
+        return "centered-logo"
+    if category in (
+        "education", "school", "academy", "language", "tutoring", "course",
+        "coaching", "clinic", "healthcare", "real estate", "nonprofit",
+    ) or info_count >= 2:
+        return "utility-split"
+    return "solid-bar"
 
 # Aliases — section types that map to the same fallback. Aliases live here
 # rather than in _FALLBACK_SKELETONS so the canonical list reads cleanly.
@@ -218,16 +370,26 @@ def _canonical_section_type(section_type: str) -> str:
     return _TYPE_ALIASES.get(t, t)
 
 
-def _resolve_anatomy(section_type: str, visual_dna: dict | None) -> tuple[str, str]:
+def _resolve_anatomy(
+    section_type: str,
+    visual_dna: dict | None,
+    *,
+    brief: dict | None = None,
+) -> tuple[str, str]:
     """Return (anatomy_text, source) for a section.
 
     Priority:
       1. visual_dna.section_anatomies[section_type]   — research-grounded
       2. visual_dna.section_anatomies[canonical_type] — research via alias
-      3. _FALLBACK_SKELETONS[canonical_type]          — minimal floor
+      3a. footer: dynamic pick from _FOOTER_VARIANTS  — varies by brand
+      3b. _FALLBACK_SKELETONS[canonical_type]         — minimal floor
       4. _GENERIC_FALLBACK                            — last resort
 
-    Source is one of: "research", "research-aliased", "fallback", "generic".
+    Source is one of: "research", "research-aliased", "fallback",
+    "fallback:<variant>" (footer only), or "generic".
+
+    `brief` is optional and only consulted for variants that need brand
+    context (currently the footer picker).
     """
     raw_type = (section_type or "").strip().lower()
     canonical = _canonical_section_type(raw_type)
@@ -240,6 +402,14 @@ def _resolve_anatomy(section_type: str, visual_dna: dict | None) -> tuple[str, s
     custom_alias = anatomies.get(canonical)
     if isinstance(custom_alias, str) and len(custom_alias.strip()) >= 40:
         return custom_alias.strip(), "research-aliased"
+
+    if canonical == "header":
+        variant = _pick_header_variant(brief)
+        return _HEADER_VARIANTS[variant], f"fallback:{variant}"
+
+    if canonical == "footer":
+        variant = _pick_footer_variant(brief)
+        return _FOOTER_VARIANTS[variant], f"fallback:{variant}"
 
     fallback = _FALLBACK_SKELETONS.get(canonical)
     if fallback:
@@ -268,6 +438,156 @@ def _section_filename(section: dict[str, Any]) -> str:
 def _component_name(filename: str) -> str:
     """Strip extension from filename to get React component name."""
     return filename.rsplit(".", 1)[0]
+
+
+def _section_content_looks_valid(content: str, section_id: str, component_name: str) -> tuple[bool, str]:
+    """Fast contract check before writing Claude output to disk.
+
+    The build validator catches syntax errors later; this catches the more
+    damaging class of "valid JSX that ignores the pipeline contract" before it
+    ships: hardcoded copy, wrong section id, or no runtime landing.json import.
+    """
+    if not content.strip():
+        return False, "empty content"
+    if "@/content/landing.json" not in content:
+        return False, "does not import runtime landing.json"
+    if "landing.sections" not in content or ".find" not in content:
+        return False, "does not select section from landing.sections"
+    if section_id and section_id not in content:
+        return False, "does not reference requested section id"
+    if f"export default function {component_name}" not in content:
+        return False, "missing matching default export"
+    if 'href="#"' in content or "href='#'" in content:
+        return False, "contains placeholder href"
+    if "style={{ fontFamily" in content or "fontFamily:" in content:
+        return False, "uses inline fontFamily"
+    return True, "ok"
+
+
+def _layout_content_looks_valid(content: str, kind: str, component_name: str) -> tuple[bool, str]:
+    """Validate header/footer output still reads all runtime data from JSON."""
+    if not content.strip():
+        return False, "empty content"
+    if "@/content/landing.json" not in content:
+        return False, "does not import runtime landing.json"
+    if f"export default function {component_name}" not in content:
+        return False, "missing matching default export"
+    if 'href="#"' in content or "href='#'" in content:
+        return False, "contains placeholder href"
+    if "style={{ fontFamily" in content or "fontFamily:" in content:
+        return False, "uses inline fontFamily"
+    if kind == "header" and "landing.nav" not in content:
+        return False, "header does not read landing.nav"
+    if kind == "footer" and "landing.footer" not in content:
+        return False, "footer does not read landing.footer"
+    if "landing.brand" not in content:
+        return False, "does not read landing.brand"
+    return True, "ok"
+
+
+def _fallback_section_component(section: dict[str, Any], component_name: str, file_path: str) -> dict[str, Any]:
+    """Deterministic, data-driven section fallback.
+
+    Used only when Claude fails or violates the runtime JSON contract. The
+    fallback keeps every nav anchor live, renders the brief's real content, and
+    includes functional forms for form-like sections so the generated app stays
+    usable instead of silently dropping a page segment.
+    """
+    section_id = (section.get("id") or section.get("type") or "section").strip()
+    section_type = (section.get("type") or "").strip().lower()
+    needs_form = section_type in {"contact", "contact_form", "reservation", "booking_form", "newsletter"}
+    form_jsx = """
+      <form onSubmit={handleSubmit} className="mt-8 grid gap-4 rounded-2xl border border-border bg-background p-5 shadow-sm">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="grid gap-2 text-sm font-medium text-foreground">
+            Name
+            <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required className="rounded-md border border-border bg-background px-3 py-2 outline-none ring-primary/20 focus:ring-4" />
+          </label>
+          <label className="grid gap-2 text-sm font-medium text-foreground">
+            Email
+            <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required className="rounded-md border border-border bg-background px-3 py-2 outline-none ring-primary/20 focus:ring-4" />
+          </label>
+        </div>
+        <label className="grid gap-2 text-sm font-medium text-foreground">
+          Message
+          <textarea value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} rows={4} className="rounded-md border border-border bg-background px-3 py-2 outline-none ring-primary/20 focus:ring-4" />
+        </label>
+        <button type="submit" className="inline-flex items-center justify-center rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition hover:opacity-90">
+          {submitted ? "Sent" : (section.cta?.label || landing.ctas?.primary?.label || "Send")}
+        </button>
+      </form>""" if needs_form else ""
+
+    content = f'''{"'use client';" if needs_form else ""}
+{"import { useState } from \"react\";" if needs_form else ""}
+import Image from "next/image";
+import Link from "next/link";
+import landing from "@/content/landing.json";
+
+export default function {component_name}() {{
+  const section = landing.sections.find((s) => s.id === "{section_id}");
+  {"const [form, setForm] = useState({ name: \"\", email: \"\", message: \"\" });" if needs_form else ""}
+  {"const [submitted, setSubmitted] = useState(false);" if needs_form else ""}
+  {"const handleSubmit = (event) => { event.preventDefault(); setSubmitted(true); };" if needs_form else ""}
+
+  if (!section) return null;
+
+  const items = section.items || [];
+  const image = section.images?.find(Boolean);
+  const cta = section.cta || landing.ctas?.primary;
+
+  return (
+    <section id="{section_id}" className="bg-background py-20 md:py-28 lg:py-32">
+      <div className="container mx-auto grid max-w-7xl gap-10 px-4 sm:px-6 lg:grid-cols-[0.95fr_1.05fr] lg:items-center lg:px-8">
+        <div className="max-w-2xl">
+          {{section.nav_label && (
+            <p className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-primary">{{section.nav_label}}</p>
+          )}}
+          <h2 className="font-[family-name:var(--font-heading)] text-3xl font-bold tracking-tight text-foreground sm:text-4xl lg:text-5xl">
+            {{section.headline}}
+          </h2>
+          {{section.subheadline && (
+            <p className="mt-4 text-lg leading-relaxed text-muted-foreground md:text-xl">{{section.subheadline}}</p>
+          )}}
+          {{section.body && (
+            <p className="mt-5 text-base leading-relaxed text-muted-foreground md:text-lg">{{section.body}}</p>
+          )}}
+          {{cta?.href && (
+            <Link href={{cta.href}} className="mt-8 inline-flex items-center justify-center rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition hover:opacity-90">
+              {{cta.label || "Explore"}}
+            </Link>
+          )}}
+          {form_jsx}
+        </div>
+        <div className="grid gap-4">
+          {{image ? (
+            <div className="relative aspect-[4/3] overflow-hidden rounded-3xl border border-border bg-muted shadow-lg">
+              <Image src={{image}} alt={{section.image_alts?.[0] || section.headline || landing.brand.name}} fill sizes="(min-width: 1024px) 48vw, 100vw" className="object-cover" />
+              <div className="absolute inset-0 bg-gradient-to-t from-foreground/35 to-transparent" />
+            </div>
+          ) : (
+            <div className="relative aspect-[4/3] overflow-hidden rounded-3xl border border-border bg-gradient-to-br from-primary/15 via-accent/10 to-muted p-8">
+              <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full bg-primary/10" />
+              <p className="relative max-w-sm font-[family-name:var(--font-heading)] text-4xl font-bold text-foreground">{{landing.brand.name}}</p>
+            </div>
+          )}}
+          {{items.length > 0 && (
+            <div className="grid gap-4 sm:grid-cols-2">
+              {{items.slice(0, 4).map((item, index) => (
+                <article key={{item.title || item.label || index}} className="h-full rounded-2xl border border-border bg-card p-5 shadow-sm">
+                  <p className="text-sm font-semibold uppercase tracking-[0.16em] text-primary">{{item.label || item.value || `0${{index + 1}}`}}</p>
+                  <h3 className="mt-3 text-lg font-semibold text-foreground">{{item.title || item.name}}</h3>
+                  {{item.description && <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{{item.description}}</p>}}
+                </article>
+              ))}}
+            </div>
+          )}}
+        </div>
+      </div>
+    </section>
+  );
+}}
+'''
+    return {"path": file_path, "content": content, "fallback": True}
 
 
 def _system_prompt(
@@ -308,7 +628,7 @@ def _system_prompt(
     # generic "modern luxe" output.
     visual_dna_block = ""
     if vd:
-        intensity = (vd.get("cultural_intensity") or "subtle").strip().lower()
+        intensity = (vd.get("cultural_intensity") or "bold").strip().lower()
         motifs = vd.get("decorative_motifs") or []
         textures = vd.get("signature_textures") or []
         icons = vd.get("iconography_anchors") or []
@@ -429,7 +749,12 @@ MANDATORY RULES
     make this brand feel UNMISTAKABLY of its category and culture.
     If VISUAL DNA is not present in DESIGN CONTEXT below, fall back to the abstract enums
     (motif / accent_shape / surface) — but keep the same goal: avoid generic SaaS output.
-2. Use TAILWIND CLASSES for styling — never inline `style={{...}}` for colors.
+2. Use TAILWIND CLASSES for styling — never inline `style={{...}}` for colors, fonts, or spacing.
+   For FONTS specifically: NEVER write `style={{ fontFamily: ... }}`. Headlines / display
+   text use `font-[family-name:var(--font-heading)]` (Tailwind arbitrary-property class);
+   body text inherits from `<body>` automatically and needs no declaration. Inlining a
+   hardcoded family name paints UNDER the next/font CSS variable and produces a visible
+   doubled-text artifact (regular + serif stacked).
    For LAYOUT COLORS (page background, section surfaces, headings, body copy, borders,
    the primary→accent gradient set), USE SEMANTIC TOKENS so the palette can change
    between generations: bg-primary, text-foreground, bg-muted, border-border, bg-card,
@@ -761,6 +1086,63 @@ CARD ALIGNMENT — PIXEL-PERFECT (cards in a row MUST line up; no jagged grids)
   • Grid columns: pick ONE of `grid-cols-1 md:grid-cols-2 lg:grid-cols-3`, `grid-cols-1 md:grid-cols-2`, or 4-up — DO NOT mix column counts mid-section.
   • The bottom edges of all cards in a row MUST end on the same Y. If copy varies, push the CTA down with `mt-auto`.
 
+CARD WIDTH — FLUID GRID ONLY (no narrow/collapsed cards, no card-stack improvisations)
+  This applies to EVERY section that renders multiple cards (features, value_prop, benefits,
+  process, services, why-choose-us, capabilities, team, etc.) — not just press.
+  ✗ FORBIDDEN PATTERNS — these produce squished/unreadable cards and are defects:
+    • Fixed pixel widths on cards (`w-[280px]`, `w-72`, `min-w-[200px]`). Cards must be GRID-FLUID.
+    • Negative margins between cards (`-ml-4`, `-space-x-2`, `-mt-8`) to make them overlap.
+    • `position: absolute` / `absolute inset-0` on a card in a list of cards.
+    • `rotate-[Xdeg]` on cards (the only legitimate rotated card is a SINGLE editorial accent).
+    • Horizontal scroll (`overflow-x-auto flex flex-nowrap`) for ≤ 6 items — use a grid instead.
+    • Oversized numbered watermarks `01 02 03` rendered as a background BEHIND cards
+      (Claude improvises this from editorial design refs but it always collapses widths). If
+      numbering is desired, put it INSIDE each card as a small eyebrow (`text-sm text-primary
+      font-bold`), NEVER as an absolute-positioned giant numeral behind the card.
+    • Cards rendered in a `flex flex-row` WITHOUT `flex-1` / `basis-0` so each child gets equal width.
+  ✓ REQUIRED — every multi-card section uses ONE of:
+    • `grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6` (3-up, for 3-6 items)
+    • `grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6` (4-up, for 4 or 8 items)
+    • `grid grid-cols-1 md:grid-cols-2 gap-6 lg:gap-8` (2-up, for 2 or 4 large items)
+    Each cell is `w-full` — fluid; the grid handles distribution. If you write a width unit
+    on a card (px / rem / Tailwind w-N), you have produced a defect.
+
+CONTENT INSIDE A CARD — overflow + multi-column safety
+  This applies to ANY content INSIDE a card or panel: stat triples, label/value rows,
+  big-number callouts, side-by-side metrics, mini-tables. The card itself can be
+  fluid (per above) and still produce broken layouts INSIDE if these rules slip:
+  ✗ FORBIDDEN INSIDE-CARD PATTERNS:
+    • Oversized numeric / currency headlines without responsive scaling.
+      `text-7xl` on a $1,800 number inside a narrow card WILL clip. Always use a
+      RESPONSIVE scale: `text-4xl sm:text-5xl md:text-6xl` and never bigger than
+      `text-6xl` for headline numbers inside a card. The hero outside cards is
+      a different rule — INSIDE cards, smaller scales are mandatory.
+    • Stat / metric triples rendered as `flex flex-row` WITHOUT `min-w-0` on each
+      child. flex children default to `min-w-0: auto` which makes long labels
+      ("DISPOSABLE INCOME") push siblings off-screen or smash into each other.
+      EVERY flex/grid child rendering text MUST have `min-w-0` so text can shrink/wrap.
+    • Adjacent label/value columns with no gap. `gap-3` minimum between columns;
+      `gap-4` or `gap-6` for stat triples. NEVER `gap-0` or no gap class.
+    • Long uppercase labels with `tracking-widest` and no wrapping. "INCOME EXPENSES
+      DISPOSABLE" laid out as 3 inline columns at `text-xs uppercase tracking-widest`
+      MUST use `break-words` or shorter labels — otherwise letters from one label
+      run into the next.
+  ✓ REQUIRED INSIDE-CARD PATTERNS:
+    • Containers that hold a single oversized headline: outer card has
+      `overflow-hidden` or the headline uses `break-all` / `tabular-nums` with
+      responsive scaling. Test mentally: "if the number were $999,999 would it fit?"
+      If no, scale down or add overflow handling.
+    • Stat triples / metric rows: `grid grid-cols-3 gap-4` with each cell
+      `min-w-0 flex flex-col items-start gap-1`. Label uses `text-[11px] sm:text-xs
+      uppercase tracking-wider text-muted-foreground` (NOT tracking-widest on long
+      words). Value uses `text-lg sm:text-xl font-bold tabular-nums`.
+    • For currency values: `tabular-nums` so digits align; consider `text-balance`
+      on multi-word labels.
+    • If a card holds both a giant headline AND a sub-metric row, the headline scales
+      down at the card's responsive breakpoints (`text-4xl md:text-5xl`), not at the
+      viewport's. A card that takes 50% of the viewport at lg+ has the layout
+      constraints of a `md` screen, not a `lg` screen — choose scales accordingly.
+
 SECTION SURFACE RHYTHM (forces the page to alternate, not look monotone)
   The user prompt for THIS section tells you which surface to use. Pick the OUTER section className
   from this menu — and pair it with the INNER card surface that has guaranteed contrast against it:
@@ -1052,37 +1434,95 @@ async def _generate_one_section(
         visual_dna=visual_dna,
     )
 
-    try:
-        result = await call_claude_for_json(
-            system_prompt=sys_p,
-            user_prompt=usr_p,
-            api_key=api_key,
-            websocket=websocket,
-            max_tokens=_SECTION_MAX_TOKENS,
+    # One retry per section. The model-fallback inside call_claude_for_json
+    # handles upstream errors (sonnet → opus) but doesn't retry when Claude
+    # returns a successful 200 with empty / missing-jsx content — which is
+    # the case we keep losing sections to. Two attempts catches both:
+    # transient infra blips AND occasional empty tool_use outputs.
+    section_id = section.get("id")
+    max_attempts = 2
+    last_failure_reason = "unknown"
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = await asyncio.wait_for(
+                call_claude_for_json(
+                    system_prompt=sys_p,
+                    user_prompt=usr_p,
+                    api_key=api_key,
+                    websocket=websocket,
+                    max_tokens=_SECTION_MAX_TOKENS,
+                ),
+                timeout=90.0,
+            )
+        except asyncio.TimeoutError:
+            last_failure_reason = "timeout after 90s"
+            logger.warning(
+                "section %s: codegen timed out on attempt %d/%d — skipping",
+                section_id, attempt, max_attempts,
+            )
+            continue
+        except Exception as exc:
+            last_failure_reason = f"exception: {exc}"
+            logger.warning(
+                "section %s: codegen attempt %d/%d threw — %s",
+                section_id, attempt, max_attempts, exc,
+            )
+            continue
+
+        if not result or "files" not in result:
+            last_failure_reason = "empty result (no 'files' key)"
+            logger.warning(
+                "section %s: codegen attempt %d/%d returned empty result",
+                section_id, attempt, max_attempts,
+            )
+            continue
+
+        files = result.get("files") or []
+        if not files:
+            last_failure_reason = "Claude returned 0 files"
+            logger.warning(
+                "section %s: codegen attempt %d/%d returned 0 files",
+                section_id, attempt, max_attempts,
+            )
+            continue
+
+        # Claude was asked for one file — take the first JSX/TSX.
+        saw_jsx = False
+        for f in files:
+            path = (f.get("path") or "").strip()
+            content = (f.get("content") or "")
+            if path.endswith((".jsx", ".tsx")) and content:
+                saw_jsx = True
+                valid, reason = _section_content_looks_valid(
+                    content,
+                    str(section_id or ""),
+                    component,
+                )
+                if not valid:
+                    last_failure_reason = f"contract validation failed: {reason}"
+                    logger.warning(
+                        "section %s: codegen attempt %d/%d failed contract validation — %s",
+                        section_id, attempt, max_attempts, reason,
+                    )
+                    break
+                if attempt > 1:
+                    logger.info("section %s: succeeded on retry (attempt %d)", section_id, attempt)
+                # Force the path to our canonical location so Claude can't pick a different folder
+                return {"path": file_path, "content": content}
+
+        if not saw_jsx:
+            last_failure_reason = "no .jsx/.tsx file in result"
+        logger.warning(
+            "section %s: codegen attempt %d/%d did not produce an acceptable component — %s",
+            section_id, attempt, max_attempts, last_failure_reason,
         )
-    except Exception as exc:
-        logger.warning("section %s: codegen exception — %s", section.get("id"), exc)
-        return None
 
-    if not result or "files" not in result:
-        logger.warning("section %s: empty result from Claude", section.get("id"))
-        return None
-
-    files = result.get("files") or []
-    if not files:
-        logger.warning("section %s: Claude returned 0 files", section.get("id"))
-        return None
-
-    # Claude was asked for one file — take the first JSX/TSX.
-    for f in files:
-        path = (f.get("path") or "").strip()
-        content = (f.get("content") or "")
-        if path.endswith((".jsx", ".tsx")) and content:
-            # Force the path to our canonical location so Claude can't pick a different folder
-            return {"path": file_path, "content": content}
-
-    logger.warning("section %s: no .jsx/.tsx file in Claude result", section.get("id"))
-    return None
+    logger.error(
+        "section %s: codegen FAILED after %d attempts — last failure: %s; writing deterministic fallback",
+        section_id, max_attempts, last_failure_reason,
+    )
+    return _fallback_section_component(section, component, file_path)
 
 
 def _pick_siblings(sections: list[dict[str, Any]], idx: int) -> list[dict[str, Any]]:
@@ -1158,24 +1598,28 @@ async def generate_landing_sections(
     total = len(sections)
     async def _bounded(idx: int, s: dict[str, Any]) -> tuple[int, dict[str, Any], dict[str, str] | None]:
         async with sem:
-            res = await _generate_one_section(
-                s,
-                _pick_siblings(sections, idx),
-                brand_name=brand_name,
-                motif=motif,
-                palette=palette,
-                typography=typography,
-                design_system=design_system,
-                personality=personality,
-                references=references,
-                design_tokens=design_tokens,
-                section_index=idx,
-                section_count=total,
-                api_key=api_key,
-                websocket=websocket,
-                voice_context=voice_context,
-                visual_dna=visual_dna,
-            )
+            try:
+                res = await _generate_one_section(
+                    s,
+                    _pick_siblings(sections, idx),
+                    brand_name=brand_name,
+                    motif=motif,
+                    palette=palette,
+                    typography=typography,
+                    design_system=design_system,
+                    personality=personality,
+                    references=references,
+                    design_tokens=design_tokens,
+                    section_index=idx,
+                    section_count=total,
+                    api_key=api_key,
+                    websocket=websocket,
+                    voice_context=voice_context,
+                    visual_dna=visual_dna,
+                )
+            except Exception as exc:
+                logger.warning("section %s: unhandled exception in _bounded — %s", s.get("id"), exc)
+                res = None
             return idx, s, res
 
     if websocket is not None:
@@ -1189,10 +1633,13 @@ async def generate_landing_sections(
 
     results = await asyncio.gather(
         *(_bounded(i, s) for i, s in enumerate(sections)),
-        return_exceptions=False,
+        return_exceptions=True,
     )
-    # Restore original order
-    results.sort(key=lambda x: x[0])
+    # Restore original order — filter out any stray BaseException results defensively
+    valid_results = [r for r in results if not isinstance(r, BaseException)]
+    if len(valid_results) < len(results):
+        logger.error("generate_landing_sections: %d section(s) raised unhandled exceptions", len(results) - len(valid_results))
+    valid_results.sort(key=lambda x: x[0])
 
     sections_meta: list[dict[str, Any]] = []
     page_imports: list[str] = []
@@ -1201,7 +1648,7 @@ async def generate_landing_sections(
     sections_dir = os.path.join(workspace_path, "src", "components", "sections")
     os.makedirs(sections_dir, exist_ok=True)
 
-    for _, section, res in results:
+    for _, section, res in valid_results:
         filename = _section_filename(section)
         component = _component_name(filename)
         file_path = f"src/components/sections/{filename}"
@@ -1225,14 +1672,17 @@ async def generate_landing_sections(
             "file_path": file_path,
             "component": component,
             "ok": ok,
+            "fallback": bool(res and res.get("fallback")),
         })
 
     if websocket is not None:
         ok_count = sum(1 for m in sections_meta if m["ok"])
+        fallback_count = sum(1 for m in sections_meta if m.get("fallback"))
+        suffix = f" ({fallback_count} fallback)" if fallback_count else ""
         try:
             await websocket.send_json({
                 "type": "progress",
-                "message": f"✅ {ok_count}/{len(sections_meta)} sections generated",
+                "message": f"✅ {ok_count}/{len(sections_meta)} sections generated{suffix}",
             })
         except Exception:
             pass
@@ -1260,6 +1710,8 @@ def _layout_system_prompt(
     references: list[dict],
     design_tokens: dict | None = None,
     visual_dna: dict | None = None,
+    brand: dict | None = None,
+    category: str = "",
 ) -> str:
     """System prompt for header/footer codegen — anatomy-driven, JSON-fed."""
     palette_lines = "\n".join(f"  --{k}: {v};" for k, v in palette.items())
@@ -1267,6 +1719,7 @@ def _layout_system_prompt(
     dt = design_tokens or {}
     pers = personality or {}
     vd = visual_dna or {}
+    b = brand or {}
     vibe = ", ".join(pers.get("vibe_keywords") or [])
     pers_block = (
         f"\nPERSONALITY (tone the layout to match this voice):\n"
@@ -1275,12 +1728,42 @@ def _layout_system_prompt(
         f"  Energy: {pers.get('energy', 'medium')}\n"
     )
 
+    # Always-present brand context block. When visual_dna comes back empty
+    # (Gemini call failure), this is the only source of per-brand variation
+    # that Claude sees — without it every fallback footer ends up looking
+    # the same generic 4-col template.
+    brand_context_lines = []
+    if b.get("tagline"):
+        brand_context_lines.append(f"  Tagline: {b['tagline']}")
+    desc = (b.get("description") or "").strip()
+    if desc:
+        # Cap to keep the prompt tight; Claude only needs the gist.
+        brand_context_lines.append(f"  Description: {desc[:240]}")
+    if category:
+        brand_context_lines.append(f"  Category: {category}")
+    info = b.get("business_info") or {}
+    if isinstance(info, dict) and info:
+        info_keys = [k for k in ("address", "phone", "email", "hours", "city") if info.get(k)]
+        if info_keys:
+            brand_context_lines.append(
+                f"  Business info available in landing.brand.business_info: {', '.join(info_keys)} "
+                f"(SURFACE these in the footer when the anatomy has room — phone as tel:, email as mailto:, address inline)"
+            )
+    social = b.get("social") or []
+    if social:
+        brand_context_lines.append(
+            f"  Social handles available in landing.brand.social: {len(social)} entries (render as icon-only links)"
+        )
+    brand_block = ""
+    if brand_context_lines:
+        brand_block = "\nBRAND CONTEXT (always-on — use to vary the look even when visual_dna is empty):\n" + "\n".join(brand_context_lines) + "\n"
+
     # Compact visual_dna block for header/footer — header is small, doesn't
     # need the full per-section flavors, just enough to flavor the brand
     # mark, nav style, and footer mood.
     visual_dna_block = ""
     if vd:
-        intensity = (vd.get("cultural_intensity") or "subtle").strip().lower()
+        intensity = (vd.get("cultural_intensity") or "bold").strip().lower()
         motifs = (vd.get("decorative_motifs") or [])[:3]
         type_voice = (vd.get("typography_voice") or "").strip()
         palette_emph = (vd.get("cultural_palette_emphasis") or "").strip()
@@ -1312,13 +1795,30 @@ def _layout_system_prompt(
             ref_block = "\nREFERENCE SITES (real sites this brief is grounded in):\n" + "\n".join(rls) + "\n"
 
     # Anatomy framing — research-grounded specs are authoritative; fallback
-    # skeletons are floors that visual_dna composes on top of.
-    if (archetype_label or "").startswith("research"):
+    # skeletons are floors that visual_dna composes on top of. Fallback
+    # variants (e.g. "fallback:cta-band") are called out by name so Claude
+    # implements the SHAPE described in the anatomy rather than defaulting
+    # to its training-data instinct ("every footer is a 4-column megacolumn").
+    label = (archetype_label or "").strip()
+    if label.startswith("research"):
         anatomy_intro = "IMPLEMENT THIS EXACT SPEC (research-grounded for this brand)"
         anatomy_outro = (
             "Tailwind class choices and decorative details are yours, but the structural skeleton, "
             "scroll behavior, and decorative integration above are the spec. This anatomy was written "
             "from real research about THIS brand."
+        )
+    elif label.startswith("fallback:"):
+        variant_name = label.split(":", 1)[1]
+        anatomy_intro = (
+            f"IMPLEMENT THIS SHAPE — variant: '{variant_name}'. "
+            f"This shape was chosen for THIS brand's personality and category. "
+            f"Do NOT silently swap to another footer pattern (a 4-col megacolumn is NOT a centered-stack, "
+            f"a CTA-band is NOT a minimalist-row)"
+        )
+        anatomy_outro = (
+            f"You MUST follow the '{variant_name}' structural floor above. "
+            "Compose the visual look (decorative motifs, surface treatment, typography flavor) "
+            "from the VISUAL DNA + BRAND CONTEXT blocks below — but the SHAPE is fixed."
         )
     else:
         anatomy_intro = "STARTING POINT (generic fallback — no research-grounded anatomy was produced for this layout)"
@@ -1343,7 +1843,7 @@ MANDATORY RULES
      const cta = landing.ctas?.primary;
      const social = brand.social || [];
      const info = brand.business_info || {{}};
-2. Use TAILWIND CLASSES ONLY. NEVER inline `style={{}}` for colors. Use bg-primary / text-foreground / bg-muted / border-border / bg-card / text-muted-foreground.
+2. Use TAILWIND CLASSES ONLY. NEVER use the `style={{}}` prop on any element — not for colors, not for fonts, not for spacing, not for anything. The ONLY exception is `style={{ backgroundImage: `url(...)` }}` when applying a dynamic image. For fonts: brand wordmark, headlines, and any serif/display copy use the Tailwind class `font-[family-name:var(--font-heading)]`. Body / nav / button text inherits the body font from `<body>` automatically — do NOT re-declare it. NEVER write `style={{ fontFamily: ... }}` — that ships a hardcoded family name that paints UNDER the next/font CSS variable and produces a visible double-rendered text artifact (regular + serif overlapping). The `typography.heading_font` value below is INFORMATIONAL ONLY (it tells you what font is loaded as `--font-heading`); never embed the literal name in JSX.
 3. Default-export a React function named `{component_name}` (matching filename).
 4. Mark `'use client';` as the FIRST line if you use useState / useEffect / onClick.
 5. Lucide-react icons for social (Instagram, Twitter, Facebook, Linkedin, Youtube, Github) and any UI affordances (Menu, X, ChevronDown). Map social.label string → icon via a small const dict.
@@ -1383,7 +1883,7 @@ PROJECT_DESIGN_TOKENS — USE THESE EXACT TAILWIND CLASS STRINGS VERBATIM in the
   Examples:
     <Link className="{dt.get("button_radius_class", "rounded-md")} bg-primary text-primary-foreground px-5 py-2.5 {dt.get("transition_class", "transition-all duration-300")} hover:opacity-90">
     <button aria-label="Open menu" className="{dt.get("button_radius_class", "rounded-md")} p-2 {dt.get("transition_class", "transition-all duration-300")} hover:bg-muted">
-{visual_dna_block}{pers_block}{ref_block}
+{brand_block}{visual_dna_block}{pers_block}{ref_block}
 
 CONTRAST & READABILITY (NON-NEGOTIABLE)
   • Nav links: `text-foreground/80 hover:text-foreground` on solid header surfaces; on transparent-pill / floating-glass
@@ -1453,6 +1953,8 @@ async def _generate_layout_component(
     api_key: str,
     websocket: Any,
     visual_dna: dict | None = None,
+    brand: dict | None = None,
+    category: str = "",
 ) -> dict[str, str] | None:
     from app.services.project_generator import call_claude_for_json
 
@@ -1464,32 +1966,82 @@ async def _generate_layout_component(
         brand_name, motif, palette, typography, design_system, personality, references,
         design_tokens=design_tokens,
         visual_dna=visual_dna,
+        brand=brand,
+        category=category,
     )
     usr_p = _layout_user_prompt({}, component, file_path)
 
-    try:
-        result = await call_claude_for_json(
-            system_prompt=sys_p,
-            user_prompt=usr_p,
-            api_key=api_key,
-            websocket=websocket,
-            max_tokens=_SECTION_MAX_TOKENS,
+    # One retry per layout component, mirroring the section retry. Header
+    # and footer falling back to deterministic stubs is the OLD behavior;
+    # giving Claude one more shot at producing a real component is cheaper
+    # than the user seeing a generic stub.
+    max_attempts = 2
+    last_failure_reason = "unknown"
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = await asyncio.wait_for(
+                call_claude_for_json(
+                    system_prompt=sys_p,
+                    user_prompt=usr_p,
+                    api_key=api_key,
+                    websocket=websocket,
+                    max_tokens=_SECTION_MAX_TOKENS,
+                ),
+                timeout=90.0,
+            )
+        except asyncio.TimeoutError:
+            last_failure_reason = "timeout after 90s"
+            logger.warning(
+                "layout %s: codegen timed out on attempt %d/%d — falling back to stub",
+                kind, attempt, max_attempts,
+            )
+            continue
+        except Exception as exc:
+            last_failure_reason = f"exception: {exc}"
+            logger.warning(
+                "layout %s: codegen attempt %d/%d threw — %s",
+                kind, attempt, max_attempts, exc,
+            )
+            continue
+
+        if not result or not result.get("files"):
+            last_failure_reason = "empty result"
+            logger.warning(
+                "layout %s: codegen attempt %d/%d returned empty result",
+                kind, attempt, max_attempts,
+            )
+            continue
+
+        saw_jsx = False
+        for f in result["files"]:
+            path = (f.get("path") or "").strip()
+            content = (f.get("content") or "")
+            if path.endswith((".jsx", ".tsx")) and content:
+                saw_jsx = True
+                valid, reason = _layout_content_looks_valid(content, kind, component)
+                if not valid:
+                    last_failure_reason = f"contract validation failed: {reason}"
+                    logger.warning(
+                        "layout %s: codegen attempt %d/%d failed contract validation — %s",
+                        kind, attempt, max_attempts, reason,
+                    )
+                    break
+                if attempt > 1:
+                    logger.info("layout %s: succeeded on retry (attempt %d)", kind, attempt)
+                return {"path": file_path, "content": content}
+
+        if not saw_jsx:
+            last_failure_reason = "no .jsx/.tsx file in result"
+        logger.warning(
+            "layout %s: codegen attempt %d/%d did not produce an acceptable component — %s",
+            kind, attempt, max_attempts, last_failure_reason,
         )
-    except Exception as exc:
-        logger.warning("layout %s: codegen exception — %s", kind, exc)
-        return None
 
-    if not result or not result.get("files"):
-        logger.warning("layout %s: empty result from Claude", kind)
-        return None
-
-    for f in result["files"]:
-        path = (f.get("path") or "").strip()
-        content = (f.get("content") or "")
-        if path.endswith((".jsx", ".tsx")) and content:
-            return {"path": file_path, "content": content}
-
-    logger.warning("layout %s: no .jsx/.tsx file in Claude result", kind)
+    logger.error(
+        "layout %s: codegen FAILED after %d attempts — last failure: %s",
+        kind, max_attempts, last_failure_reason,
+    )
     return None
 
 
@@ -1507,7 +2059,9 @@ async def generate_layout_components(
     are logged but non-fatal — Phase-0 already wrote archetype-matched stub
     files so the layout import never 404s.
     """
-    brand_name = (brief.get("brand") or {}).get("name", "")
+    brand = dict(brief.get("brand") or {})
+    brand_name = brand.get("name", "")
+    category = (brief.get("category") or "").strip()
     motif = (brief.get("motif") or "minimal").strip().lower()
     palette = dict(brief.get("palette") or {})
     typography = dict(brief.get("typography") or {})
@@ -1522,8 +2076,10 @@ async def generate_layout_components(
 
     # Resolve header + footer anatomies via the same pipeline used for sections:
     # research first (visual_dna.section_anatomies), fallback skeleton second.
-    header_anatomy, header_source = _resolve_anatomy("header", visual_dna)
-    footer_anatomy, footer_source = _resolve_anatomy("footer", visual_dna)
+    # Pass the brief so the footer fallback picker can pick a variant by
+    # personality / category instead of always returning the same shape.
+    header_anatomy, header_source = _resolve_anatomy("header", visual_dna, brief=brief)
+    footer_anatomy, footer_source = _resolve_anatomy("footer", visual_dna, brief=brief)
 
     if websocket is not None:
         try:
@@ -1543,6 +2099,7 @@ async def generate_layout_components(
         design_tokens=design_tokens,
         api_key=api_key, websocket=websocket,
         visual_dna=visual_dna,
+        brand=brand, category=category,
     )
     footer_task = _generate_layout_component(
         kind="footer",
@@ -1553,9 +2110,16 @@ async def generate_layout_components(
         design_tokens=design_tokens,
         api_key=api_key, websocket=websocket,
         visual_dna=visual_dna,
+        brand=brand, category=category,
     )
 
-    header_res, footer_res = await asyncio.gather(header_task, footer_task)
+    header_res, footer_res = await asyncio.gather(header_task, footer_task, return_exceptions=True)
+    if isinstance(header_res, BaseException):
+        logger.error("generate_layout_components: header threw — %s", header_res)
+        header_res = None
+    if isinstance(footer_res, BaseException):
+        logger.error("generate_layout_components: footer threw — %s", footer_res)
+        footer_res = None
 
     layout_dir = os.path.join(workspace_path, "src", "components", "layout")
     os.makedirs(layout_dir, exist_ok=True)

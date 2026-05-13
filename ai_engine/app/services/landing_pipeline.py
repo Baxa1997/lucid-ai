@@ -98,13 +98,121 @@ async def run_landing_pipeline(
     # by ws.py on the previous round; we strip them here, feed them as
     # already-known context to Gemini, and filter out matching questions.
     from knowledge.loader import extract_clarify_context
+    from app.services.prompt_guards import is_gibberish, detect_scope_warnings
     prior_answers, clean_description = extract_clarify_context(description)
+
+    # ── Gibberish gate (heuristic, free, no Gemini call) ─────────────
+    # Catches keyboard mash like "asdasdas" before we spend a Gemini call
+    # generating canned "what type of business is this?" disambiguation.
+    # Skipped when the user has already started clarifying (prior_answers
+    # non-empty) so we don't re-flag an in-progress conversation.
+    SCOPE_ACK_KEY = "out_of_scope_ack"
+    if not prior_answers and is_gibberish(clean_description):
+        gibberish_payload = {
+            "kind": "gibberish",
+            "message": (
+                "Looks like that came out as random characters — what would "
+                "you like to build? A short description works best, e.g. "
+                "“an Italian trattoria in Florence” or “a SaaS landing page”."
+            ),
+        }
+        try:
+            if chat_session_id:
+                import json as _json
+                from app.services.chat import ChatService
+                await ChatService.add_message(
+                    session_id=chat_session_id, role="agent",
+                    content=gibberish_payload["message"],
+                    event_type="GibberishDetected",
+                    user_jwt=None,
+                )
+        except Exception as exc:
+            logger.warning("landing_pipeline: gibberish persist failed — %s", exc)
+        try:
+            await websocket.send_json({"type": "gibberish_detected", **gibberish_payload})
+        except Exception:
+            pass
+        logger.info(
+            "landing_pipeline: gibberish gate fired on prompt=%r — aborting pre-intent",
+            clean_description[:60],
+        )
+        return False
+
+    # ── Scope acknowledgment gate (heuristic, free) ──────────────────
+    # Detect when the user mentioned features outside the landing-page
+    # scope (auth, dashboards, billing, multi-page) and confirm with the
+    # user before proceeding to research. Skipped once they've already
+    # acknowledged (prior_answers[SCOPE_ACK_KEY] is set).
+    scope_warnings = detect_scope_warnings(clean_description)
+    if scope_warnings and SCOPE_ACK_KEY not in prior_answers:
+        # Human-readable mapping so the chat message reads naturally.
+        SCOPE_LABELS = {
+            "auth_requested":          "login / signup / password reset",
+            "dashboard_requested":     "a user dashboard or admin panel",
+            "billing_requested":       "subscription billing / Stripe",
+            "crud_requested":          "CRUD / record management",
+            "multi_page_requested":    "a multi-page website",
+            "multi_tenant_requested":  "multi-tenant / workspaces",
+            "backend_requested":       "a custom backend / API",
+        }
+        items = [SCOPE_LABELS.get(k, k.replace("_", " ")) for k in scope_warnings]
+        items_text = ", ".join(items[:-1]) + (" and " + items[-1] if len(items) > 1 else items[0])
+        question_text = (
+            f"I see you mentioned {items_text}. Right now I can only generate "
+            "the landing page for this — full-app generation (multi-route, auth, "
+            "dashboards, billing) is on the roadmap but not built yet. "
+            "Should I proceed with just the landing page?"
+        )
+        clarify_payload = {
+            "kind": "intent_clarify",
+            "clarify_key": SCOPE_ACK_KEY,
+            "question": question_text,
+            "options": [
+                {"id": "proceed_landing_only", "label": "Yes — generate the landing page only", "hint": "I'll skip the dashboard/auth parts for now."},
+                {"id": "cancel",               "label": "No — cancel this generation",          "hint": "Stops here; nothing is generated."},
+            ],
+            "original_task": clean_description,
+            "scope_warnings": scope_warnings,
+        }
+        try:
+            if chat_session_id:
+                import json as _json
+                from app.services.chat import ChatService
+                await ChatService.add_message(
+                    session_id=chat_session_id, role="agent",
+                    content=_json.dumps(clarify_payload),
+                    event_type="ClarificationNeeded",
+                    user_jwt=None,
+                )
+        except Exception as exc:
+            logger.warning("landing_pipeline: scope-ack persist failed — %s", exc)
+        try:
+            await websocket.send_json({"type": "clarification_needed", **clarify_payload})
+        except Exception:
+            pass
+        logger.info(
+            "landing_pipeline: scope-ack gate fired — warnings=%s", scope_warnings,
+        )
+        return False
+
+    # Honor a "cancel" answer from the scope-ack gate — exit cleanly.
+    if prior_answers.get(SCOPE_ACK_KEY) == "cancel":
+        try:
+            await websocket.send_json({"type": "info", "message": "Generation canceled."})
+        except Exception:
+            pass
+        logger.info("landing_pipeline: user canceled at scope-ack gate")
+        return False
+
     intent_input = clean_description
     if prior_answers:
         # Append already-known disambiguations as plain prose so Gemini
-        # treats them as constraints rather than re-asks them.
-        hints = "\n".join(f"- {k.replace('_', ' ')}: {v.replace('_', ' ')}" for k, v in prior_answers.items())
-        intent_input = f"{clean_description}\n\nAlready clarified by the user:\n{hints}"
+        # treats them as constraints rather than re-asks them. Skip the
+        # internal SCOPE_ACK_KEY — Gemini doesn't need to know about it.
+        gemini_answers = {k: v for k, v in prior_answers.items() if k != SCOPE_ACK_KEY}
+        if gemini_answers:
+            hints = "\n".join(f"- {k.replace('_', ' ')}: {v.replace('_', ' ')}" for k, v in gemini_answers.items())
+            intent_input = f"{clean_description}\n\nAlready clarified by the user:\n{hints}"
         logger.info("landing_pipeline: %d prior clarifications applied — %s",
                     len(prior_answers), list(prior_answers.keys()))
 
@@ -175,6 +283,46 @@ async def run_landing_pipeline(
         except Exception as exc:
             logger.warning("landing_pipeline: research failed (non-fatal) — %s", exc)
             return intent, None, None
+
+        # Research is the foundation for everything Claude writes. If one side
+        # comes back weak (tool failed, no grounding, snippet-loop detected),
+        # retry that side once before distilling. This keeps the pipeline stable
+        # without paying for a second full research pass when the first pass was
+        # already good.
+        async def _retry_weak_research(
+            label: str,
+            data: dict | None,
+            retry_fn,
+        ) -> dict | None:
+            if _research_summary_is_strong(data):
+                return data
+            summary = (data or {}).get("_summary") or {}
+            logger.warning(
+                "landing_pipeline: %s research weak — retrying once (summary=%s)",
+                label, summary,
+            )
+            try:
+                retried = await retry_fn(intent, websocket=websocket, timeout_s=240.0)
+            except Exception as exc:
+                logger.warning("landing_pipeline: %s research retry failed — %s", label, exc)
+                return data
+            if _research_summary_score(retried) >= _research_summary_score(data):
+                logger.info(
+                    "landing_pipeline: %s research retry accepted (old=%s new=%s)",
+                    label, summary, (retried or {}).get("_summary") or {},
+                )
+                return retried
+            logger.warning(
+                "landing_pipeline: %s research retry did not improve — keeping first result",
+                label,
+            )
+            return data
+
+        domain_res, design_res = await asyncio.gather(
+            _retry_weak_research("domain", domain_res, run_domain_research),
+            _retry_weak_research("design", design_res, run_design_research),
+        )
+
         try:
             signals = await extract_research_signals(
                 intent, domain_res, design_res,
@@ -399,7 +547,11 @@ async def run_landing_pipeline(
     # ── Step 6: app/page.jsx shell ───────────────────────────────────
     try:
         from app.services.landing_section_codegen import _resolve_anatomy as _resolve_header_anatomy
-        header_anatomy_text, _ = _resolve_header_anatomy("header", brief.get("visual_dna") or {})
+        header_anatomy_text, _ = _resolve_header_anatomy(
+            "header",
+            brief.get("visual_dna") or {},
+            brief=brief,
+        )
         write_landing_page_shell(
             workspace_path,
             page_imports,
@@ -431,7 +583,7 @@ async def run_landing_pipeline(
     # (unresolved imports, JSX syntax, missing exports) only get caught
     # by the dev server, which leaves the user staring at a red overlay.
     await _send(websocket, "progress", "🏗️  Building application — checking for errors...")
-    await _phase(6, "Building application", "Running production build to catch errors…", "active")
+    await _phase(6, "Verifying build", "Running production build to catch errors…", "active")
     try:
         from app.services.build_validator import BuildValidator
         validator = BuildValidator(
@@ -449,17 +601,17 @@ async def run_landing_pipeline(
                     websocket, "progress",
                     f"✅ Build passed — fixed {fixed_n} file(s) across {attempts} attempt(s)",
                 )
-            await _phase(6, "Building application", "Build passed — preview ready", "done")
+            await _phase(6, "Verifying build", "Build passed — preview ready", "done")
         else:
             err_count = build_result.get("error_count", 0)
             await _send(
                 websocket, "warning",
                 f"⚠️  Build still has {err_count} error(s) after auto-fix — preview may show issues.",
             )
-            await _phase(6, "Building application", f"{err_count} error(s) remain", "done")
+            await _phase(6, "Verifying build", f"{err_count} error(s) remain", "done")
     except Exception as exc:
         logger.warning("landing_pipeline: build_validator failed (non-fatal) — %s", exc)
-        await _phase(6, "Building application", "Build check skipped", "done")
+        await _phase(6, "Verifying build", "Build check skipped", "done")
 
     # ── Step 9: Quality gate ─────────────────────────────────────────
     # Verify the built page actually fulfils its purpose contract
@@ -536,6 +688,33 @@ async def run_landing_pipeline(
             pass
 
     return True
+
+
+def _research_summary_score(data: dict | None) -> int:
+    """Rank a research result for retry decisions.
+
+    Weighted toward grounded calls and source count, then successful text. A
+    degenerate snippet-loop call is penalized heavily because it actively
+    poisons downstream distillation.
+    """
+    summary = (data or {}).get("_summary") or {}
+    return (
+        int(summary.get("calls_grounded", 0) or 0) * 20
+        + int(summary.get("total_sources", 0) or 0)
+        + int(summary.get("calls_succeeded", 0) or 0) * 5
+        - int(summary.get("calls_degenerate", 0) or 0) * 30
+    )
+
+
+def _research_summary_is_strong(data: dict | None) -> bool:
+    """True when a 4-call research bundle is good enough to distill."""
+    summary = (data or {}).get("_summary") or {}
+    return (
+        int(summary.get("calls_succeeded", 0) or 0) >= 3
+        and int(summary.get("calls_grounded", 0) or 0) >= 2
+        and int(summary.get("total_sources", 0) or 0) >= 5
+        and int(summary.get("calls_degenerate", 0) or 0) == 0
+    )
 
 
 async def _send(websocket: Any, type_: str, message: str) -> None:

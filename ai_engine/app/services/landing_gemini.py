@@ -23,8 +23,8 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Model IDs — env-overridable so we can swap without code changes.
-RESEARCH_MODEL = os.environ.get("LANDING_RESEARCH_MODEL", "gemini-2.5-pro")
-DISTILL_MODEL  = os.environ.get("LANDING_BRIEF_MODEL",   "gemini-2.5-flash")
+RESEARCH_MODEL = os.environ.get("LANDING_RESEARCH_MODEL", "gemini-3.1-pro-preview")
+DISTILL_MODEL  = os.environ.get("LANDING_BRIEF_MODEL",   "gemini-3-flash-preview")
 
 
 # ── Low-level POST ────────────────────────────────────────────────────
@@ -83,7 +83,35 @@ async def post_gemini(
         grounding = None
 
     if not text:
-        logger.warning("gemini %s: empty text in response", label)
+        # Surface finishReason / safety / promptFeedback so silent
+        # "empty text" failures are diagnosable without re-running with
+        # a debugger attached. MAX_TOKENS = ceiling too low; SAFETY =
+        # response blocked; OTHER (with empty) = schema unsatisfiable
+        # for input (most common with strict required-field schemas
+        # for categories that don't fit — e.g. demanding decorative
+        # motifs from a B2B compliance SaaS brief).
+        try:
+            cand0 = (data.get("candidates") or [{}])[0] or {}
+            finish_reason = cand0.get("finishReason") or cand0.get("finish_reason") or "?"
+            safety = cand0.get("safetyRatings") or []
+            blocked = [r for r in safety if isinstance(r, dict) and r.get("blocked")]
+            pf = data.get("promptFeedback") or {}
+            pf_block = pf.get("blockReason") or pf.get("block_reason")
+            usage = data.get("usageMetadata") or {}
+            thoughts_tok = int(usage.get("thoughtsTokenCount", 0) or 0)
+            cand_tok = int(usage.get("candidatesTokenCount", 0) or 0)
+            prompt_tok = int(usage.get("promptTokenCount", 0) or 0)
+        except Exception:
+            finish_reason = "?"
+            blocked = []
+            pf_block = None
+            thoughts_tok = cand_tok = prompt_tok = 0
+        logger.warning(
+            "gemini %s: empty text — finishReason=%s safetyBlocked=%d promptBlock=%s "
+            "tokens(prompt=%d candidates=%d thoughts=%d)",
+            label, finish_reason, len(blocked), pf_block or "-",
+            prompt_tok, cand_tok, thoughts_tok,
+        )
         return "", grounding
 
     # Persist for diagnostics
@@ -244,8 +272,19 @@ async def structured_distill(
     response_schema: dict | None = None,
     max_tokens: int = 8192,
     temperature: float = 0.2,
+    model: str | None = None,
 ) -> str:
-    """Flash + JSON output, no tools. Returns raw JSON text (caller parses)."""
+    """Flash + JSON output, no tools. Returns raw JSON text (caller parses).
+
+    `model` overrides DISTILL_MODEL for this call. Set this for calls
+    where the default model has known quirks with the requested schema —
+    e.g. gemini-3-flash-preview exhibits a runaway generation mode on
+    `responseSchema` + `application/json` outputs where it fills the
+    entire maxOutputTokens budget without producing parseable text
+    (finishReason=MAX_TOKENS, candidates=N, text=""). Pinning visual_dna
+    to gemini-2.5-flash sidesteps the bug at the cost of slightly older
+    model quality on that one call.
+    """
     generation_config: dict[str, Any] = {
         "temperature": temperature,
         "maxOutputTokens": max_tokens,
@@ -260,6 +299,6 @@ async def structured_distill(
         "generationConfig": generation_config,
     }
     text, _ = await post_gemini(
-        DISTILL_MODEL, payload, timeout_s, label=label,
+        model or DISTILL_MODEL, payload, timeout_s, label=label,
     )
     return text

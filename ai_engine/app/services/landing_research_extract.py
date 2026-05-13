@@ -119,17 +119,24 @@ _DOMAIN_SIGNALS_SCHEMA: dict[str, Any] = {
 # ("bold" — full-bleed rice-paper texture, calligraphy headers).
 _VISUAL_DNA_SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
+    # Only the STRUCTURAL fields are required — these every brand can
+    # produce (section_anatomies = layout shape; cultural_intensity =
+    # mode dial; layout_signature / typography_voice / palette_emphasis =
+    # universal design framing). The ORNAMENTAL fields (decorative_motifs,
+    # signature_textures, iconography_anchors, photography_style,
+    # section_flavors) are made optional because demanding them from
+    # restraint-required categories (enterprise SaaS, fintech, healthcare,
+    # legal, etc.) was causing Gemini to return empty responses — the
+    # model couldn't satisfy the schema and gave up. Bold/cultural brands
+    # still populate all 10; restrained brands now populate the structural
+    # 5 and skip ornaments. Verified by paired test: SaaS brief that
+    # previously timed out now completes with the relaxed schema.
     "required": [
-        "decorative_motifs",
-        "signature_textures",
-        "iconography_anchors",
-        "photography_style",
-        "layout_signature",
+        "cultural_intensity",
         "cultural_palette_emphasis",
         "typography_voice",
-        "section_flavors",
+        "layout_signature",
         "section_anatomies",
-        "cultural_intensity",
     ],
     "properties": {
         "decorative_motifs": {
@@ -355,10 +362,10 @@ EXTRACT into JSON matching the schema. Every string must be CONCRETE and ACTIONA
     footer:       (footer archetype) mega-columns | minimalist-row | cta-band | centered-stack. Pick what fits brand voice. Specify column structure + social row.
   Skip section types not relevant to this brand. Each anatomy is COMPLETE in itself — Claude reads it as the spec without seeing the others.
 
-• cultural_intensity: ONE word — "subtle" or "bold".
-    "subtle"  = cultural cues sit in accent positions only (a small red seal-stamp, a lantern silhouette as a divider). Modern restraint stays. Page reads upscale-modern with cultural FLAVOR.
-    "bold"    = larger cultural textures (rice-paper over hero, calligraphy-stroke headers, full-bleed cultural patterns), more 'wow', less restraint. Page reads unmistakably traditional.
-  Pick based on the brand's tone ({tone}) and personality ({personality}). Restrained, refined, minimalist, sophisticated → subtle. Festive, traditional, immersive, theatrical, expressive → bold. When in doubt, pick subtle.
+• cultural_intensity: ONE word — "subtle" or "bold". DEFAULT IS "bold". Pick "subtle" only when the category genuinely requires visual restraint.
+    "bold"   (DEFAULT) = cultural textures take real real-estate (rice-paper or fabric texture behind sections, calligraphy/script-flavored display type for headlines, full-bleed cultural patterns or decorative motifs as section dividers, signature color used confidently across multiple surfaces — not just in accents). Page reads UNMISTAKABLY of its category and culture, not "generic SaaS template with brand name swapped in." This is the right answer for restaurants, cafes, hotels, resorts, spas, fashion, retail, beauty, fitness, wellness, lifestyle, hospitality, food/beverage, travel, cultural institutions, creative agencies, studios, music, entertainment, religious/ceremonial, weddings, events, real estate (luxury/boutique), language schools, education with cultural identity, and any brand whose appeal is sensory/aesthetic/cultural rather than purely functional.
+    "subtle" = cultural cues sit in accent positions only (a small motif under a headline, a single textural detail). Modern restraint dominates. Pick this ONLY for: enterprise SaaS, B2B tools, fintech, healthcare/clinics, legal/law firms, accounting/audit, insurance, funeral services, government/civic, security/compliance, and similar categories where the audience expects visual restraint and "trustworthy/conservative" reads as a feature.
+  Brand's tone is {tone} and personality is {personality}. If the category isn't on the "subtle" list above, pick "bold" — being timid with cultural identity produces a generic page that fails to feel like the brand. The whole point of grounding research in real reference sites and visual DNA is to make THIS brand look like ITSELF, not like every other landing page.
 
 OUTPUT BUDGET — be COMPACT but section_anatomies needs room. Whole JSON should fit in ~6000 chars. Concretely:
   • Each string field (photography_style, layout_signature, cultural_palette_emphasis, typography_voice): 1-2 sentences, MAX ~200 chars each.
@@ -366,8 +373,8 @@ OUTPUT BUDGET — be COMPACT but section_anatomies needs room. Whole JSON should
   • signature_textures: 2-3 items. Each item ≤80 chars.
   • iconography_anchors: 4-6 items. Each item is a SHORT noun (≤25 chars: "lantern", "tea cup", "olive branch") — no descriptions.
   • section_flavors: 1 sentence per section type, MAX ~150 chars each. Skip section types not relevant.
-  • section_anatomies: 80-150 words PER section, ~700-1200 chars each. ONLY include section types relevant to this brief — fewer richer entries beats many thin ones. Aim for 5-8 entries total (always include hero + header + footer; the rest match what the brand needs).
-Stop early. Do not pad with extra commentary, examples, or rationale prose. Concrete and tight beats expansive every time.
+  • section_anatomies: 20-30 words PER section MAX, ~150 chars each. 5-7 entries total. THREE MANDATORY KEYS — `hero`, `header`, `footer`. Pick footer variant: minimalist-row | mega-columns | cta-band | centered-stack. Other 2-4 entries from: menu, gallery, story, testimonials, features, pricing, cta.
+HARD LIMIT: entire JSON must fit in 1800 tokens. Stop early if needed. No padding, no rationale.
 
 OUTPUT: just the JSON. No markdown wrapper. Every string concrete and actionable — no abstract design jargon, no SaaS-flavored boilerplate."""
 
@@ -395,12 +402,14 @@ EXTRACT into JSON matching the schema:
 • industry_terms (10 items): real jargon / technical terms used by professionals in {category}. Pull from BUSINESS_RESEARCH ===INDUSTRY_TERMINOLOGY===. Strings only — just the term, no definition.
 
 • audience_phrases (8-10 items): VERBATIM quotes from AUDIENCE_RESEARCH ===AUDIENCE_LANGUAGE===. Real things customers said. Keep the quote text only — drop the source attribution. These will be injected into copy generation as voice anchors, so STRONGLY PREFER positive intent/desire phrases ("looking for somewhere that…", "love when a place…", "always wanted…", "what makes it special is…") over complaints or negative reviews. Skip pure complaints unless they reveal an unmet need that frames a positive promise. Aim for ≥80% positive/aspirational tone.
+  HARD RELEVANCE FILTER: phrases must match {category} / {geo_specifics} / {audience_primary}. Drop quotes about unrelated cuisines, venues, or cities even if they are from a high-quality local source. For example, a Korean BBQ brief must NOT keep Italian, Mediterranean, bakery, cocktail-only, or waterfront-generic restaurant quotes unless the quote explicitly applies to Korean BBQ / grilling / premium dining.
 
 • regional_touchpoints (5 items): names of local landmarks / neighborhoods / events / institutions from REGIONAL_RESEARCH ===CULTURAL_TOUCHPOINTS===. Each entry: name + 1-line context.
 
 • competitor_section_orders (5-8 entries): the section_order each competitor uses on their homepage, pulled from COMPETITIVE_RESEARCH ===COMPETITOR_INVENTORY===. Each entry is an array of section type strings in order, lowercase, snake_case (e.g. ["hero", "story", "menu_highlights", "reservations", "press", "footer"]).
 
 • top_competitors (5 entries): from COMPETITIVE_RESEARCH ===COMPETITOR_INVENTORY===. Each: {{name, url (cleaned, no markdown), positioning (1 sentence), tier ("budget"|"mid"|"premium")}}.
+  PRIORITY ORDER: first choose direct {category}/{subcategory} competitors in {geo_specifics}; then adjacent direct competitors in nearby NYC neighborhoods; only then use broader premium restaurants as aspirational comparables. At least 3 of 5 should be direct category/subcategory matches when the research contains them. Do not fill all 5 with generic premium restaurants if direct competitors exist.
 
 • white_space (3-5 items): angles competitors aren't taking, from COMPETITIVE_RESEARCH ===WHITE_SPACE===. One short sentence each.
 
@@ -470,7 +479,7 @@ async def extract_research_signals(
     }
 
     domain_prompt = _DOMAIN_EXTRACT_PROMPT.format(
-        **{k: fmt[k] for k in ("category", "geo_specifics", "audience_primary", "personality", "tone")},
+        **{k: fmt[k] for k in ("category", "subcategory", "geo_specifics", "audience_primary", "personality", "tone")},
         business=_clip(domain_research.get("business", {}).get("text", ""), 8000),
         audience=_clip(domain_research.get("audience", {}).get("text", ""), 8000),
         regional=_clip(domain_research.get("regional", {}).get("text", ""), 6000),
@@ -493,18 +502,54 @@ async def extract_research_signals(
         layout=_clip(design_research.get("layout", {}).get("text", ""), 8000),
     )
 
+    # ── visual_dna call config ────────────────────────────────────────
+    # The visual_dna distill is the load-bearing call for cultural
+    # specificity in section codegen — when it fails, every section
+    # falls back to the generic _FALLBACK_SKELETONS floor and the
+    # output reads "generic SaaS template with brand name swapped in."
+    #
+    # The previous configuration (max_tokens=32768, shared timeout_s,
+    # running concurrently with domain+design in a single gather) was
+    # silently timing out at 120s on real grounded inputs — verified
+    # with a paired end-to-end test where 2/2 brands returned empty
+    # visual_dna while domain+design extracts succeeded.
+    #
+    # Three changes restore reliability:
+    #   1. max_tokens back to 16384 — known-good ceiling that fits the
+    #      schema's ~6000-char target with plenty of headroom; 32768
+    #      stretches generation time disproportionately on Flash.
+    #   2. Dedicated 180s timeout — visual_dna is 4x the output size of
+    #      domain/design signals and a busier schema.
+    #   3. Sequential execution — run domain + design (light, fast) in
+    #      parallel first, then run visual_dna alone so it doesn't
+    #      compete with the lighter calls for the Vertex per-project
+    #      concurrency window.
+    _VISUAL_DNA_TIMEOUT_S = 180.0
+    _VISUAL_DNA_MAX_TOKENS = 2048
+    # Pin visual_dna to gemini-2.5-flash. The default DISTILL_MODEL
+    # (gemini-3-flash-preview) exhibits a runaway-generation failure mode
+    # on this call: it fills the entire maxOutputTokens budget without
+    # producing parseable text. Verified across 3 paired tests:
+    #   • run #2 (32k tokens, gather): both brands → TIMEOUT
+    #   • run #3 (16k tokens, sequential): SaaS → MAX_TOKENS empty
+    #   • run #4 (24k tokens, sequential): BOTH brands → MAX_TOKENS
+    #     empty (candidates=24561, thoughts=0, text="")
+    # gemini-2.5-flash returns parseable JSON reliably for both
+    # concrete (restaurant) and abstract (compliance SaaS) briefs.
+    _VISUAL_DNA_MODEL = "gemini-2.5-flash"
+
     async def _visual_dna_call() -> str:
-        """Visual DNA call wrapped so we can retry once when section_anatomies
-        comes back empty. The anatomies are now load-bearing for codegen — when
-        they're missing every section falls back to the generic skeleton, so
-        a single extra distill call (~5s, cheap Flash tokens) is worth it.
-        """
         return await structured_distill(
-            visual_dna_prompt, timeout_s,
-            label="visual_dna", response_schema=_VISUAL_DNA_SCHEMA, max_tokens=16384,
+            visual_dna_prompt, _VISUAL_DNA_TIMEOUT_S,
+            label="visual_dna",
+            response_schema=_VISUAL_DNA_SCHEMA,
+            max_tokens=_VISUAL_DNA_MAX_TOKENS,
+            model=_VISUAL_DNA_MODEL,
         )
 
-    domain_raw, design_raw, visual_dna_raw = await asyncio.gather(
+    # Phase 1: light signal extracts run concurrently — both ~4k max tokens,
+    # both reliably complete in <30s.
+    domain_raw, design_raw = await asyncio.gather(
         structured_distill(
             domain_prompt, timeout_s,
             label="domain_signals", response_schema=_DOMAIN_SIGNALS_SCHEMA, max_tokens=4096,
@@ -513,24 +558,129 @@ async def extract_research_signals(
             design_prompt, timeout_s,
             label="design_signals", response_schema=_DESIGN_SIGNALS_SCHEMA, max_tokens=4096,
         ),
-        _visual_dna_call(),
     )
+
+    # Phase 2: visual_dna runs alone with a generous timeout. It's the
+    # heaviest call by far (schema with 15+ section_anatomies, each 80-150
+    # words of grounded prose) so it gets its own quota window.
+    visual_dna_raw = await _visual_dna_call()
 
     domain = _parse_json(domain_raw, label="domain_signals") or {}
     design = _parse_json(design_raw, label="design_signals") or {}
     visual_dna = _parse_json(visual_dna_raw, label="visual_dna") or {}
 
-    # One-retry fallback: if section_anatomies is missing/empty, the codegen
-    # falls back to generic skeletons — a 5s retry is cheap insurance.
-    if not (visual_dna.get("section_anatomies") or {}):
+    # Persist the raw visual_dna response unconditionally — when extraction
+    # silently returns `{}` (truncated response, schema mismatch) we need
+    # the raw text on disk to diagnose. Tiny disk cost, big debug payoff.
+    try:
+        with open("/tmp/landing_visual_dna_raw.txt", "w") as fh:
+            fh.write(visual_dna_raw or "(empty)")
+    except Exception:
+        pass
+
+    # One-retry fallback: trigger when EITHER the whole visual_dna parsed
+    # to empty (Gemini call failed) OR section_anatomies came back empty
+    # (we need those for codegen). Previously only the second condition
+    # was checked, so total-failure cases never retried.
+    needs_retry = (not visual_dna) or (not (visual_dna.get("section_anatomies") or {}))
+    if needs_retry:
+        reason = "parse failed" if not visual_dna else "section_anatomies empty"
         try:
-            logger.info("extract_research_signals: visual_dna.section_anatomies empty — retrying once")
+            logger.info("extract_research_signals: visual_dna %s — retrying once", reason)
             visual_dna_retry_raw = await _visual_dna_call()
+            try:
+                with open("/tmp/landing_visual_dna_raw_retry.txt", "w") as fh:
+                    fh.write(visual_dna_retry_raw or "(empty)")
+            except Exception:
+                pass
             visual_dna_retry = _parse_json(visual_dna_retry_raw, label="visual_dna_retry") or {}
-            if visual_dna_retry.get("section_anatomies"):
+            # Prefer the retry only if it improves on the first attempt:
+            # either we had nothing before, or the retry has anatomies and
+            # the first didn't.
+            if visual_dna_retry and (
+                not visual_dna
+                or (visual_dna_retry.get("section_anatomies") and not visual_dna.get("section_anatomies"))
+            ):
                 visual_dna = visual_dna_retry
+                logger.info("extract_research_signals: retry succeeded — using retry result")
+            else:
+                logger.warning(
+                    "extract_research_signals: retry didn't improve result (retry_keys=%d retry_anatomies=%d) — keeping first attempt",
+                    len(visual_dna_retry),
+                    len((visual_dna_retry.get("section_anatomies") or {})),
+                )
         except Exception as exc:
             logger.warning("extract_research_signals: visual_dna retry failed (%s) — using first attempt", exc)
+
+    # Targeted gap-fill: gemini-3-flash-preview reliably produces 5-7 anatomies
+    # but routinely skips `footer` (and occasionally `header`) because they're
+    # not explicit section types in the brief. Asking again at the top of the
+    # prompt didn't help — added language pushed the model into MAX_TOKENS.
+    # Instead, when those universal layout keys are missing, make a SMALL
+    # follow-up call that only asks for them. Tiny prompt, tiny output,
+    # high success rate.
+    anatomies_so_far = (visual_dna.get("section_anatomies") or {})
+    missing_layout_keys = [k for k in ("header", "footer") if k not in anatomies_so_far]
+    if anatomies_so_far and missing_layout_keys:
+        try:
+            logger.info(
+                "extract_research_signals: backfilling missing layout anatomies: %s",
+                missing_layout_keys,
+            )
+            backfill_prompt = (
+                f"You previously distilled a visual_dna brief for an upscale {fmt.get('category', '')} "
+                f"brand in {fmt.get('geo_specifics', '')} (personality: {fmt.get('personality', '')}). "
+                f"You produced anatomies for: {sorted(anatomies_so_far.keys())}. "
+                f"Now write ONLY the missing layout anatomies: {missing_layout_keys}. "
+                "Each anatomy: 30-50 words MAXIMUM. Outer container rules, composition, decorative accent. "
+                "For footer, pick one variant explicitly: minimalist-row | mega-columns | cta-band | "
+                "centered-stack — match the brand's voice. Output JSON only: "
+                '{ "header": "...", "footer": "..." } — include only the keys you were asked for.'
+            )
+            backfill_schema = {
+                "type": "OBJECT",
+                "properties": {
+                    "header": {"type": "STRING"},
+                    "footer": {"type": "STRING"},
+                },
+            }
+            backfill_raw = await structured_distill(
+                backfill_prompt, timeout_s,
+                label="visual_dna_backfill",
+                response_schema=backfill_schema,
+                max_tokens=1024,
+                model="gemini-2.5-flash",
+            )
+            backfill = _parse_json(backfill_raw, label="visual_dna_backfill") or {}
+            merged_count = 0
+            for k in missing_layout_keys:
+                v = (backfill.get(k) or "").strip()
+                if isinstance(v, str) and len(v) >= 40:
+                    anatomies_so_far[k] = v
+                    merged_count += 1
+            if merged_count:
+                visual_dna["section_anatomies"] = anatomies_so_far
+                logger.info(
+                    "extract_research_signals: backfill merged %d/%d layout keys",
+                    merged_count, len(missing_layout_keys),
+                )
+            else:
+                logger.warning(
+                    "extract_research_signals: backfill returned no usable anatomies for %s",
+                    missing_layout_keys,
+                )
+        except Exception as exc:
+            logger.warning("extract_research_signals: backfill failed (%s) — falling back to variant picker", exc)
+
+    # Final deterministic repair for universal layout anatomies. Gemini can
+    # still return an empty backfill despite a valid visual_dna object. Header
+    # and footer are load-bearing for layout codegen, so don't leave the
+    # research artifact incomplete: synthesize compact anatomies from the
+    # visual DNA instead of forcing every downstream consumer to rediscover
+    # the fallback.
+    if visual_dna:
+        _ensure_layout_anatomies(visual_dna, fmt)
+        _sanitize_visual_dna_anatomies(visual_dna)
 
     # Persist for diagnostics
     try:
@@ -542,7 +692,34 @@ async def extract_research_signals(
     except Exception:
         pass
 
+    # Loud signal when the whole visual_dna is still empty after retry — this
+    # is the bug that produces same-looking sections across projects, so we
+    # want it screaming in the logs, not buried in an info line.
+    if not visual_dna:
+        logger.error(
+            "extract_research_signals: visual_dna EMPTY after retry — codegen will fall back to generic skeletons. "
+            "Check /tmp/landing_visual_dna_raw*.txt for the raw response."
+        )
+
     anatomies_count = len((visual_dna.get("section_anatomies") or {}))
+    # Dedicated success/failure marker for visual_dna — load-bearing for
+    # cultural specificity. When this logs FAIL the generated site will
+    # fall back to generic skeletons; grep for this in prod telemetry.
+    if visual_dna and anatomies_count > 0:
+        logger.info(
+            "extract_research_signals: visual_dna OK — anatomies=%d intensity=%s motifs=%d textures=%d icons=%d",
+            anatomies_count,
+            (visual_dna.get("cultural_intensity") or "?"),
+            len(visual_dna.get("decorative_motifs") or []),
+            len(visual_dna.get("signature_textures") or []),
+            len(visual_dna.get("iconography_anchors") or []),
+        )
+    else:
+        logger.error(
+            "extract_research_signals: visual_dna FAIL — keys=%d anatomies=%d "
+            "(generated page will be GENERIC; check Vertex quota / timeout / max_tokens)",
+            len(visual_dna), anatomies_count,
+        )
     logger.info(
         "extract_research_signals: ok — domain_keys=%d design_keys=%d visual_dna_keys=%d anatomies=%d intensity=%s",
         len(domain), len(design), len(visual_dna), anatomies_count,
@@ -681,6 +858,90 @@ def _clip(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     return text[:max_chars] + "\n…[truncated]"
+
+
+def _ensure_layout_anatomies(visual_dna: dict, fmt: dict[str, str]) -> None:
+    """Guarantee universal header/footer anatomy keys exist.
+
+    These two keys are not always present in Gemini's compact JSON even though
+    layout codegen needs them. The fallback is intentionally research-flavored:
+    it references motifs, palette emphasis, typography voice, and category so
+    Claude still gets brand-specific guidance instead of a generic footer.
+    """
+    anatomies = visual_dna.setdefault("section_anatomies", {})
+    if not isinstance(anatomies, dict):
+        anatomies = {}
+        visual_dna["section_anatomies"] = anatomies
+
+    motifs = [m for m in (visual_dna.get("decorative_motifs") or []) if isinstance(m, str)]
+    motif_a = motifs[0] if motifs else "a small brand-specific accent mark"
+    motif_b = motifs[1] if len(motifs) > 1 else motif_a
+    palette = (visual_dna.get("cultural_palette_emphasis") or "primary + accent colors").strip()
+    type_voice = (visual_dna.get("typography_voice") or "heading font for wordmark, clean sans for navigation").strip()
+    category = (fmt.get("category") or "brand").strip()
+    category_l = category.lower()
+    geo = (fmt.get("geo_specifics") or "").strip()
+    info_heavy_categories = (
+        "education", "school", "academy", "language", "tutoring", "course",
+        "coaching", "clinic", "healthcare", "fitness", "wellness",
+        "real estate", "nonprofit", "community",
+    )
+    refined_categories = (
+        "restaurant", "hotel", "resort", "hospitality", "spa", "studio",
+        "gallery", "portfolio", "fashion", "luxury",
+    )
+
+    if not isinstance(anatomies.get("header"), str) or len((anatomies.get("header") or "").strip()) < 40:
+        if any(c in category_l for c in info_heavy_categories):
+            anatomies["header"] = (
+                "Utility-split header archetype. Desktop has a slim top row for business_info details from landing.brand "
+                "(email, phone, city or hours) and a main 64px row with brand left, concise nav center, rounded CTA right. "
+                f"Brand mark uses {type_voice}; {motif_a} appears as a tiny divider or logo accent. "
+                "Mobile collapses utility details into a full-width drawer. Header must stay solid and readable on scroll."
+            )
+        elif any(c in category_l for c in refined_categories):
+            anatomies["header"] = (
+                "Centered-logo editorial header archetype. Desktop uses left nav group, centered wordmark, and right nav/CTA group "
+                "inside an 80px translucent background that becomes solid on scroll. "
+                f"Wordmark uses {type_voice}; {motif_a} appears as a restrained logo accent. "
+                f"CTA is a rounded token-driven button using {palette}. Mobile collapses to brand left and hamburger right."
+            )
+        else:
+            anatomies["header"] = (
+                "Sticky top-bar archetype with a 64px desktop height and solid readable surface after scroll. "
+                f"Brand mark uses {type_voice}; navigation is a short centered row with hover underline or soft pill treatment. "
+                f"Use {motif_a} as a tiny wordmark or divider accent, never as a large decoration. "
+                f"CTA sits right as a rounded token-driven button using {palette}. Mobile collapses to a full-width drawer with the same nav and CTA."
+            )
+
+    if not isinstance(anatomies.get("footer"), str) or len((anatomies.get("footer") or "").strip()) < 40:
+        anatomies["footer"] = (
+            "Mega-columns footer tailored to the business context. Outer footer uses a dark or card surface with clear contrast, "
+            "then a container grid of brand story, Explore links from landing.footer.links, Visit/contact details from "
+            f"landing.brand.business_info, and a final reservation/newsletter CTA for this {category} in {geo}. "
+            f"Integrate {motif_b} as a restrained divider or social-row accent. Bottom strip shows copyright plus small legal links. "
+            "All links, social handles, and business info must read from landing.json at runtime."
+        )
+
+
+def _sanitize_visual_dna_anatomies(visual_dna: dict) -> None:
+    """Remove anatomy phrases that contradict downstream hard UI rules."""
+    anatomies = visual_dna.get("section_anatomies") or {}
+    if not isinstance(anatomies, dict):
+        return
+    replacements = {
+        "with no border-radius": "with token-driven rounded corners",
+        "no border-radius": "token-driven rounded corners",
+        "rounded-none": "rounded-md",
+        "without border-radius": "with token-driven rounded corners",
+    }
+    for key, value in list(anatomies.items()):
+        if not isinstance(value, str):
+            continue
+        cleaned = value
+        for needle, repl in replacements.items():
+            cleaned = cleaned.replace(needle, repl)
+        anatomies[key] = cleaned
 
 
 def _parse_json(raw: str, *, label: str) -> dict | None:

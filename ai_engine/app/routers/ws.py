@@ -1335,7 +1335,7 @@ async def websocket_agent(websocket: WebSocket):
                         try:
                             await websocket.send_json({
                                 "type": "status",
-                                "status": "initializing",
+                                "status": "cloning",
                                 "message": _msgs[_i % len(_msgs)],
                             })
                         except Exception:
@@ -1523,7 +1523,7 @@ async def websocket_agent(websocket: WebSocket):
                         "message": "⚠️ Could not clone repository. Workspace ready in limited mode — you can still send tasks.",
                     })
 
-            if not clone_fatal:
+            if not clone_fatal and not task:
                 ready_msg = "Workspace ready. You can start giving tasks."
                 if session.repo_url:
                     ready_msg = (

@@ -223,12 +223,12 @@ async def run_pipeline(
 
     try:
         # ── Phase 1: Validate ─────────────────────────────
-        await _send_phase(1, "Validating inputs", "Checking API keys and repository settings…", "active")
+        await _send_phase(1, "Preparing workspace", "Checking API keys and repository settings…", "active")
         validated = await validate_inputs(task, user, websocket, chat_session_id=chat_session_id)
         if validated is None:
-            await _send_phase(1, "Validating inputs", "Validation failed", "error")
+            await _send_phase(1, "Preparing workspace", "Validation failed", "error")
             return
-        await _send_phase(1, "Validating inputs", "All inputs validated", "done")
+        await _send_phase(1, "Preparing workspace", "All inputs validated", "done")
         await asyncio.sleep(0.8)
 
         # Save original task (with [LUCID_PROJECT] header) for naming in Phase 7
@@ -293,7 +293,7 @@ async def run_pipeline(
                 logger.info("Skeleton detection: stack=%s, is_admin=%s, task=%s",
                             detected_stack, is_admin, (task_original or task)[:60])
 
-                await _send_phase(2, "Cloning template", f"Loading {detected_stack or 'project'} template…", "active")
+                await _send_phase(2, "Preparing workspace", f"Loading {detected_stack or 'project'} template…", "active")
 
                 skeleton_path = get_skeleton_for_stack(detected_stack, is_admin, task=task_original or task)
                 if skeleton_path:
@@ -308,10 +308,10 @@ async def run_pipeline(
                     validated["skeleton_stack"] = detected_stack
                     validated["is_admin"] = is_admin
                     await asyncio.sleep(1.0)
-                    await _send_phase(2, "Cloning template", f"Template ready: {skeleton_name}", "done")
+                    await _send_phase(2, "Preparing workspace", f"Template ready: {skeleton_name}", "done")
                 else:
                     logger.warning("No skeleton found for stack: %s", detected_stack)
-                    await _send_phase(2, "Cloning template", "Using default structure", "done")
+                    await _send_phase(2, "Preparing workspace", "Using default structure", "done")
             except Exception as skel_err:
                 logger.warning("Skeleton copy failed (non-fatal): %s", skel_err)
 
@@ -948,7 +948,16 @@ async def run_pipeline(
         from app.services.local_preview import start_local_preview
 
         _preview_pm = validated.get("package_manager", "npm")
-        _conv_id    = chat_session_id or conversation_id or task_id
+        # Use the route/project id as the preview registry key when present.
+        # ws.py reconnect/reload paths also look up previews by project_id, so
+        # starting under chat_session_id makes refresh lose a healthy server
+        # whenever those ids differ.
+        _conv_id    = (
+            (getattr(session, "project_id", "") if session is not None else "")
+            or chat_session_id
+            or conversation_id
+            or task_id
+        )
 
         async def _start_preview_safe():
             try:
