@@ -1577,25 +1577,50 @@ async def websocket_agent(websocket: WebSocket):
                 except Exception as exc:
                     logger.warning("Failed to persist user message: %s", exc)
 
-            # ── Ambiguity gate: ask before generating if archetype is mixed ──
-            # Heuristic conflict detector flags prompts that name one
-            # archetype but pack signals from another (e.g. "landing page
-            # with cart and checkout"). When triggered, persist the
-            # question, send it to the client, and skip the pipeline —
-            # generation resumes only after a clarification_response
-            # arrives in the follow-up loop below.
-            from knowledge.loader import detect_classification_conflict
-            _conflict = detect_classification_conflict(task)
-            if _conflict:
+            # ── Ambiguity gate: ask before generating if prompt is vague ──
+            # Stage 0: Gemini-powered clarity check — generates a targeted
+            # question when key context is missing (location, project type,
+            # audience). Falls back to the keyword-based conflict detector
+            # for known archetype conflicts (landing vs ecommerce, etc.).
+            # Max 3 clarification rounds; after that we proceed regardless.
+            import json as _json
+            from knowledge.loader import detect_classification_conflict, extract_clarify_context
+            from app.services.clarity_agent import check_prompt_clarity
+
+            _existing_clarify, _ = extract_clarify_context(task)
+            _clarify_question: dict | None = None
+
+            # Only run AI clarity check for new/initial prompts (not follow-ups)
+            # and only when fewer than 3 rounds have been used.
+            if len(_existing_clarify) < 3:
+                _clarify_question = await check_prompt_clarity(
+                    task=task,
+                    already_clarified=_existing_clarify,
+                    timeout_s=12.0,
+                )
+
+            # If AI clarity check passed (or skipped), fall back to keyword detector
+            if _clarify_question is None:
+                _kw_conflict = detect_classification_conflict(task)
+                if _kw_conflict:
+                    _clarify_question = {
+                        "key": "",  # empty key → legacy archetype-lock path
+                        "text": _kw_conflict["question"],
+                        "options": _kw_conflict["options"],
+                        "_kind": _kw_conflict["kind"],
+                    }
+
+            if _clarify_question is not None:
+                _is_legacy = not _clarify_question.get("key")
                 _payload = {
-                    "kind": _conflict["kind"],
-                    "question": _conflict["question"],
-                    "options": _conflict["options"],
+                    "kind": _clarify_question.get("_kind") or "intent_clarify",
+                    "clarify_key": _clarify_question.get("key") or "",
+                    "question": _clarify_question.get("text") or _clarify_question.get("question") or "",
+                    "options": _clarify_question.get("options", []),
                     "original_task": task,
                 }
                 if chat_session_id:
                     try:
-                        import json as _json
                         await ChatService.add_message(
                             session_id=chat_session_id, role="agent",
                             content=_json.dumps(_payload),
@@ -1615,8 +1640,9 @@ async def websocket_agent(websocket: WebSocket):
                     "Awaiting your choice…",
                 )
                 logger.info(
-                    "[%s] Classification conflict (%s) — awaiting user response",
-                    session.session_id, _conflict["kind"],
+                    "[%s] Clarity check — asking about %r (round %d)",
+                    session.session_id, _clarify_question.get("key") or "archetype",
+                    len(_existing_clarify) + 1,
                 )
             else:
                 # ── Step: Got Task ────────────────────────────────
