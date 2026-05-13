@@ -2,6 +2,12 @@
 
 Asks up to 3 dynamic questions to understand the real project — what to build,
 who it's for, where it is — so research and routing are accurate.
+
+ZERO hardcoded questions or options. Gemini decides:
+  - whether to ask anything at all
+  - what to ask
+  - what options to offer (contextually relevant per prompt)
+
 Uses the existing clarification_needed / [LUCID_CLARIFY::key=value] infrastructure.
 """
 from __future__ import annotations
@@ -15,111 +21,68 @@ logger = logging.getLogger(__name__)
 
 _MAX_ROUNDS = 3
 
-# Valid question keys — snake_case identifiers that map to [LUCID_CLARIFY::key=value]
-# markers stacked on the task. Any key not in this set is rejected (fail-safe).
-_VALID_KEYS = {
-    "project_type",    # landing page / full website / web app / e-commerce
-    "location",        # city or country for physical businesses
-    "audience",        # target demographic when it flips the visual style
-    "niche",           # sub-category when parent is too generic (restaurant → Italian?)
-    "style",           # brand tone when it would flip the design (luxury vs playful)
-}
-
-# Short physical-business prompts — Gemini is inconsistent on ≤5 word prompts.
-# This fast-path guarantees a location question before the API call.
-# "clinic" excluded — audience (luxury vs budget) matters more than location there.
-_PHYSICAL_KEYWORDS = {
-    "gym", "spa", "salon", "café", "cafe", "bakery", "barbershop", "bar",
-    "pub", "club", "nightclub", "shop", "store", "boutique", "studio",
-    "pharmacy", "hotel", "hostel", "resort", "restaurant", "diner",
-    "bistro", "brasserie", "pizzeria", "trattoria", "tavern", "laundry",
-    "cleaners", "carwash", "garage", "florist", "gallery", "museum",
-    "theater", "theatre", "cinema", "library", "church", "mosque",
-    "temple", "school", "academy", "tailor", "jeweler", "jeweller",
-    "optician", "dentist", "vet",
-}
-
-_LOCATION_PREPOSITIONS = {"in", "at", "near", "around", "based", "located"}
-
-_PHYSICAL_LOCATION_OPTIONS = [
-    {"id": "united_states",  "label": "United States"},
-    {"id": "united_kingdom", "label": "United Kingdom"},
-    {"id": "western_europe", "label": "Western Europe"},
-    {"id": "other",          "label": "Other"},
-]
-
-
-def _fast_location_check(task: str) -> dict | None:
-    """Return a location question for short physical-business prompts.
-
-    Only fires on ≤5-word prompts with no location preposition already present.
-    """
-    words = task.lower().split()
-    if any(w.strip(".,!?") in _LOCATION_PREPOSITIONS for w in words):
-        return None
-    if len(words) > 5:
-        return None
-    for w in words:
-        if w.strip(".,!?'\"") in _PHYSICAL_KEYWORDS:
-            return {
-                "key": "location",
-                "text": f"Where is your {task.lower()} located?",
-                "options": _PHYSICAL_LOCATION_OPTIONS,
-            }
-    return None
-
-
 _SYSTEM_PROMPT = """\
-You are a smart project intake agent for an AI web design platform.
+You are a smart project intake agent for an AI web design platform. You decide the MINIMUM number of questions needed to generate a great result.
 
-A user described a project. Your job: ask the ONE most important question that would significantly improve the quality of this project — better visual research, better routing, better output.
+══ DEFAULT: clear=true ══
+Bias HARD toward passing through. Only ask when the answer would FUNDAMENTALLY change the design or routing. If you're unsure → return {{"clear": true}}.
 
-══ QUESTION PRIORITY ══
-Ask the first item below that is still unclear:
+══ HOW TO READ THE PROMPT ══
+Extract everything already stated or strongly implied BEFORE deciding:
+- "app" → it's a web app, project_type is clear
+- "landing page", "website", "page", "site" → project_type is clear
+- "in <city/country>" → location is clear
+- "Italian/French/Japanese/etc." restaurant → cuisine is clear
+- "for <audience>" → audience is clear
+- "luxury/premium/budget/casual" → style direction is clear
+- Adjective + business (Italian café, yoga studio, dental clinic) → category often clear
 
-1. PROJECT SCOPE (key="project_type") — ask ONLY if it is genuinely unclear whether the user wants:
-   - A single marketing/landing page
-   - A full multi-page website
-   - A web app or dashboard
-   - An e-commerce store with products/cart
-   Do NOT ask this for clear SaaS tools, digital products, or when user said "landing page" / "website".
+If the prompt already has these → DO NOT ask about them again.
 
-2. LOCATION (key="location") — ask when the business is physical (shop, café, studio, gym, clinic, hotel, restaurant, bar, salon) AND no city/country is mentioned.
-   → Options: specific countries, NOT continents. Always include "Other".
-   → Pick the 4 most relevant countries for this business type.
+══ WHEN TO ASK ══
+Only when something CRITICAL for design is missing and not inferable:
+1. Physical business with NO location → ask "location" with country options specific to that business type
+2. Business category too generic to design for (just "restaurant", just "shop", just "studio") AND nothing else specified → ask "niche"
+3. Project scope ambiguous AND not implied (e.g. "company website" — could be one-pager or full multi-page) → ask "project_type"
+4. Target audience would FLIP the design AND isn't implied (e.g. "clinic" — luxury private vs public) → ask "audience"
 
-3. BUSINESS NICHE (key="niche") — ask when the category is too generic for visual research.
-   → "restaurant" alone → what cuisine? Italian, Asian, American BBQ, Fine dining?
-   → "studio" alone → photography? yoga? music? tattoo?
-   → "agency" alone → marketing? design? talent? law?
+══ OPTIONS MUST BE CONTEXTUAL TO THE PROMPT ══
+- Italian gelato missing location → ["Italy", "France", "Spain", "Other"]
+- Japanese pottery missing location → ["Japan", "South Korea", "China", "Other"]
+- yoga studio missing location → ["India", "United States", "Western Europe", "Other"]
+- "restaurant" missing niche → ["Italian", "Asian fusion", "American BBQ", "Fine dining"]
+- NEVER continental ("Europe", "Asia") — always specific countries
+- 2–4 options, optionally "Other"
 
-4. TARGET AUDIENCE (key="audience") — ask when the demographic would completely flip the visual style.
-   → "clinic" → luxury private vs budget public
-   → "fitness app" → audience is already clear (fitness people), DON'T ask
-   → Keep options specific and visual: "Young professionals", "Families", "Seniors", "Luxury clients"
+══ KEY NAMING ══
+snake_case, descriptive. Common: project_type, location, niche, audience, style.
+Don't ask about keys already in "Already clarified".
 
-5. STYLE DIRECTION (key="style") — ask ONLY as a last resort when nothing else is unclear but brand tone is completely unknown.
-   → Options: "Luxury / Premium", "Modern / Minimal", "Bold / Playful", "Classic / Traditional"
+══ EXAMPLES ══
+"SaaS invoicing tool for freelancers" → clear=true (project type=app, audience=freelancers, both stated)
+"AI writing assistant app" → clear=true (says "app", that's enough)
+"fitness app" → clear=true (says "app")
+"gym in New York" → clear=true (physical+location specified, niche is reasonable)
+"dentist in Berlin" → clear=true (physical+location specified)
+"Italian coffee shop in Florence" → clear=true (everything stated)
+"luxury skincare brand for women 40+" → clear=true (style+audience stated)
+"coffee shop" → ASK location (physical, no city)
+"company website" → ASK project_type (could be 1-page or full)
+"clinic" → ASK audience (luxury vs budget flips entire design)
+"restaurant" + already has location → ASK niche (cuisine matters for design)
+"agency" → ASK project_type (could be portfolio site or landing page)
 
-══ NEVER ASK ABOUT ══
-- Colors, fonts, specific content, or features
-- Things clearly stated or strongly implied by the prompt
-- A second question on the same topic already answered
+══ INPUT ══
+ALREADY CLARIFIED: {already_clarified}
+ROUNDS: {rounds_used} of {max_rounds}
+PROMPT: {task}
 
-══ ALREADY CLARIFIED ══
-{already_clarified}
+If rounds >= {max_rounds} → return {{"clear": true}}.
 
-══ ROUNDS ══
-Used {rounds_used} of {max_rounds}. If rounds >= {max_rounds} OR prompt has enough context → return {{"clear": true}}.
-
-══ PROMPT ══
-{task}
-
-Return JSON only — no prose:
+Return JSON only:
 {{"clear": true}}
 OR
-{{"clear": false, "question": {{"key": "<one of: project_type|location|niche|audience|style>", "text": "<question, max 12 words>", "options": [{{"id": "<snake_id>", "label": "<2-5 word label>"}}]}}}}
-2–4 options maximum.
+{{"clear": false, "question": {{"key": "snake_case", "text": "max 12 words", "options": [{{"id": "snake_id", "label": "2-5 word label"}}]}}}}
 """
 
 
@@ -147,13 +110,6 @@ async def check_prompt_clarity(
 
     if not clean_task:
         return None
-
-    # Fast path: short physical-business prompts always need location first
-    if rounds_used == 0 or "location" not in already_clarified:
-        _fast = _fast_location_check(clean_task)
-        if _fast:
-            logger.info("clarity_agent: fast-path location for %r", clean_task)
-            return _fast
 
     prompt = _SYSTEM_PROMPT.format(
         rounds_used=rounds_used,
@@ -195,7 +151,7 @@ async def check_prompt_clarity(
             timeout_s,
             label="clarity_check",
             response_schema=response_schema,
-            max_tokens=300,
+            max_tokens=320,
             model="gemini-2.5-flash",
         )
         result = json.loads(raw) if isinstance(raw, str) else raw
@@ -211,10 +167,9 @@ async def check_prompt_clarity(
         if len(q["options"]) < 2:
             return None
 
-        # Validate key — must be snake_case and in allowed set
+        # Normalize key — snake_case only (no allowlist; trust Gemini)
         key = re.sub(r"[^a-z0-9_]", "", q["key"].lower().strip())
-        if key not in _VALID_KEYS:
-            logger.info("clarity_agent: suppressed unknown key=%r", key)
+        if not key:
             return None
 
         # Don't re-ask a key already answered
@@ -223,7 +178,8 @@ async def check_prompt_clarity(
             return None
 
         q["key"] = key
-        logger.info("clarity_agent: round %d — asking about %r", rounds_used + 1, key)
+        logger.info("clarity_agent: round %d — asking %r (%d options)",
+                    rounds_used + 1, key, len(q["options"]))
         return q
 
     except Exception as exc:
