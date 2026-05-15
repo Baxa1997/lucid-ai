@@ -34,6 +34,8 @@ async def generate_website(
     concurrency: int = _DEFAULT_CONCURRENCY,
     skip_header: bool = False,
     skip_footer: bool = False,
+    purpose_data: dict | None = None,
+    page_images: dict[str, dict] | None = None,
 ) -> dict[str, Any]:
     """Run Stage 5 — parallel creative generation for the whole website.
 
@@ -83,12 +85,17 @@ async def generate_website(
     #   kind ∈ {"page","header","footer"} — used for result categorization
     tasks: list[tuple[str, Any, str, dict]] = []
 
+    page_images = page_images or {}
+
     async def _bounded_page(page: dict) -> list[dict] | None:
+        route = (page.get("route") or page.get("path") or "/").strip()
+        images_for_page = page_images.get(route) or {}
         async with sem:
             return await generate_one_page(
                 page=page, visual_dna=visual_dna,
                 brand_name=brand_name, tagline=tagline, domain=domain,
                 api_key=api_key, websocket=websocket,
+                page_images=images_for_page,
             )
 
     async def _bounded_header() -> dict | None:

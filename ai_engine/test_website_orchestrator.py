@@ -39,7 +39,7 @@ def reset_ctx():
     FakeContext.fail_footer = False
 
 
-async def fake_generate_one_page(*, page, visual_dna, brand_name, tagline, domain, api_key, websocket=None):
+async def fake_generate_one_page(*, page, visual_dna, brand_name, tagline, domain, api_key, websocket=None, page_images=None, **_kw):
     FakeContext.concurrent += 1
     FakeContext.max_concurrent = max(FakeContext.max_concurrent, FakeContext.concurrent)
     route = page.get("route") or "/"

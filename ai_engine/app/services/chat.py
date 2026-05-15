@@ -70,6 +70,15 @@ class ChatService:
         title: str | None = None,
         model_provider: str | None = None,
     ) -> dict:
+        # Use the admin client unconditionally for this write. The user-JWT
+        # path was returning 42501 from PostgREST after migration 020
+        # rewrote the chat_sessions SELECT policy to be membership-aware:
+        # PostgREST's INSERT-then-RETURNING flow re-checks the SELECT policy
+        # on the just-inserted row, and at that point the AFTER-INSERT
+        # trigger hasn't yet added the project_members owner row in the
+        # same transaction's visibility scope. The row carries an explicit
+        # user_id, the SECURITY DEFINER trigger still fires and adds the
+        # owner membership, and RLS isolation is preserved at read time.
         row = {
             "id": str(uuid.uuid4()),
             "user_id": user_id,
@@ -80,7 +89,7 @@ class ChatService:
         }
         try:
             async def _create():
-                async with db_client(user_jwt) as client:
+                async with db_client(None) as client:
                     result = await client.table("chat_sessions").insert(row).execute()
                 return result.data[0] if result.data else row
             return await _with_retry(_create)

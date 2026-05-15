@@ -273,7 +273,13 @@ def map_project_type_to_archetype(project_type_value: str) -> Optional[str]:
     if not project_type_value:
         return None
     v = project_type_value.lower().strip().replace("-", "_")
-    # Order matters: more specific matches first
+    # Order matters: more specific matches first. Composite IDs (marketing_with_admin)
+    # come before component words so "admin" doesn't shortcut to admin_dashboard.
+    if any(s in v for s in (
+        "marketing_with_admin", "site_with_admin", "website_with_admin",
+        "site_and_admin", "marketing_and_admin", "both",
+    )):
+        return "consumer_website_with_admin"
     if any(s in v for s in ("ecommerce", "e_commerce", "online_store", "online_shop", "shop", "store")):
         return "ecommerce"
     if any(s in v for s in ("landing", "one_page", "one_pager", "single_page", "promo")):
@@ -284,8 +290,12 @@ def map_project_type_to_archetype(project_type_value: str) -> Optional[str]:
         return "blog"
     if "marketplace" in v:
         return "marketplace"
-    if any(s in v for s in ("dashboard", "saas", "web_app", "webapp", "admin")):
+    if "admin_dashboard" in v or "admin_panel" in v or "back_office" in v or "backoffice" in v:
+        return "admin_dashboard"
+    if any(s in v for s in ("saas", "web_app", "webapp")):
         return "saas_dashboard"
+    if "admin" in v:
+        return "admin_dashboard"
     if any(s in v for s in ("full_website", "multi_page", "website", "site")):
         return "consumer_website"
     return None
@@ -377,6 +387,19 @@ LAYOUT_ARCHETYPES = {
         "has_sidebar": False,
         "app_type_hint": "marketplace",
     },
+    # Composite: public marketing site + internal admin panel sharing the same
+    # database. Codegen runs the consumer_website pipeline first, then a
+    # follow-up admin pass (gated on needs_admin_followup flag in the
+    # classification dict). Treated as a "consumer" family for routing so
+    # the website pipeline picks it up; the admin half is appended as a
+    # separate stage downstream.
+    "consumer_website_with_admin": {
+        "is_single_page": False,
+        "nav_style": "top_header",
+        "has_admin_features": True,
+        "has_sidebar": False,
+        "app_type_hint": "consumer",
+    },
 }
 
 
@@ -384,7 +407,8 @@ LAYOUT_ARCHETYPES = {
 # (e.g. admin_dashboard → crm) but must NOT cross family boundaries.
 _STRUCTURAL_FAMILIES: dict[str, set] = {
     "single":   {"single_page_landing"},
-    "consumer": {"consumer_website", "portfolio", "blog", "marketplace"},
+    "consumer": {"consumer_website", "portfolio", "blog", "marketplace",
+                 "consumer_website_with_admin"},
     "admin":    {"admin_dashboard", "crm", "tms", "saas_dashboard", "ecommerce"},
 }
 

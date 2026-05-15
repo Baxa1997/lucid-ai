@@ -66,6 +66,17 @@ class Settings(BaseSettings):
     # DEFAULT_MODEL_PROVIDER env var maps to DEFAULT_PROVIDER attribute
     DEFAULT_PROVIDER: str = Field("google", validation_alias="DEFAULT_MODEL_PROVIDER")
 
+    # ── Classifier feature flag ──────────────────────────────
+    # When True, the WS prompt-entry gate uses the new
+    # ``project_classifier_agent.resolve_classification`` flow instead of
+    # the legacy ``clarity_agent.check_prompt_clarity`` heuristic. The
+    # new flow asks the same clarification questions (same WS event,
+    # ``clarification_needed``) and additionally resolves the prompt to
+    # a concrete archetype + entity list, injecting a
+    # ``[LUCID_FORCE_ARCHETYPE::...]`` marker so the downstream
+    # classifier short-circuits. Default OFF for safe rollout.
+    USE_CLASSIFIER_AGENT: bool = False
+
     # ── Agent / sandbox ──────────────────────────────────────
     # MAX_ITERATIONS caps how many steps the agent takes per task.
     # Passed to get_default_agent() once the OpenHands SDK is installed.

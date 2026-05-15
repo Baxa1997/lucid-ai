@@ -16,7 +16,7 @@ from app.services.sessions import store, destroy_session, reap_expired_sessions
 from app.services.sandbox import docker_runner_manager
 from app.services.workspace_manager import workspace_manager
 from app.services.redis_client import connect_redis, disconnect_redis
-from app.routers import health, sessions, ws, chat, files, integrations, preview, publish
+from app.routers import health, sessions, ws, chat, files, integrations, preview, publish, admin
 
 
 # Hard cap on incoming request body size for HTTP endpoints.
@@ -217,6 +217,7 @@ def create_app() -> FastAPI:
     application.include_router(integrations.router)
     application.include_router(preview.router)
     application.include_router(publish.router)
+    application.include_router(admin.router)
 
     return application
 

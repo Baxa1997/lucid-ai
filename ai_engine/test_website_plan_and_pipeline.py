@@ -12,7 +12,7 @@ from app.services.website_plan import (
 )
 from app.services.website_pipeline import (
     _build_foundation_files, _build_site_config,
-    _build_navigation, _build_design_system,
+    _build_navigation, _build_design_system, _build_globals_css,
 )
 
 
@@ -169,6 +169,39 @@ def test_design_system_subtle():
     print(f"  ✓ design_system subtle: {len(js)} chars")
 
 
+def test_globals_css_with_palette():
+    design_signal = {
+        "chosen_palette": {
+            "name": "Espresso",
+            "primary":    "30 80% 20%",   # espresso brown
+            "secondary":  "85 30% 50%",   # olive green
+            "accent":     "45 95% 65%",   # cream-gold
+            "background": "40 30% 96%",
+            "foreground": "30 60% 12%",
+            "muted":      "40 20% 90%",
+            "border":     "40 20% 85%",
+            "card":       "40 30% 98%",
+        },
+        "chosen_typography": {
+            "heading_font": "Playfair Display",
+            "body_font":    "Inter",
+        },
+    }
+    css = _build_globals_css(design_signal)
+    assert "@tailwind base" in css
+    assert "30 80% 20%" in css            # primary HSL appears
+    assert "Playfair Display" in css      # heading font appears
+    assert "--primary:" in css
+    assert "--background:" in css
+    print(f"  ✓ globals_css with palette: {len(css)} chars")
+
+
+def test_globals_css_empty_design_signal():
+    css = _build_globals_css({})
+    assert css == ""   # no design data → skip writing
+    print("  ✓ globals_css empty → empty string")
+
+
 def test_foundation_full_plan():
     plan = {
         "brand": {"name": "Caffè Verona", "tagline": "Since 1923", "domain": "food_and_beverage"},
@@ -232,6 +265,8 @@ def main():
         test_navigation,
         test_design_system_bold,
         test_design_system_subtle,
+        test_globals_css_with_palette,
+        test_globals_css_empty_design_signal,
         test_foundation_full_plan,
         test_foundation_skips_dynamic_routes,
     ]

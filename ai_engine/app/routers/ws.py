@@ -1583,16 +1583,72 @@ async def websocket_agent(websocket: WebSocket):
             # audience). Falls back to the keyword-based conflict detector
             # for known archetype conflicts (landing vs ecommerce, etc.).
             # Max 3 clarification rounds; after that we proceed regardless.
+            #
+            # When ``settings.USE_CLASSIFIER_AGENT`` is True, the new
+            # ``project_classifier_agent.resolve_classification`` is used
+            # instead. It wraps ``check_prompt_clarity`` AND additionally:
+            #   • resolves a concrete archetype when the prompt is clear
+            #   • injects a ``[LUCID_FORCE_ARCHETYPE::...]`` marker into
+            #     the task so the downstream classifier short-circuits
+            #   • runs entity extraction for admin paths
+            # Same WS event (``clarification_needed``) is reused — no
+            # frontend changes required.
             import json as _json
-            from knowledge.loader import detect_classification_conflict, extract_clarify_context
+            from knowledge.loader import (
+                detect_classification_conflict, extract_clarify_context,
+                ARCHETYPE_LOCK_PREFIX,
+            )
             from app.services.clarity_agent import check_prompt_clarity
+            from app.config import settings as _settings
 
             _existing_clarify, _ = extract_clarify_context(task)
             _clarify_question: dict | None = None
 
+            if _settings.USE_CLASSIFIER_AGENT and len(_existing_clarify) < 3:
+                # New path — let the resolver return either a clarification
+                # question or a fully-resolved archetype. On any exception
+                # we fall through to the legacy check_prompt_clarity path
+                # to keep behavior safe during rollout.
+                try:
+                    from app.services.project_classifier_agent import (
+                        resolve_classification,
+                    )
+                    _resolution = await resolve_classification(task)
+                    if _resolution.get("status") == "needs_clarification":
+                        _clarify_question = {
+                            "key": _resolution.get("clarify_key", "") or "",
+                            "text": _resolution.get("question", ""),
+                            "options": _resolution.get("options", []),
+                        }
+                    elif _resolution.get("status") == "resolved":
+                        _arch = _resolution.get("archetype", "")
+                        if _arch:
+                            # Inject the force-archetype marker so the
+                            # downstream classifier (and project_generator)
+                            # skip their own classification step. Existing
+                            # infra: knowledge.loader.force_archetype_from_task.
+                            task = f"{ARCHETYPE_LOCK_PREFIX}{_arch}] {task}"
+                            logger.info(
+                                "[%s] classifier_agent resolved → archetype=%s "
+                                "followup=%s entities=%s reasoning=%r",
+                                getattr(session, "session_id", "?"),
+                                _arch,
+                                _resolution.get("needs_admin_followup"),
+                                _resolution.get("entities"),
+                                str(_resolution.get("reasoning", ""))[:80],
+                            )
+                        # _clarify_question stays None → proceeds to generation
+                except Exception as exc:
+                    logger.warning(
+                        "[%s] classifier_agent failed (%s) — falling back to legacy clarity_agent",
+                        getattr(session, "session_id", "?"), exc,
+                    )
+
+            # Legacy path (also fallback for the new path's failures).
             # Only run AI clarity check for new/initial prompts (not follow-ups)
-            # and only when fewer than 3 rounds have been used.
-            if len(_existing_clarify) < 3:
+            # and only when fewer than 3 rounds have been used and the new
+            # flow hasn't already produced a question.
+            if _clarify_question is None and not _settings.USE_CLASSIFIER_AGENT and len(_existing_clarify) < 3:
                 _clarify_question = await check_prompt_clarity(
                     task=task,
                     already_clarified=_existing_clarify,

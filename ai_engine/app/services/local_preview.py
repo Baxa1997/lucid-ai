@@ -761,8 +761,10 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
 
     # Env-driven form — production-safe. Vercel doesn't set this env var, so
     # `assetPrefix` evaluates to undefined and assets serve from root.
+    preview_prefix = f"/preview-{port}"
     asset_prefix_expr = "process.env.NEXT_PUBLIC_ASSET_PREFIX || undefined"
     asset_prefix_line = f"assetPrefix: {asset_prefix_expr},"
+    images_line = "images: { unoptimized: true },"
 
     for fname in ("next.config.mjs", "next.config.js", "next.config.ts"):
         config_path = os.path.join(workspace_path, fname)
@@ -776,7 +778,30 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
 
             # Already env-driven? Nothing to do.
             if asset_prefix_expr in content:
-                logger.debug("local_preview: %s already env-driven — skipping patch", fname)
+                if "images:" in content:
+                    if "unoptimized" not in content:
+                        content = re.sub(
+                            r"(images\s*:\s*\{)",
+                            r"\1\n    unoptimized: true,",
+                            content,
+                            count=1,
+                        )
+                else:
+                    content = re.sub(
+                        r"(assetPrefix\s*:\s*process\.env\.NEXT_PUBLIC_ASSET_PREFIX\s*\|\|\s*undefined\s*,)",
+                        rf"\1\n  {images_line}",
+                        content,
+                        count=1,
+                    )
+                if content != original_content:
+                    with open(config_path, "w") as f:
+                        f.write(content)
+                    logger.info(
+                        "local_preview: added image preview settings to env-driven %s",
+                        fname,
+                    )
+                else:
+                    logger.debug("local_preview: %s already env-driven — skipping patch", fname)
                 return
 
             # Legacy template that reads NEXT_PUBLIC_ASSET_PREFIX with `unoptimized` —
@@ -828,7 +853,7 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
             ):
                 new_content = re.sub(
                     pat,
-                    rf'\1\n  {asset_prefix_line}',
+                    rf'\1\n  {asset_prefix_line}\n  ',
                     content,
                     count=1,
                 )
@@ -876,18 +901,19 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
                 return
 
             # Inject images: { unoptimized: true } so Next.js doesn't reject
-            # external image URLs common in user-imported repos.
+            # external image URLs common in generated landing pages.
             if "images:" in content:
-                content = re.sub(
-                    r"(images\s*:\s*\{)",
-                    r"\1\n    unoptimized: true,",
-                    content,
-                    count=1,
-                )
+                if "unoptimized" not in content:
+                    content = re.sub(
+                        r"(images\s*:\s*\{)",
+                        r"\1\n    unoptimized: true,",
+                        content,
+                        count=1,
+                    )
             else:
                 content = re.sub(
-                    r"(assetPrefix\s*:\s*\"[^\"]*\",)",
-                    r'\1\n  images: { unoptimized: true },',
+                    r"(assetPrefix\s*:\s*process\.env\.NEXT_PUBLIC_ASSET_PREFIX\s*\|\|\s*undefined\s*,)",
+                    rf"\1\n  {images_line}",
                     content,
                     count=1,
                 )
@@ -895,7 +921,11 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
             if content != original_content:
                 with open(config_path, "w") as f:
                     f.write(content)
-                logger.info("local_preview: patched %s with assetPrefix=%s", fname, base_path)
+                logger.info(
+                    "local_preview: patched %s with env-driven assetPrefix for %s",
+                    fname,
+                    preview_prefix,
+                )
             else:
                 logger.debug("local_preview: %s unchanged — skipping write", fname)
         except Exception as exc:
@@ -909,17 +939,17 @@ async def _patch_nextjs_base_path(workspace_path: str, port: int) -> None:
         minimal = (
             f'/** Lucid AI preview patch */\n'
             f'const nextConfig = {{\n'
-            f'  assetPrefix: "{base_path}",\n'
+            f'  {asset_prefix_line}\n'
             f'  reactStrictMode: true,\n'
-            f'  images: {{ unoptimized: true }},\n'
+            f'  {images_line}\n'
             f'}};\n'
             f'export default nextConfig;\n'
         )
         with open(config_path, "w") as f:
             f.write(minimal)
         logger.info(
-            "local_preview: no next.config found — created next.config.mjs with assetPrefix=%s",
-            base_path,
+            "local_preview: no next.config found — created next.config.mjs with env-driven assetPrefix for %s",
+            preview_prefix,
         )
     except Exception as exc:
         logger.warning("local_preview: failed to create next.config.mjs: %s", exc)

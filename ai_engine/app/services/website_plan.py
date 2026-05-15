@@ -158,6 +158,7 @@ async def build_website_plan(
     visual_dna: dict[str, Any],
     *,
     timeout_s: float = 60.0,
+    purpose_data: dict | None = None,
 ) -> dict[str, Any]:
     """Build the multi-page plan. Returns a plan dict — never raises."""
     from app.services.landing_gemini import structured_distill

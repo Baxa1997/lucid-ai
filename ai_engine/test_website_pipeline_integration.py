@@ -36,7 +36,7 @@ def _good_jsx(name: str) -> str:
 '''
 
 
-async def mock_generate_one_page(*, page, visual_dna, brand_name, tagline, domain, api_key, websocket=None):
+async def mock_generate_one_page(*, page, visual_dna, brand_name, tagline, domain, api_key, websocket=None, page_images=None, **_kw):
     """Return realistic mock files mirroring what Claude would return."""
     route = (page.get("route") or "/").strip()
     slug = "home" if route == "/" else route.strip("/").replace("/", "-")
@@ -135,6 +135,7 @@ async def test_full_pipeline(prompt: str) -> dict:
             "site_config_exists": "src/config/site.js" in all_files,
             "navigation_exists": "src/config/navigation.js" in all_files,
             "design_system_exists": "src/lib/design-system.js" in all_files,
+            "globals_css_exists": "src/app/globals.css" in all_files,
             "homepage_exists": "src/app/page.js" in all_files,
             "header_exists": "src/components/layout/MarketingHeader.jsx" in all_files,
             "footer_exists": "src/components/layout/MarketingFooter.jsx" in all_files,

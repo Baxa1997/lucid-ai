@@ -23,10 +23,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+def _content_separation_enabled() -> bool:
+    """Feature flag, default ON. Set CONTENT_SEPARATION_ENABLED=0 to roll back."""
+    raw = os.environ.get("CONTENT_SEPARATION_ENABLED", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
 
 # Per-page generation params. Each page emits 1 composition file + 3-8
 # section components, totaling ~2-6k tokens — 16k gives plenty of headroom.
@@ -164,6 +171,7 @@ def _build_user_prompt(
     slug: str,
     section_specs: list[dict],
     visual_dna: dict,
+    page_images: dict | None = None,
 ) -> str:
     """User prompt: what THIS specific page should produce."""
     component_pages_dir = f"src/components/pages/{slug}"
@@ -189,13 +197,123 @@ def _build_user_prompt(
     # Compose the import + JSX skeleton hint for the page.js composition file
     page_file = "src/app/page.js" if slug == "home" else f"src/app/{slug}/page.js"
 
+    # Image block — only present when Stage 5.5 produced bindings
+    images_block = ""
+    if page_images:
+        from app.services.image_binding import format_images_for_prompt
+        formatted = format_images_for_prompt(page_images)
+        if formatted:
+            images_block = (
+                "\n\n" + formatted +
+                "\n\nIMAGE RULES (NON-NEGOTIABLE):\n"
+                "  - Use these EXACT urls as the `src` of every <img> / <Image> tag.\n"
+                "  - Use the provided `alt` text on every <img> — never empty, never \"image\".\n"
+                "  - Do NOT invent paths like /images/hero.jpg — local files do not exist.\n"
+                "  - Do NOT replace these with placeholders or via.placeholder.com.\n"
+                "  - When a section has multiple images, use them in the order listed.\n"
+                "  - Sections not listed here have NO photos — use Lucide icons or pure CSS instead.\n"
+            )
+
+    content_json_path = f"src/content/pages/{slug}.json"
+    content_import_path = f"@/content/pages/{slug}.json"
+
+    if _content_separation_enabled():
+        content_block = f"""
+══ CONTENT / CODE SEPARATION (NON-NEGOTIABLE) ══
+All visible copy MUST come from a separate JSON file. Components import
+that JSON and wrap every editable element with the <Editable> component.
+This is what enables in-place editing in the dashboard.
+
+REQUIRED OUTPUT FILES (in addition to the section .jsx + page composition):
+
+1. ONE content file at {content_json_path}
+   Shape (real data, no nulls, no template stubs):
+   {{
+     "page": "{slug}",
+     "<section_key>": {{
+       "title":      "Short headline",
+       "subtitle":   "Optional supporting line",
+       "cta_primary": {{ "label": "Apply Now", "href": "#apply" }},
+       "image_alt":  "Description of the image at this slot",
+       "items": [
+         {{ "title": "...", "description": "...", ... }}
+       ]
+     }},
+     ...
+   }}
+
+   • Use one TOP-LEVEL key per section, named in snake_case derived from
+     the section type (hero → "hero", open_roles → "open_roles", etc.).
+   • Include EVERY string that appears in the JSX: titles, subtitles,
+     button labels, alt text, FAQ Q&A pairs, list items, footer links.
+   • Collections (gallery items, FAQ items, testimonials, roles, dishes)
+     go under a "items" array with one object per entry.
+   • image_alt fields MUST match the alt text from the IMAGES block above.
+   • Buttons go as {{ "label": "...", "href": "#..." }} objects.
+
+2. The N section .jsx files at {component_pages_dir}/  — each MUST:
+
+   a) Import the content JSON:
+        import content from "{content_import_path}";
+        import {{ Editable }} from "@/lib/editable";
+
+   b) Reference every visible string via `content.<section_key>.<field>`.
+      FORBIDDEN:  <h1>Welcome to Acme Logistics</h1>
+      REQUIRED:   <h1>{{content.hero.title}}</h1>
+
+   c) Wrap every editable element with <Editable path="..." type="...">:
+
+        <Editable path="hero.title" type="text">
+          <h1 className="...">{{content.hero.title}}</h1>
+        </Editable>
+
+        <Editable path="hero.subtitle" type="text">
+          <p className="...">{{content.hero.subtitle}}</p>
+        </Editable>
+
+        <a href={{content.hero.cta_primary.href}}>
+          <Editable path="hero.cta_primary.label" type="text">
+            <span>{{content.hero.cta_primary.label}}</span>
+          </Editable>
+        </a>
+
+        <Editable path="hero.image_alt" type="text">
+          <img src="https://images.unsplash.com/..." alt={{content.hero.image_alt}} />
+        </Editable>
+
+   d) Editable types — pick the right one:
+        text       — plain string
+        rich_text  — long copy that may contain inline formatting
+        image      — <img>/<Image>: wrap so editor can swap src + alt
+        button     — wrap the LABEL of an <a>/<button>; href stays in JSX
+        color      — only for color tokens
+        array      — wrap a list element (the parent) so editor can add/remove
+
+   e) DO NOT wrap layout containers, decorative divs, or className strings
+      with <Editable>. ONLY content the user would want to change.
+
+3. Page composition at {page_file}
+   - Imports each section component (no content imports here).
+   - Exports a default function rendering them inside a <main>.
+   - NO <Editable> wrappers in the composition file.
+
+══ CRITICAL RULES ══
+  - Every visible text node in section .jsx files MUST be a {{content.…}}
+    expression. The ONLY string literals allowed in JSX text are:
+    Tailwind class names, aria attributes, JSON keys, and import paths.
+  - NEVER inline <h1>literal text</h1>, <p>literal</p>, label="literal" inside <Editable>.
+  - The path attribute on <Editable> must match a real key in content.json.
+"""
+    else:
+        content_block = ""
+
     return f"""GENERATE THE COMPLETE "{page_title}" PAGE FOR ROUTE {route}
 
 PAGE PURPOSE
 {page_purpose or '(general page for this route)'}
 
 SECTIONS TO BUILD ({len(section_specs)} total) — generate each as its own .jsx file under {component_pages_dir}/:
-{section_block}
+{section_block}{images_block}{content_block}
 
 REQUIRED OUTPUT FILES
 1. {page_file}
@@ -204,7 +322,10 @@ REQUIRED OUTPUT FILES
    - Imports {{ siteConfig }} from '@/config/site' if it sets metadata
    - Renders sections inside a <main> wrapper in the order listed above
 
-2. One .jsx file per section under {component_pages_dir}/ — exact names listed above
+2. One .jsx file per section under {component_pages_dir}/ — exact names listed above{(f'''
+
+3. One content JSON at {content_json_path} — see CONTENT / CODE SEPARATION
+   block above for shape and rules.''') if _content_separation_enabled() else ''}
 
 CRITICAL
   - Stay strictly inside the page's design (the anatomies above ARE the spec).
@@ -226,6 +347,7 @@ async def generate_one_page(
     api_key: str,
     websocket: Any = None,
     foundation_imports: dict[str, str] | None = None,
+    page_images: dict | None = None,
 ) -> list[dict] | None:
     """Generate one complete page (composition + sections) in a single Claude call.
 
@@ -284,6 +406,7 @@ async def generate_one_page(
     usr_p = _build_user_prompt(
         page=page, slug=slug,
         section_specs=section_specs, visual_dna=visual_dna,
+        page_images=page_images,
     )
 
     last_failure = "unknown"
@@ -324,8 +447,11 @@ async def generate_one_page(
             continue
 
         # Validate: must contain the page.js composition + at least one section
+        # When CONTENT_SEPARATION_ENABLED is on, also require the content JSON file.
         valid_files: list[dict] = []
         saw_page_js = False
+        saw_content_json = False
+        expected_content_path = f"src/content/pages/{slug}.json"
         for f in files:
             if not isinstance(f, dict):
                 continue
@@ -335,10 +461,29 @@ async def generate_one_page(
                 continue
             if path.endswith("page.js") or path.endswith("page.jsx"):
                 saw_page_js = True
+            if path.lstrip("/") == expected_content_path:
+                # Validate the JSON parses — otherwise it's just a wall of text.
+                try:
+                    json.loads(content)
+                    saw_content_json = True
+                except json.JSONDecodeError as exc:
+                    logger.warning(
+                        "page_generator: page %s content JSON failed to parse — %s",
+                        route, exc,
+                    )
+                    continue
             valid_files.append({"path": path, "content": content})
 
         if not saw_page_js or len(valid_files) < 2:
             last_failure = f"missing composition file or section files (got {len(valid_files)})"
+            logger.warning(
+                "page_generator: page %s attempt %d/%d — %s",
+                route, attempt, _PAGE_MAX_ATTEMPTS, last_failure,
+            )
+            continue
+
+        if _content_separation_enabled() and not saw_content_json:
+            last_failure = f"missing content JSON at {expected_content_path}"
             logger.warning(
                 "page_generator: page %s attempt %d/%d — %s",
                 route, attempt, _PAGE_MAX_ATTEMPTS, last_failure,

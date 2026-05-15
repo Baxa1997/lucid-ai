@@ -241,6 +241,7 @@ async def run_domain_research(
     *,
     websocket: Any = None,
     timeout_s: float = 240.0,
+    purpose_data: dict | None = None,
 ) -> dict[str, Any]:
     """Stage 2 — run 4 parallel grounded research calls.
 

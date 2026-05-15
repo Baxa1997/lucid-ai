@@ -335,12 +335,17 @@ def fix_banned_icons(workspace_path: str) -> list[str]:
                 remaining = []
                 for icon in icons:
                     icon_name = icon.split(" as ")[0].strip()
+                    # Skip empty tokens from trailing commas / double commas
+                    # in the original source — otherwise the rebuilt import
+                    # ends up as `import { Menu, X,  } from 'lucide-react'`.
+                    if not icon_name:
+                        continue
                     if icon_name not in _BANNED_ICONS:
                         remaining.append(icon)
-                
+
                 if not remaining:
                     return ""  # Remove entire import line
-                
+
                 return f"import {{ {', '.join(remaining)} }} from 'lucide-react'"
             
             new_content = _LUCIDE_IMPORT_RE.sub(_remove_from_import, new_content)

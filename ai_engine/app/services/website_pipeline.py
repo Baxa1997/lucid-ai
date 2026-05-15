@@ -30,6 +30,51 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def _content_separation_enabled() -> bool:
+    """Shared feature flag (default ON). Mirrored from page_generator so
+    Stage 5 foundation builders can branch on the same flag."""
+    raw = os.environ.get("CONTENT_SEPARATION_ENABLED", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+_EDITABLE_COMPONENT_JSX = '''"use client";
+/* AUTO-GENERATED — Phase 4 editable wrapper. Do not edit by hand. */
+import { Children, cloneElement, isValidElement } from "react";
+
+/**
+ * Editable — wraps an inline element with data-* attributes the dashboard
+ * editor scans for. Renders the child element directly (no wrapper) when
+ * possible so the resulting HTML stays valid (no <span> around <h1>).
+ *
+ *   <Editable path="hero.title" type="text">
+ *     <h1>{content.hero.title}</h1>
+ *   </Editable>
+ */
+export function Editable({ path, type = "text", children }) {
+  const attrs = {
+    "data-editable": "true",
+    "data-editable-path": path,
+    "data-editable-type": type,
+  };
+  // When there is exactly one element child we inject the data-attrs
+  // directly onto it — keeps HTML valid (no span wrapping a block element).
+  if (Children.count(children) === 1 && isValidElement(children)) {
+    return cloneElement(children, attrs);
+  }
+  // Text nodes or multiple children → wrap in a span. Span is invalid
+  // around block elements; the editor authoring rule is to pass a single
+  // element child, which lands on the fast path above.
+  return <span {...attrs}>{children}</span>;
+}
+
+export default Editable;
+'''
+
+
+def _build_editable_component() -> str:
+    return _EDITABLE_COMPONENT_JSX
+
+
 async def _send(websocket, kind: str, message: str) -> None:
     if websocket is None:
         return
@@ -71,22 +116,64 @@ async def run_website_pipeline(
         await _send(websocket, "error", "❌ Missing ANTHROPIC_API_KEY")
         return False
 
-    # ── Stage 1: Intent ─────────────────────────────────────────────
+    # ── Stage 0.5: Purpose classification ───────────────────────────
+    # Runs BEFORE intent so downstream stages know what the site is FOR
+    # (recruitment vs ecommerce vs lead-gen), not just what industry it's
+    # in. Pure additive — does not modify any existing stage's inputs.
     await _phase(websocket, 1, "Preparing workspace", "Workspace ready", "done")
+
+    from app.services.purpose_classifier import classify_purpose
+    from knowledge.loader import extract_clarify_context
+
+    clarity_answers, clean_description = extract_clarify_context(description)
+    gemini_key = validated.get("gemini_api_key") or os.environ.get("GOOGLE_API_KEY", "")
+
+    purpose_data = await classify_purpose(
+        user_prompt=clean_description,
+        clarity_answers=clarity_answers or {},
+        gemini_key=gemini_key,
+    )
+    logger.info(
+        "Purpose classified: %s (%d%%) — industry=%r audience=%s named_roles=%s",
+        purpose_data["primary_purpose"], purpose_data["confidence"],
+        purpose_data["industry"], purpose_data["target_audience"],
+        purpose_data["named_roles"],
+    )
+    await _send(
+        websocket, "progress",
+        f"🎯 Purpose: {purpose_data['primary_purpose']} ({purpose_data['confidence']}% conf)",
+    )
+
+    # ── Stage 1: Intent — CACHED ────────────────────────────────────
+    # Cached not just to save the ~$0.01 Flash call but because the
+    # downstream Stage 3 cache key includes `intent`. Without caching
+    # intent, Gemini non-determinism produces a slightly different
+    # `intent` dict every run, which would force a Stage 3 miss even
+    # when Stage 2 is a hit. Caching here keeps the whole tail stable.
+    from app.services.pipeline_cache import pipeline_cache
+    project_id = chat_session_id or "_session_none_"
+
     await _phase(websocket, 3, "Researching project", "Analyzing intent + culture…", "active")
     await _send(websocket, "progress", "🧠 Stage 1/6 — Analyzing intent…")
 
     from app.services.landing_intent import analyze_intent
-    from knowledge.loader import extract_clarify_context
 
-    _, clean_description = extract_clarify_context(description)
-
-    try:
-        intent = await analyze_intent(clean_description, classification, timeout_s=60.0)
-    except Exception as exc:
-        logger.error("website_pipeline: intent failed — %s", exc, exc_info=True)
-        await _send(websocket, "error", f"❌ Intent analysis failed: {exc}")
-        return False
+    cached_intent = pipeline_cache.get(
+        project_id, "intent", clean_description, classification,
+    )
+    if cached_intent is not None:
+        intent = cached_intent
+        await _send(websocket, "progress", "♻️  Stage 1 — using cached intent")
+    else:
+        try:
+            intent = await analyze_intent(clean_description, classification, timeout_s=60.0)
+        except Exception as exc:
+            logger.error("website_pipeline: intent failed — %s", exc, exc_info=True)
+            await _send(websocket, "error", f"❌ Intent analysis failed: {exc}")
+            return False
+        pipeline_cache.set(
+            project_id, "intent", intent, clean_description, classification,
+        )
 
     logger.info(
         "website_pipeline: intent ok — category=%s geo=%s personality=%s",
@@ -94,35 +181,65 @@ async def run_website_pipeline(
         intent.get("brand_personality"),
     )
 
-    # ── Stage 2: Research (parallel) ────────────────────────────────
+    # ── Stage 2: Research (parallel) — CACHED per project ───────────
+    # Cache key is (prompt + clarity + purpose). Anything that changes
+    # the research question changes the hash → automatic invalidation.
     await _send(websocket, "progress", "🔎 Stage 2/6 — Researching domain + design (parallel)…")
 
     from app.services.landing_domain_research import run_domain_research
     from app.services.landing_design_research import run_design_research
 
-    try:
-        domain_res, design_res = await asyncio.gather(
-            run_domain_research(intent, timeout_s=120.0),
-            run_design_research(intent, timeout_s=120.0),
+    cached_research = pipeline_cache.get(
+        project_id, "research",
+        clean_description, clarity_answers, purpose_data,
+    )
+    if cached_research is not None:
+        await _send(websocket, "progress", "♻️  Stage 2 — using cached research")
+        domain_res, design_res = cached_research
+    else:
+        try:
+            domain_res, design_res = await asyncio.gather(
+                run_domain_research(intent, timeout_s=120.0, purpose_data=purpose_data),
+                run_design_research(intent, timeout_s=120.0, purpose_data=purpose_data),
+            )
+        except Exception as exc:
+            logger.error("website_pipeline: research failed — %s", exc, exc_info=True)
+            await _send(websocket, "error", f"❌ Research failed: {exc}")
+            return False
+        pipeline_cache.set(
+            project_id, "research", (domain_res, design_res),
+            clean_description, clarity_answers, purpose_data,
         )
-    except Exception as exc:
-        logger.error("website_pipeline: research failed — %s", exc, exc_info=True)
-        await _send(websocket, "error", f"❌ Research failed: {exc}")
-        return False
 
-    # ── Stage 3: Visual_DNA extraction ──────────────────────────────
+    # ── Stage 3: Visual_DNA + Voice — CACHED per project ────────────
+    # Cache key is (research + intent + purpose). When research is a
+    # cache hit, the signals cache will be a hit too — saving the full
+    # Pro extract call (the most expensive single step in the pipeline).
     await _send(websocket, "progress", "✨ Stage 3/6 — Extracting visual DNA (typography, palette, motifs)…")
 
     from app.services.landing_research_extract import extract_research_signals
 
-    try:
-        signals = await extract_research_signals(
-            intent, domain_res, design_res, timeout_s=180.0,
+    cached_signals = pipeline_cache.get(
+        project_id, "signals",
+        domain_res, intent, purpose_data,
+    )
+    if cached_signals is not None:
+        await _send(websocket, "progress", "♻️  Stage 3 — using cached visual DNA + voice signature")
+        signals = cached_signals
+    else:
+        try:
+            signals = await extract_research_signals(
+                intent, domain_res, design_res, timeout_s=180.0,
+                purpose_data=purpose_data,
+            )
+        except Exception as exc:
+            logger.error("website_pipeline: visual_dna extract failed — %s", exc, exc_info=True)
+            await _send(websocket, "error", f"❌ Visual DNA extraction failed: {exc}")
+            return False
+        pipeline_cache.set(
+            project_id, "signals", signals,
+            domain_res, intent, purpose_data,
         )
-    except Exception as exc:
-        logger.error("website_pipeline: visual_dna extract failed — %s", exc, exc_info=True)
-        await _send(websocket, "error", f"❌ Visual DNA extraction failed: {exc}")
-        return False
 
     visual_dna = signals.get("visual_dna") or {}
     anatomies = visual_dna.get("section_anatomies") or {}
@@ -142,6 +259,7 @@ async def run_website_pipeline(
     try:
         plan = await build_website_plan(
             clean_description, intent, visual_dna, timeout_s=60.0,
+            purpose_data=purpose_data,
         )
     except Exception as exc:
         logger.error("website_pipeline: plan failed — %s", exc, exc_info=True)
@@ -162,7 +280,16 @@ async def run_website_pipeline(
 
     # ── Stage 5: Deterministic foundation ───────────────────────────
     await _send(websocket, "progress", "🛠️  Stage 5/6 — Building foundation (palette, tokens, nav)…")
-    foundation_files = _build_foundation_files(plan, visual_dna, design_signal=signals.get("design") or {})
+    design_signal = signals.get("design") or {}
+    foundation_files = _build_foundation_files(plan, visual_dna, design_signal=design_signal)
+    # globals.css gets its own builder because it has Tailwind directives
+    # and template-shaped HSL var blocks that aren't a plain key=value dict
+    try:
+        globals_css = _build_globals_css(design_signal)
+        if globals_css:
+            foundation_files["src/app/globals.css"] = globals_css
+    except Exception as exc:
+        logger.warning("website_pipeline: globals.css build failed (non-fatal) — %s", exc)
     foundation_written = 0
     for rel_path, content in foundation_files.items():
         try:
@@ -174,6 +301,40 @@ async def run_website_pipeline(
         except Exception as exc:
             logger.warning("website_pipeline: failed to write %s — %s", rel_path, exc)
     logger.info("website_pipeline: foundation written — %d files", foundation_written)
+
+    # ── Stage 5.5: Image binding ────────────────────────────────────
+    # Resolve every section that needs imagery to a real Unsplash URL
+    # BEFORE Claude sees the page — prevents hallucinated /images/ paths.
+    await _send(websocket, "progress", "🖼️  Stage 5.5 — Binding images (Unsplash)…")
+    from app.services.image_binding import (
+        bind_page_images, clear_image_cache,
+    )
+    clear_image_cache()  # don't leak across pipeline runs
+    industry = (purpose_data.get("industry") or intent.get("business_category") or "general").strip()
+    try:
+        image_bindings = await asyncio.gather(*[
+            bind_page_images(page, industry, purpose_data, visual_dna)
+            for page in pages
+        ])
+    except Exception as exc:
+        logger.warning("website_pipeline: image binding threw (non-fatal) — %s", exc)
+        image_bindings = [{} for _ in pages]
+    page_images = {
+        (p.get("route") or "/").strip(): img
+        for p, img in zip(pages, image_bindings)
+    }
+    total_imgs = sum(
+        sum(len(v) for v in page_imgs.values())
+        for page_imgs in page_images.values()
+    )
+    logger.info(
+        "Stage 5.5: Binding images — %d pages bound, %d images total",
+        len(page_images), total_imgs,
+    )
+    await _send(
+        websocket, "progress",
+        f"🖼️  Images bound: {total_imgs} across {len(page_images)} pages",
+    )
 
     # ── Stage 6: Parallel creative (the big one) ────────────────────
     await _phase(websocket, 5, "Writing code",
@@ -187,6 +348,8 @@ async def run_website_pipeline(
             plan=plan, visual_dna=visual_dna,
             api_key=anthropic_key, websocket=websocket,
             concurrency=8,
+            purpose_data=purpose_data,
+            page_images=page_images,
         )
     except Exception as exc:
         logger.error("website_pipeline: orchestrator failed — %s", exc, exc_info=True)
@@ -230,6 +393,28 @@ async def run_website_pipeline(
             f"⚠️ {len(failed_routes)}/{total_pages} page(s) failed: {', '.join(failed_routes)}",
         )
 
+    # ── Stage 6.5: Derive content schema (editor metadata) ─────────
+    # Walks src/content/pages/*.json that Claude just wrote and
+    # produces .lucid/content-schema.json — the manifest the
+    # dashboard editor uses to know what's editable. Pure derivation,
+    # no LLM. Skip cleanly when content separation is disabled.
+    if _content_separation_enabled():
+        try:
+            from app.services.content_schema import write_content_schema
+            schema_path, field_count = write_content_schema(workspace_path)
+            logger.info(
+                "website_pipeline: content-schema written — %s (%d fields)",
+                schema_path, field_count,
+            )
+            await _send(
+                websocket, "progress",
+                f"📝 Stage 6.5 — Content schema: {field_count} editable fields",
+            )
+        except Exception as exc:
+            logger.warning(
+                "website_pipeline: content schema derivation threw (non-fatal) — %s", exc,
+            )
+
     # ── Stage 7: Post-generation verification ──────────────────────
     # Static audit of file structure + imports. Catches Claude
     # contract violations before the dev server starts.
@@ -257,6 +442,65 @@ async def run_website_pipeline(
             )
     except Exception as exc:
         logger.warning("website_pipeline: verification threw (non-fatal) — %s", exc)
+
+    # ── Stage 7b: Content / code separation audit ──────────────────
+    # Validates Phase-4 editing contract — no-op when feature flag off.
+    if _content_separation_enabled():
+        try:
+            from app.services.website_verification import audit_content_separation
+            sep_audit = audit_content_separation(workspace_path)
+            logger.info("website_pipeline: %s", sep_audit["summary"])
+            if not sep_audit["ok"]:
+                detail = ", ".join(
+                    f"{k}={len(v)}" for k, v in sep_audit["issues"].items() if v
+                )
+                await _send(
+                    websocket, "warning",
+                    f"⚠️ Content/code-separation issues: {detail}",
+                )
+        except Exception as exc:
+            logger.warning(
+                "website_pipeline: content separation audit threw (non-fatal) — %s", exc,
+            )
+
+    # ── Stage 7.5: Content quality audit ───────────────────────────
+    # Catches bad CONTENT (placeholders, fake addresses, broken /routes,
+    # missing required sections, voice violations) — NEVER blocks the
+    # pipeline. The score lands on the websocket so the frontend can
+    # display it; the issues are logged for diagnostics.
+    await _send(websocket, "progress", "🧪 Stage 7.5 — Auditing content quality…")
+    from app.services.website_verification import audit_content
+    voice_signature = (signals.get("voice") or {}) if isinstance(signals, dict) else {}
+    try:
+        content_audit = audit_content(
+            project_dir=workspace_path,
+            purpose_data=purpose_data,
+            voice_signature=voice_signature,
+        )
+        logger.info("website_pipeline: %s", content_audit["summary"])
+        if not content_audit["ok"] and content_audit["score"] < 70:
+            logger.warning(
+                "Content quality below threshold: %d", content_audit["score"],
+            )
+            logger.warning("Issues: %s", {
+                k: len(v) for k, v in content_audit["issues"].items() if v
+            })
+        # Surface score + categorized issue counts so the frontend can render a badge
+        try:
+            await websocket.send_json({
+                "type": "content_audit",
+                "score": content_audit["score"],
+                "ok": content_audit["ok"],
+                "summary": content_audit["summary"],
+                "issue_counts": {
+                    k: len(v) for k, v in content_audit["issues"].items()
+                },
+                "warnings": content_audit.get("warnings", []),
+            }) if websocket is not None else None
+        except Exception:
+            pass
+    except Exception as exc:
+        logger.warning("website_pipeline: content audit threw (non-fatal) — %s", exc)
 
     await _send(
         websocket, "progress",
@@ -298,6 +542,11 @@ def _build_foundation_files(
     # design-system.js — token presets from visual_dna intensity
     intensity = (visual_dna.get("cultural_intensity") or "bold").lower()
     files["src/lib/design-system.js"] = _build_design_system(intensity)
+
+    # editable.jsx — runtime wrapper for in-place editing (Phase 4)
+    # See _build_editable_component() for the React implementation.
+    if _content_separation_enabled():
+        files["src/lib/editable.jsx"] = _build_editable_component()
 
     # Route shells for non-home pages
     for page in pages:
@@ -359,6 +608,42 @@ def _build_navigation(pages: list[dict]) -> str:
         f'export const mainNav = {items_js};\n'
         '\n'
         f'export const footerNav = {items_js};\n'
+    )
+
+
+def _build_globals_css(design_signal: dict[str, Any]) -> str:
+    """Build src/app/globals.css from design signals.
+
+    Reuses landing_phase0's palette renderer for HSL var blocks. Adds Tailwind
+    directives + Google Fonts imports + heading/body font-family overrides.
+    """
+    palette = (design_signal or {}).get("chosen_palette") or {}
+    typo = (design_signal or {}).get("chosen_typography") or {}
+    if not palette and not typo:
+        return ""  # no design data → skip writing (page generators will still work but use default colors)
+
+    # Build the palette {token: HSL} dict in landing_phase0's expected shape
+    palette_for_css = {
+        "background": palette.get("background", ""),
+        "foreground": palette.get("foreground", ""),
+        "primary":    palette.get("primary", ""),
+        "secondary":  palette.get("secondary", ""),
+        "accent":     palette.get("accent", ""),
+        "muted":      palette.get("muted", ""),
+        "border":     palette.get("border", ""),
+        "card":       palette.get("card", ""),
+    }
+    # Drop empties
+    palette_for_css = {k: v.strip() for k, v in palette_for_css.items() if v and v.strip()}
+
+    heading_font = (typo.get("heading_font") or "Inter").strip()
+    body_font = (typo.get("body_font") or "Inter").strip()
+
+    from app.services.landing_phase0 import _palette_vars, _GLOBALS_TEMPLATE
+    return _GLOBALS_TEMPLATE.format(
+        palette_vars=_palette_vars(palette_for_css),
+        heading_font=heading_font,
+        body_font=body_font,
     )
 
 

@@ -264,6 +264,7 @@ async def run_design_research(
     *,
     websocket: Any = None,
     timeout_s: float = 240.0,
+    purpose_data: dict | None = None,
 ) -> dict[str, Any]:
     """Stage 3 — run 4 parallel grounded design research calls.
 

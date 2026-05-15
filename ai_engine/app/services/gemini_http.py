@@ -41,7 +41,15 @@ _cached_expiry: float = 0.0
 
 
 def _get_adc_token() -> str:
-    """Return a valid OAuth2 access token from ADC, refreshing if needed."""
+    """Return a valid OAuth2 access token from ADC, refreshing if needed.
+
+    The token swap hits oauth2.googleapis.com, which can fail with a DNS or
+    transport error on the very first call after a container cold-start
+    (Docker's embedded resolver occasionally drops the first lookup). We
+    retry a few times with short backoff so a transient blip doesn't kill
+    the whole pipeline — without retries, analyze_intent silently falls back
+    to its generic default and poisons every downstream stage.
+    """
     global _cached_token, _cached_expiry
     now = time.time()
     if _cached_token and now < _cached_expiry - 300:
@@ -54,17 +62,31 @@ def _get_adc_token() -> str:
         from google.auth import default as _adc_default
         from google.auth.transport.requests import Request as _AuthRequest
 
-        creds, _project = _adc_default(
-            scopes=["https://www.googleapis.com/auth/cloud-platform"]
-        )
-        creds.refresh(_AuthRequest())
-        _cached_token = creds.token
-        # google.auth uses datetime — convert to epoch seconds.
-        if creds.expiry:
-            _cached_expiry = creds.expiry.timestamp()
-        else:
-            _cached_expiry = now + 3000  # conservative 50min default
-        return _cached_token
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):  # 3 tries: 0s + 0.5s + 1.5s
+            try:
+                creds, _project = _adc_default(
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"]
+                )
+                creds.refresh(_AuthRequest())
+                _cached_token = creds.token
+                if creds.expiry:
+                    _cached_expiry = creds.expiry.timestamp()
+                else:
+                    _cached_expiry = now + 3000  # conservative 50min default
+                if attempt > 1:
+                    logger.info("ADC token refresh succeeded on attempt %d", attempt)
+                return _cached_token
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "ADC token refresh attempt %d/3 failed (%s: %s)",
+                    attempt, type(exc).__name__, str(exc)[:200],
+                )
+                if attempt < 3:
+                    time.sleep(0.5 * attempt)  # 0.5s, 1.0s
+        assert last_exc is not None
+        raise last_exc
 
 
 def _build_url(model: str) -> str:

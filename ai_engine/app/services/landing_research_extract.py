@@ -473,6 +473,7 @@ async def extract_research_signals(
     design_research: dict,
     *,
     timeout_s: float = 90.0,
+    purpose_data: dict | None = None,
 ) -> dict[str, Any]:
     """Two parallel Flash calls → structured signal dict.
 
