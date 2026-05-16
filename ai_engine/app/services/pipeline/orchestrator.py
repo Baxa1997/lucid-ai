@@ -1438,9 +1438,9 @@ async def run_pipeline(
                         await websocket.send_json({
                             "type": "complete",
                             "message": (
-                                f"✅ Your project is live!\n\n"
-                                f"🌐 {auto_vercel_url}\n\n"
-                                f"_Give it about 30 seconds, then open the link._"
+                                f"Published to {auto_vercel_url}. "
+                                "Type a message below to keep editing — "
+                                "your changes will deploy automatically."
                             ),
                         })
                         await _send_phase(7, "Publishing project", "Project is going live", "done")

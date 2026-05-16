@@ -363,7 +363,8 @@ async def bootstrap_publish(
         "vercelUrl": vercel_url,
         "visibility": body.visibility,
         "message": (
-            "Your project is live! Give it about 30 seconds, then open the link."
+            "Project published. Type a message below to keep editing — "
+            "changes will deploy automatically."
             if vercel_url else
             "Your code is saved. The hosting setup is still in progress — check back in a minute."
         ),

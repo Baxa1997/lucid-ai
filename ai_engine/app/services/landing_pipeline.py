@@ -679,9 +679,8 @@ async def run_landing_pipeline(
                 "type": "chat_message",
                 "role": "agent",
                 "content": (
-                    f"✅ Built **{brand_name}** — {len(page_renders)} sections "
-                    f"({', '.join((s.get('id') or s.get('type') or 'section') for s in (brief.get('sections') or [])[:4])}"
-                    f"{'…' if len(brief.get('sections') or []) > 4 else ''})."
+                    f"**{brand_name}** is ready. Type a message below to edit the design, "
+                    "copy, or sections — or click Publish to share it."
                 ),
             })
         except Exception:
