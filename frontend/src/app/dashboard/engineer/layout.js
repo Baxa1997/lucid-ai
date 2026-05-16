@@ -323,13 +323,29 @@ export default function EngineerLayout({children}) {
     .slice(0, 2);
 
   // ── Logout handler ──
+  // `signOut()` with the default `scope: 'global'` does a server round-trip
+  // to revoke the refresh token. On slow networks (or while an active
+  // WebSocket is holding the page busy) that call can stall for tens of
+  // seconds — the user sees the button stuck on "Signing out…". For UI
+  // logout we don't need server-side revocation; we just need the local
+  // session cleared and the user redirected. `scope: 'local'` is instant
+  // and never touches the network.
+  //
+  // We still wrap it in a 1.5s race-with-timeout so a misbehaving SDK
+  // version can't pin the button: after 1.5s we force the redirect.
   const handleLogout = useCallback(async () => {
     isLoggingOutRef.current = true;
     setIsLoggingOut(true);
+
+    const signOutPromise = supabase.auth
+      .signOut({ scope: "local" })
+      .catch((err) => {
+        console.error("Logout signOut() failed:", err);
+      });
+    const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 1500));
+
     try {
-      await supabase.auth.signOut();
-    } catch (err) {
-      console.error("Logout signOut() failed:", err);
+      await Promise.race([signOutPromise, timeoutPromise]);
     } finally {
       clearAllSupabaseCookies();
       sessionStorage.setItem("lucid-just-signed-out", "true");
