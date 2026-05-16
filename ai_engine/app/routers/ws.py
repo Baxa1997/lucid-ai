@@ -568,8 +568,21 @@ async def websocket_agent(websocket: WebSocket):
                 # JWT) were silently returning empty for legitimate rows whenever the JWT
                 # context didn't satisfy the policy (e.g. JWT minted with a kid the policy
                 # didn't trust, refreshed token, etc). We still gate on user_id explicitly
-                # so this remains per-user — admin only bypasses RLS, not access control.
+                # so this remains per-project — admin only bypasses RLS, not access control.
+                #
+                # Member access: when a project_members member who is NOT the owner
+                # connects, ``user_id`` is the member's id and a per-user filter would
+                # miss the owner's completed session — leaving the member stuck on
+                # "Preparing preview" forever AND spawning a fresh "New workspace
+                # session" row under the member's user_id. Resolve the owner's id
+                # by joining chat_sessions on the URL slug (project_id) against
+                # project_members (keyed on chat_sessions.id UUID PK). For the owner
+                # themselves resolve_shared_session returns None and we fall through
+                # to the per-user lookup, so behavior is unchanged.
                 from app.supabase_client import managed_admin_client
+                from app.services.members import MembershipService
+                _shared = await MembershipService.resolve_shared_session(project_id, user_id)
+                _lookup_uid = _shared["owner_user_id"] if _shared else user_id
                 prev_sid: str | None = None
                 async with managed_admin_client() as client:
                     # 1a. Most recent session with generation_complete=True
@@ -577,7 +590,7 @@ async def websocket_agent(websocket: WebSocket):
                         completed_r = await (
                             client.table("chat_sessions")
                             .select("id")
-                            .eq("user_id", user_id)
+                            .eq("user_id", _lookup_uid)
                             .eq("project_id", project_id)
                             .eq("generation_complete", True)
                             .order("created_at", desc=True)
@@ -595,7 +608,7 @@ async def websocket_agent(websocket: WebSocket):
                             repo_r = await (
                                 client.table("chat_sessions")
                                 .select("id")
-                                .eq("user_id", user_id)
+                                .eq("user_id", _lookup_uid)
                                 .eq("project_id", project_id)
                                 .not_.is_("platform_repo_url", "null")
                                 .order("created_at", desc=True)
@@ -612,7 +625,7 @@ async def websocket_agent(websocket: WebSocket):
                         plain_r = await (
                             client.table("chat_sessions")
                             .select("id")
-                            .eq("user_id", user_id)
+                            .eq("user_id", _lookup_uid)
                             .eq("project_id", project_id)
                             .order("created_at", desc=True)
                             .limit(1)
@@ -630,7 +643,7 @@ async def websocket_agent(websocket: WebSocket):
                         id_r = await (
                             client.table("chat_sessions")
                             .select("id, project_id")
-                            .eq("user_id", user_id)
+                            .eq("user_id", _lookup_uid)
                             .eq("id", project_id)
                             .maybe_single()
                             .execute()

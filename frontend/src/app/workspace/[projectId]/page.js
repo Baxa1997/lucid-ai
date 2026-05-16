@@ -27,10 +27,14 @@ import {
   MessageSquare,
   Wrench,
   Clock,
+  Share2,
 } from "lucide-react";
 import {useState, useEffect, useRef} from "react";
 import {useParams, useRouter} from "next/navigation";
 import {cn} from "@/lib/utils";
+import {getSupabaseBrowserClient} from "@/lib/supabase/client";
+import InviteDialog from "@/components/members/InviteDialog";
+import {useProject, useProjectMessages} from "@/lib/api/projects";
 
 export default function WorkspacePage() {
   const params = useParams();
@@ -39,26 +43,54 @@ export default function WorkspacePage() {
   const [input, setInput] = useState("");
   const scrollRef = useRef(null);
 
-  // Mock messages based on the image structure
-  const [messages] = useState([
-    {
-      id: 1,
-      role: "user",
-      content: "dasde3qewwqdas",
-    },
-    {
-      id: 2,
-      role: "assistant",
-      content:
-        "I'm not sure what you meant by \"dasde3qewwqdas\". Could you please clarify what you'd like help with?\n\nI can assist you with tasks like:\n\n• Code development - writing, debugging, or refactoring code\n• Repository exploration - understanding codebases and finding files\n• Git operations - commits, branches, and pull requests\n• File editing - creating or modifying files\n• Running commands - executing scripts, tests, or build commands\n• Web browsing - researching documentation or APIs\n\nJust let me know what you need!",
-    },
-  ]);
+  // ── Invite / share state ─────────────────────────────────
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState(null);
+  useEffect(() => {
+    const supabase = getSupabaseBrowserClient();
+    supabase.auth.getUser().then(({data: {user}}) => {
+      if (user?.id) setCurrentUserId(user.id);
+    });
+  }, []);
 
+  // ── Real project + message data ──────────────────────────
+  const {data: project, status: projectStatus, error: projectError} = useProject(projectId);
+  const {data: messagesData, status: messagesStatus} = useProjectMessages(projectId, {limit: 50});
+  const messages = messagesData?.messages || [];
+
+  // Auto-scroll to bottom when messages arrive.
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages.length]);
+
+  // ── Error / loading screens ──────────────────────────────
+  if (projectError === "404") {
+    return <WorkspaceErrorScreen
+      title="Project not found"
+      message="This project doesn't exist or has been deleted."
+      onBack={() => router.push("/dashboard/engineer")}
+    />;
+  }
+  if (projectError === "403") {
+    return <WorkspaceErrorScreen
+      title="Access denied"
+      message="You don't have access to this project. Ask the owner to invite you."
+      onBack={() => router.push("/dashboard/engineer")}
+    />;
+  }
+  if (projectError === "5xx" || projectError === "network") {
+    return <WorkspaceErrorScreen
+      title="Something went wrong"
+      message="We couldn't load this project. Please refresh the page."
+      onBack={() => router.refresh?.() ?? window.location.reload()}
+      backLabel="Refresh"
+    />;
+  }
+
+  const projectTitle = project?.title || (projectStatus === "loading" ? null : "Untitled project");
+  const isActive = project?.is_active;
 
   return (
     <div className="flex h-screen bg-[#ffffff] text-slate-900 overflow-hidden font-sans">
@@ -131,20 +163,37 @@ export default function WorkspacePage() {
         {/* ── Header ── */}
         <header className="h-14 min-h-[56px] border-b border-slate-200 bg-white flex items-center justify-between px-4 z-40">
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 bg-orange-50 text-[#dc5426] px-2 py-1 rounded-full border border-orange-100">
-              <div className="w-1.5 h-1.5 rounded-full bg-[#dc5426] animate-pulse" />
+            <div
+              className={cn(
+                "flex items-center gap-2 px-2 py-1 rounded-full border",
+                isActive
+                  ? "bg-orange-50 text-[#dc5426] border-orange-100"
+                  : "bg-slate-50 text-slate-500 border-slate-200",
+              )}>
+              <div
+                className={cn(
+                  "w-1.5 h-1.5 rounded-full",
+                  isActive ? "bg-[#dc5426] animate-pulse" : "bg-slate-400",
+                )}
+              />
               <span className="text-[10px] font-bold uppercase tracking-wider">
-                Running
+                {isActive ? "Running" : "Idle"}
               </span>
             </div>
             <div className="h-4 w-px bg-slate-200" />
-            <div className="flex items-center gap-2">
-              <h1 className="text-sm font-semibold text-slate-900">
-                Unclear Request or Random Input
-              </h1>
-              <span className="text-[10px] font-mono bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded border border-slate-200">
-                v1
-              </span>
+            <div className="flex items-center gap-2 min-w-0">
+              {projectStatus === "loading" && !project ? (
+                <div className="h-4 w-48 rounded bg-slate-100 animate-pulse" />
+              ) : (
+                <h1 className="text-sm font-semibold text-slate-900 truncate max-w-[420px]">
+                  {projectTitle}
+                </h1>
+              )}
+              {project?.archetype && (
+                <span className="text-[10px] font-mono bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded border border-slate-200">
+                  {project.archetype}
+                </span>
+              )}
             </div>
           </div>
 
@@ -155,9 +204,24 @@ export default function WorkspacePage() {
             <ActionButton icon={Globe} tooltip="Browser" />
             <div className="w-px h-4 bg-slate-200 mx-2" />
             <ActionButton icon={HardHat} tooltip="Memory" />
+            <button
+              onClick={() => setInviteOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 transition-colors"
+              title="Invite collaborators">
+              <Share2 className="w-3.5 h-3.5" />
+              Share
+            </button>
             <ActionButton icon={MoreVertical} tooltip="More" />
           </div>
         </header>
+
+        <InviteDialog
+          open={inviteOpen}
+          onClose={() => setInviteOpen(false)}
+          projectId={projectId}
+          projectTitle={project?.title || null}
+          currentUserId={currentUserId}
+        />
 
         {/* ── Main Chat Area ── */}
         <main className="flex-1 overflow-hidden relative">
@@ -165,6 +229,26 @@ export default function WorkspacePage() {
             ref={scrollRef}
             className="h-full overflow-y-auto pt-8 pb-40 px-4 scroll-smooth">
             <div className="max-w-3xl mx-auto space-y-8">
+              {messagesStatus === "loading" && messages.length === 0 && (
+                <div className="space-y-6">
+                  <MessageSkeleton align="right" />
+                  <MessageSkeleton align="left" />
+                  <MessageSkeleton align="right" />
+                </div>
+              )}
+
+              {messagesStatus === "success" && messages.length === 0 && (
+                <div className="flex flex-col items-center justify-center text-center py-16 text-slate-400">
+                  <MessageSquare className="w-8 h-8 mb-3" />
+                  <p className="text-sm font-medium text-slate-600">
+                    No messages yet
+                  </p>
+                  <p className="text-xs mt-1">
+                    Send a task below to start the conversation.
+                  </p>
+                </div>
+              )}
+
               {messages.map((msg) => (
                 <div
                   key={msg.id}
@@ -320,5 +404,37 @@ function FooterButton({icon: Icon, label}) {
       <Icon className="w-3 h-3" />
       {label}
     </button>
+  );
+}
+
+function MessageSkeleton({align}) {
+  return (
+    <div
+      className={cn(
+        "flex gap-4",
+        align === "right" ? "flex-row-reverse" : "flex-row",
+      )}>
+      <div className="w-8 h-8 rounded-lg bg-slate-100 animate-pulse shrink-0" />
+      <div className="space-y-2 max-w-[60%]">
+        <div className="h-3 w-64 bg-slate-100 animate-pulse rounded" />
+        <div className="h-3 w-48 bg-slate-100 animate-pulse rounded" />
+      </div>
+    </div>
+  );
+}
+
+function WorkspaceErrorScreen({title, message, onBack, backLabel = "Back to dashboard"}) {
+  return (
+    <div className="flex h-screen items-center justify-center bg-slate-50 p-6">
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 w-full max-w-md p-8 text-center">
+        <h1 className="text-base font-semibold text-slate-900 mb-2">{title}</h1>
+        <p className="text-sm text-slate-500 mb-5">{message}</p>
+        <button
+          onClick={onBack}
+          className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md">
+          {backLabel}
+        </button>
+      </div>
+    </div>
   );
 }

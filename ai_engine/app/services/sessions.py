@@ -537,11 +537,37 @@ async def create_session(
     # from writing code ("MUST refuse to improve or augment the code").
     # Now the session only manages: workspace_dir + git clone + repo scan.
 
-    # Create the workspace directory on the host
-    workspace_dir = os.path.join(
-        settings.WORKSPACE_BASE_PATH, user_id, session_id
-    )
-    os.makedirs(workspace_dir, exist_ok=True)
+    # ── Resolve the workspace directory ──────────────────────
+    # Shared-workspace model for collaboration: when this project_id
+    # already has a built preview workspace on disk (created during a
+    # prior pipeline run by the owner or another member), point this
+    # session at it instead of creating an empty per-user dir.
+    #
+    # This is what makes invited members see the actual project — without
+    # this hop, they'd land in WORKSPACE_BASE_PATH/<their-id>/<new-session>/
+    # which is freshly created and empty, and the pipeline would treat
+    # them as starting a new project from scratch.
+    #
+    # For first-time runs (no preview yet), we fall through to the
+    # per-user dir; the pipeline later promotes the preview into
+    # PREVIEW_WS_ROOT once it's built, and subsequent connects use it.
+    from app.paths import preview_workspace_path
+
+    workspace_dir = None
+    if project_id:
+        shared = preview_workspace_path(project_id)
+        if os.path.isdir(shared):
+            workspace_dir = shared
+            logger.info(
+                "Session %s attaching to shared workspace %s (project %s)",
+                session_id, shared, project_id,
+            )
+
+    if workspace_dir is None:
+        workspace_dir = os.path.join(
+            settings.WORKSPACE_BASE_PATH, user_id, session_id
+        )
+        os.makedirs(workspace_dir, exist_ok=True)
 
     session = AgentSession(
         session_id=session_id,

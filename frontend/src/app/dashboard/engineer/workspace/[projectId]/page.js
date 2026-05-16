@@ -49,6 +49,7 @@ import {WorkspaceContext} from "@/contexts/WorkspaceContext";
 import ChatPanel from "@/components/workspace/ChatPanel";
 import QualityReportPanel from "@/components/workspace/QualityReportPanel";
 import RightPanel from "@/components/workspace/RightPanel";
+import InviteDialog from "@/components/members/InviteDialog";
 
 // ── Main Page Component ────────────────────────────────────
 export default function ConversationPage({params}) {
@@ -282,6 +283,16 @@ function ConversationPageInner({params}) {
   const [gitToken, setGitToken] = useState("");
   const [userName, setUserName] = useState("");
 
+  // ── Invite dialog state ─────────────────────────────────
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState(null);
+
+  // ── Membership-revoked state ────────────────────────────
+  // Set to true when the owner removes us from project_members while we're
+  // inside the workspace. Triggers the blocking "no access" overlay so we
+  // don't keep sending messages / reading state we shouldn't see.
+  const [accessRevoked, setAccessRevoked] = useState(false);
+
   useEffect(() => {
     fetch("/api/agent/token")
       .then((r) => r.json())
@@ -299,9 +310,54 @@ function ConversationPageInner({params}) {
           user.email?.split("@")[0] ||
           "";
         setUserName(name.split(" ")[0]); // First name only
+        setCurrentUserId(user.id);
       }
     });
   }, []);
+
+  // ── Watch for membership revocation (real-time) ────────────────────────
+  // Subscribe to project_members DELETE events scoped to the current user.
+  // When a row matching our (project_id, user_id) is deleted, the owner has
+  // removed us — flip accessRevoked so the blocking overlay renders. Postgres
+  // sends only the PK on DELETE by default (REPLICA IDENTITY default), which
+  // is fine here since project_members PK IS (project_id, user_id).
+  useEffect(() => {
+    const projectPk = conversation?.db_id;
+    if (!currentUserId || !projectPk) {
+      console.log("[access-watch] skip — currentUserId:", currentUserId, "projectPk:", projectPk);
+      return;
+    }
+    const supabase = getSupabaseBrowserClient();
+    console.log("[access-watch] subscribing for user", currentUserId, "project", projectPk);
+    const channel = supabase
+      .channel(`project-access:${projectPk}:${currentUserId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "DELETE",
+          schema: "public",
+          table: "project_members",
+          filter: `user_id=eq.${currentUserId}`,
+        },
+        (payload) => {
+          console.log("[access-watch] DELETE event:", payload);
+          if (payload?.old?.project_id === projectPk) {
+            console.log("[access-watch] match — revoking access");
+            setAccessRevoked(true);
+          } else {
+            console.log("[access-watch] no match — payload.old.project_id:",
+              payload?.old?.project_id, "expected:", projectPk);
+          }
+        },
+      )
+      .subscribe((status, err) => {
+        console.log("[access-watch] subscribe status:", status, "err:", err);
+      });
+    return () => {
+      console.log("[access-watch] unsubscribing");
+      supabase.removeChannel(channel);
+    };
+  }, [currentUserId, conversation?.db_id]);
 
   // Load git token from integrations — runs in PARALLEL, not blocked by conversation
   const [gitTokenLoaded, setGitTokenLoaded] = useState(false);
@@ -1661,6 +1717,7 @@ function ConversationPageInner({params}) {
               </div>
               {/* Invite collaborator — separate 22px circle with border */}
               <button
+                onClick={() => setInviteOpen(true)}
                 className="w-[22px] h-[22px] rounded-full border border-[#d1d5db] dark:border-[#444c56] flex items-center justify-center shrink-0 text-[#6b7280] dark:text-slate-400 hover:border-[#9ca3af] hover:bg-[#f3f4f6] dark:hover:bg-white/[0.06] transition-all"
                 title="Invite collaborator">
                 <Plus className="w-3 h-3" />
@@ -1722,6 +1779,42 @@ function ConversationPageInner({params}) {
             </button>
           </div>
         </header>
+
+        <InviteDialog
+          open={inviteOpen}
+          onClose={() => setInviteOpen(false)}
+          /* projectId must be chat_sessions.id (UUID PK) — what
+             project_members.project_id references — NOT the URL slug
+             (which is chat_sessions.project_id, a TEXT column). */
+          projectId={conversation?.db_id || null}
+          projectTitle={conversation?.title || null}
+          currentUserId={currentUserId}
+        />
+
+        {accessRevoked && (
+          <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-sm grid place-items-center p-6">
+            <div className="max-w-md w-full bg-white dark:bg-[#161b22] rounded-2xl border border-slate-200 dark:border-[#2d333b] shadow-2xl p-7">
+              <div className="w-12 h-12 rounded-full bg-red-50 dark:bg-red-950/40 text-red-600 grid place-items-center mb-4">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-6 h-6">
+                  <circle cx="12" cy="12" r="10"/>
+                  <line x1="15" y1="9" x2="9" y2="15"/>
+                  <line x1="9" y1="9" x2="15" y2="15"/>
+                </svg>
+              </div>
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-1.5">
+                You no longer have access
+              </h2>
+              <p className="text-sm text-slate-500 dark:text-slate-400 mb-5">
+                The owner of <span className="font-medium text-slate-700 dark:text-slate-200">{conversation?.title || "this project"}</span> removed you from the project. Your chat is disabled and you can&rsquo;t open it from your dashboard anymore.
+              </p>
+              <button
+                onClick={() => router.push("/dashboard/engineer")}
+                className="w-full px-4 py-2.5 rounded-lg bg-[#dc5426] hover:bg-[#c4471f] text-white text-sm font-semibold transition-colors">
+                Back to dashboard
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* ════════════════════════════════════════════════
           BODY — 2-panel layout: Chat (left) + Preview/Code (right)

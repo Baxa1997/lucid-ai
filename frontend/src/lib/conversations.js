@@ -45,10 +45,13 @@ export async function listConversations() {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return [];
 
+  // No .eq('user_id', user.id) — the RLS policy on chat_sessions (from
+  // migration 020) already restricts SELECT to project members, so this
+  // returns both owned projects AND projects the user was invited to.
+  // Adding an explicit user_id filter would hide invited projects.
   const { data, error } = await supabase
     .from('chat_sessions')
     .select('project_id, user_repo_url, user_repo_provider, title, created_at, updated_at, is_active')
-    .eq('user_id', user.id)
     .order('updated_at', { ascending: false })
     .limit(100);
 
@@ -91,15 +94,23 @@ export async function listConversations() {
 export async function getConversation(conversationId) {
   const supabase = getSupabaseBrowserClient();
 
-  const { data, error } = await supabase
+  // Multiple chat_sessions rows can share the same project_id slug —
+  // each WS connect creates a fresh row (with an empty/placeholder
+  // title). The ORIGINAL row created by the project owner has the real
+  // project title; later rows are placeholders. Prefer rows with a
+  // non-null title; fall back to the oldest one as a tiebreaker
+  // (oldest = the owner's first session = the real project metadata).
+  const { data: rows, error } = await supabase
     .from('chat_sessions')
-    .select('project_id, title, user_repo_url, user_repo_provider, platform_repo_url, platform_repo_branch')
+    .select('id, project_id, title, user_repo_url, user_repo_provider, platform_repo_url, platform_repo_branch, created_at')
     .eq('project_id', conversationId)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .order('created_at', { ascending: true })
+    .limit(20);
 
-  if (error || !data) return null;
+  if (error || !rows || rows.length === 0) return null;
+
+  const data =
+    rows.find((r) => r.title && r.title.trim().length > 0) || rows[0];
 
   // Prefer user_repo_url (user linked their own repo).
   // Fall back to platform_repo_url (wizard/scratch project — repo created by Lucid).
@@ -109,7 +120,12 @@ export async function getConversation(conversationId) {
     : null;
 
   return {
+    // Historical: `id` here is the URL/project slug, NOT chat_sessions.id.
+    // Most callers depend on that aliasing, so we keep it. `db_id` exposes
+    // the actual chat_sessions PK so features that interact with related
+    // tables (project_members, project_invites) can use the right key.
     id: conversationId,
+    db_id: data.id,
     // DB title is the brand name set by the landing pipeline — prefer it over
     // the repo slug so landing projects show "The Bali Haven" not "lucid-ws-...".
     title: data.title || repoName?.split('/').pop() || 'Project',

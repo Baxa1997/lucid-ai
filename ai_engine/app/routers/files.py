@@ -9,7 +9,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.auth import AuthenticatedUser, get_current_user
 from app.config import logger, settings
+from app.services.members import MembershipService
 from app.services.sessions import store
+from app.supabase_client import managed_admin_client
+from postgrest.exceptions import APIError
 
 router = APIRouter(prefix="/api/v1/files", tags=["files"])
 
@@ -130,26 +133,92 @@ async def export_files(
 
 # ── Shared helpers ───────────────────────────────────────────
 
+async def _lookup_project_from_agent_session(agent_session_id: str) -> tuple[str | None, str | None]:
+    """Map an agent session_id back to (chat_sessions.id, owner_user_id).
+
+    The agent session_id lives on chat_sessions.agent_session_id; the
+    chat_sessions row itself carries the canonical project_id (its UUID
+    PK) and the owner user_id. Returns (None, None) when no row exists.
+    """
+    try:
+        async with managed_admin_client() as client:
+            res = (
+                await client.table("chat_sessions")
+                .select("id, user_id")
+                .eq("agent_session_id", agent_session_id)
+                .limit(1)
+                .execute()
+            )
+        rows = res.data or []
+        if not rows:
+            return None, None
+        return rows[0].get("id"), rows[0].get("user_id")
+    except APIError as exc:
+        logger.warning("chat_sessions lookup by agent_session_id failed: %s", exc)
+        return None, None
+
+
 async def _resolve_workspace(session_id: str, user_id: str) -> str:
     """Return the workspace directory for a session.
 
-    First checks the live session store. If the session is gone (completed/
-    destroyed), falls back to constructing the expected on-disk path so that
-    file reads still work after the WebSocket closes.
+    Authorization: project membership (not raw ownership). An invited
+    editor reads file contents through the same path as the owner.
+
+    Resolution flow:
+      1. Live session in store: use its project_id for the membership
+         check, and its workspace_dir for the path. The owner-of-record
+         is ``session.user_id``.
+      2. Session reaped: look up chat_sessions by ``agent_session_id``
+         to recover (project_id, owner_user_id), then check membership
+         and reconstruct the path under the OWNER's id (workspaces live
+         on disk keyed by the owner — using the requester's id would
+         break for invited members).
     """
-    session = await store.get_or_none(session_id)
-    if session is not None:
-        if session.user_id != user_id:
+    async def _deny_unless_member(project_id: str | None) -> None:
+        """403 unless ``user_id`` is a member of ``project_id``."""
+        if not project_id:
+            # We couldn't tie this session to a project. Without a
+            # project_id there's nothing membership-y to check against,
+            # so block the request rather than silently allow it.
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not authorized to access this session.",
             )
-        # workspace_dir is always a string path on the local filesystem
+        if not await MembershipService.is_member(project_id, user_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to access this session.",
+            )
+
+    # 1. Live session in the in-memory / Redis store.
+    session = await store.get_or_none(session_id)
+    if session is not None:
+        # Prefer the project_id stored on the live session — it was set
+        # at session creation time. If it's missing (older sessions), fall
+        # back to a chat_sessions lookup by agent_session_id.
+        project_id = session.project_id
+        if not project_id:
+            project_id, _ = await _lookup_project_from_agent_session(session_id)
+        await _deny_unless_member(project_id)
         if session.workspace_dir:
             return session.workspace_dir
+        # No workspace_dir on the live session? Fall through to the
+        # disk path below, using the session's owner.
+        owner_id = session.user_id
 
-    # Session gone — reconstruct path from disk convention
-    workspace_dir = os.path.join(settings.WORKSPACE_BASE_PATH, user_id, session_id)
+    # 2. Disk fallback — session has been reaped.
+    else:
+        project_id, owner_id = await _lookup_project_from_agent_session(session_id)
+        await _deny_unless_member(project_id)
+        if not owner_id:
+            # We somehow have a member-authorized project with no owner
+            # row. Treat as gone, not authorization failure.
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Session {session_id} not found.",
+            )
+
+    workspace_dir = os.path.join(settings.WORKSPACE_BASE_PATH, owner_id, session_id)
     if not os.path.isdir(workspace_dir):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

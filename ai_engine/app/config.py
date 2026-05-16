@@ -106,6 +106,20 @@ class Settings(BaseSettings):
     # Use .allowed_origins_list property to get parsed list[str].
     ALLOWED_ORIGINS: str = "http://localhost:3000"
 
+    # Public-facing app root used to build the accept-invite link emailed
+    # to invitees. Should be the URL the user types in their browser
+    # (e.g. https://app.lucid.ai) — NOT the ai_engine API URL.
+    # Falls back to the first ALLOWED_ORIGINS entry when unset.
+    APP_URL: str = ""
+
+    @property
+    def app_url(self) -> str:
+        """The public URL invitees click to land on /accept-invite."""
+        if self.APP_URL:
+            return self.APP_URL.rstrip("/")
+        origins = self.allowed_origins_list
+        return origins[0].rstrip("/") if origins else "http://localhost:3000"
+
     @property
     def allowed_origins_list(self) -> list[str]:
         """Parse ALLOWED_ORIGINS into a list of URLs."""

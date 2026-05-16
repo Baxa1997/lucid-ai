@@ -130,6 +130,10 @@ services:
       # Must match frontend ENCRYPTION_KEY — used to decrypt stored git tokens
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - ALLOWED_ORIGINS=http://localhost:3000,http://frontend:3000,https://lucid-ai-pearl.vercel.app
+      # Public-facing app root used to build the accept-invite link emailed
+      # to invitees. Reuses NEXT_PUBLIC_APP_URL when APP_URL isn't set so
+      # production only needs to configure one variable.
+      - APP_URL=${APP_URL:-${NEXT_PUBLIC_APP_URL:-http://localhost:3000}}
       # Vision-grounded research (Option B).
       # Screenshot service for fetching reference site images.
       # Leave SCREENSHOT_API_KEY empty to disable — pipeline falls back to text-only research.

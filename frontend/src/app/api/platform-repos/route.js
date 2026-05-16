@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/gatekeeper';
 import { getSupabaseServerClient } from '@/lib/supabase/server';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 // ─────────────────────────────────────────────────────────
 //  GET /api/platform-repos
 //
@@ -22,15 +25,14 @@ export async function GET() {
   try {
     const supabase = await getSupabaseServerClient();
 
-    // Query chat_sessions for this user. Show ALL projects — drafts that
-    // haven't been exported, AND sessions that pushed to GitHub even if
-    // their project_id row was never populated (legacy / repair path).
-    // We filter client-side because PostgREST lacks an OR-NULL operator
-    // that's clean to chain with .not().
+    // Query chat_sessions. Returns ALL projects the user has access to —
+    // both owned and projects they were invited to. RLS on chat_sessions
+    // (migration 020) restricts SELECT to project members, so we don't
+    // need (and must NOT add) an explicit user_id filter — that would hide
+    // shared projects that the user joined via an invite.
     const { data: sessions, error } = await supabase
       .from('chat_sessions')
       .select('id, project_id, title, platform_repo_url, vercel_url, created_at, updated_at')
-      .eq('user_id', ctx.userId)
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -49,16 +51,36 @@ export async function GET() {
       (s) => s.project_id || s.platform_repo_url
     );
 
+    // Score a session row so we can pick the richest one per project. Shared
+    // projects accumulate multiple chat_sessions rows under the same slug —
+    // one per user who ever opened the workspace. The original owner's row
+    // carries the real title/repo/deploy URL; placeholder rows created when
+    // invited members open the workspace have title="New workspace session"
+    // and no repo/deploy URL. Higher score wins. (We still keep created_at
+    // DESC as a tiebreaker via the iteration order of `sessions`.)
+    const scoreSession = (s) => {
+      let score = 0;
+      if (s.platform_repo_url) score += 100;
+      if (s.vercel_url) score += 50;
+      const title = (s.title || '').trim();
+      if (title && title !== 'New workspace session') score += 10;
+      return score;
+    };
+
     // Deduplicate by project_id when we have one, otherwise by repo URL.
-    // This way a session that pushed to GitHub but never got project_id
-    // assigned still surfaces, while normal cases collapse correctly.
-    const seen = new Set();
-    const uniqueSessions = usable.filter((s) => {
+    // For each key, keep the row with the highest score so shared projects
+    // display the owner's title rather than an editor's placeholder row.
+    const byKey = new Map();
+    for (const s of usable) {
       const key = s.project_id || s.platform_repo_url;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+      const prev = byKey.get(key);
+      if (!prev || scoreSession(s) > scoreSession(prev)) {
+        byKey.set(key, s);
+      }
+    }
+    const uniqueSessions = [...byKey.values()].sort(
+      (a, b) => new Date(b.created_at) - new Date(a.created_at)
+    );
 
     // Build response — prefer the repo name when the project has been
     // exported, otherwise fall back to the chat session title (which is
