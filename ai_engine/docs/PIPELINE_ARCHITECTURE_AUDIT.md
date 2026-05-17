@@ -520,3 +520,55 @@ already misleading enough that a third consumer would make it worse.
 - SQL gen: `app/services/tenant_sql_generator.py`
 - Tenant RPCs: `supabase/migrations/023_project_tenancy.sql`, `024_tenant_helpers.sql`, `025_get_tenant_collection.sql`
 - Feature flags: `app/config.py:78`, `website_pipeline.py:42-71`, `project_generator.py:184,278,7443`
+
+---
+
+## Phase 3 status (as of 2026-05-17)
+
+The admin pipeline now exists. Steps 3.1 → 3.6 Part A are merged.
+A full write-up lives in [PHASE_3_STATUS.md](PHASE_3_STATUS.md);
+this section is the audit-relevant summary.
+
+- **Admin pipeline file location:**
+  [app/services/admin_pipeline.py](../app/services/admin_pipeline.py) —
+  the new `run_admin_pipeline()` + `should_route_to_admin_pipeline()`.
+  Dispatched from [project_generator.py:7463 onward](../app/services/project_generator.py#L7463),
+  routing `admin_dashboard` / `crm` / `tms` / `saas_dashboard` behind
+  `ADMIN_PIPELINE_V2_ENABLED`. Ecommerce intentionally stays on the
+  legacy path. Returning `False` falls through to legacy.
+
+- **Mirrors `website_pipeline.py` structure.** Stage shape is the
+  same (0.5 → 1 → 2 → 3 → 4 → 4.5 → 4.6 → 4.7 → 5 → 6), but Stages
+  2 and 7 are deliberate SKIPs (no marketing research, no in-process
+  build verifier — `dry_run_admin_pipeline.py` runs `npm run build`
+  out-of-band). The two pipelines share Stages 4.6 and 4.7 via
+  [pipeline_tenant.py](../app/services/pipeline_tenant.py) (extracted
+  in Step 3.1 explicitly so the admin pipeline could reuse them
+  without importing website code).
+
+- **The three risks from this audit still apply, no new ones
+  surfaced.** Re-checked after Phase 3:
+  - **Risk 1** (flags off in prod) — `ADMIN_PIPELINE_V2_ENABLED`
+    inherits the same opt-in default. Same mitigation applies: flip
+    it in `docker-compose.yml` / `.env` before any production
+    rollout.
+  - **Risk 2** (`project_generator.py` monolith) — Phase 3 followed
+    the audit's mitigation: rather than threading admin branches
+    through `_generate_new_project_inner`, the entire admin path
+    lives in `admin_pipeline.py`. The only edit to
+    `project_generator.py` is the dispatch block — no new in-place
+    branches on `_layout_archetype` were added downstream.
+  - **Risk 3** (`landing_phase0` shared between landing + website,
+    hard to evolve) — Phase 3 did **not** add a third consumer.
+    Admin builds its own foundation files via
+    `admin_foundation_builder.py`. Audit's recommendation respected.
+
+- **Pipeline isolation maintained.** Admin doesn't touch
+  `landing_pipeline.py` or `website_pipeline.py`. The only edges
+  between pipelines are (a) the shared `pipeline_tenant.py` and
+  (b) the dispatch in `project_generator.py`. Verified by
+  [scripts/verify_pipeline_isolation.py](../scripts/verify_pipeline_isolation.py)
+  — asserts no `admin_*` module imports anything from
+  `landing_*` or `website_*`. The legacy admin path inside
+  `_generate_new_project_inner` is untouched and continues to
+  serve as a safety net.
