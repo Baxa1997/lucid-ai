@@ -1,0 +1,44 @@
+{
+  "brand": {
+    "name": "Slow Compile",
+    "tagline": "Long-form notes on software craft",
+    "domain": "personal tech blog"
+  },
+  "pages": [
+    {
+      "route": "/",
+      "title": "Home",
+      "purpose": "Latest essays and reading list",
+      "sections": [
+        {"type": "hero", "purpose": "One-line statement of intent"},
+        {"type": "latest_posts", "purpose": "Most recent 10 essays, each with title, excerpt, date, reading time"},
+        {"type": "categories", "purpose": "Browse by topic: systems, languages, debugging, career"}
+      ]
+    },
+    {
+      "route": "/posts",
+      "title": "Archive",
+      "purpose": "Full post archive",
+      "sections": [
+        {"type": "post_list", "purpose": "Every post chronologically, with title, slug, published date, status"}
+      ]
+    },
+    {
+      "route": "/about",
+      "title": "About",
+      "purpose": "Author bio",
+      "sections": [
+        {"type": "long_form", "purpose": "Single-author bio, current role, links to other writing"}
+      ]
+    },
+    {
+      "route": "/subscribe",
+      "title": "Subscribe",
+      "purpose": "RSS + newsletter capture",
+      "sections": [
+        {"type": "newsletter_form", "purpose": "Email capture"},
+        {"type": "rss_links", "purpose": "Feed URLs"}
+      ]
+    }
+  ]
+}

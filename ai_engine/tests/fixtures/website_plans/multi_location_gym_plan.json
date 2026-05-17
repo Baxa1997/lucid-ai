@@ -1,0 +1,70 @@
+{
+  "brand": {
+    "name": "Iron Loft Fitness",
+    "tagline": "Strength training across the boroughs",
+    "domain": "multi-location gym chain"
+  },
+  "pages": [
+    {
+      "route": "/",
+      "title": "Home",
+      "purpose": "Convert visitors into trial members or class bookings",
+      "sections": [
+        {"type": "hero", "purpose": "Brand headline + 'Find a location' CTA"},
+        {"type": "location_preview", "purpose": "Six location cards — neighborhood, address, hours, photo"},
+        {"type": "class_preview", "purpose": "Eight signature classes with name, description, intensity level"},
+        {"type": "membership_preview", "purpose": "Three membership tiers — fixed copy, headline names and price"},
+        {"type": "testimonials", "purpose": "Ten member quotes with name, home gym, before/after type"}
+      ]
+    },
+    {
+      "route": "/locations",
+      "title": "Locations",
+      "purpose": "Full location directory",
+      "sections": [
+        {"type": "location_grid", "purpose": "Every gym: name, neighborhood, address, phone, hours by day, photo, amenities list"}
+      ]
+    },
+    {
+      "route": "/schedule",
+      "title": "Class schedule",
+      "purpose": "Class bookings",
+      "sections": [
+        {"type": "class_calendar", "purpose": "Every scheduled class instance: class name, instructor, location, start time, duration, capacity, slots remaining"}
+      ]
+    },
+    {
+      "route": "/instructors",
+      "title": "Instructors",
+      "purpose": "Staff roster",
+      "sections": [
+        {"type": "instructor_grid", "purpose": "Each instructor: photo, name, title, specialties, home location, certifications, bio"}
+      ]
+    },
+    {
+      "route": "/membership",
+      "title": "Membership",
+      "purpose": "Pricing + sign-up",
+      "sections": [
+        {"type": "membership_full", "purpose": "Detailed tier breakdown — fixed marketing copy"},
+        {"type": "faq", "purpose": "Ten common membership questions — fixed Q&A"}
+      ]
+    },
+    {
+      "route": "/about",
+      "title": "About",
+      "purpose": "Brand story",
+      "sections": [
+        {"type": "story", "purpose": "Founder story — one paragraph"}
+      ]
+    },
+    {
+      "route": "/contact",
+      "title": "Contact",
+      "purpose": "General inquiries",
+      "sections": [
+        {"type": "contact_form", "purpose": "Catch-all inquiry form"}
+      ]
+    }
+  ]
+}

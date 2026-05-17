@@ -3,11 +3,19 @@
 End-to-end orchestrator replacing the legacy Phase 1/2/3 monolithic flow
 for consumer_website and related multi-page archetypes:
 
-  Stage 1 — analyze_intent           (Gemini Flash)
-  Stage 2 — domain + design research (Gemini, parallel)
-  Stage 3 — visual_dna extraction    (Gemini Pro, single source of design truth)
-  Stage 4 — website plan             (Gemini Flash → pages + sections per page)
-  Stage 5 — DETERMINISTIC FOUNDATION (no LLM)
+  Stage 1   — analyze_intent           (Gemini Flash)
+  Stage 2   — domain + design research (Gemini, parallel)
+  Stage 3   — visual_dna extraction    (Gemini Pro, single source of design truth)
+  Stage 4   — website plan             (Gemini Flash → pages + sections per page)
+  Stage 4.5 — data-model planning      (Gemini 3.1 Pro Preview → DataModel:
+                                        tables for growing collections,
+                                        singletons for fixed copy)
+  Stage 4.6 — tenant provisioning      (Supabase: create per-project schema,
+                                        apply generated DDL — non-fatal)
+  Stage 4.7 — seed data                (Gemini 3.1 Pro Preview → realistic
+                                        rows for every collection; inserted
+                                        into the tenant schema — non-fatal)
+  Stage 5   — DETERMINISTIC FOUNDATION (no LLM)
               globals.css from palette + fonts
               design-system.js tokens
               site.js (brand + tagline)
@@ -25,6 +33,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -35,6 +44,38 @@ def _content_separation_enabled() -> bool:
     Stage 5 foundation builders can branch on the same flag."""
     raw = os.environ.get("CONTENT_SEPARATION_ENABLED", "1").strip().lower()
     return raw not in ("0", "false", "no", "off")
+
+
+def _data_model_planner_enabled() -> bool:
+    """Stage 4.5 planner toggle (default ON). Set DATA_MODEL_PLANNER_ENABLED=0
+    to skip the planner call entirely — useful for cheap re-runs during
+    Stage 6 prompt iteration where the data_model isn't being consumed yet."""
+    raw = os.environ.get("DATA_MODEL_PLANNER_ENABLED", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _tenant_provision_enabled() -> bool:
+    """Stage 4.6 provisioning toggle (default ON). Set
+    TENANT_PROVISION_ENABLED=0 to skip the schema-create + SQL-apply
+    step. Useful when iterating on prompts and you don't want each run
+    to mutate the Supabase project."""
+    raw = os.environ.get("TENANT_PROVISION_ENABLED", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _tenant_seed_enabled() -> bool:
+    """Stage 4.7 seed-generation toggle (default ON). Set
+    TENANT_SEED_ENABLED=0 to skip the Gemini seed call + INSERTs.
+    Disabling this leaves provisioned tables empty — useful when only
+    the schema shape matters."""
+    raw = os.environ.get("TENANT_SEED_ENABLED", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 
 _EDITABLE_COMPONENT_JSX = '''"use client";
@@ -82,6 +123,294 @@ async def _send(websocket, kind: str, message: str) -> None:
         await websocket.send_json({"type": kind, "message": message})
     except Exception:
         pass
+
+
+async def _provision_tenant_for_project(
+    *,
+    data_model,  # DataModel | None — typed loose to avoid module-load cost
+    project_id: str,
+    websocket: Any,
+):
+    """Stage 4.6 — lazy tenant provisioning.
+
+    Creates the per-project Postgres schema (one-shot) and applies the
+    planner's CREATE TABLE / RLS / index / trigger DDL. Returns the
+    tenant schema name on success, or None when skipped or failed.
+
+    Skipped (returns None) when ANY of:
+      • The flag `TENANT_PROVISION_ENABLED` is off.
+      • data_model is None or has no tables (nothing to provision for).
+      • project_id is not a UUID — there's no chat_sessions row to
+        associate the schema with (e.g. `_session_none_` dev runs).
+
+    Failure path: any error during provision/apply is caught, logged,
+    and surfaced as a websocket warning. The function returns None and
+    the rest of the pipeline keeps running with JSON-only content.
+
+    Idempotency: reads `chat_sessions.tenant_schema` first; if already
+    populated, skips the RPC call and re-applies the generated SQL
+    (which is fully IF NOT EXISTS / DROP IF EXISTS — safe to re-run).
+    """
+    # Entry log — makes it obvious in production whether the stage
+    # was even reached. Pair with the SKIPPED warnings below.
+    logger.info(
+        "[%s] Stage 4.6 ENTRY: project_id type=%s, "
+        "data_model_tables=%d, has_uuid=%s",
+        project_id,
+        type(project_id).__name__,
+        len(getattr(data_model, "tables", []) or []) if data_model else -1,
+        bool(_UUID_RE.match(project_id)),
+    )
+
+    if not _tenant_provision_enabled():
+        logger.warning(
+            "[%s] Stage 4.6 SKIPPED: reason=TENANT_PROVISION_ENABLED=0 "
+            "(this means generated site will use JSON only — no live Supabase data layer)",
+            project_id,
+        )
+        return None
+    if data_model is None or not getattr(data_model, "tables", None):
+        logger.warning(
+            "[%s] Stage 4.6 SKIPPED: reason=empty_or_missing_data_model "
+            "(planner emitted no tables; site will use JSON only)",
+            project_id,
+        )
+        return None
+    if not _UUID_RE.match(project_id):
+        logger.warning(
+            "[%s] Stage 4.6 SKIPPED: reason=project_id_not_uuid "
+            "(no chat_sessions row to anchor tenant_schema — site will use JSON only)",
+            project_id,
+        )
+        return None
+
+    await _send(websocket, "progress",
+                "🔐 Stage 4.6/6 — Provisioning tenant schema + applying SQL…")
+
+    # Lazy imports keep import-time of website_pipeline cheap and let
+    # tests patch these symbols on the module easily.
+    from app.supabase_client import managed_admin_client
+    from app.services.tenant_sql_generator import (
+        apply_tenant_sql,
+        generate_tenant_sql,
+        validate_generated_sql,
+    )
+
+    try:
+        async with managed_admin_client() as admin:
+            # 0. Persist the planner's DataModel onto chat_sessions so
+            #    the public.get_tenant_collection RPC (migration 025)
+            #    can authorize callers by checking the `public_read`
+            #    flag per table. Done as part of provisioning rather
+            #    than Stage 4.5 so we only persist when we're actually
+            #    going to spin up a tenant for it.
+            await (
+                admin.table("chat_sessions")
+                .update({"data_model": data_model.model_dump(mode="json")})
+                .eq("id", project_id)
+                .execute()
+            )
+
+            # 1. Has this project already been provisioned?
+            existing = await (
+                admin.table("chat_sessions")
+                .select("tenant_schema")
+                .eq("id", project_id)
+                .limit(1)
+                .execute()
+            )
+            rows = existing.data or []
+            if rows and rows[0].get("tenant_schema"):
+                tenant_schema = rows[0]["tenant_schema"]
+                logger.info(
+                    "website_pipeline: tenant_schema already provisioned (%s) — re-applying SQL",
+                    tenant_schema,
+                )
+            else:
+                rpc_res = await admin.rpc(
+                    "provision_tenant_schema",
+                    {"p_project_id": project_id},
+                ).execute()
+                tenant_schema = rpc_res.data
+                logger.info(
+                    "website_pipeline: tenant_schema provisioned — %s",
+                    tenant_schema,
+                )
+
+            # 2. Generate + static-validate the DDL before sending to Postgres.
+            sql = generate_tenant_sql(data_model, tenant_schema, project_id)
+            sql_errs = validate_generated_sql(sql)
+            if sql_errs:
+                raise RuntimeError(
+                    f"validate_generated_sql produced {len(sql_errs)} error(s): "
+                    + "; ".join(sql_errs)
+                )
+
+            # 3. Apply each statement via the execute_ddl RPC.
+            apply_res = await apply_tenant_sql(sql, admin)
+            if not apply_res["success"]:
+                raise RuntimeError(
+                    f"apply_tenant_sql failed after {apply_res['statements_executed']} "
+                    f"statement(s): {apply_res['error']}"
+                )
+
+            logger.info(
+                "website_pipeline: tenant SQL applied — schema=%s tables=%d statements=%d",
+                tenant_schema, len(data_model.tables),
+                apply_res["statements_executed"],
+            )
+            await _send(
+                websocket, "progress",
+                f"🔐 Tenant schema {tenant_schema} ready "
+                f"({apply_res['statements_executed']} DDL statements)",
+            )
+            return tenant_schema
+    except Exception as exc:  # noqa: BLE001 — never surface DB errors to caller
+        logger.error(
+            "website_pipeline: tenant provisioning failed — %s", exc,
+            exc_info=True,
+        )
+        await _send(
+            websocket, "warning",
+            f"⚠️ Tenant provisioning failed ({exc}). "
+            "Continuing with JSON-only content.",
+        )
+        return None
+
+
+async def _seed_tenant_for_project(
+    *,
+    data_model,           # DataModel | None
+    tenant_schema: str | None,
+    website_plan: dict,
+    intent: dict,
+    purpose_data: dict,
+    gemini_key: str,
+    project_id: str,
+    websocket: Any,
+) -> dict | None:
+    """Stage 4.7 — Gemini-generated seed rows inserted into tenant tables.
+
+    Returns the `apply_seed_data` result dict on success, or None when
+    skipped or failed.
+
+    Skipped (returns None) when ANY of:
+      • Flag `TENANT_SEED_ENABLED` is off.
+      • data_model is None / has no tables.
+      • tenant_schema is None — without a provisioned schema there's
+        nothing to insert into. This makes the seed step a strict
+        downstream of Stage 4.6 (provision must have succeeded).
+
+    Non-fatal: any error logs + warns over the websocket; the rest of
+    the pipeline keeps running with empty tenant tables. Phase 2.3.C
+    codegen will fall back to JSON content for tables with zero rows.
+    """
+    # Entry log — same pattern as Stage 4.6.
+    logger.info(
+        "[%s] Stage 4.7 ENTRY: tenant_schema=%r, data_model_tables=%d",
+        project_id,
+        tenant_schema,
+        len(getattr(data_model, "tables", []) or []) if data_model else -1,
+    )
+
+    if not _tenant_seed_enabled():
+        logger.warning(
+            "[%s] Stage 4.7 SKIPPED: reason=TENANT_SEED_ENABLED=0 "
+            "(tables provisioned but empty — generated site will fall back to JSON)",
+            project_id,
+        )
+        return None
+    if data_model is None or not getattr(data_model, "tables", None):
+        logger.warning(
+            "[%s] Stage 4.7 SKIPPED: reason=empty_or_missing_data_model "
+            "(nothing to seed)",
+            project_id,
+        )
+        return None
+    if not tenant_schema:
+        logger.warning(
+            "[%s] Stage 4.7 SKIPPED: reason=no_tenant_schema "
+            "(Stage 4.6 either skipped or failed — no schema to insert into)",
+            project_id,
+        )
+        return None
+
+    await _send(websocket, "progress",
+                "🌱 Stage 4.7/6 — Generating + inserting seed data…")
+
+    from app.supabase_client import managed_admin_client
+    from app.services.seed_tenant_data import apply_seed_data, plan_seed_data
+    from app.services.image_binding import search_unsplash
+
+    try:
+        seed_data = await plan_seed_data(
+            data_model=data_model,
+            website_plan=website_plan,
+            intent=intent,
+            purpose_data=purpose_data,
+            gemini_key=gemini_key,
+            project_id=project_id,
+        )
+    except Exception as exc:
+        logger.error(
+            "website_pipeline: seed plan failed — %s", exc, exc_info=True,
+        )
+        await _send(
+            websocket, "warning",
+            f"⚠️ Seed generation failed ({exc}). Tables will be empty.",
+        )
+        return None
+
+    if not seed_data:
+        # plan_seed_data returns {} on Gemini failure; treat as a soft
+        # miss rather than an error so the pipeline keeps going.
+        await _send(
+            websocket, "warning",
+            "⚠️ Seed generation returned no rows — tables will be empty.",
+        )
+        return None
+
+    try:
+        async with managed_admin_client() as admin:
+            result = await apply_seed_data(
+                seed_data=seed_data,
+                data_model=data_model,
+                tenant_schema=tenant_schema,
+                admin_client=admin,
+                image_search=search_unsplash,
+            )
+    except Exception as exc:
+        logger.error(
+            "website_pipeline: seed apply threw — %s", exc, exc_info=True,
+        )
+        await _send(
+            websocket, "warning",
+            f"⚠️ Seed insert threw ({exc}). Some tables may be partially seeded.",
+        )
+        return None
+
+    if not result["success"]:
+        logger.error(
+            "website_pipeline: seed apply failed on table %r — %s",
+            result["failed_table"], result["error"],
+        )
+        await _send(
+            websocket, "warning",
+            f"⚠️ Seed insert failed on {result['failed_table']} "
+            f"after {result['tables_inserted']} table(s): {result['error']}",
+        )
+        return result
+
+    logger.info(
+        "website_pipeline: seed applied — tables=%d rows=%d",
+        result["tables_inserted"], result["rows_inserted"],
+    )
+    await _send(
+        websocket, "progress",
+        f"🌱 Seed data: {result['rows_inserted']} rows across "
+        f"{result['tables_inserted']} table(s)",
+    )
+    return result
 
 
 async def _phase(websocket, phase: int, title: str, desc: str, status: str) -> None:
@@ -278,10 +607,107 @@ async def run_website_pipeline(
     )
     await _send(websocket, "progress", f"📋 Plan: {len(pages)} pages → {', '.join(page_routes)}")
 
+    # ── Stage 4.5: Data-model planning ──────────────────────────────
+    # Decides which sections need Supabase-backed collections (tables
+    # that grow + are edited over time) vs which stay as JSON singletons.
+    # Output is a validated `DataModel`; the SQL generator (Step 1.3)
+    # turns it into per-tenant CREATE TABLE statements when the project
+    # gets provisioned. Stage 6 codegen will read this in a follow-up
+    # step to know which sections to wire to Supabase instead of static
+    # JSON. Non-fatal: planner returns empty DataModel on Gemini failure,
+    # site still ships with all-JSON content.
+    # Entry log — confirms in production whether Stage 4.5 was reached
+    # AND with what kind of project_id (real UUID vs dev placeholder).
+    logger.info(
+        "[%s] Stage 4.5 ENTRY: project_id type=%s, value=%s",
+        project_id, type(project_id).__name__, project_id,
+    )
+    data_model = None
+    if not _data_model_planner_enabled():
+        logger.warning(
+            "[%s] Stage 4.5 SKIPPED: reason=DATA_MODEL_PLANNER_ENABLED=0 "
+            "(downstream Stages 4.6 + 4.7 will also skip — site will use JSON only)",
+            project_id,
+        )
+    if _data_model_planner_enabled():
+        await _send(websocket, "progress",
+                    "🗂️  Stage 4.5/6 — Planning data model (collections vs singletons)…")
+        from app.services.data_model_planner import plan_data_model
+
+        cached_dm = pipeline_cache.get(
+            project_id, "data_model", plan, intent, purpose_data,
+        )
+        if cached_dm is not None:
+            data_model = cached_dm
+            await _send(websocket, "progress", "♻️  Stage 4.5 — using cached data model")
+        else:
+            try:
+                data_model = await plan_data_model(
+                    website_plan=plan,
+                    intent=intent,
+                    purpose_data=purpose_data,
+                    visual_dna=visual_dna,
+                    gemini_key=gemini_key,
+                    project_id=project_id,
+                )
+                pipeline_cache.set(
+                    project_id, "data_model", data_model,
+                    plan, intent, purpose_data,
+                )
+            except Exception as exc:
+                # Planner already swallows Gemini errors and returns an
+                # empty DataModel — anything that escapes here is a real
+                # bug (import error, etc). Log + continue with None so
+                # downstream stages keep working.
+                logger.error(
+                    "website_pipeline: data_model_planner threw — %s", exc,
+                    exc_info=True,
+                )
+                data_model = None
+
+        if data_model is not None:
+            logger.info(
+                "website_pipeline: data_model ok — tables=%d singletons=%d",
+                len(data_model.tables), len(data_model.singletons),
+            )
+            await _send(
+                websocket, "progress",
+                f"🗂️  Data model: {len(data_model.tables)} collections, "
+                f"{len(data_model.singletons)} singletons",
+            )
+
+    # ── Stage 4.6: Tenant provisioning + SQL apply ──────────────────
+    tenant_schema = await _provision_tenant_for_project(
+        data_model=data_model,
+        project_id=project_id,
+        websocket=websocket,
+    )
+
+    # ── Stage 4.7: Seed data generation + INSERT ────────────────────
+    # Strict downstream of 4.6 — only fires when a real tenant_schema
+    # came back. Failures don't break the pipeline; empty tables fall
+    # back to JSON content in the codegen layer (Phase 2.3.C).
+    await _seed_tenant_for_project(
+        data_model=data_model,
+        tenant_schema=tenant_schema,
+        website_plan=plan,
+        intent=intent,
+        purpose_data=purpose_data,
+        gemini_key=gemini_key,
+        project_id=project_id,
+        websocket=websocket,
+    )
+
     # ── Stage 5: Deterministic foundation ───────────────────────────
     await _send(websocket, "progress", "🛠️  Stage 5/6 — Building foundation (palette, tokens, nav)…")
     design_signal = signals.get("design") or {}
-    foundation_files = _build_foundation_files(plan, visual_dna, design_signal=design_signal)
+    foundation_files = _build_foundation_files(
+        plan, visual_dna,
+        design_signal=design_signal,
+        data_model=data_model,
+        tenant_schema=tenant_schema,
+        project_id=project_id,
+    )
     # globals.css gets its own builder because it has Tailwind directives
     # and template-shaped HSL var blocks that aren't a plain key=value dict
     try:
@@ -350,6 +776,11 @@ async def run_website_pipeline(
             concurrency=8,
             purpose_data=purpose_data,
             page_images=page_images,
+            # Pass the planner output only when there's a live tenant
+            # behind it. Without 4.6 success there's no src/lib/db.js
+            # in the project for Claude to import — fetching code
+            # would be a dead reference.
+            data_model=data_model if tenant_schema else None,
         )
     except Exception as exc:
         logger.error("website_pipeline: orchestrator failed — %s", exc, exc_info=True)
@@ -518,6 +949,10 @@ def _build_foundation_files(
     plan: dict[str, Any],
     visual_dna: dict[str, Any],
     design_signal: dict[str, Any],
+    *,
+    data_model=None,            # DataModel | None — Stage 4.5 output
+    tenant_schema: str | None = None,
+    project_id: str = "",
 ) -> dict[str, str]:
     """Build the foundation file contents. Returns {rel_path: content}.
 
@@ -525,6 +960,12 @@ def _build_foundation_files(
     from the plan + visual_dna + research output. They're written
     deterministically so the per-page Claude calls have a stable contract
     to import from.
+
+    When the project has a provisioned tenant_schema and at least one
+    collection in `data_model.tables`, this also emits the Supabase
+    plumbing (`.env.local`, `src/lib/supabase.js`, `src/lib/db.js`) so
+    page components can fetch live rows via the public
+    `get_tenant_collection` RPC (migration 025).
     """
     brand = plan.get("brand") or {}
     brand_name = brand.get("name") or "Brand"
@@ -547,6 +988,27 @@ def _build_foundation_files(
     # See _build_editable_component() for the React implementation.
     if _content_separation_enabled():
         files["src/lib/editable.jsx"] = _build_editable_component()
+
+    # ── Supabase plumbing (only when there's a live tenant + tables) ─
+    # Conditions:
+    #   • A tenant_schema was provisioned (Stage 4.6 succeeded).
+    #   • The data_model has at least one collection (something to fetch).
+    #   • project_id is a real UUID — the RPC keys off chat_sessions.id.
+    # Without all three, the page components have no reason to import
+    # the Supabase client, so we skip the files entirely.
+    if (
+        tenant_schema
+        and data_model is not None
+        and getattr(data_model, "tables", None)
+        and _UUID_RE.match(project_id)
+    ):
+        env_local, supabase_js, db_js = _build_supabase_plumbing(
+            project_id=project_id,
+            data_model=data_model,
+        )
+        files[".env.local"] = env_local
+        files["src/lib/supabase.js"] = supabase_js
+        files["src/lib/db.js"] = db_js
 
     # Route shells for non-home pages
     for page in pages:
@@ -572,6 +1034,98 @@ def _build_foundation_files(
         )
 
     return files
+
+
+def _build_supabase_plumbing(
+    *,
+    project_id: str,
+    data_model,  # DataModel
+) -> tuple[str, str, str]:
+    """Build (`.env.local`, `src/lib/supabase.js`, `src/lib/db.js`) contents.
+
+    The generated client uses ONLY public env vars (`NEXT_PUBLIC_*`)
+    and the anon Supabase key — no service_role anywhere near the
+    browser. All reads go through the public `get_tenant_collection`
+    RPC (migration 025) which enforces `public_read` per-table from
+    the project's stored data_model.
+
+    `data_model` is used to emit a list of valid collection names as
+    a comment in db.js — handy when debugging which collections the
+    generated UI is allowed to read.
+    """
+    supabase_url = os.environ.get("SUPABASE_URL", "").strip()
+    anon_key     = os.environ.get("SUPABASE_ANON_KEY", "").strip()
+
+    table_names = [t.name for t in data_model.tables]
+    table_list_comment = (
+        "/*\n * Collections available via getCollection(name):\n"
+        + "".join(f" *   - {n}\n" for n in table_names)
+        + " */"
+    )
+
+    env_local = (
+        "# AUTO-GENERATED — Lucid AI website pipeline.\n"
+        "# Public client — these are safe to ship to the browser; the anon\n"
+        "# key only grants what RLS + the get_tenant_collection RPC allow.\n"
+        f"NEXT_PUBLIC_SUPABASE_URL={supabase_url}\n"
+        f"NEXT_PUBLIC_SUPABASE_ANON_KEY={anon_key}\n"
+        f"NEXT_PUBLIC_LUCID_PROJECT_ID={project_id}\n"
+    )
+
+    supabase_js = (
+        '/* AUTO-GENERATED — Lucid AI website pipeline. */\n'
+        'import { createClient } from "@supabase/supabase-js";\n'
+        '\n'
+        'const url     = process.env.NEXT_PUBLIC_SUPABASE_URL;\n'
+        'const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;\n'
+        '\n'
+        '// Single shared client. Throwing on missing env vars is\n'
+        '// deliberate — a misconfigured build should fail loudly\n'
+        "// at first import, not paper over with `null`.\n"
+        'if (!url || !anonKey) {\n'
+        '  throw new Error(\n'
+        '    "Lucid: NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY is missing.",\n'
+        '  );\n'
+        '}\n'
+        '\n'
+        'export const supabase = createClient(url, anonKey);\n'
+    )
+
+    # Explicit `.js` extension on the import — Next.js bundler-mode
+    # resolves either form, but standalone Node ESM (used by our
+    # smoke tests) requires the extension.
+    db_js = (
+        '/* AUTO-GENERATED — Lucid AI website pipeline. */\n'
+        f'{table_list_comment}\n'
+        'import { supabase } from "./supabase.js";\n'
+        '\n'
+        'const PROJECT_ID = process.env.NEXT_PUBLIC_LUCID_PROJECT_ID;\n'
+        '\n'
+        '/**\n'
+        ' * Fetch rows from the project\'s per-tenant collection. Returns\n'
+        ' * an array (possibly empty). Errors are logged + swallowed —\n'
+        ' * the caller renders an empty section instead of crashing the\n'
+        ' * whole page.\n'
+        ' *\n'
+        ' * @param {string} tableName - snake_case table identifier.\n'
+        ' * @param {{ limit?: number }} [opts]\n'
+        ' * @returns {Promise<Array<Object>>}\n'
+        ' */\n'
+        'export async function getCollection(tableName, opts = {}) {\n'
+        '  const { data, error } = await supabase.rpc("get_tenant_collection", {\n'
+        '    p_project_id: PROJECT_ID,\n'
+        '    p_table_name: tableName,\n'
+        '    p_limit:      opts.limit ?? 200,\n'
+        '  });\n'
+        '  if (error) {\n'
+        '    console.error("[lucid/db] getCollection(" + tableName + ") failed:", error);\n'
+        '    return [];\n'
+        '  }\n'
+        '  return Array.isArray(data) ? data : [];\n'
+        '}\n'
+    )
+
+    return env_local, supabase_js, db_js
 
 
 def _build_site_config(brand_name: str, tagline: str) -> str:

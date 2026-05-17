@@ -1,0 +1,47 @@
+{
+  "brand": {
+    "name": "Trattoria Bianca",
+    "tagline": "Hand-rolled pasta, Brooklyn-born",
+    "domain": "italian restaurant"
+  },
+  "pages": [
+    {
+      "route": "/",
+      "title": "Home",
+      "purpose": "Introduce the restaurant and invite guests to book or order",
+      "sections": [
+        {"type": "hero", "purpose": "Brand statement + reservation CTA"},
+        {"type": "menu_preview", "purpose": "Show 6 signature dishes with photo and price"},
+        {"type": "story", "purpose": "Family origin story + chef bio"},
+        {"type": "gallery", "purpose": "12 photos of the dining room and dishes"},
+        {"type": "testimonials", "purpose": "Quotes from regulars and press"},
+        {"type": "cta", "purpose": "Reservation form linkout"}
+      ]
+    },
+    {
+      "route": "/menu",
+      "title": "Menu",
+      "purpose": "Full menu organised by course",
+      "sections": [
+        {"type": "menu_full", "purpose": "Antipasti, primi, secondi, dolci — each dish with name, description, price"}
+      ]
+    },
+    {
+      "route": "/reservations",
+      "title": "Reservations",
+      "purpose": "Bookings",
+      "sections": [
+        {"type": "reservation_form", "purpose": "Capture guest name, email, party size, date"}
+      ]
+    },
+    {
+      "route": "/contact",
+      "title": "Contact",
+      "purpose": "Hours, address, phone",
+      "sections": [
+        {"type": "contact_info", "purpose": "One address, one phone, hours by day"},
+        {"type": "map", "purpose": "Embedded Google Map"}
+      ]
+    }
+  ]
+}

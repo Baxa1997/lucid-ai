@@ -1,0 +1,44 @@
+{
+  "brand": {
+    "name": "Marta Reis",
+    "tagline": "Portrait photography for editorial and brand work",
+    "domain": "photographer portfolio"
+  },
+  "pages": [
+    {
+      "route": "/",
+      "title": "Home",
+      "purpose": "Featured work + brief intro",
+      "sections": [
+        {"type": "hero", "purpose": "Cover image + one-line tagline"},
+        {"type": "featured_projects", "purpose": "Grid of 6 hand-picked projects with cover image and title"}
+      ]
+    },
+    {
+      "route": "/work",
+      "title": "Work",
+      "purpose": "Browse all projects",
+      "sections": [
+        {"type": "project_grid", "purpose": "Every project — title, year, client, cover photo, 5-15 images per project"}
+      ]
+    },
+    {
+      "route": "/about",
+      "title": "About",
+      "purpose": "Bio + press",
+      "sections": [
+        {"type": "long_form_bio", "purpose": "Photographer's bio paragraph"},
+        {"type": "press_quotes", "purpose": "3 press blurbs from magazines — short text + outlet name"}
+      ]
+    },
+    {
+      "route": "/contact",
+      "title": "Contact",
+      "purpose": "Booking inquiries",
+      "sections": [
+        {"type": "contact_form", "purpose": "Inquiry form"},
+        {"type": "contact_info", "purpose": "Single email, single phone, agent info"}
+      ]
+    }
+  ]
+}

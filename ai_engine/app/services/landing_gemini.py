@@ -273,6 +273,7 @@ async def structured_distill(
     max_tokens: int = 8192,
     temperature: float = 0.2,
     model: str | None = None,
+    thinking_budget: int | None = None,
 ) -> str:
     """Flash + JSON output, no tools. Returns raw JSON text (caller parses).
 
@@ -284,11 +285,20 @@ async def structured_distill(
     (finishReason=MAX_TOKENS, candidates=N, text=""). Pinning visual_dna
     to gemini-2.5-flash sidesteps the bug at the cost of slightly older
     model quality on that one call.
+
+    `thinking_budget` overrides the auto-picked reasoning budget. Pro
+    models default to 1024 (Vertex rejects 0); Flash/Lite default to 0
+    to save latency. Bump this on complex prompts where Pro models
+    return empty bodies with finishReason=MAX_TOKENS — that means
+    reasoning blew the default 1024 cap and starved the output budget.
     """
     # Pro models REQUIRE thinking_budget > 0 (Vertex rejects 0 with
     # INVALID_ARGUMENT). Flash/Lite models allow 0 to save latency.
     _model_for_thinking = (model or DISTILL_MODEL or "").lower()
-    _thinking_budget = 1024 if "pro" in _model_for_thinking else 0
+    if thinking_budget is None:
+        _thinking_budget = 1024 if "pro" in _model_for_thinking else 0
+    else:
+        _thinking_budget = thinking_budget
 
     generation_config: dict[str, Any] = {
         "temperature": temperature,

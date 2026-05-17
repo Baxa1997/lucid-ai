@@ -36,6 +36,7 @@ async def generate_website(
     skip_footer: bool = False,
     purpose_data: dict | None = None,
     page_images: dict[str, dict] | None = None,
+    data_model: Any = None,   # DataModel | None — Stage 4.5 output
 ) -> dict[str, Any]:
     """Run Stage 5 — parallel creative generation for the whole website.
 
@@ -96,6 +97,7 @@ async def generate_website(
                 brand_name=brand_name, tagline=tagline, domain=domain,
                 api_key=api_key, websocket=websocket,
                 page_images=images_for_page,
+                data_model=data_model,
             )
 
     async def _bounded_header() -> dict | None:

@@ -1,0 +1,56 @@
+{
+  "brand": {
+    "name": "Cornerstone Law Group",
+    "tagline": "Plain-English legal counsel for founders and operators",
+    "domain": "boutique law firm"
+  },
+  "pages": [
+    {
+      "route": "/",
+      "title": "Home",
+      "purpose": "Introduce the firm and convert visitors into consultation requests",
+      "sections": [
+        {"type": "hero", "purpose": "Headline + 'Book a consultation' CTA"},
+        {"type": "services_preview", "purpose": "Six practice areas — each with name, short description, and price-from indicator"},
+        {"type": "team_preview", "purpose": "Five attorney bios with photo, name, title, areas of focus"},
+        {"type": "testimonials", "purpose": "Eight client quotes with company name and engagement type"},
+        {"type": "logos", "purpose": "Twelve client logos for social proof"},
+        {"type": "cta", "purpose": "Final call-to-action — fixed copy"}
+      ]
+    },
+    {
+      "route": "/services",
+      "title": "Services",
+      "purpose": "Full service catalog",
+      "sections": [
+        {"type": "service_list", "purpose": "Every service: name, description, typical engagement length, starting price, deliverables list"}
+      ]
+    },
+    {
+      "route": "/team",
+      "title": "Team",
+      "purpose": "Full attorney roster",
+      "sections": [
+        {"type": "team_full", "purpose": "Each attorney with photo, name, title, education, bar admissions, bio, focus areas, contact email"}
+      ]
+    },
+    {
+      "route": "/about",
+      "title": "About",
+      "purpose": "Firm story + values",
+      "sections": [
+        {"type": "story", "purpose": "Founding story — one paragraph"},
+        {"type": "values", "purpose": "Three to four firm values — fixed copy"}
+      ]
+    },
+    {
+      "route": "/contact",
+      "title": "Contact",
+      "purpose": "Booking inquiries",
+      "sections": [
+        {"type": "contact_form", "purpose": "Capture name, email, company, engagement type"},
+        {"type": "contact_info", "purpose": "One office address, phone, hours"}
+      ]
+    }
+  ]
+}

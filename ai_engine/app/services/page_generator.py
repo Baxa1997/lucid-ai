@@ -165,6 +165,92 @@ QUALITY BAR
 """
 
 
+def _build_collections_block(data_model: Any) -> str:
+    """Render the prompt section telling Claude which sections are live
+    (fetched from Supabase) vs static (read from content JSON).
+
+    Returns an empty string when there are no collections — most landing
+    pages and any project where Stage 4.5 produced an empty DataModel.
+    Adding the block conditionally keeps the prompt size minimal for the
+    common case.
+
+    Why a server component path
+    ---------------------------
+    `await getCollection(...)` only works in a server component (Next.js
+    server-side rendering). Client components — the default for sections
+    that use hooks or onClick — can't await a top-level call. So we
+    instruct Claude to drop the `"use client"` directive AND switch the
+    component to `async function` for the matching sections only.
+    """
+    if data_model is None or not getattr(data_model, "tables", None):
+        return ""
+
+    table_lines: list[str] = []
+    for t in data_model.tables:
+        field_names = ", ".join(f.name for f in t.fields[:8])
+        table_lines.append(
+            f"  • {t.name}  (label: {t.plural_label})\n"
+            f"      fields: {field_names}"
+        )
+    tables_str = "\n".join(table_lines)
+
+    return f"""
+
+══ LIVE COLLECTIONS (Supabase-backed — server components) ══
+This project has a database backend. The following collections hold
+LIVE rows that the user will edit over time. For sections whose
+primary purpose is to display a list of items from one of these
+collections, fetch the data at render time INSTEAD of reading it from
+content.<key>.items.
+
+AVAILABLE COLLECTIONS:
+{tables_str}
+
+WHEN TO FETCH LIVE
+- If a section type / purpose obviously matches one of these tables
+  (e.g. "menu" / "menu_preview" → menu_items, "gallery" → gallery_images,
+  "testimonials" → testimonials, "team" / "instructors" → team_members),
+  treat it as a LIVE COLLECTION section.
+- If no table obviously matches, treat the section as a normal static
+  section using the JSON content path described below.
+
+LIVE COLLECTION SECTION RULES (NON-NEGOTIABLE)
+1. DROP the `"use client"` directive from the section file.
+2. Make the component an async function:
+       export default async function MenuPreviewSection() {{ ... }}
+3. Import the fetcher at the top of the file:
+       import {{ getCollection }} from "@/lib/db";
+4. Fetch the rows inside the function body:
+       const items = await getCollection("menu_items");
+5. Render the rows with `items.map(...)`. Each row has the columns
+   declared in the AVAILABLE COLLECTIONS list above, plus `id`,
+   `created_at`, `updated_at` (autopopulated). Do NOT assume any
+   columns not in the field list.
+6. The section's TITLE / INTRO / CTA copy STILL comes from
+   content.<section_key>.<field> in the page's JSON. Only the LIST
+   OF ITEMS comes from getCollection(). Example:
+       <Editable path="menu.title" type="text">
+         <h2>{{content.menu.title}}</h2>
+       </Editable>
+       {{items.map((it) => (
+         <div key={{it.id}}>
+           <h3>{{it.name}}</h3>
+           <p>${{(it.price_cents / 100).toFixed(2)}}</p>
+         </div>
+       ))}}
+7. For the content JSON file: the matching `<section_key>` key MUST
+   still exist with title / intro / cta_primary etc., but it MUST
+   NOT contain an "items" array — items live in Supabase.
+8. Do NOT wrap the items.map(...) loop with <Editable>. Editing
+   individual rows happens through the admin panel, not the inline
+   editor. Per-row text inside items.map(...) renders as plain JSX.
+
+For all OTHER sections, follow the CONTENT / CODE SEPARATION block
+below exactly as written (client component, "use client", import
+from content.json, full Editable wrapping).
+"""
+
+
 def _build_user_prompt(
     *,
     page: dict,
@@ -172,6 +258,7 @@ def _build_user_prompt(
     section_specs: list[dict],
     visual_dna: dict,
     page_images: dict | None = None,
+    data_model: Any = None,
 ) -> str:
     """User prompt: what THIS specific page should produce."""
     component_pages_dir = f"src/components/pages/{slug}"
@@ -213,6 +300,11 @@ def _build_user_prompt(
                 "  - When a section has multiple images, use them in the order listed.\n"
                 "  - Sections not listed here have NO photos — use Lucide icons or pure CSS instead.\n"
             )
+
+    # Collections block — only present when Stage 4.5 produced a data_model
+    # with at least one table AND the project is tenant-provisioned (the
+    # foundation layer wrote src/lib/db.js for us).
+    collections_block = _build_collections_block(data_model)
 
     content_json_path = f"src/content/pages/{slug}.json"
     content_import_path = f"@/content/pages/{slug}.json"
@@ -313,7 +405,7 @@ PAGE PURPOSE
 {page_purpose or '(general page for this route)'}
 
 SECTIONS TO BUILD ({len(section_specs)} total) — generate each as its own .jsx file under {component_pages_dir}/:
-{section_block}{images_block}{content_block}
+{section_block}{images_block}{collections_block}{content_block}
 
 REQUIRED OUTPUT FILES
 1. {page_file}
@@ -348,6 +440,7 @@ async def generate_one_page(
     websocket: Any = None,
     foundation_imports: dict[str, str] | None = None,
     page_images: dict | None = None,
+    data_model: Any = None,   # DataModel | None — Stage 4.5 output
 ) -> list[dict] | None:
     """Generate one complete page (composition + sections) in a single Claude call.
 
@@ -407,6 +500,7 @@ async def generate_one_page(
         page=page, slug=slug,
         section_specs=section_specs, visual_dna=visual_dna,
         page_images=page_images,
+        data_model=data_model,
     )
 
     last_failure = "unknown"

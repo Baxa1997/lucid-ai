@@ -1,0 +1,53 @@
+{
+  "brand": {
+    "name": "Lens & Iron",
+    "tagline": "Vintage cameras, sourced and tested",
+    "domain": "vintage camera ecommerce"
+  },
+  "pages": [
+    {
+      "route": "/",
+      "title": "Home",
+      "purpose": "Browse featured cameras, new arrivals, brand story",
+      "sections": [
+        {"type": "hero", "purpose": "Tagline + 'Shop now' CTA"},
+        {"type": "featured_products", "purpose": "Grid of 8 hand-picked cameras with photo, name, price"},
+        {"type": "categories", "purpose": "Browse by maker (Leica, Nikon, Canon, Hasselblad)"},
+        {"type": "story", "purpose": "Single paragraph about the owner and curation philosophy"}
+      ]
+    },
+    {
+      "route": "/shop",
+      "title": "Shop",
+      "purpose": "Full product catalog",
+      "sections": [
+        {"type": "product_grid", "purpose": "Filterable grid of all products with photo, name, price, stock status"}
+      ]
+    },
+    {
+      "route": "/categories",
+      "title": "Categories",
+      "purpose": "Categories landing",
+      "sections": [
+        {"type": "category_list", "purpose": "Each category is one of: SLR, rangefinder, medium-format, instant, lens"}
+      ]
+    },
+    {
+      "route": "/about",
+      "title": "About",
+      "purpose": "Owner story",
+      "sections": [
+        {"type": "long_form", "purpose": "Multi-paragraph essay on the owner's background and inventory standards"}
+      ]
+    },
+    {
+      "route": "/contact",
+      "title": "Contact",
+      "purpose": "How to reach support",
+      "sections": [
+        {"type": "contact_form", "purpose": "Send a question or sell-to-us submission"},
+        {"type": "policies", "purpose": "Shipping, returns, warranty — fixed copy"}
+      ]
+    }
+  ]
+}

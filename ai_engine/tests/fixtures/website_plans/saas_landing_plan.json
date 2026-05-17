@@ -1,0 +1,24 @@
+{
+  "brand": {
+    "name": "Cortex Analytics",
+    "tagline": "Real-time product analytics for B2B SaaS",
+    "domain": "B2B SaaS product analytics"
+  },
+  "pages": [
+    {
+      "route": "/",
+      "title": "Home",
+      "purpose": "Single-page landing — convert visitors to demos",
+      "sections": [
+        {"type": "hero", "purpose": "Headline, subhead, primary CTA 'Book a demo'"},
+        {"type": "logo_strip", "purpose": "5 customer logos for social proof"},
+        {"type": "features", "purpose": "Three feature tiles: real-time dashboards, custom events, alerting — each a short pitch"},
+        {"type": "screenshot_showcase", "purpose": "Product screenshot with annotated callouts"},
+        {"type": "comparison", "purpose": "Cortex vs Mixpanel vs Amplitude — fixed comparison table"},
+        {"type": "pricing", "purpose": "Three tiers: Starter $99, Team $299, Enterprise Custom — fixed copy"},
+        {"type": "faq", "purpose": "Six fixed FAQs about pricing, onboarding, data residency"},
+        {"type": "cta_footer", "purpose": "Final 'Book a demo' CTA"}
+      ]
+    }
+  ]
+}
