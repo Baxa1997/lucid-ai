@@ -54,11 +54,11 @@ _load_env_file(str(Path(__file__).resolve().parents[2] / ".env"))
 
 
 from app.services.data_model_planner import plan_data_model  # noqa: E402
-from app.services.website_pipeline import (  # noqa: E402
-    _build_foundation_files,
-    _provision_tenant_for_project,
-    _seed_tenant_for_project,
+from app.services.pipeline_tenant import (  # noqa: E402
+    provision_tenant_for_project,
+    seed_tenant_for_project,
 )
+from app.services.website_pipeline import _build_foundation_files  # noqa: E402
 
 
 FIXTURES = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "website_plans"
@@ -300,7 +300,7 @@ async def main() -> int:
 
         # Stage 4.6 — provision + DDL
         print("\n→ Stage 4.6 (provision + DDL) …")
-        tenant_schema = await _provision_tenant_for_project(
+        tenant_schema = await provision_tenant_for_project(
             data_model=data_model, project_id=project_id, websocket=None,
         )
         if not tenant_schema:
@@ -310,7 +310,7 @@ async def main() -> int:
 
         # Stage 4.7 — seed
         print("\n→ Stage 4.7 (seed) …")
-        seed = await _seed_tenant_for_project(
+        seed = await seed_tenant_for_project(
             data_model=data_model, tenant_schema=tenant_schema,
             website_plan=plan, intent=intent, purpose_data=purpose_data,
             gemini_key=gemini_key, project_id=project_id, websocket=None,
