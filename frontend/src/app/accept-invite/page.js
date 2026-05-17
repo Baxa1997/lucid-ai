@@ -5,14 +5,19 @@
 //  Reads ?token=..., checks auth, calls the accept endpoint, redirects
 //  to the project workspace. Unauthenticated users are bounced to the
 //  login page with a return URL that brings them back here.
+//
+//  Suspense boundary is required because `useSearchParams()` in
+//  Next.js 14 forces a CSR bailout during static prerendering; without
+//  wrapping the consumer in <Suspense>, `next build` errors with
+//  "useSearchParams() should be wrapped in a suspense boundary".
 // ─────────────────────────────────────────────────────────
 
-import { useEffect, useState, useCallback } from "react";
+import { Suspense, useEffect, useState, useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2, AlertCircle, Check } from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
-export default function AcceptInvitePage() {
+function AcceptInviteInner() {
   const router = useRouter();
   const params = useSearchParams();
   const token = params.get("token");
@@ -129,5 +134,28 @@ export default function AcceptInvitePage() {
         )}
       </div>
     </div>
+  );
+}
+
+function AcceptInviteFallback() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 w-full max-w-md p-8 text-center">
+        <div className="w-12 h-12 mx-auto mb-4 rounded-full bg-blue-100 grid place-items-center">
+          <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
+        </div>
+        <h1 className="text-base font-semibold text-slate-900 mb-1">
+          Loading invite…
+        </h1>
+      </div>
+    </div>
+  );
+}
+
+export default function AcceptInvitePage() {
+  return (
+    <Suspense fallback={<AcceptInviteFallback />}>
+      <AcceptInviteInner />
+    </Suspense>
   );
 }
