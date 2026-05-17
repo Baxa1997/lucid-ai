@@ -7460,6 +7460,41 @@ async def _generate_new_project_inner(
         )
         return ok
 
+    # ── Admin pipeline v2 — feature-flagged (Step 3.3) ─────────────
+    # Mirrors the website-pipeline dispatch. Routes admin-family
+    # archetypes through the new pipeline when the flag is on.
+    # 'ecommerce' is intentionally excluded — it has a different
+    # legacy code path that we'll migrate in a later step.
+    # Falls through to legacy admin generation if the pipeline
+    # returns False (e.g. tenant provisioning failed).
+    from app.services.admin_pipeline import (
+        run_admin_pipeline, should_route_to_admin_pipeline,
+    )
+    if should_route_to_admin_pipeline(_layout_archetype):
+        _phase_begin("admin_pipeline_v2")
+        ok = await run_admin_pipeline(
+            description=description,
+            classification=_classification,
+            workspace_path=workspace_path,
+            validated=validated,
+            websocket=websocket,
+            chat_session_id=chat_session_id,
+        )
+        _phase_end("admin_pipeline_v2")
+        logger.info(
+            "⏱️  [TIMING] TOTAL admin pipeline v2: %.2fs (ok=%s)",
+            _perf_time.perf_counter() - _t_total, ok,
+        )
+        if ok:
+            return True
+        # If admin pipeline returned False, fall through to legacy
+        # (e.g. provisioning failed) — preserves the safety net so
+        # users always get *something*.
+        logger.warning(
+            "[%s] Admin pipeline v2 returned False — falling through to legacy",
+            chat_session_id,
+        )
+
     # ── Step 2.5: Expand very short prompts ──
     # "ACCA website" or "yoga studio" yields empty research blocks because Gemini
     # has nothing concrete to anchor on. Expanding here propagates richer context
