@@ -324,13 +324,15 @@ class TestResolveTenant:
                 "parent_project_id": None,
                 "tenant_schema":     SCHEMA_NAME,
                 "data_model":        own_data_model,
+                "visual_dna":        {"brand_name": "Standalone"},
             },
         })
         result = await resolve_tenant_for_project(UUID_VALID, client)
         assert result is not None
-        tenant_schema, data_model = result
+        tenant_schema, data_model, visual_dna = result
         assert tenant_schema == SCHEMA_NAME
         assert [t.name for t in data_model.tables] == ["menu_items"]
+        assert visual_dna == {"brand_name": "Standalone"}
 
     @pytest.mark.asyncio
     async def test_linked_project_returns_parent_tenant(self):
@@ -342,18 +344,41 @@ class TestResolveTenant:
                 "parent_project_id": UUID_PARENT,
                 "tenant_schema":     None,           # ignored for linked
                 "data_model":        {},             # ignored for linked
+                "visual_dna":        None,
             },
             UUID_PARENT: {
                 "tenant_schema":     PARENT_SCHEMA,
                 "data_model":        parent_data_model,
+                "visual_dna":        {"brand_name": "Parent", "primary_color": "#ff3366"},
             },
         })
         result = await resolve_tenant_for_project(UUID_VALID, client)
         assert result is not None
-        tenant_schema, data_model = result
+        tenant_schema, data_model, visual_dna = result
         # Parent's schema, not child's NULL.
         assert tenant_schema == PARENT_SCHEMA
         assert [t.name for t in data_model.tables] == ["menu_items"]
+        # Parent's visual_dna inherited verbatim.
+        assert visual_dna == {"brand_name": "Parent", "primary_color": "#ff3366"}
+
+    @pytest.mark.asyncio
+    async def test_standalone_project_without_visual_dna_returns_none_for_third(self):
+        """Old project rows (pre-migration-029) read visual_dna as None.
+        Resolver must NOT raise — return None as the third tuple element."""
+        own_data_model = _make_data_model().model_dump(mode="json")
+        client = _make_resolve_client({
+            UUID_VALID: {
+                "id":                UUID_VALID,
+                "parent_project_id": None,
+                "tenant_schema":     SCHEMA_NAME,
+                "data_model":        own_data_model,
+                "visual_dna":        None,
+            },
+        })
+        result = await resolve_tenant_for_project(UUID_VALID, client)
+        assert result is not None
+        _, _, visual_dna = result
+        assert visual_dna is None
 
     @pytest.mark.asyncio
     async def test_linked_project_with_missing_parent_returns_none(self):

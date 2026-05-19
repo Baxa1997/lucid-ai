@@ -7,8 +7,9 @@ goes wrong:
   • Missing "use client" (would crash at first useState)
   • Missing AuthGuard (page would be world-readable)
   • Missing db_admin imports (page would have no data source)
-  • TypeScript syntax (would fail `next build` on JSX-only codebase)
+  • TypeScript syntax (would fail the Vite JSX build)
   • Raw fetch / supabase imports (bypasses the auth contract)
+  • Next.js imports (admin uses React Router/Vite)
   • Obvious JSX brokenness (unbalanced tags / unclosed strings)
 
 The validator returns a list of issue strings; empty list = clean.
@@ -46,9 +47,13 @@ _TS_PATTERNS = [
 
 _FORBIDDEN_IMPORTS = [
     # Anything pulling Supabase directly bypasses the db_admin contract.
-    re.compile(r"""import[^;]*['"]@supabase/(?!ssr)"""),
+    re.compile(r"""import[^;]*['"]@supabase/"""),
+    # Admin panels are React/Vite. Next imports mean the wrong runtime.
+    re.compile(r"""import[^;]*['"]next/(link|navigation|router|image)['"]"""),
     # Service-role key would be catastrophic in browser bundle.
     re.compile(r"SUPABASE_SERVICE_KEY"),
+    # Vite admin bundles must use import.meta.env.VITE_*.
+    re.compile(r"NEXT_PUBLIC_[A-Z0-9_]+"),
 ]
 
 # `await fetch(` is the smoking gun for direct API calls.
@@ -68,8 +73,7 @@ def validate_generated_crud_file(
     `expected_entity` is the table.name (snake_case). The validator
     looks for it in the file as a smoke check that Claude didn't
     silently swap entities. `page_type` is informational — it
-    relaxes the check set (e.g. "use client" is required for all
-    three; only list view is REQUIRED to import deleteRow).
+    adjusts the check set for list/create/edit pages.
     """
     issues: list[str] = []
 
@@ -86,20 +90,35 @@ def validate_generated_crud_file(
     elif "@/components/AuthGuard" not in file_content:
         issues.append("AuthGuard used but not imported from @/components/AuthGuard")
 
-    # 3. db_admin import — every page must hit at least one helper
+    # 3. db_admin import — every page must hit the expected helpers
     if "@/lib/db_admin" not in file_content:
         issues.append("missing import from @/lib/db_admin")
     else:
-        # Per-page expected helper
         helper_required = {
-            "list":   "listCollection",
-            "create": "createRow",
-            "edit":   "updateRow",  # listCollection + deleteRow are also OK
-        }.get(page_type)
-        if helper_required and helper_required not in file_content:
-            issues.append(
-                f"{page_type} page missing expected helper {helper_required!r}"
-            )
+            "list":   ("listCollection", "deleteRow"),
+            "create": ("createRow",),
+            "edit":   ("listCollection", "updateRow", "deleteRow"),
+        }.get(page_type, ())
+        for helper in helper_required:
+            if helper not in file_content:
+                issues.append(
+                    f"{page_type} page missing expected helper {helper!r}"
+                )
+
+    # 3b. React Router import contract
+    if "react-router-dom" not in file_content:
+        issues.append("missing react-router-dom import")
+    else:
+        router_required = {
+            "list":   ("Link",),
+            "create": ("useNavigate",),
+            "edit":   ("useNavigate", "useParams"),
+        }.get(page_type, ())
+        for symbol in router_required:
+            if symbol not in file_content:
+                issues.append(
+                    f"{page_type} page missing React Router symbol {symbol!r}"
+                )
 
     # 4. default export
     if "export default" not in file_content:
@@ -122,6 +141,9 @@ def validate_generated_crud_file(
     # 8. fetch() call — direct API access bypasses db_admin
     if _FETCH_USAGE_RE.search(file_content):
         issues.append("uses raw fetch() — must use db_admin helpers")
+
+    if "useRouter(" in file_content or "router.push(" in file_content:
+        issues.append("uses Next router API — use React Router useNavigate()")
 
     # 9. Balanced JSX-ish brackets (very crude)
     bracket_issues = _check_balanced_brackets(file_content)

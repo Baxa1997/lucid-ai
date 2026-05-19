@@ -97,7 +97,7 @@ class TestPromptBuilders:
         out = build_edit_view_prompt(ent, _plan(ent))
         body = out["user"]
         # Reads params.id, finds row, pre-fills
-        assert "params.id" in body
+        assert "useParams" in body
         assert "find(" in body or "find((r)" in body
         assert "reset(" in body or "defaultValues" in body
         # Submit path
@@ -132,6 +132,7 @@ class TestPromptBuilders:
             text = out["system"] + out["user"]
             assert helper in text, f"{builder.__name__} missing {helper}"
             assert "@/lib/db_admin" in text
+            assert "react-router-dom" in text
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -155,15 +156,15 @@ class TestMockMode:
         result = self._run(tmp_path)
         # 3 pages: list / create / edit
         assert len(result["files_written"]) == 3
-        for tail in ("page.jsx", "new/page.jsx", "[id]/page.jsx"):
-            assert (tmp_path / f"src/app/leads/{tail}").is_file()
+        for tail in ("List.jsx", "Create.jsx", "Edit.jsx"):
+            assert (tmp_path / f"src/pages/Leads{tail}").is_file()
 
     def test_mock_files_valid_jsx_contain_use_client(self, tmp_path):
         self._run(tmp_path)
-        for tail in ("page.jsx", "new/page.jsx", "[id]/page.jsx"):
-            content = (tmp_path / f"src/app/leads/{tail}").read_text()
+        for tail in ("List.jsx", "Create.jsx", "Edit.jsx"):
+            content = (tmp_path / f"src/pages/Leads{tail}").read_text()
             # The directive must be the first non-comment line so
-            # Next's RSC bailout works.
+            # generated files have one client-side shape.
             first_line = next(
                 (l for l in content.splitlines() if l.strip() and not l.strip().startswith("/*")),
                 "",
@@ -174,7 +175,7 @@ class TestMockMode:
 
     def test_mock_includes_authguard(self, tmp_path):
         self._run(tmp_path)
-        list_jsx = (tmp_path / "src/app/leads/page.jsx").read_text()
+        list_jsx = (tmp_path / "src/pages/LeadsList.jsx").read_text()
         assert "AuthGuard" in list_jsx
         assert "@/components/AuthGuard" in list_jsx
 
@@ -194,9 +195,9 @@ class TestMockMode:
     def test_snake_case_entity_writes_kebab_path(self, tmp_path):
         ent = _entity("purchase_orders")
         self._run(tmp_path, entity=ent)
-        assert (tmp_path / "src/app/purchase-orders/page.jsx").is_file()
-        assert (tmp_path / "src/app/purchase-orders/new/page.jsx").is_file()
-        assert (tmp_path / "src/app/purchase-orders/[id]/page.jsx").is_file()
+        assert (tmp_path / "src/pages/PurchaseOrdersList.jsx").is_file()
+        assert (tmp_path / "src/pages/PurchaseOrdersCreate.jsx").is_file()
+        assert (tmp_path / "src/pages/PurchaseOrdersEdit.jsx").is_file()
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -206,6 +207,7 @@ class TestMockMode:
 _VALID_LIST_JSX = '''\
 "use client";
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { listCollection, deleteRow } from "@/lib/db_admin.js";
 import { AuthGuard } from "@/components/AuthGuard.jsx";
 
@@ -220,6 +222,7 @@ export default function LeadsListPage() {
   return (
     <AuthGuard>
       <div>{rows.map((row) => <div key={row.id}>{row.name}</div>)}</div>
+      <Link to="/leads/new">New</Link>
     </AuthGuard>
   );
 }

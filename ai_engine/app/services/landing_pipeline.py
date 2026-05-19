@@ -49,7 +49,7 @@ async def run_landing_pipeline(
     anthropic_key = validated.get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY", "")
 
     if not anthropic_key:
-        await _send(websocket, "error", "❌ Missing ANTHROPIC_API_KEY (Gemini auth via Vertex ADC)")
+        await _send(websocket, "error", "Service is missing its API key — please contact support.")
         return False
 
     # Drive the UI's task-phase indicator from inside this pipeline.
@@ -89,7 +89,7 @@ async def run_landing_pipeline(
     # Phase 3 — keeps the UI from flickering through interim statuses.
     await _phase(1, "Preparing workspace", "Workspace ready", "done")
     await _phase(3, "Researching project", "Searching real reference sites + design DNA…", "active")
-    await _send(websocket, "progress", "🧠 Researching brand & sections (Gemini)...")
+    await _send(websocket, "progress", "Researching your brand…")
 
     # ── Stage 0: intent + clarifier gate ─────────────────────────────
     # analyze_intent runs FIRST (sequentially) so we can interrupt the
@@ -343,12 +343,12 @@ async def run_landing_pipeline(
         )
     except Exception as exc:
         logger.error("landing_pipeline: brief failed — %s", exc, exc_info=True)
-        await _send(websocket, "error", f"❌ Brief failed: {str(exc)[:160]}")
+        await _send(websocket, "error", "Couldn't research your brand — please try again.")
         return False
 
     sections = brief.get("sections") or []
     if not sections:
-        await _send(websocket, "error", "❌ Brief returned 0 sections — aborting")
+        await _send(websocket, "error", "Couldn't plan your sections — try a more specific description.")
         return False
 
     # Enrich the brief with research signals (mutates in-place). No-ops if
@@ -388,7 +388,7 @@ async def run_landing_pipeline(
     await _send(
         websocket,
         "progress",
-        f"📐 Brief: {brand_name or 'site'} — {len(sections)} sections",
+        f"Designing {brand_name or 'your site'}…",
     )
     await _phase(
         3,
@@ -435,7 +435,7 @@ async def run_landing_pipeline(
         logger.info("landing_pipeline: wrote %s", content_path)
     except Exception as exc:
         logger.error("landing_pipeline: content write failed — %s", exc, exc_info=True)
-        await _send(websocket, "error", f"❌ Content write failed: {str(exc)[:160]}")
+        await _send(websocket, "error", "Couldn't save your content — please try again.")
         return False
 
     # ── Step 3: Image binding (Unsplash) ─────────────────────────────
@@ -489,7 +489,7 @@ async def run_landing_pipeline(
         run_landing_phase0(workspace_path, brief)
     except Exception as exc:
         logger.error("landing_pipeline: phase0 failed — %s", exc, exc_info=True)
-        await _send(websocket, "error", f"❌ Phase-0 failed: {str(exc)[:160]}")
+        await _send(websocket, "error", "Couldn't set up the project — please try again.")
         return False
 
     # ── Step 5: Parallel section + layout codegen ────────────────────
@@ -523,7 +523,7 @@ async def run_landing_pipeline(
         )
     except Exception as exc:
         logger.error("landing_pipeline: section codegen failed — %s", exc, exc_info=True)
-        await _send(websocket, "error", f"❌ Section codegen failed: {str(exc)[:160]}")
+        await _send(websocket, "error", "Couldn't build your sections — please try again.")
         return False
 
     try:
@@ -541,7 +541,7 @@ async def run_landing_pipeline(
     page_imports = result.get("page_imports") or []
     page_renders = result.get("page_renders") or []
     if not page_renders:
-        await _send(websocket, "error", "❌ All sections failed codegen — aborting")
+        await _send(websocket, "error", "Couldn't build any sections — please try a different description.")
         return False
 
     # ── Step 6: app/page.jsx shell ───────────────────────────────────
@@ -560,7 +560,7 @@ async def run_landing_pipeline(
         )
     except Exception as exc:
         logger.error("landing_pipeline: page shell failed — %s", exc, exc_info=True)
-        await _send(websocket, "error", f"❌ Page shell failed: {str(exc)[:160]}")
+        await _send(websocket, "error", "Couldn't assemble your page — please try again.")
         return False
 
     await _phase(
@@ -582,7 +582,7 @@ async def run_landing_pipeline(
     # before handing off to preview. Without this, build-time errors
     # (unresolved imports, JSX syntax, missing exports) only get caught
     # by the dev server, which leaves the user staring at a red overlay.
-    await _send(websocket, "progress", "🏗️  Building application — checking for errors...")
+    await _send(websocket, "progress", "Final checks…")
     await _phase(6, "Verifying build", "Running production build to catch errors…", "active")
     try:
         from app.services.build_validator import BuildValidator
@@ -597,16 +597,18 @@ async def run_landing_pipeline(
             attempts = build_result.get("attempts", 0)
             fixed_n = len(build_result.get("fixed_files") or [])
             if fixed_n:
+                # build auto-fix is a recovery path — keep the user
+                # message friendly, drop the file/attempt count
                 await _send(
                     websocket, "progress",
-                    f"✅ Build passed — fixed {fixed_n} file(s) across {attempts} attempt(s)",
+                    "Cleaned up a few small issues.",
                 )
             await _phase(6, "Verifying build", "Build passed — preview ready", "done")
         else:
             err_count = build_result.get("error_count", 0)
             await _send(
                 websocket, "warning",
-                f"⚠️  Build still has {err_count} error(s) after auto-fix — preview may show issues.",
+                "Some issues remain — preview it and let me know what to fix.",
             )
             await _phase(6, "Verifying build", f"{err_count} error(s) remain", "done")
     except Exception as exc:
@@ -624,7 +626,7 @@ async def run_landing_pipeline(
     except Exception as exc:
         logger.warning("landing_pipeline: quality_gate failed (non-fatal) — %s", exc)
 
-    await _send(websocket, "progress", f"🎉 Landing generated — {len(page_renders)} sections")
+    await _send(websocket, "progress", "Your site is ready!")
 
     # ── Finalise chat_sessions row ─────────────────────────────────────
     # Three fields the rest of the system reads on reload / publish / list:
@@ -857,13 +859,13 @@ async def _emit_plan_and_wait(
         await clear_persisted_plan(chat_session_id)
         if correction:
             websocket._plan_correction = correction
-            await _send(websocket, "progress", f"🔄 Re-researching: {correction[:60]}…")
+            await _send(websocket, "progress", "Re-researching with your changes…")
             logger.info("landing_pipeline: plan rejected with correction")
         else:
-            await _send(websocket, "warning", "❌ Plan rejected — generation aborted.")
+            await _send(websocket, "warning", "Generation canceled.")
             logger.info("landing_pipeline: plan rejected without correction")
         return False
 
     await clear_persisted_plan(chat_session_id)
-    await _send(websocket, "progress", "✅ Plan confirmed — starting code generation…")
+    await _send(websocket, "progress", "Plan confirmed — building your site now…")
     return True

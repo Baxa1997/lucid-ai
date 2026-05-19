@@ -143,7 +143,7 @@ async def run_website_pipeline(
     """
     anthropic_key = validated.get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY", "")
     if not anthropic_key:
-        await _send(websocket, "error", "❌ Missing ANTHROPIC_API_KEY")
+        await _send(websocket, "error", "Service is missing its API key — please contact support.")
         return False
 
     # ── Stage 0.5: Purpose classification ───────────────────────────
@@ -171,7 +171,7 @@ async def run_website_pipeline(
     )
     await _send(
         websocket, "progress",
-        f"🎯 Purpose: {purpose_data['primary_purpose']} ({purpose_data['confidence']}% conf)",
+        "Understanding what you want to build…",
     )
 
     # ── Stage 1: Intent — CACHED ────────────────────────────────────
@@ -184,7 +184,7 @@ async def run_website_pipeline(
     project_id = chat_session_id or "_session_none_"
 
     await _phase(websocket, 3, "Researching project", "Analyzing intent + culture…", "active")
-    await _send(websocket, "progress", "🧠 Stage 1/6 — Analyzing intent…")
+    await _send(websocket, "progress", "Studying your brand…")
 
     from app.services.landing_intent import analyze_intent
 
@@ -193,13 +193,13 @@ async def run_website_pipeline(
     )
     if cached_intent is not None:
         intent = cached_intent
-        await _send(websocket, "progress", "♻️  Stage 1 — using cached intent")
+        pass  # cache-hit; no user-facing message needed
     else:
         try:
             intent = await analyze_intent(clean_description, classification, timeout_s=60.0)
         except Exception as exc:
             logger.error("website_pipeline: intent failed — %s", exc, exc_info=True)
-            await _send(websocket, "error", f"❌ Intent analysis failed: {exc}")
+            await _send(websocket, "error", "Couldn't understand your request — please try again.")
             return False
         pipeline_cache.set(
             project_id, "intent", intent, clean_description, classification,
@@ -214,7 +214,7 @@ async def run_website_pipeline(
     # ── Stage 2: Research (parallel) — CACHED per project ───────────
     # Cache key is (prompt + clarity + purpose). Anything that changes
     # the research question changes the hash → automatic invalidation.
-    await _send(websocket, "progress", "🔎 Stage 2/6 — Researching domain + design (parallel)…")
+    await _send(websocket, "progress", "Researching your industry…")
 
     from app.services.landing_domain_research import run_domain_research
     from app.services.landing_design_research import run_design_research
@@ -224,7 +224,7 @@ async def run_website_pipeline(
         clean_description, clarity_answers, purpose_data,
     )
     if cached_research is not None:
-        await _send(websocket, "progress", "♻️  Stage 2 — using cached research")
+        # cache-hit; no user-facing message
         domain_res, design_res = cached_research
     else:
         try:
@@ -234,7 +234,7 @@ async def run_website_pipeline(
             )
         except Exception as exc:
             logger.error("website_pipeline: research failed — %s", exc, exc_info=True)
-            await _send(websocket, "error", f"❌ Research failed: {exc}")
+            await _send(websocket, "error", "Couldn't research your industry — please try again.")
             return False
         pipeline_cache.set(
             project_id, "research", (domain_res, design_res),
@@ -245,7 +245,7 @@ async def run_website_pipeline(
     # Cache key is (research + intent + purpose). When research is a
     # cache hit, the signals cache will be a hit too — saving the full
     # Pro extract call (the most expensive single step in the pipeline).
-    await _send(websocket, "progress", "✨ Stage 3/6 — Extracting visual DNA (typography, palette, motifs)…")
+    await _send(websocket, "progress", "Designing the look and feel…")
 
     from app.services.landing_research_extract import extract_research_signals
 
@@ -254,7 +254,7 @@ async def run_website_pipeline(
         domain_res, intent, purpose_data,
     )
     if cached_signals is not None:
-        await _send(websocket, "progress", "♻️  Stage 3 — using cached visual DNA + voice signature")
+        # cache-hit; no user-facing message
         signals = cached_signals
     else:
         try:
@@ -264,7 +264,7 @@ async def run_website_pipeline(
             )
         except Exception as exc:
             logger.error("website_pipeline: visual_dna extract failed — %s", exc, exc_info=True)
-            await _send(websocket, "error", f"❌ Visual DNA extraction failed: {exc}")
+            await _send(websocket, "error", "Couldn't design the look and feel — please try again.")
             return False
         pipeline_cache.set(
             project_id, "signals", signals,
@@ -282,8 +282,30 @@ async def run_website_pipeline(
         # Don't hard-fail — orchestrator will produce generic anatomies, still works
         logger.warning("website_pipeline: visual_dna has no anatomies — pages will be more generic")
 
+    # Persist visual_dna to chat_sessions so linked admin projects can
+    # inherit the parent's brand identity verbatim. Non-fatal — a failed
+    # write only affects future linked-admin generations, never this run.
+    if visual_dna and _UUID_RE.match(project_id or ""):
+        try:
+            from app.supabase_client import managed_admin_client
+            async with managed_admin_client() as _admin:
+                await (
+                    _admin.table("chat_sessions")
+                    .update({"visual_dna": visual_dna})
+                    .eq("id", project_id)
+                    .execute()
+                )
+            logger.info(
+                "website_pipeline: persisted visual_dna to chat_sessions (%d keys)",
+                len(visual_dna),
+            )
+        except Exception as exc:
+            logger.warning(
+                "website_pipeline: visual_dna persist failed (non-fatal) — %s", exc,
+            )
+
     # ── Stage 4: Build plan ─────────────────────────────────────────
-    await _send(websocket, "progress", "📋 Stage 4/6 — Planning pages + sections…")
+    await _send(websocket, "progress", "Planning your pages…")
 
     from app.services.website_plan import build_website_plan
     try:
@@ -293,12 +315,12 @@ async def run_website_pipeline(
         )
     except Exception as exc:
         logger.error("website_pipeline: plan failed — %s", exc, exc_info=True)
-        await _send(websocket, "error", f"❌ Plan build failed: {exc}")
+        await _send(websocket, "error", "Couldn't plan your pages — please try again.")
         return False
 
     pages = plan.get("pages") or []
     if not pages:
-        await _send(websocket, "error", "❌ Plan returned 0 pages")
+        await _send(websocket, "error", "Couldn't plan any pages — try a more specific description.")
         return False
 
     page_routes = [p.get("route") for p in pages]
@@ -306,7 +328,11 @@ async def run_website_pipeline(
         "website_pipeline: plan ok — brand=%r pages=%d routes=%s",
         plan["brand"]["name"], len(pages), page_routes,
     )
-    await _send(websocket, "progress", f"📋 Plan: {len(pages)} pages → {', '.join(page_routes)}")
+    _page_names = ", ".join(
+        (p.get("title") or p.get("route") or "").lstrip("/") or "Home"
+        for p in pages
+    )
+    await _send(websocket, "progress", f"Pages: {_page_names}")
 
     # ── Stage 4.5: Data-model planning ──────────────────────────────
     # Decides which sections need Supabase-backed collections (tables
@@ -332,7 +358,7 @@ async def run_website_pipeline(
         )
     if _data_model_planner_enabled():
         await _send(websocket, "progress",
-                    "🗂️  Stage 4.5/6 — Planning data model (collections vs singletons)…")
+                    "Designing your data structure…")
         from app.services.data_model_planner import plan_data_model
 
         cached_dm = pipeline_cache.get(
@@ -340,7 +366,7 @@ async def run_website_pipeline(
         )
         if cached_dm is not None:
             data_model = cached_dm
-            await _send(websocket, "progress", "♻️  Stage 4.5 — using cached data model")
+            # cache-hit; no user-facing message
         else:
             try:
                 data_model = await plan_data_model(
@@ -371,11 +397,12 @@ async def run_website_pipeline(
                 "website_pipeline: data_model ok — tables=%d singletons=%d",
                 len(data_model.tables), len(data_model.singletons),
             )
-            await _send(
-                websocket, "progress",
-                f"🗂️  Data model: {len(data_model.tables)} collections, "
-                f"{len(data_model.singletons)} singletons",
-            )
+            if data_model.tables:
+                _table_names = ", ".join(t.name for t in data_model.tables)
+                await _send(
+                    websocket, "progress",
+                    f"Will manage: {_table_names}",
+                )
 
     # ── Stage 4.6: Tenant provisioning + SQL apply ──────────────────
     tenant_schema = await provision_tenant_for_project(
@@ -400,7 +427,7 @@ async def run_website_pipeline(
     )
 
     # ── Stage 5: Deterministic foundation ───────────────────────────
-    await _send(websocket, "progress", "🛠️  Stage 5/6 — Building foundation (palette, tokens, nav)…")
+    await _send(websocket, "progress", "Setting up the project…")
     design_signal = signals.get("design") or {}
     foundation_files = _build_foundation_files(
         plan, visual_dna,
@@ -432,7 +459,7 @@ async def run_website_pipeline(
     # ── Stage 5.5: Image binding ────────────────────────────────────
     # Resolve every section that needs imagery to a real Unsplash URL
     # BEFORE Claude sees the page — prevents hallucinated /images/ paths.
-    await _send(websocket, "progress", "🖼️  Stage 5.5 — Binding images (Unsplash)…")
+    await _send(websocket, "progress", "Finding photos for your pages…")
     from app.services.image_binding import (
         bind_page_images, clear_image_cache,
     )
@@ -460,14 +487,14 @@ async def run_website_pipeline(
     )
     await _send(
         websocket, "progress",
-        f"🖼️  Images bound: {total_imgs} across {len(page_images)} pages",
+        "Photos ready.",
     )
 
     # ── Stage 6: Parallel creative (the big one) ────────────────────
     await _phase(websocket, 5, "Writing code",
                  f"Generating {len(pages)} pages + header + footer in parallel…", "active")
     await _send(websocket, "progress",
-                f"⚡ Stage 6/6 — Generating {len(pages)} pages + chrome in parallel (Claude)…")
+                "Designing your pages…")
 
     from app.services.website_orchestrator import generate_website
     try:
@@ -485,7 +512,7 @@ async def run_website_pipeline(
         )
     except Exception as exc:
         logger.error("website_pipeline: orchestrator failed — %s", exc, exc_info=True)
-        await _send(websocket, "error", f"❌ Page generation failed: {exc}")
+        await _send(websocket, "error", "Couldn't generate your pages — please try again.")
         return False
 
     # Write all generated files to workspace
@@ -520,9 +547,10 @@ async def run_website_pipeline(
     )
 
     if failed_routes:
+        _failed_names = ", ".join(r.lstrip("/") or "Home" for r in failed_routes)
         await _send(
             websocket, "warning",
-            f"⚠️ {len(failed_routes)}/{total_pages} page(s) failed: {', '.join(failed_routes)}",
+            f"Some pages didn't generate cleanly: {_failed_names}",
         )
 
     # ── Stage 6.5: Derive content schema (editor metadata) ─────────
@@ -540,7 +568,7 @@ async def run_website_pipeline(
             )
             await _send(
                 websocket, "progress",
-                f"📝 Stage 6.5 — Content schema: {field_count} editable fields",
+                "Editor ready.",
             )
         except Exception as exc:
             logger.warning(
@@ -550,7 +578,7 @@ async def run_website_pipeline(
     # ── Stage 7: Post-generation verification ──────────────────────
     # Static audit of file structure + imports. Catches Claude
     # contract violations before the dev server starts.
-    await _send(websocket, "progress", "🔍 Stage 7/7 — Verifying file structure + imports…")
+    await _send(websocket, "progress", "Final checks…")
 
     from app.services.website_verification import audit_generated_website
     try:
@@ -561,16 +589,11 @@ async def run_website_pipeline(
         )
         logger.info("website_pipeline: %s", audit["summary"])
         if audit["ok"]:
-            await _send(websocket, "progress", f"✅ {audit['summary']}")
+            pass  # silent success — final "Site is ready!" covers it
         else:
-            issue_lines: list[str] = []
-            for key, val in audit["issues"].items():
-                if val:
-                    sample = val[:3]
-                    issue_lines.append(f"  • {key}: {len(val)} (e.g. {sample})")
             await _send(
                 websocket, "warning",
-                "⚠️ Verification found issues — site may still run but has gaps:\n" + "\n".join(issue_lines),
+                "Some parts of the site may have gaps — preview it and let me know what to fix.",
             )
     except Exception as exc:
         logger.warning("website_pipeline: verification threw (non-fatal) — %s", exc)
@@ -588,7 +611,7 @@ async def run_website_pipeline(
                 )
                 await _send(
                     websocket, "warning",
-                    f"⚠️ Content/code-separation issues: {detail}",
+                    "Some content may not be editable from the dashboard — preview it and let me know.",
                 )
         except Exception as exc:
             logger.warning(
@@ -600,7 +623,8 @@ async def run_website_pipeline(
     # missing required sections, voice violations) — NEVER blocks the
     # pipeline. The score lands on the websocket so the frontend can
     # display it; the issues are logged for diagnostics.
-    await _send(websocket, "progress", "🧪 Stage 7.5 — Auditing content quality…")
+    # Content quality audit runs silently — score is sent via a
+    # separate content_audit event, no chat message needed.
     from app.services.website_verification import audit_content
     voice_signature = (signals.get("voice") or {}) if isinstance(signals, dict) else {}
     try:
@@ -636,7 +660,7 @@ async def run_website_pipeline(
 
     await _send(
         websocket, "progress",
-        f"✅ Website generated — {written} files, {successful_pages}/{total_pages} pages ok",
+        "Your site is ready!",
     )
 
     # Success criteria: at least 1 page generated AND we wrote >0 files.

@@ -14,23 +14,29 @@ from app.services.admin_field_renderers import (
     format_field_examples,
 )
 from app.services.data_model import TableDefinition
+from app.services.prompts._visual_context import (
+    VISUAL_CONTEXT_RULE,
+    build_visual_context_block,
+)
 
 
 _SYSTEM_PROMPT = """\
-You are generating a React 18 / Next.js 14 App Router component for an
-admin panel CREATE form. The user fills out one input per field, the
-form submits via createRow, and on success redirects to the list page.
+You are generating a React/Vite component for an admin panel CREATE form.
+The user fills out one input per field, the form submits via createRow,
+and on success redirects to the list page. Routing is React Router, not
+Next.js.
 
 OUTPUT REQUIREMENTS:
 - Single .jsx file, no TypeScript anywhere
 - Use Tailwind classes only
 - Use react-hook-form's useForm + register for state + validation
+- Import { useNavigate } from "react-router-dom"
 - Import from "@/lib/db_admin.js": createRow
 - Import AuthGuard from "@/components/AuthGuard.jsx"
 - Component must start with the "use client" directive
 - Wrap the entire return in <AuthGuard>
 - Show submit button "Saving…" while pending
-- On submit success: useRouter().push("/<entity-slug>")
+- On submit success: call the function returned by useNavigate()
 - On submit failure: show error message below form
 
 FIELD-TYPE → INPUT MAPPING (use exactly):
@@ -57,6 +63,7 @@ VALIDATION:
 FORBIDDEN:
 - No fetch() — use createRow helper
 - No direct supabase or @supabase/* imports
+- No next/link or next/navigation imports
 - No TypeScript syntax (no `: Type`, no `as`, no <T>)
 - No external form libraries other than react-hook-form (already installed)
 - No `id`, `created_at`, or `updated_at` fields in the form payload —
@@ -64,7 +71,7 @@ FORBIDDEN:
 
 Return ONLY the file content for the requested path. The tool you
 must call to respond accepts a list of files; emit exactly one file.
-"""
+""" + "\n" + VISUAL_CONTEXT_RULE + "\n"
 
 
 def build_create_view_prompt(
@@ -77,10 +84,12 @@ def build_create_view_prompt(
     slug = entity.name.replace("_", "-")
     fields_block = format_fields_for_prompt(entity.fields)
     examples_block = format_field_examples(entity.fields)
+    visual_context = build_visual_context_block(admin_plan)
 
     user_prompt = f"""\
 Generate the CREATE form for the "{entity.name}" entity.
 
+{visual_context}
 ENTITY:       {entity.singular_label or entity.name}
 TABLE:        {entity.name}
 DESCRIPTION:  {entity.description}
@@ -100,13 +109,13 @@ REQUIRED STRUCTURE:
 
   "use client";
   import {{ useState }} from "react";
-  import {{ useRouter }} from "next/navigation";
+  import {{ useNavigate }} from "react-router-dom";
   import {{ useForm }} from "react-hook-form";
   import {{ createRow }} from "@/lib/db_admin.js";
   import {{ AuthGuard }} from "@/components/AuthGuard.jsx";
 
   export default function {entity.name.title().replace("_", "")}NewPage() {{
-    const router = useRouter();
+    const navigate = useNavigate();
     const {{ register, handleSubmit, formState: {{ errors }} }} = useForm();
     const [submitting, setSubmitting] = useState(false);
     const [error, setError]           = useState(null);
@@ -118,7 +127,7 @@ REQUIRED STRUCTURE:
         // Coerce types — checkbox -> bool, number inputs -> Number,
         // json textarea -> JSON.parse.
         await createRow("{entity.name}", data);
-        router.push("/{slug}");
+        navigate("/{slug}");
       }} catch (e) {{
         setError(e.message || String(e));
         setSubmitting(false);
@@ -134,7 +143,7 @@ REQUIRED STRUCTURE:
     );
   }}
 
-Generate src/app/{slug}/new/page.jsx. Return ONLY that one file's content.
+Generate src/pages/{entity.name.title().replace("_", "")}Create.jsx. Return ONLY that one file's content.
 """
 
     return {"system": _SYSTEM_PROMPT, "user": user_prompt}

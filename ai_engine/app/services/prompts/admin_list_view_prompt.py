@@ -19,17 +19,22 @@ from app.services.admin_field_renderers import (
     format_field_examples,
 )
 from app.services.data_model import TableDefinition
+from app.services.prompts._visual_context import (
+    VISUAL_CONTEXT_RULE,
+    build_visual_context_block,
+)
 
 
 _SYSTEM_PROMPT = """\
-You are generating a React 18 / Next.js 14 App Router component for an
-admin panel LIST view. The component lists rows from a Supabase table
-and lets the user create / edit / delete them.
+You are generating a React/Vite component for an admin panel LIST view.
+The component lists rows from a Supabase table and lets the user create,
+edit, and delete them. Routing is React Router, not Next.js.
 
 OUTPUT REQUIREMENTS:
 - Single .jsx file, no TypeScript anywhere
 - Use Tailwind classes only (no inline styles, no CSS modules)
 - Use lucide-react for icons (Plus, Pencil, Trash2)
+- Import { Link } from "react-router-dom"
 - Import from "@/lib/db_admin.js": listCollection, deleteRow
 - Import AuthGuard from "@/components/AuthGuard.jsx"
 - Import EmptyState from "@/components/EmptyState.jsx"
@@ -49,6 +54,7 @@ OUTPUT REQUIREMENTS:
 FORBIDDEN:
 - No fetch() — use listCollection helper
 - No direct supabase or @supabase/* imports — db_admin abstracts that
+- No next/link or next/navigation imports
 - No external date libraries (date-fns, dayjs) — use Intl.DateTimeFormat
 - No state-management libraries (redux, zustand) — useState is enough
 - No TypeScript syntax (no `: Type` annotations, no `as` casts, no <T>)
@@ -57,7 +63,7 @@ FORBIDDEN:
 
 Return ONLY the file content for the requested path. The tool you
 must call to respond accepts a list of files; emit exactly one file.
-"""
+""" + "\n" + VISUAL_CONTEXT_RULE + "\n"
 
 
 def build_list_view_prompt(
@@ -66,7 +72,9 @@ def build_list_view_prompt(
 ) -> dict[str, str]:
     """Return ``{"system": ..., "user": ...}`` for the list-view codegen call.
 
-    `admin_plan` is read only for `branding.brand_name`. The entity
+    `admin_plan["branding"]` carries the visual_dna subset (brand_name,
+    primary_color, typography_voice, cultural_intensity, layout_density,
+    accent_motif) that drives the VISUAL CONTEXT block. The entity
     itself drives every other prompt detail.
     """
     branding = (admin_plan or {}).get("branding") or {}
@@ -75,10 +83,12 @@ def build_list_view_prompt(
     slug = entity.name.replace("_", "-")
     fields_block = format_fields_for_prompt(entity.fields)
     examples_block = format_field_examples(entity.fields)
+    visual_context = build_visual_context_block(admin_plan)
 
     user_prompt = f"""\
 Generate the LIST view for the "{entity.name}" entity.
 
+{visual_context}
 ENTITY:       {entity.singular_label or entity.name} \
 (plural: {entity.plural_label or entity.name})
 TABLE:        {entity.name}
@@ -94,13 +104,13 @@ PER-FIELD JSX EXAMPLES (use these shapes verbatim where applicable):
 ROUTES:
   list:  /{slug}
   new:   /{slug}/new
-  edit:  /{slug}/<row.id>     (Next.js dynamic segment is /[id])
+  edit:  /{slug}/<row.id>
 
 REQUIRED STRUCTURE OF THE GENERATED FILE:
 
   "use client";
   import {{ useEffect, useState }} from "react";
-  import Link from "next/link";
+  import {{ Link }} from "react-router-dom";
   import {{ Plus, Pencil, Trash2 }} from "lucide-react";
   import {{ listCollection, deleteRow }} from "@/lib/db_admin.js";
   import {{ AuthGuard }} from "@/components/AuthGuard.jsx";
@@ -149,7 +159,7 @@ REQUIRED STRUCTURE OF THE GENERATED FILE:
     );
   }}
 
-Generate src/app/{slug}/page.jsx. Return ONLY that one file's content.
+Generate src/pages/{entity.name.title().replace("_", "")}List.jsx. Return ONLY that one file's content.
 """
 
     return {"system": _SYSTEM_PROMPT, "user": user_prompt}

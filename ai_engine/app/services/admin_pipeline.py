@@ -34,6 +34,7 @@ Failure model:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any, Optional
@@ -79,13 +80,6 @@ def should_route_to_admin_pipeline(layout_archetype: str) -> bool:
     )
 
 
-# ── Defaults ─────────────────────────────────────────────────────────
-# Stage 3 stubs to these until we build admin-specific visual research
-# in Step 3.4. Slate-900 is a neutral dark default that works for most
-# internal tools — admins lean toward calm/professional over branded.
-_DEFAULT_PRIMARY_COLOR = "#0f172a"  # slate-900
-
-
 # ── Internal: websocket helpers (mirror website_pipeline) ────────────
 
 async def _send(websocket: Any, kind: str, message: str) -> None:
@@ -112,30 +106,45 @@ async def _phase(websocket: Any, phase: int, title: str, desc: str, status: str)
 
 # ── Stage 3 stub: minimal "visual DNA" for admins ────────────────────
 
-def _stub_visual_dna_for_admin(intent: dict[str, Any]) -> dict[str, Any]:
-    """Step 3.3 placeholder for full visual_dna extraction.
+async def _resolve_admin_visual_dna(
+    *,
+    intent: dict[str, Any],
+    purpose_data: dict[str, Any],
+    parent_visual_dna: Optional[dict[str, Any]],
+    gemini_key: str,
+) -> dict[str, Any]:
+    """Decide which visual_dna applies to this admin run.
 
-    Admin panels need only brand_name + primary_color + (optional)
-    logo_url to drive layout — Step 3.4 will swap this for real
-    research if differentiation matters. For now we synthesize from
-    intent so downstream stages keep getting the dict shape they
-    expect.
+    Linked admin (parent project's visual_dna is set): inherit it
+    verbatim. The admin and its website share a single brand
+    identity — the admin's UI is the website's logo + palette +
+    voice, applied to a CRUD shell.
+
+    Standalone admin (no parent, or parent has no visual_dna):
+    extract a 6-field signal set via Gemini Flash.
+
+    Always returns a dict with at minimum brand_name + primary_color.
+    On Gemini failure for standalone admins, returns the
+    extractor's default fixture so downstream stages keep working.
     """
-    brand_name = (
-        (intent.get("brand") or {}).get("name")
-        or intent.get("business_category")
-        or "Admin"
+    if parent_visual_dna:
+        logger.info(
+            "_resolve_admin_visual_dna: inheriting parent visual_dna "
+            "(keys=%d, intensity=%s)",
+            len(parent_visual_dna),
+            parent_visual_dna.get("cultural_intensity"),
+        )
+        return parent_visual_dna
+
+    logger.info(
+        "_resolve_admin_visual_dna: standalone admin — extracting own brand signals",
     )
-    return {
-        "brand_name":    brand_name,
-        "primary_color": _DEFAULT_PRIMARY_COLOR,
-        "logo_url":      None,
-        # Kept for plumbing compatibility with website_plan, which
-        # reads cultural_intensity + layout_signature. Admin defaults
-        # match shadcn/ui's neutral look.
-        "cultural_intensity": "calm",
-        "layout_signature":   "sidebar dashboard with table views",
-    }
+    from app.services.admin_brand_extractor import extract_admin_brand_signals
+    return await extract_admin_brand_signals(
+        intent=intent,
+        purpose_data=purpose_data,
+        gemini_key=gemini_key,
+    )
 
 
 # ── Entry: run_admin_pipeline ────────────────────────────────────────
@@ -198,7 +207,7 @@ async def run_admin_pipeline(
     # ── Stage 0.5: Purpose classification ───────────────────────────
     logger.info("[%s] Admin Stage 0.5 ENTRY: purpose classification", project_id)
     await _phase(websocket, 1, "Preparing workspace", "Workspace ready", "done")
-    await _send(websocket, "progress", "🎯 Stage 0.5 — Classifying admin purpose…")
+    await _send(websocket, "progress", "Understanding what you want to build…")
 
     from app.services.purpose_classifier import classify_purpose
     from knowledge.loader import extract_clarify_context
@@ -215,7 +224,7 @@ async def run_admin_pipeline(
         logger.error(
             "[%s] Admin Stage 0.5 FAILED — %s", project_id, exc, exc_info=True,
         )
-        await _send(websocket, "error", f"❌ Purpose classification failed: {exc}")
+        await _send(websocket, "error", "Couldn't understand your request — please try a more specific description.")
         return False
 
     logger.info(
@@ -226,7 +235,7 @@ async def run_admin_pipeline(
 
     # ── Stage 1: Intent analysis ────────────────────────────────────
     logger.info("[%s] Admin Stage 1 ENTRY: intent analysis", project_id)
-    await _send(websocket, "progress", "🧠 Stage 1 — Analyzing intent…")
+    await _send(websocket, "progress", "Studying your requirements…")
 
     from app.services.landing_intent import analyze_intent
     try:
@@ -235,7 +244,7 @@ async def run_admin_pipeline(
         logger.error(
             "[%s] Admin Stage 1 FAILED — %s", project_id, exc, exc_info=True,
         )
-        await _send(websocket, "error", f"❌ Intent analysis failed: {exc}")
+        await _send(websocket, "error", "Couldn't read your request — please try again.")
         return False
 
     logger.info(
@@ -254,28 +263,12 @@ async def run_admin_pipeline(
         project_id,
     )
 
-    # ── Stage 3: Visual DNA (LIGHTER than website) ──────────────────
-    # Step 3.3 stub: minimal defaults from intent. Admin styling is
-    # mostly standard template (per Q2 decision in spec); a full
-    # palette/typography research call is overkill.
-    logger.info("[%s] Admin Stage 3 ENTRY: visual DNA (stub)", project_id)
-    visual_dna = _stub_visual_dna_for_admin(intent)
-    logger.info(
-        "[%s] Admin Stage 3 COMPLETE: brand=%r primary_color=%s",
-        project_id, visual_dna["brand_name"], visual_dna["primary_color"],
-    )
-
-    # ── Stage 4: Plan — derived from data_model after 4.5 ───────────
-    # The website pipeline calls build_website_plan BEFORE the data
-    # model planner. For admins we flip the order: the data model is
-    # the source of truth, and "pages" are just entity routes derived
-    # from it. We build the plan AFTER Stage 4.5 below.
-
-    # ── Linked-admin path: resolve parent's tenant, skip 4.5/4.6/4.7 ─
-    # If parent_project_id is set on this chat_sessions row, the admin
-    # reads from the parent's tenant — there's nothing to provision or
-    # seed because the parent already did. We still need a plan; we
-    # derive it from the parent's data_model.
+    # ── Linked-admin detection (early) ──────────────────────────────
+    # We need to know is_linked BEFORE Stage 3 so that visual_dna can
+    # inherit the parent's identity verbatim instead of paying for a
+    # standalone brand extraction. The downstream Stages 4.5/4.6/4.7
+    # also branch on is_linked, but the parent fetch is idempotent and
+    # this single early read covers all of them.
     from app.supabase_client import managed_admin_client
     from app.services.pipeline_tenant import (
         resolve_tenant_for_project,
@@ -286,6 +279,7 @@ async def run_admin_pipeline(
     is_linked = False
     linked_data_model = None
     linked_tenant_schema: Optional[str] = None
+    linked_visual_dna: Optional[dict] = None
     if UUID_RE.match(project_id):
         try:
             async with managed_admin_client() as admin:
@@ -303,21 +297,22 @@ async def run_admin_pipeline(
                     resolved = await resolve_tenant_for_project(project_id, admin)
                     if not resolved:
                         logger.error(
-                            "[%s] Admin Stage 4.6 FAILED: linked admin's "
-                            "parent (%s) has no tenant_schema or data_model",
+                            "[%s] Admin linked-resolution FAILED: parent "
+                            "(%s) has no tenant_schema or data_model",
                             project_id, parent_id,
                         )
                         await _send(
                             websocket, "error",
-                            "❌ Linked admin's parent project is not provisioned yet.",
+                            "The linked website isn't ready yet — please try again in a moment.",
                         )
                         return False
-                    linked_tenant_schema, linked_data_model = resolved
+                    linked_tenant_schema, linked_data_model, linked_visual_dna = resolved
                     logger.info(
-                        "[%s] Admin Stage 4.6 COMPLETE (linked): "
-                        "parent=%s tenant_schema=%s tables=%d",
+                        "[%s] Admin linked-resolution COMPLETE: "
+                        "parent=%s tenant_schema=%s tables=%d visual_dna=%s",
                         project_id, parent_id, linked_tenant_schema,
                         len(linked_data_model.tables),
+                        "inherited" if linked_visual_dna else "none",
                     )
         except Exception as exc:
             logger.error(
@@ -326,9 +321,61 @@ async def run_admin_pipeline(
             )
             await _send(
                 websocket, "error",
-                f"❌ Could not resolve admin's parent project: {exc}",
+                "Couldn't find the linked website.",
             )
             return False
+
+    # ── Stage 3: Visual DNA ─────────────────────────────────────────
+    # Linked admins inherit the parent's full visual_dna (palette,
+    # typography_voice, cultural_intensity, decorative_motifs,
+    # section_anatomies — though admin prompts only consume the first 4).
+    # Standalone admins get a 6-field Flash extraction (~$0.005).
+    logger.info("[%s] Admin Stage 3 ENTRY: visual DNA", project_id)
+    visual_dna = await _resolve_admin_visual_dna(
+        intent=intent,
+        purpose_data=purpose_data,
+        parent_visual_dna=linked_visual_dna,
+        gemini_key=gemini_key,
+    )
+    logger.info(
+        "[%s] Admin Stage 3 COMPLETE: brand=%r primary_color=%s "
+        "voice=%s intensity=%s density=%s (linked=%s)",
+        project_id,
+        visual_dna.get("brand_name"),
+        visual_dna.get("primary_color"),
+        visual_dna.get("typography_voice"),
+        visual_dna.get("cultural_intensity"),
+        visual_dna.get("layout_density"),
+        is_linked,
+    )
+
+    # Persist standalone admin's visual_dna so re-runs and downstream
+    # queries see the same identity. Skip for linked admins — they
+    # already inherit from the parent's persisted row.
+    if visual_dna and not is_linked and UUID_RE.match(project_id):
+        try:
+            async with managed_admin_client() as _admin:
+                await (
+                    _admin.table("chat_sessions")
+                    .update({"visual_dna": visual_dna})
+                    .eq("id", project_id)
+                    .execute()
+                )
+            logger.info(
+                "[%s] Admin Stage 3: persisted visual_dna (%d keys)",
+                project_id, len(visual_dna),
+            )
+        except Exception as exc:
+            logger.warning(
+                "[%s] Admin Stage 3: visual_dna persist failed (non-fatal) — %s",
+                project_id, exc,
+            )
+
+    # ── Stage 4: Plan — derived from data_model after 4.5 ───────────
+    # The website pipeline calls build_website_plan BEFORE the data
+    # model planner. For admins we flip the order: the data model is
+    # the source of truth, and "pages" are just entity routes derived
+    # from it. We build the plan AFTER Stage 4.5 below.
 
     # ── Stage 4.5: Data model (admin-aware) ─────────────────────────
     # Standalone admins call the admin-specific planner (Step 3.4),
@@ -340,7 +387,7 @@ async def run_admin_pipeline(
     logger.info("[%s] Admin Stage 4.5 ENTRY: admin data model planner", project_id)
     await _send(
         websocket, "progress",
-        "🗂️  Stage 4.5 — Planning data model (entities to manage)…",
+        "Designing your data structure…",
     )
     from app.services.admin_data_model_planner import plan_admin_data_model
 
@@ -359,7 +406,7 @@ async def run_admin_pipeline(
         )
         await _send(
             websocket, "error",
-            f"❌ Data model planning failed: {exc}",
+            "Couldn't design your data — please try a more specific description.",
         )
         return False
 
@@ -371,7 +418,7 @@ async def run_admin_pipeline(
         )
         await _send(
             websocket, "error",
-            "❌ Planner produced 0 entity tables for this admin.",
+            "Couldn't figure out what to manage — try describing it differently.",
         )
         return False
 
@@ -383,8 +430,7 @@ async def run_admin_pipeline(
     )
     await _send(
         websocket, "progress",
-        f"🗂️  Data model: {len(data_model.tables)} entities "
-        f"({', '.join(t.name for t in data_model.tables)})",
+        f"Will manage: {', '.join(t.name for t in data_model.tables)}",
     )
 
     # ── Stage 4 (deferred): build admin plan from data_model ────────
@@ -418,7 +464,7 @@ async def run_admin_pipeline(
             )
             await _send(
                 websocket, "error",
-                "❌ Tenant provisioning failed for this admin.",
+                "Couldn't set up your database — please try again.",
             )
             return False
         logger.info(
@@ -448,14 +494,14 @@ async def run_admin_pipeline(
         )
 
     # ── Stage 5: Foundation files (Step 3.5) ────────────────────────
-    # Deterministic file emission — package.json, layouts, auth, lib,
-    # components, dashboard, stub CRUD pages. No LLM here. Step 3.6
-    # will replace the stub CRUD pages with real list / create / edit
-    # bodies via Claude.
+    # Deterministic React/Vite file emission — package.json, Vite
+    # config, auth, lib, components, dashboard, and stub CRUD pages.
+    # No LLM here. Step 3.6 will replace the stub CRUD pages with
+    # real list / create / edit bodies via Claude.
     logger.info("[%s] Admin Stage 5 ENTRY: foundation builder", project_id)
     await _send(
         websocket, "progress",
-        "🛠️  Stage 5 — Building admin foundation files…",
+        "Setting up your dashboard…",
     )
     from app.services.admin_foundation_builder import build_admin_foundation
     from app.config import settings
@@ -477,7 +523,7 @@ async def run_admin_pipeline(
         )
         await _send(
             websocket, "error",
-            f"❌ Foundation builder failed: {exc}",
+            "Couldn't build the project files — please try again.",
         )
         return False
 
@@ -491,8 +537,7 @@ async def run_admin_pipeline(
     )
     await _send(
         websocket, "progress",
-        f"🛠️  Foundation: {len(foundation_result['files_written'])} files "
-        f"({len(data_model.tables)} entities scaffolded)",
+        "Login and dashboard ready.",
     )
 
     # ── Stage 6: CRUD codegen (Step 3.6 Part A — mock-default) ──────
@@ -501,7 +546,11 @@ async def run_admin_pipeline(
     # honour the AuthGuard + db_admin contract. Set
     # ADMIN_CODEGEN_MOCK=false (with a valid ANTHROPIC_API_KEY) once
     # Part B is ready to spend credits.
-    from app.services.admin_codegen import generate_entity_crud
+    from app.services.admin_codegen import (
+        _EST_PAGE_COST_USD,
+        generate_one_admin_page,
+        pages_for_entity,
+    )
 
     mock_codegen = (
         os.environ.get("ADMIN_CODEGEN_MOCK", "true").strip().lower()
@@ -519,63 +568,175 @@ async def run_admin_pipeline(
         )
     await _send(
         websocket, "progress",
-        f"⚡ Stage 6 — Generating CRUD ({'mock' if mock_codegen else 'Claude'})…",
+        "Generating pages…",
     )
 
     anthropic_key = (
         (validated or {}).get("anthropic_api_key")
         or os.environ.get("ANTHROPIC_API_KEY", "")
     )
+    if not mock_codegen and not str(anthropic_key).strip():
+        logger.error(
+            "[%s] Admin Stage 6 FAILED: ADMIN_CODEGEN_MOCK=false but no "
+            "Anthropic API key is available",
+            project_id,
+        )
+        await _send(
+            websocket, "error",
+            "Real dashboard coding is enabled, but no Anthropic key is available.",
+        )
+        return False
 
-    codegen_results: list[dict] = []
-    for entity in data_model.tables:
-        try:
-            result = await generate_entity_crud(
+    # ── Flat N×3 parallel codegen ────────────────────────────────────
+    # Mirrors website_orchestrator's pattern: one Semaphore, one
+    # asyncio.gather, all (entity, page_type) pairs in flight under a
+    # bounded concurrency. Lets users with N=4 entities finish in ~one
+    # page's wall time instead of N×3.
+    try:
+        concurrency = int(os.environ.get("ADMIN_CODEGEN_CONCURRENCY", "8"))
+    except ValueError:
+        concurrency = 8
+    sem = asyncio.Semaphore(max(1, concurrency))
+
+    # Track per-entity remaining count so we can emit "<entity> pages
+    # ready" the moment ALL 3 pages for an entity have landed —
+    # entities complete in arbitrary order under parallel execution.
+    by_entity = {t.name: t for t in data_model.tables}
+    remaining = {t.name: 3 for t in data_model.tables}
+
+    async def _bounded_page(
+        entity: TableDefinition,
+        page_type: str,
+        rel_path: str,
+        prompt: dict,
+    ) -> dict[str, Any]:
+        async with sem:
+            page_result = await generate_one_admin_page(
                 entity=entity,
-                data_model=data_model,
+                page_type=page_type,
+                rel_path=rel_path,
+                prompt=prompt,
                 admin_plan=plan,
                 workspace_path=workspace_path,
                 anthropic_key=anthropic_key,
                 mock=mock_codegen,
             )
-        except Exception as exc:
+        # Smooth chat motion — emit per-entity progress when an
+        # entity's third page completes (any order is fine).
+        remaining[entity.name] -= 1
+        if remaining[entity.name] == 0:
+            label = entity.plural_label or entity.name
+            await _send(
+                websocket, "progress",
+                f"{label} pages ready.",
+            )
+        return page_result
+
+    all_tasks = []
+    for entity in data_model.tables:
+        for page_type, rel_path, prompt in pages_for_entity(entity, plan):
+            all_tasks.append(_bounded_page(entity, page_type, rel_path, prompt))
+
+    logger.info(
+        "[%s] Admin Stage 6: launching %d parallel calls (concurrency=%d)",
+        project_id, len(all_tasks), concurrency,
+    )
+    page_results = await asyncio.gather(*all_tasks, return_exceptions=True)
+
+    # Group page results back per-entity for the post-stage gate.
+    codegen_results: dict[str, dict[str, Any]] = {
+        name: {"files_written": [], "validation_errors": [], "page_cost": 0.0}
+        for name in by_entity
+    }
+    for r in page_results:
+        if isinstance(r, Exception):
             logger.error(
-                "[%s] Admin Stage 6 entity %s threw — %s",
-                project_id, entity.name, exc, exc_info=True,
+                "[%s] Admin Stage 6 task raised — %s",
+                project_id, r, exc_info=r,
             )
             continue
-        codegen_results.append(result)
-        if result["validation_errors"]:
-            logger.warning(
-                "[%s] Admin Stage 6 entity %s: %d validation issue(s)",
-                project_id, entity.name, len(result["validation_errors"]),
+        bucket = codegen_results[r["entity"]]
+        bucket["page_cost"] += r["page_cost"]
+        if r["written"]:
+            bucket["files_written"].append(r["rel_path"])
+        if r["issues"]:
+            bucket["validation_errors"].append(
+                {"file": r["rel_path"], "issues": r["issues"]}
             )
 
-    total_actual = sum(r["claude_actual_cost"]   for r in codegen_results)
-    total_est    = sum(r["claude_cost_estimate"] for r in codegen_results)
-    total_files  = sum(len(r["files_written"])   for r in codegen_results)
-    total_errors = sum(len(r["validation_errors"]) for r in codegen_results)
+    total_actual = sum(b["page_cost"]                    for b in codegen_results.values())
+    total_est    = len(all_tasks) * _EST_PAGE_COST_USD
+    total_files  = sum(len(b["files_written"])           for b in codegen_results.values())
+    total_errors = sum(len(b["validation_errors"])       for b in codegen_results.values())
     logger.info(
         "[%s] Admin Stage 6 COMPLETE: files=%d, validator_errors=%d, "
         "cost=$%.4f (est $%.4f, mock=%s)",
         project_id, total_files, total_errors,
         total_actual, total_est, mock_codegen,
     )
+    expected_files = len(data_model.tables) * 3
+    if not mock_codegen and (total_files < expected_files or total_errors > 0):
+        logger.error(
+            "[%s] Admin Stage 6 FAILED: files=%d/%d validator_errors=%d",
+            project_id, total_files, expected_files, total_errors,
+        )
+        await _send(
+            websocket, "error",
+            "The dashboard pages did not pass code validation. Please retry when credits are available.",
+        )
+        return False
 
-    # ── Stage 7: Build verification (still deferred) ────────────────
-    # The mock + real Claude paths produce JSX that the next `npm run
-    # build` will validate; until we shell out to Node from Python
-    # this stage stays informational.
-    logger.info(
-        "[%s] Admin Stage 7 SKIPPED: reason=needs_node_runtime "
-        "(npm run build is the canonical verifier — see dry_run script)",
-        project_id,
+    # ── Stage 7: Build verification ─────────────────────────────────
+    # Real codegen gets a no-token Vite build by default. Mock mode
+    # skips by default so unit tests and cheap dry runs stay fast, but
+    # operators can force it with ADMIN_BUILD_VALIDATE=true.
+    build_default = "false" if mock_codegen else "true"
+    build_validate = (
+        os.environ.get("ADMIN_BUILD_VALIDATE", build_default).strip().lower()
+        in ("1", "true", "yes", "on")
     )
+    if build_validate:
+        await _send(websocket, "progress", "Checking dashboard build…")
+        from app.services.build_validator import BuildValidator
+
+        try:
+            retries = int(os.environ.get("ADMIN_BUILD_FIX_RETRIES", "0"))
+        except ValueError:
+            retries = 0
+        validator = BuildValidator(
+            api_key=str(anthropic_key or ""),
+            classification={
+                **(classification or {}),
+                "project_stack": "admin-react",
+                "model_id": (classification or {}).get("model_id", "claude-sonnet-4-6"),
+            },
+            websocket=websocket,
+            max_retries=max(0, retries),
+        )
+        build_result = await validator.validate_and_fix(workspace_path)
+        try:
+            setattr(websocket, "_build_ok", bool(build_result.get("success")))
+        except Exception:
+            pass
+        if not build_result.get("success"):
+            logger.error(
+                "[%s] Admin Stage 7 FAILED: %s",
+                project_id, build_result.get("errors", "")[:1000],
+            )
+            await _send(
+                websocket, "error",
+                "The dashboard code was generated, but the Vite build failed.",
+            )
+            return False
+        logger.info("[%s] Admin Stage 7 COMPLETE: Vite build passed", project_id)
+    else:
+        logger.info(
+            "[%s] Admin Stage 7 SKIPPED: mock=%s ADMIN_BUILD_VALIDATE=%s",
+            project_id, mock_codegen, os.environ.get("ADMIN_BUILD_VALIDATE"),
+        )
 
     await _send(
         websocket, "progress",
-        f"✅ Admin generated — {len(data_model.tables)} entities, "
-        f"{total_files} CRUD files{' (mock)' if mock_codegen else ''}, "
-        f"tenant_schema={tenant_schema}",
+        "Your dashboard is ready!",
     )
     return True

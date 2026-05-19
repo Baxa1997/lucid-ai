@@ -188,6 +188,20 @@ def patched_externals(monkeypatch):
     planner_mock = AsyncMock(side_effect=_planner_short_circuit)
     planner_mock.return_value = _default_dm  # for standalone tests
 
+    # Default brand-extractor mock — standalone admins go through this
+    # at Stage 3. Returns a complete 6-field dict so the downstream
+    # plan + foundation builder never see Nones. Tests that want to
+    # observe extractor calls (or override the return) set this on the
+    # returned mocks dict.
+    _default_brand_signals = {
+        "brand_name":         "OpsCo",
+        "primary_color":      "#0f172a",
+        "typography_voice":   "professional",
+        "cultural_intensity": "calm",
+        "layout_density":     "comfortable",
+        "accent_motif":       "geometric",
+    }
+
     mocks: dict = {
         "classify_purpose":              AsyncMock(return_value=_fake_purpose()),
         "analyze_intent":                AsyncMock(return_value=_fake_intent()),
@@ -197,6 +211,7 @@ def patched_externals(monkeypatch):
             "success": True, "tables_inserted": 2, "rows_inserted": 8,
         }),
         "resolve_tenant_for_project":    AsyncMock(),
+        "extract_admin_brand_signals":   AsyncMock(return_value=_default_brand_signals),
     }
     monkeypatch.setattr(
         "app.services.purpose_classifier.classify_purpose",
@@ -221,6 +236,10 @@ def patched_externals(monkeypatch):
     monkeypatch.setattr(
         "app.services.pipeline_tenant.resolve_tenant_for_project",
         mocks["resolve_tenant_for_project"],
+    )
+    monkeypatch.setattr(
+        "app.services.admin_brand_extractor.extract_admin_brand_signals",
+        mocks["extract_admin_brand_signals"],
     )
     return mocks
 
@@ -341,6 +360,34 @@ class TestStandaloneFlow:
         assert kwargs["tenant_schema"] == SCHEMA_NEW
         assert kwargs["project_id"] == UUID_VALID
 
+    @pytest.mark.asyncio
+    async def test_standalone_admin_extracts_own_visual_dna(
+        self, monkeypatch, tmp_path, patched_externals,
+    ):
+        """Standalone admins call the brand extractor at Stage 3 and
+        skip the parent visual_dna path (since there's no parent)."""
+        monkeypatch.setenv("ADMIN_PIPELINE_V2_ENABLED", "1")
+        client = _make_chat_session_admin_client(parent_project_id=None)
+        with _patch_admin_client(client):
+            ok = await run_admin_pipeline(
+                description="internal CRM",
+                classification={"layout_archetype": "admin_dashboard"},
+                workspace_path=str(tmp_path),
+                validated={},
+                websocket=None,
+                chat_session_id=UUID_VALID,
+            )
+        assert ok is True
+        # Brand extractor was called exactly once with the upstream
+        # intent + purpose_data — never with a parent_visual_dna kwarg
+        # (that's the linked path).
+        patched_externals["extract_admin_brand_signals"].assert_awaited_once()
+        kwargs = patched_externals["extract_admin_brand_signals"].await_args.kwargs
+        assert "intent" in kwargs
+        assert "purpose_data" in kwargs
+        # Standalone never resolves a parent — no resolve call.
+        patched_externals["resolve_tenant_for_project"].assert_not_awaited()
+
 
 # ─────────────────────────────────────────────────────────────────────
 #  TestLinkedFlow — admin with parent_project_id
@@ -355,7 +402,7 @@ class TestLinkedFlow:
         monkeypatch.setenv("ADMIN_PIPELINE_V2_ENABLED", "1")
         parent_dm = _make_admin_data_model()
         patched_externals["resolve_tenant_for_project"].return_value = (
-            SCHEMA_PARENT, parent_dm,
+            SCHEMA_PARENT, parent_dm, None,
         )
         client = _make_chat_session_admin_client(parent_project_id=UUID_PARENT)
         with _patch_admin_client(client):
@@ -376,7 +423,7 @@ class TestLinkedFlow:
     ):
         monkeypatch.setenv("ADMIN_PIPELINE_V2_ENABLED", "1")
         patched_externals["resolve_tenant_for_project"].return_value = (
-            SCHEMA_PARENT, _make_admin_data_model(),
+            SCHEMA_PARENT, _make_admin_data_model(), None,
         )
         client = _make_chat_session_admin_client(parent_project_id=UUID_PARENT)
         with _patch_admin_client(client):
@@ -407,7 +454,7 @@ class TestLinkedFlow:
     ):
         monkeypatch.setenv("ADMIN_PIPELINE_V2_ENABLED", "1")
         patched_externals["resolve_tenant_for_project"].return_value = (
-            SCHEMA_PARENT, _make_admin_data_model(),
+            SCHEMA_PARENT, _make_admin_data_model(), None,
         )
         client = _make_chat_session_admin_client(parent_project_id=UUID_PARENT)
         with _patch_admin_client(client):
@@ -452,7 +499,7 @@ class TestLinkedFlow:
             singletons={},
         )
         patched_externals["resolve_tenant_for_project"].return_value = (
-            SCHEMA_PARENT, parent_dm,
+            SCHEMA_PARENT, parent_dm, None,
         )
         client = _make_chat_session_admin_client(parent_project_id=UUID_PARENT)
         with _patch_admin_client(client):
@@ -470,6 +517,43 @@ class TestLinkedFlow:
         planner_calls = patched_externals["plan_data_model"].await_args_list
         assert len(planner_calls) == 1
         assert planner_calls[0].kwargs.get("parent_data_model") is parent_dm
+
+    @pytest.mark.asyncio
+    async def test_linked_admin_inherits_parent_visual_dna(
+        self, monkeypatch, tmp_path, patched_externals,
+    ):
+        """When the parent has a visual_dna persisted, the linked admin
+        uses it verbatim and skips the standalone brand extractor."""
+        monkeypatch.setenv("ADMIN_PIPELINE_V2_ENABLED", "1")
+        parent_dm = _make_admin_data_model()
+        parent_visual_dna = {
+            "brand_name":         "Studio Vibrant",
+            "primary_color":      "#ff3366",
+            "typography_voice":   "editorial",
+            "cultural_intensity": "energetic",
+            "layout_density":     "spacious",
+            "accent_motif":       "organic",
+            # extras the website pipeline persists — admin doesn't read
+            # them but must not blow up when they're present.
+            "section_anatomies":  {"hero": "…"},
+            "decorative_motifs":  ["wave", "asterisk"],
+        }
+        patched_externals["resolve_tenant_for_project"].return_value = (
+            SCHEMA_PARENT, parent_dm, parent_visual_dna,
+        )
+        client = _make_chat_session_admin_client(parent_project_id=UUID_PARENT)
+        with _patch_admin_client(client):
+            ok = await run_admin_pipeline(
+                description="linked admin",
+                classification={"layout_archetype": "admin_dashboard"},
+                workspace_path=str(tmp_path),
+                validated={},
+                websocket=None,
+                chat_session_id=UUID_VALID,
+            )
+        assert ok is True
+        # Linked admin must NOT call the brand extractor — it inherits.
+        patched_externals["extract_admin_brand_signals"].assert_not_awaited()
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -572,24 +656,26 @@ class TestProgressUpdates:
             )
         assert ok is True
 
-        # At minimum: Stage 0.5, Stage 1, Stage 4.5 progress messages
-        # land on the websocket. We don't pin exact strings — the
-        # check is that *something* was sent for each stage.
+        # At minimum: a progress message lands for the "understand
+        # the request" step, the "design the data" step, and a final
+        # "ready" message. We don't pin exact strings — pipelines
+        # tweak copy frequently and the test should track *intent*.
         progress_msgs = [m["message"] for m in sent_messages if m.get("type") == "progress"]
-        assert any("0.5" in m or "purpose" in m.lower() for m in progress_msgs), (
-            f"no Stage 0.5 message in {progress_msgs!r}"
-        )
-        assert any("Stage 1" in m or "intent" in m.lower() for m in progress_msgs), (
-            f"no Stage 1 message in {progress_msgs!r}"
-        )
-        assert any("4.5" in m or "data model" in m.lower() for m in progress_msgs), (
-            f"no Stage 4.5 message in {progress_msgs!r}"
-        )
-        # Final completion message — phrasing evolved from
-        # "Admin scaffolding ready" (Step 3.5) to "Admin generated"
-        # (Step 3.6) once Stage 6 started writing real files. Accept
-        # either so the test isn't fragile to future copy tweaks.
         assert any(
-            ("Admin scaffolding ready" in m) or ("Admin generated" in m)
+            "understand" in m.lower() or "purpose" in m.lower() or "studying" in m.lower()
             for m in progress_msgs
+        ), f"no purpose/intent message in {progress_msgs!r}"
+        assert any(
+            "data" in m.lower() or "manage" in m.lower() or "entities" in m.lower()
+            for m in progress_msgs
+        ), f"no data-model message in {progress_msgs!r}"
+        # Many progress messages — the chat should show smooth motion.
+        # 5 is a conservative floor for the post-refactor pipeline
+        # (it currently emits ~10 with 4 entities).
+        assert len(progress_msgs) >= 5, (
+            f"expected many progress messages, got {len(progress_msgs)}: {progress_msgs!r}"
+        )
+        # Final "ready" message regardless of exact copy.
+        assert any(
+            "ready" in m.lower() for m in progress_msgs
         ), f"no completion message in {progress_msgs!r}"

@@ -16,18 +16,20 @@ Step 3.6 Part A verifications (extend Step 3.3 + 3.4 + 3.5):
   (h) admin plan navigation has one entry per entity
   (i) data_model.singletons is empty
   (j) all data_model.tables have public_read=false
-  (k) package.json exists with @supabase/ssr dependency
-  (l) src/app/layout.jsx exists
-  (m) src/app/login/page.jsx exists
-  (n) src/app/page.jsx (dashboard) exists
+  (k) package.json exists with React/Vite admin dependencies
+  (l) src/App.jsx exists
+  (m) src/pages/Login.jsx exists
+  (n) src/pages/Dashboard.jsx exists
   (o) src/lib/supabase.js, db_admin.js, auth.js all exist
   (p) For each entity: 3 pages exist (list/new/edit, as stubs)
-  (q) src/components/Sidebar.jsx exists with nav items for each entity
+  (q) src/components/Layout.jsx exists with nav items for each entity
   (r) .env.local has all 6 required env vars
   (s) Stage 6 ran in MOCK mode (no Anthropic key needed)
   (t) Each entity has 3 generated mock CRUD files
   (u) Mock files pass validate_generated_crud_file
-  (v) Workspace `next build` static checks would pass (validator green)
+  (v) Workspace Vite build static checks would pass (validator green)
+  (w) chat_sessions.visual_dna has all 6 brand-signal fields
+      (brand_name + 5 visual dials, not the old 3-field stub)
 
 Cost: ~$0.05 Gemini (purpose + intent + admin planner + seeder).
 Zero Anthropic. Mutates Supabase — creates one chat_session,
@@ -127,7 +129,7 @@ async def _fetch_chat_session_row(project_id: str) -> dict | None:
     async with managed_admin_client() as c:
         res = await (
             c.table("chat_sessions")
-            .select("id, product_type, tenant_schema, data_model")
+            .select("id, product_type, tenant_schema, data_model, visual_dna")
             .eq("id", project_id).limit(1)
             .execute()
         )
@@ -339,8 +341,8 @@ async def _verify_all(
 
         # (h) navigation has Dashboard + one entry per entity
         nav_routes = [item["route"] for item in plan["navigation"]]
-        expected_nav_routes = ["/admin"] + [
-            f"/admin/{t.name.replace('_', '-')}" for t in parsed_dm.tables
+        expected_nav_routes = ["/"] + [
+            f"/{t.name.replace('_', '-')}" for t in parsed_dm.tables
         ]
         nav_ok = nav_routes == expected_nav_routes
         results.append((
@@ -388,7 +390,10 @@ async def _verify_all(
     def _isfile(rel: str) -> bool:
         return os.path.isfile(os.path.join(ws, rel))
 
-    # (k) package.json exists + lists @supabase/ssr
+    def _pascal(name: str) -> str:
+        return "".join(part.capitalize() for part in (name or "").split("_"))
+
+    # (k) package.json exists + lists React/Vite admin deps
     pkg_ok = False
     pkg_detail = "package.json missing"
     if _isfile("package.json"):
@@ -396,35 +401,41 @@ async def _verify_all(
             import json as _json
             pkg = _json.loads(open(os.path.join(ws, "package.json")).read())
             deps = (pkg.get("dependencies") or {})
-            pkg_ok = "@supabase/ssr" in deps
+            scripts = pkg.get("scripts") or {}
+            pkg_ok = (
+                "@supabase/supabase-js" in deps
+                and "react-router-dom" in deps
+                and scripts.get("build") == "vite build"
+            )
             pkg_detail = (
-                f"name={pkg.get('name')!r}, @supabase/ssr={deps.get('@supabase/ssr')}"
+                f"name={pkg.get('name')!r}, build={scripts.get('build')!r}"
                 if pkg_ok else
-                f"package.json present but @supabase/ssr missing (deps={list(deps)})"
+                f"package.json present but React/Vite contract missing "
+                f"(deps={list(deps)}, scripts={scripts})"
             )
         except Exception as exc:
             pkg_detail = f"package.json parse failed: {exc}"
     results.append(("k", pkg_ok, pkg_detail))
 
-    # (l) src/app/layout.jsx
+    # (l) src/App.jsx
     results.append((
-        "l", _isfile("src/app/layout.jsx"),
-        "src/app/layout.jsx present" if _isfile("src/app/layout.jsx")
-        else "src/app/layout.jsx missing",
+        "l", _isfile("src/App.jsx"),
+        "src/App.jsx present" if _isfile("src/App.jsx")
+        else "src/App.jsx missing",
     ))
 
-    # (m) src/app/login/page.jsx
+    # (m) src/pages/Login.jsx
     results.append((
-        "m", _isfile("src/app/login/page.jsx"),
-        "src/app/login/page.jsx present" if _isfile("src/app/login/page.jsx")
-        else "src/app/login/page.jsx missing",
+        "m", _isfile("src/pages/Login.jsx"),
+        "src/pages/Login.jsx present" if _isfile("src/pages/Login.jsx")
+        else "src/pages/Login.jsx missing",
     ))
 
-    # (n) src/app/page.jsx (dashboard)
+    # (n) src/pages/Dashboard.jsx
     results.append((
-        "n", _isfile("src/app/page.jsx"),
-        "src/app/page.jsx present" if _isfile("src/app/page.jsx")
-        else "src/app/page.jsx missing",
+        "n", _isfile("src/pages/Dashboard.jsx"),
+        "src/pages/Dashboard.jsx present" if _isfile("src/pages/Dashboard.jsx")
+        else "src/pages/Dashboard.jsx missing",
     ))
 
     # (o) src/lib/supabase.js, db_admin.js, auth.js
@@ -443,11 +454,11 @@ async def _verify_all(
             name = t.get("name")
             if not name:
                 continue
-            slug = name.replace("_", "-")
+            base = _pascal(name)
             paths = [
-                f"src/app/{slug}/page.jsx",
-                f"src/app/{slug}/new/page.jsx",
-                f"src/app/{slug}/[id]/page.jsx",
+                f"src/pages/{base}List.jsx",
+                f"src/pages/{base}Create.jsx",
+                f"src/pages/{base}Edit.jsx",
             ]
             missing = [p for p in paths if not _isfile(p)]
             per_entity.append((name, len(missing)))
@@ -461,11 +472,11 @@ async def _verify_all(
     else:
         results.append(("p", False, "no tables to check"))
 
-    # (q) src/components/Sidebar.jsx exists + mentions every entity slug
+    # (q) src/components/Layout.jsx exists + mentions every entity slug
     sidebar_ok = False
-    sidebar_detail = "Sidebar.jsx missing"
-    if _isfile("src/components/Sidebar.jsx"):
-        sidebar_src = open(os.path.join(ws, "src/components/Sidebar.jsx")).read()
+    sidebar_detail = "Layout.jsx missing"
+    if _isfile("src/components/Layout.jsx"):
+        sidebar_src = open(os.path.join(ws, "src/components/Layout.jsx")).read()
         if isinstance(tables, list):
             missing_slugs = []
             for t in tables:
@@ -483,18 +494,18 @@ async def _verify_all(
             sidebar_detail = "sidebar present (no entities to verify)"
     results.append(("q", sidebar_ok, sidebar_detail))
 
-    # (r) .env.local has all 6 required env vars
+    # (r) .env.local has all 6 required Vite env vars
     env_ok = False
     env_detail = ".env.local missing"
     if _isfile(".env.local"):
         env_text = open(os.path.join(ws, ".env.local")).read()
         required_vars = [
-            "NEXT_PUBLIC_SUPABASE_URL",
-            "NEXT_PUBLIC_SUPABASE_ANON_KEY",
-            "NEXT_PUBLIC_PROJECT_ID",
-            "NEXT_PUBLIC_TENANT_SCHEMA",
-            "NEXT_PUBLIC_BRAND_NAME",
-            "NEXT_PUBLIC_PRIMARY_COLOR",
+            "VITE_SUPABASE_URL",
+            "VITE_SUPABASE_ANON_KEY",
+            "VITE_PROJECT_ID",
+            "VITE_TENANT_SCHEMA",
+            "VITE_BRAND_NAME",
+            "VITE_PRIMARY_COLOR",
         ]
         missing_env = [v for v in required_vars if v not in env_text]
         env_ok = not missing_env
@@ -524,8 +535,7 @@ async def _verify_all(
     s_detail = "no entity tables to probe"
     s_ok = False
     if table_names:
-        slug0 = table_names[0].replace("_", "-")
-        first_path = os.path.join(ws, f"src/app/{slug0}/page.jsx")
+        first_path = os.path.join(ws, f"src/pages/{_pascal(table_names[0])}List.jsx")
         if os.path.isfile(first_path):
             first_text = open(first_path).read()
             s_ok = mock_marker in first_text
@@ -543,11 +553,11 @@ async def _verify_all(
     if table_names:
         per_entity_mock = []
         for name in table_names:
-            slug = name.replace("_", "-")
+            base = _pascal(name)
             files = [
-                f"src/app/{slug}/page.jsx",
-                f"src/app/{slug}/new/page.jsx",
-                f"src/app/{slug}/[id]/page.jsx",
+                f"src/pages/{base}List.jsx",
+                f"src/pages/{base}Create.jsx",
+                f"src/pages/{base}Edit.jsx",
             ]
             mock_count = 0
             for rel in files:
@@ -573,11 +583,11 @@ async def _verify_all(
         u_problems.append("no tables to validate")
     else:
         for name in table_names:
-            slug = name.replace("_", "-")
+            base = _pascal(name)
             for rel, page_type in (
-                (f"src/app/{slug}/page.jsx",        "list"),
-                (f"src/app/{slug}/new/page.jsx",    "create"),
-                (f"src/app/{slug}/[id]/page.jsx",   "edit"),
+                (f"src/pages/{base}List.jsx",       "list"),
+                (f"src/pages/{base}Create.jsx",     "create"),
+                (f"src/pages/{base}Edit.jsx",       "edit"),
             ):
                 p = os.path.join(ws, rel)
                 if not os.path.isfile(p):
@@ -608,7 +618,7 @@ async def _verify_all(
     # (v) Build verification proxy — same green-validator gate as (u)
     # plus a structural sanity check that the foundation files
     # required by the mocks (AuthGuard, db_admin) exist. The real
-    # `next build` runs separately when KEEP_WORKSPACE=1.
+    # `vite build` runs separately when KEEP_WORKSPACE=1.
     structural_ok = (
         _isfile("src/components/AuthGuard.jsx")
         and _isfile("src/lib/db_admin.js")
@@ -620,6 +630,39 @@ async def _verify_all(
         f"u_ok={u_ok}, AuthGuard+db_admin present={structural_ok}"
     )
     results.append(("v", v_ok, v_detail))
+
+    # (w) visual_dna is real (6 keys), not the old 3-field stub.
+    # Step 3.6 stubbed brand_name + primary_color + 2 hardcoded
+    # fillers. Real extraction lands brand_name + primary_color +
+    # typography_voice + cultural_intensity + layout_density +
+    # accent_motif. Persisted to chat_sessions.visual_dna by
+    # admin_pipeline's Stage 3.
+    required_vd_keys = {
+        "brand_name",
+        "primary_color",
+        "typography_voice",
+        "cultural_intensity",
+        "layout_density",
+        "accent_motif",
+    }
+    persisted = (row or {}).get("visual_dna") or {}
+    if not isinstance(persisted, dict) or not persisted:
+        w_ok = False
+        w_detail = "visual_dna not persisted to chat_sessions"
+    else:
+        missing = required_vd_keys - set(persisted.keys())
+        w_ok = not missing
+        if w_ok:
+            w_detail = (
+                f"6/6 fields present "
+                f"(voice={persisted.get('typography_voice')!r}, "
+                f"intensity={persisted.get('cultural_intensity')!r}, "
+                f"density={persisted.get('layout_density')!r}, "
+                f"motif={persisted.get('accent_motif')!r})"
+            )
+        else:
+            w_detail = f"missing visual_dna keys: {sorted(missing)}"
+    results.append(("w", w_ok, w_detail))
 
     return results
 
@@ -679,18 +722,19 @@ async def main() -> int:
                 "h": "admin plan: navigation has Dashboard + one per entity",
                 "i": "data_model.singletons is empty (no marketing keys)",
                 "j": "all data_model.tables have public_read=false",
-                "k": "package.json has @supabase/ssr dependency",
-                "l": "src/app/layout.jsx exists",
-                "m": "src/app/login/page.jsx exists",
-                "n": "src/app/page.jsx (dashboard) exists",
+                "k": "package.json has React/Vite admin dependencies",
+                "l": "src/App.jsx exists",
+                "m": "src/pages/Login.jsx exists",
+                "n": "src/pages/Dashboard.jsx exists",
                 "o": "src/lib/{supabase,db_admin,auth}.js all exist",
                 "p": "Each entity has 3 stub pages (list/new/edit)",
-                "q": "src/components/Sidebar.jsx mentions every entity",
-                "r": ".env.local has all 6 required env vars",
+                "q": "src/components/Layout.jsx mentions every entity",
+                "r": ".env.local has all 6 required Vite env vars",
                 "s": "Stage 6 ran in MOCK mode (no Anthropic spent)",
                 "t": "Each entity has 3 generated mock CRUD files",
                 "u": "Mock files pass validate_generated_crud_file",
                 "v": "Validator + foundation contract intact (build-ready)",
+                "w": "visual_dna persisted with all 6 brand-signal fields",
             }[cid]
             _emit(cid, label, ok_check, detail)
             if not ok_check:

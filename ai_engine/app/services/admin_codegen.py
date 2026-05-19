@@ -1,27 +1,34 @@
-"""Stage 6 — per-entity admin CRUD codegen.
+"""Stage 6 — admin CRUD codegen, page-level parallel.
 
 Step 3.6 Part A wires the entire flow but defaults to ``mock=True`` so
-no Anthropic credits are spent. Part B (when credits arrive) will set
-``mock=False`` and let Claude generate real list / create / edit
+no Anthropic credits are spent. Part B (when credits arrive) sets
+``mock=False`` and lets Claude generate real list / create / edit
 pages.
 
-Flow per entity
----------------
-For each entity table:
-  1. Build three prompts (list / create / edit) via the prompt modules.
+Per-page pipeline
+-----------------
+For each (entity, page_type) pair:
+  1. Build a prompt via the prompt modules.
   2. If mock=True: write a placeholder JSX that imports AuthGuard and
-     explains itself. Skip the Claude call.
-  3. If mock=False: call `call_claude_for_json` once per prompt,
-     receive a file from the model, and write it to disk.
-  4. Run the static validator over each emitted file; surface any
-     issues in the result dict so the caller can log / re-prompt.
+     the page-specific db_admin helper.
+  3. If mock=False: call `call_claude_for_json` once, receive a file,
+     and write it to disk.
+  4. Run the static validator on the emitted file; surface any issues
+     in the result dict.
 
-The mock pages are deliberately a step up from Step 3.5's stubs:
-they import AuthGuard + listCollection and call the helper, which
-proves the import contract is honoured without needing Claude.
+Parallelism
+-----------
+The pipeline builds a flat list of ALL (entity, page_type) tuples
+across the data model and gathers them under a single
+``asyncio.Semaphore`` — the same shape ``website_orchestrator`` uses
+for parallel page generation. ``generate_entity_crud`` still exists as
+a per-entity convenience (it gathers its own 3 pages internally), but
+the pipeline uses ``generate_one_admin_page`` directly for full N×3
+concurrency.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any
@@ -61,23 +68,42 @@ def _mock_page_jsx(
     """A self-explanatory placeholder JSX file.
 
     The mock honours the SAME contract Claude will: 'use client',
-    AuthGuard import, plus the page-specific db_admin helper
-    (listCollection / createRow / updateRow). Validates the import
-    contract without burning credits.
+    AuthGuard import, React Router import, plus the page-specific
+    db_admin helper. Validates the import contract without burning
+    credits.
     """
     label_plural   = entity.plural_label or entity.name
     label_singular = entity.singular_label or entity.name
     field_count    = len(entity.fields)
     component_name = "".join(p.title() for p in entity.name.split("_"))
+    slug = entity.name.replace("_", "-")
 
     # Per-page identifiers + imports — matches what the validator
     # expects for `page_type`.
     config = {
-        "list":   ("ListPage", "listCollection", "()"),
-        "create": ("NewPage",  "createRow",      "()"),
-        "edit":   ("EditPage", "updateRow",      "({ params })"),
+        "list": (
+            "ListPage",
+            'import { Link } from "react-router-dom";\n',
+            'import { listCollection, deleteRow } from "@/lib/db_admin.js";\n',
+            "  void listCollection;\n  void deleteRow;\n",
+            f'  const route = "/{slug}/new";\n  void route;\n',
+        ),
+        "create": (
+            "CreatePage",
+            'import { useNavigate } from "react-router-dom";\n',
+            'import { createRow } from "@/lib/db_admin.js";\n',
+            "  const navigate = useNavigate();\n  void createRow;\n  void navigate;\n",
+            "",
+        ),
+        "edit": (
+            "EditPage",
+            'import { useNavigate, useParams } from "react-router-dom";\n',
+            'import { listCollection, updateRow, deleteRow } from "@/lib/db_admin.js";\n',
+            "  const navigate = useNavigate();\n  const { id } = useParams();\n  void listCollection;\n  void updateRow;\n  void deleteRow;\n  void navigate;\n  void id;\n",
+            "",
+        ),
     }[page_type]
-    suffix, helper, params_arg = config
+    suffix, router_import, helper_import, setup_lines, extra_lines = config
 
     brand = (plan.get("branding") or {}).get("brand_name") or "Admin"
 
@@ -88,17 +114,17 @@ def _mock_page_jsx(
         ' * Imports AuthGuard + db_admin so the contract Claude will\n'
         ' * inherit is exercised even in mock mode.\n'
         ' */\n'
+        f'{router_import}'
         'import { AuthGuard } from "@/components/AuthGuard.jsx";\n'
-        f'import {{ {helper} }} from "@/lib/db_admin.js";\n'
+        f'{helper_import}'
         '\n'
-        f'export default function {component_name}{suffix}{params_arg} {{\n'
-        f'  // {helper} is referenced so the bundler ships it. The real\n'
-        '  // component will use it; here it suppresses the\n'
-        '  // unused-import warning in stricter builds.\n'
-        f'  void {helper};\n'
+        f'export default function {component_name}{suffix}() {{\n'
+        f'{setup_lines}'
+        f'{extra_lines}'
         '  return (\n'
         '    <AuthGuard>\n'
         '      <div className="p-8 max-w-2xl">\n'
+        '        {typeof Link === "function" ? null : null}\n'
         f'        <h1 className="text-3xl font-bold mb-2">{label_plural}</h1>\n'
         f'        <p className="text-sm text-muted-foreground mb-6">{brand} admin</p>\n'
         '        <p className="text-muted-foreground mb-2">\n'
@@ -173,6 +199,99 @@ async def _call_claude_for_one_page(
 
 # ── Main entry ───────────────────────────────────────────────────────
 
+def pages_for_entity(
+    entity: TableDefinition,
+    admin_plan: dict,
+) -> list[tuple[str, str, dict]]:
+    """Return the (page_type, rel_path, prompt) triples for one entity.
+
+    Public helper so the pipeline can build a flat task list across
+    entities for parallel Stage-6 codegen.
+    """
+    base = "".join(part.title() for part in entity.name.split("_"))
+    return [
+        ("list",   f"src/pages/{base}List.jsx",        build_list_view_prompt(entity, admin_plan)),
+        ("create", f"src/pages/{base}Create.jsx",      build_create_view_prompt(entity, admin_plan)),
+        ("edit",   f"src/pages/{base}Edit.jsx",        build_edit_view_prompt(entity, admin_plan)),
+    ]
+
+
+async def generate_one_admin_page(
+    *,
+    entity: TableDefinition,
+    page_type: str,
+    rel_path: str,
+    prompt: dict[str, str],
+    admin_plan: dict,
+    workspace_path: str,
+    anthropic_key: str,
+    mock: bool,
+) -> dict[str, Any]:
+    """Generate ONE admin CRUD page.
+
+    Returns a flat dict per page so the pipeline can gather many
+    concurrently and aggregate them afterwards:
+
+      ``entity``     — table.name (for grouping in the caller)
+      ``page_type``  — "list" | "create" | "edit"
+      ``rel_path``   — relative path written (or attempted)
+      ``written``    — True if a file was written
+      ``page_cost``  — actual $ spent on this page (0 when mock=True)
+      ``issues``     — list of validator issue strings (empty == clean)
+    """
+    label = f"{entity.name}/{page_type}"
+
+    if mock:
+        content: str | None = _mock_page_jsx(entity, page_type, admin_plan)
+        page_cost = 0.0
+    else:
+        content, page_cost = await _call_claude_for_one_page(
+            prompt=prompt,
+            anthropic_key=anthropic_key,
+            label=label,
+        )
+
+    if content is None:
+        return {
+            "entity":     entity.name,
+            "page_type":  page_type,
+            "rel_path":   rel_path,
+            "written":    False,
+            "page_cost":  page_cost,
+            "issues":     ["claude returned no usable file"],
+        }
+
+    # Validate before writing — same check whether mock or real.
+    issues = validate_generated_crud_file(
+        content,
+        expected_entity=entity.name,
+        page_type=page_type,
+    )
+    if issues:
+        logger.warning(
+            "admin_codegen %s: validator flagged:\n%s",
+            label, summarise_issues(issues),
+        )
+
+    # Write even if validator complained — easier to inspect a broken
+    # file than to recover from a missing one. Production callers may
+    # choose to skip writes on errors; for the dry run we want
+    # everything on disk.
+    abs_path = os.path.join(workspace_path, rel_path)
+    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+    with open(abs_path, "w", encoding="utf-8") as fh:
+        fh.write(content)
+
+    return {
+        "entity":     entity.name,
+        "page_type":  page_type,
+        "rel_path":   rel_path,
+        "written":    True,
+        "page_cost":  page_cost,
+        "issues":     issues,
+    }
+
+
 async def generate_entity_crud(
     *,
     entity: TableDefinition,
@@ -182,7 +301,12 @@ async def generate_entity_crud(
     anthropic_key: str = "",
     mock: bool = True,
 ) -> dict[str, Any]:
-    """Generate the 3 CRUD pages for one entity.
+    """Generate the 3 CRUD pages for one entity, in parallel.
+
+    Kept as a public entry-point because tests + ad-hoc callers use it,
+    but the pipeline now builds a flatter task list across ALL entities
+    via `pages_for_entity` + `generate_one_admin_page` so all N×3 pages
+    can fire under one bounded semaphore.
 
     Returns a dict with:
       • ``files_written``         — list of relative paths
@@ -194,62 +318,27 @@ async def generate_entity_crud(
     """
     _ = data_model  # reserved for future cross-entity context
 
-    slug = entity.name.replace("_", "-")
-    pages: list[tuple[str, str, dict]] = [
-        # (page_type,  rel_path,                                 prompt)
-        ("list",   f"src/app/{slug}/page.jsx",        build_list_view_prompt(entity, admin_plan)),
-        ("create", f"src/app/{slug}/new/page.jsx",    build_create_view_prompt(entity, admin_plan)),
-        ("edit",   f"src/app/{slug}/[id]/page.jsx",   build_edit_view_prompt(entity, admin_plan)),
-    ]
+    pages = pages_for_entity(entity, admin_plan)
 
-    files_written: list[str] = []
-    validation_errors: list[dict[str, Any]] = []
-    cost_estimate = 0.0
-    cost_actual   = 0.0
-
-    for page_type, rel_path, prompt in pages:
-        label = f"{entity.name}/{page_type}"
-        cost_estimate += _EST_PAGE_COST_USD
-
-        if mock:
-            content = _mock_page_jsx(entity, page_type, admin_plan)
-        else:
-            content, page_cost = await _call_claude_for_one_page(
-                prompt=prompt,
-                anthropic_key=anthropic_key,
-                label=label,
-            )
-            cost_actual += page_cost
-            if content is None:
-                # Hard fail — caller can decide whether to retry.
-                validation_errors.append({
-                    "file":  rel_path,
-                    "issues": ["claude returned no usable file"],
-                })
-                continue
-
-        # Validate before writing — same check whether mock or real.
-        issues = validate_generated_crud_file(
-            content,
-            expected_entity=entity.name,
-            page_type=page_type,
+    # 3 pages per entity — independent prompts, no shared state, safe
+    # to gather in parallel.
+    results = await asyncio.gather(*[
+        generate_one_admin_page(
+            entity=entity, page_type=page_type, rel_path=rel_path,
+            prompt=prompt, admin_plan=admin_plan,
+            workspace_path=workspace_path, anthropic_key=anthropic_key,
+            mock=mock,
         )
-        if issues:
-            logger.warning(
-                "admin_codegen %s: validator flagged:\n%s",
-                label, summarise_issues(issues),
-            )
-            validation_errors.append({"file": rel_path, "issues": issues})
+        for page_type, rel_path, prompt in pages
+    ])
 
-        # Write even if validator complained — easier to inspect a
-        # broken file than to recover from a missing one. Production
-        # callers may choose to skip writes on errors; for the dry run
-        # we want everything on disk.
-        abs_path = os.path.join(workspace_path, rel_path)
-        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-        with open(abs_path, "w", encoding="utf-8") as fh:
-            fh.write(content)
-        files_written.append(rel_path)
+    files_written:     list[str] = [r["rel_path"] for r in results if r["written"]]
+    validation_errors: list[dict[str, Any]] = [
+        {"file": r["rel_path"], "issues": r["issues"]}
+        for r in results if r["issues"]
+    ]
+    cost_actual   = sum(r["page_cost"] for r in results)
+    cost_estimate = len(pages) * _EST_PAGE_COST_USD
 
     logger.info(
         "admin_codegen %s: %d files written (mock=%s, validator_errors=%d)",

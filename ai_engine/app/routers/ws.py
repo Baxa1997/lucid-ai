@@ -194,7 +194,7 @@ async def websocket_agent(websocket: WebSocket):
         await websocket.send_json({
             "type": "status",
             "status": "initializing",
-            "message": "Setting up agent workspace...",
+            "message": "Getting started…",
         })
 
         user_id = ws_user.user_id
@@ -444,7 +444,7 @@ async def websocket_agent(websocket: WebSocket):
                     await websocket.send_json({
                         "type": "preview_ready",
                         "preview_url": _active_url,
-                        "message": f"🖥️ Live preview: {_active_url}",
+                        "message": "Preview ready",
                     })
                     logger.info(
                         "Re-emitted preview_ready on reconnect for session %s → %s",
@@ -904,7 +904,7 @@ async def websocket_agent(websocket: WebSocket):
                     try:
                         await websocket.send_json({"type": "preview_ready",
                                                    "preview_url": _early_active_url,
-                                                   "message": f"🖥️ Live preview: {_early_active_url}"})
+                                                   "message": "Preview ready"})
                         if session is not None:
                             session.workspace_dir = _cached_tmp
                     except Exception:
@@ -945,7 +945,7 @@ async def websocket_agent(websocket: WebSocket):
                                         logger.debug("bg_preview: file_tree send on reuse failed (ok): %s", _ft_reuse_err)
                                 await websocket.send_json({"type": "preview_ready",
                                                            "preview_url": _existing_url,
-                                                           "message": f"🖥️ Live preview: {_existing_url}"})
+                                                           "message": "Preview ready"})
                                 return
 
                             # ── Use a STABLE path per conversation ──────────────────
@@ -1130,7 +1130,7 @@ async def websocket_agent(websocket: WebSocket):
                                 if not _already_installed:
                                     await websocket.send_json({"type": "preview_status",
                                                                "status": "installing",
-                                                               "message": f"Installing dependencies ({_bg_pm})…"})
+                                                               "message": "Installing dependencies…"})
                                     logger.info("bg_preview: installing deps with %s for %s", _bg_pm, _bg_conv_id)
                                     try:
                                         # Use a shared pnpm content-store so packages are
@@ -1208,7 +1208,7 @@ async def websocket_agent(websocket: WebSocket):
                                 _reconnect_preview_url, _reconnect_conv_id)
                     await websocket.send_json({"type": "preview_ready",
                                                "preview_url": _reconnect_preview_url,
-                                               "message": f"🖥️ Live preview: {_reconnect_preview_url}"})
+                                               "message": "Preview ready"})
                 else:
                     # Dev server died — try to restart from cached workspace
                     _recon_ws = None
@@ -1320,7 +1320,7 @@ async def websocket_agent(websocket: WebSocket):
                 # The AI will generate all files when the task runs.
                 await websocket.send_json({
                     "type": "workspace_empty",
-                    "message": "Waiting for AI to generate code...",
+                    "message": "Working on it…",
                     "path": "new_project",
                 })
 
@@ -1438,7 +1438,7 @@ async def websocket_agent(websocket: WebSocket):
                                 _err = (_install.stderr or _install.stdout or "")[:200]
                                 await websocket.send_json({
                                     "type": "warning",
-                                    "message": f"{_pm} install errors: {_err}",
+                                    "message": "Couldn't install dependencies — preview may not work.",
                                 })
                                 logger.warning(
                                     "%s install failed (non-fatal) for project %s: %s",
@@ -1447,7 +1447,7 @@ async def websocket_agent(websocket: WebSocket):
                             else:
                                 await websocket.send_json({
                                     "type": "progress",
-                                    "message": f"✅ Dependencies installed ({_pm})",
+                                    "message": "Dependencies installed.",
                                 })
                                 logger.info(
                                     "%s install succeeded for project %s", _pm, project_id
@@ -1455,7 +1455,7 @@ async def websocket_agent(websocket: WebSocket):
                         except _subprocess.TimeoutExpired:
                             await websocket.send_json({
                                 "type": "warning",
-                                "message": f"⚠️ {_pm} install timed out — dependencies may be missing",
+                                "message": "Dependency install timed out — preview may not work.",
                             })
                             logger.warning(
                                 "%s install timed out (subprocess) for project %s", _pm, project_id
@@ -1463,7 +1463,7 @@ async def websocket_agent(websocket: WebSocket):
                         except (asyncio.TimeoutError, TimeoutError):
                             await websocket.send_json({
                                 "type": "warning",
-                                "message": f"⚠️ {_pm} install timed out after 5 min — workspace ready but dependencies may be missing",
+                                "message": "Dependency install timed out — preview may not work.",
                             })
                             logger.warning(
                                 "%s install timed out (asyncio) for project %s", _pm, project_id
@@ -1533,7 +1533,7 @@ async def websocket_agent(websocket: WebSocket):
                     await websocket.send_json({
                         "type": "status",
                         "status": "preparing",
-                        "message": "⚠️ Could not clone repository. Workspace ready in limited mode — you can still send tasks.",
+                        "message": "Couldn't clone the repository — preview is limited but you can still send tasks.",
                     })
 
             if not clone_fatal and not task:
@@ -2395,7 +2395,7 @@ async def _auto_push_if_needed(
         try:
             await websocket.send_json({
                 "type": "warning",
-                "message": f"⚠️ Auto-push skipped: {reason_str}. Changes are saved locally.",
+                "message": "Couldn't push your changes to GitHub — they're saved locally.",
             })
         except Exception:
             pass

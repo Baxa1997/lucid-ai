@@ -252,8 +252,8 @@ Rules:
     GOOD: {{cond ? ( <> <A/> <B/> </> ) : ( <X/> )}}
   Same fix applies to `items.map(x => <A/> <B/>)` → `items.map(x => <><A/><B/></>)`.
 - Do not change logic, design, or styling — only fix imports and syntax
-- Use RELATIVE imports only (../components/X, ./sections/Y)
-- For Next.js: do NOT use @/ alias
+- Prefer the import style already used by the project. If jsconfig.json
+  or vite.config.js defines @/*, @/ imports are valid.
 
 After fixing, list every file you changed and why.
 STOP when all errors are fixed.

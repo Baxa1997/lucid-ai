@@ -1,35 +1,16 @@
-"""Stage 5 — deterministic admin foundation file generator.
+"""Stage 5 - deterministic React/Vite admin foundation generator.
 
-Writes every file in the generated admin Next.js project EXCEPT the
-per-entity CRUD bodies (those land in Step 3.6 via Claude codegen).
+Writes every file in the generated admin React app except the final
+per-entity CRUD bodies, which Stage 6 may replace with Claude output.
 After this step the project should:
-  • boot via `npm run dev`
-  • render /login wired to Supabase Auth
-  • render the sidebar with one nav item per entity
-  • render dashboard with per-entity row counts
-  • render stub list/new/edit pages explaining Step 3.6
+  - boot via `npm run dev`
+  - render `/login` with Supabase Auth
+  - render a protected sidebar shell with one nav item per entity
+  - render a dashboard with per-entity row counts
+  - render stub list/new/edit pages that Stage 6 can overwrite
 
-Design choices
---------------
-  • JavaScript not TypeScript — matches the rest of the codebase
-    (CLAUDE.md: "Frontend uses JavaScript … with Next.js App Router").
-  • shadcn-style HSL Tailwind tokens with a slate-neutral palette
-    swapped for `--primary` via `admin_plan.branding.primary_color`.
-  • @supabase/ssr's `createBrowserClient` (NOT the legacy
-    `@supabase/auth-helpers-nextjs`) — Supabase deprecated the
-    helpers in 2024 and `ssr` is the supported path.
-  • All RPC calls go through migrations 026 (writes) + 027
-    (authenticated reads). Anon read RPC (025) is NOT used here —
-    admins are authenticated by definition.
-
-Inputs vs side-effects
-----------------------
-This module's main entry point writes files; the caller is expected
-to have ensured `workspace_path` is an empty directory (or that
-clobbering existing files is acceptable). The website pipeline's
-foundation builder returns a dict and lets the caller write — we
-write directly here because the admin foundation is uniformly
-overwrite-safe (no merge-with-template step like the website has).
+Admin panels deliberately use the local `admin-react`/Vite shape,
+while websites and landing pages continue to use Next.js.
 """
 from __future__ import annotations
 
@@ -44,11 +25,16 @@ from app.services.data_model import DataModel, TableDefinition
 logger = logging.getLogger(__name__)
 
 
-# ── Slug helpers ─────────────────────────────────────────────────────
+# -- Slug/component helpers -------------------------------------------------
 
 def _kebab(name: str) -> str:
-    """`purchase_orders` → `purchase-orders`."""
+    """`purchase_orders` -> `purchase-orders`."""
     return (name or "").replace("_", "-")
+
+
+def _pascal(name: str) -> str:
+    """`purchase_orders` -> `PurchaseOrders`."""
+    return "".join(part.capitalize() for part in re.split(r"[_\-\s]+", name or "") if part) or "Entity"
 
 
 def _slugify_brand(name: str) -> str:
@@ -57,11 +43,17 @@ def _slugify_brand(name: str) -> str:
     return s or "admin"
 
 
-# ── Icon mapping (matches admin_plan.py) ─────────────────────────────
-# This list is duplicated from admin_plan._ICON_BY_NAME_SUBSTRING so
-# the sidebar source can import only the names it actually uses.
-# Keep the two in sync when adding entries — they share the same set
-# of canonical icon names.
+def _react_route(route: str) -> str:
+    """Normalize older `/admin/...` plan routes to standalone app routes."""
+    route = (route or "/").strip() or "/"
+    if route == "/admin":
+        route = "/"
+    elif route.startswith("/admin/"):
+        route = route[len("/admin"):] or "/"
+    return route.replace("[id]", ":id")
+
+
+# -- Icon mapping (matches admin_plan.py) -----------------------------------
 
 LUCIDE_ICON_NAMES = sorted({
     "home", "user-plus", "users", "graduation-cap", "user-cog",
@@ -74,42 +66,42 @@ LUCIDE_ICON_NAMES = sorted({
 })
 
 
-# Lucide ships PascalCase exports — `users` → `Users`, `user-plus` → `UserPlus`.
 def _icon_to_pascal(icon_kebab: str) -> str:
     return "".join(part.capitalize() for part in icon_kebab.split("-"))
 
 
-# ── Tailwind / globals.css ───────────────────────────────────────────
+# -- Tailwind / Vite root files ---------------------------------------------
 
 _TAILWIND_CONFIG = """\
 /** @type {import('tailwindcss').Config} */
-module.exports = {
+export default {
+  darkMode: ["class"],
   content: [
-    "./src/app/**/*.{js,jsx}",
-    "./src/components/**/*.{js,jsx}",
+    "./index.html",
+    "./src/**/*.{js,jsx}",
   ],
   theme: {
     extend: {
       colors: {
-        border:     "hsl(var(--border))",
-        input:      "hsl(var(--input))",
-        ring:       "hsl(var(--ring))",
+        border: "hsl(var(--border))",
+        input: "hsl(var(--input))",
+        ring: "hsl(var(--ring))",
         background: "hsl(var(--background))",
         foreground: "hsl(var(--foreground))",
         primary: {
-          DEFAULT:    "hsl(var(--primary))",
+          DEFAULT: "hsl(var(--primary))",
           foreground: "hsl(var(--primary-foreground))",
         },
         muted: {
-          DEFAULT:    "hsl(var(--muted))",
+          DEFAULT: "hsl(var(--muted))",
           foreground: "hsl(var(--muted-foreground))",
         },
         card: {
-          DEFAULT:    "hsl(var(--card))",
+          DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
         destructive: {
-          DEFAULT:    "hsl(var(--destructive))",
+          DEFAULT: "hsl(var(--destructive))",
           foreground: "hsl(var(--destructive-foreground))",
         },
       },
@@ -126,54 +118,156 @@ module.exports = {
 
 
 _POSTCSS_CONFIG = """\
-module.exports = {
+const config = {
   plugins: {
     tailwindcss: {},
     autoprefixer: {},
   },
 };
+
+export default config;
 """
 
 
-# Slate-neutral defaults; the primary HSL is derived from the
-# admin_plan.branding.primary_color hex via `_hex_to_hsl_string`.
-_GLOBALS_CSS_TEMPLATE = """\
+_VITE_CONFIG = """\
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+import { fileURLToPath, URL } from "node:url";
+
+export default defineConfig({
+  plugins: [react()],
+  server: { port: 5173, host: true },
+  resolve: {
+    alias: {
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
+    },
+  },
+});
+"""
+
+
+_JSCONFIG = """\
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src/**/*.js", "src/**/*.jsx"]
+}
+"""
+
+
+_GITIGNORE = """\
+node_modules/
+dist/
+.vite/
+.env.local
+.env.*.local
+.DS_Store
+*.log
+"""
+
+
+_ENV_EXAMPLE = """\
+# Copy to .env.local and fill in the values from the Supabase Dashboard.
+VITE_SUPABASE_URL=
+VITE_SUPABASE_ANON_KEY=
+VITE_PROJECT_ID=
+VITE_TENANT_SCHEMA=
+VITE_BRAND_NAME=
+VITE_PRIMARY_COLOR=
+"""
+
+
+_INDEX_HTML = """\
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lucid Admin</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
+"""
+
+
+_INDEX_CSS_TEMPLATE = """\
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {{
-  --background:           0 0% 100%;
-  --foreground:           222 47% 11%;
-  --card:                 0 0% 100%;
-  --card-foreground:      222 47% 11%;
-  --muted:                210 40% 96%;
-  --muted-foreground:     215 16% 47%;
-  --border:               214 32% 91%;
-  --input:                214 32% 91%;
-  --primary:              {primary_hsl};
-  --primary-foreground:   210 40% 98%;
-  --destructive:          0 84% 60%;
+  --background: 0 0% 100%;
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --muted: 210 40% 96%;
+  --muted-foreground: 215 16% 47%;
+  --border: 214 32% 91%;
+  --input: 214 32% 91%;
+  --primary: {primary_hsl};
+  --primary-foreground: 210 40% 98%;
+  --destructive: 0 84% 60%;
   --destructive-foreground: 210 40% 98%;
-  --ring:                 215 20% 65%;
-  --radius:               0.5rem;
+  --ring: 215 20% 65%;
+  --radius: 0.5rem;
+
+  /* visual_dna-driven design tokens — components read these via
+     Tailwind arbitrary values like p-[var(--admin-padding-y)_var(--admin-padding-x)]
+     or font-[var(--font-heading)]. */
+  --font-body: {body_font};
+  --font-heading: {heading_font};
+  --body-weight: {body_weight};
+  --admin-padding-x: {density_padding_x};
+  --admin-padding-y: {density_padding_y};
+}}
+
+* {{
+  box-sizing: border-box;
+}}
+
+html {{
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }}
 
 body {{
+  margin: 0;
+  min-height: 100vh;
   background-color: hsl(var(--background));
   color: hsl(var(--foreground));
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI",
-    Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--font-body);
+  font-weight: var(--body-weight);
+}}
+
+h1, h2, h3, h4, h5, h6 {{
+  font-family: var(--font-heading);
+}}
+
+button,
+input,
+select,
+textarea {{
+  font: inherit;
+}}
+
+a {{
+  color: inherit;
+  text-decoration: none;
 }}
 """
 
 
 def _hex_to_hsl_string(hex_color: str) -> str:
-    """Convert `#0f172a` → `222 47% 11%` (the Tailwind/shadcn token shape).
+    """Convert `#0f172a` -> `222 47% 11%`.
 
-    Falls back to slate-900 (`222 47% 11%`) on parse failure so
-    globals.css always builds, even if the planner returned a
-    malformed brand color.
+    Falls back to slate-900 on parse failure so generated CSS always builds.
     """
     h = (hex_color or "").strip().lstrip("#")
     if len(h) == 3:
@@ -205,82 +299,121 @@ def _hex_to_hsl_string(hex_color: str) -> str:
     return f"{int(round(hue))} {int(round(sat * 100))}% {int(round(lum * 100))}%"
 
 
-# ── package.json / next.config.js / jsconfig.json ────────────────────
+# ── visual_dna → foundation knobs ──────────────────────────────────
+
+_FONT_STACKS: dict[str, tuple[str, str]] = {
+    # voice: (body_stack, heading_stack)
+    "professional": (
+        "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+        "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    ),
+    "friendly": (
+        "ui-rounded, 'SF Pro Rounded', system-ui, sans-serif",
+        "ui-rounded, 'SF Pro Rounded', system-ui, sans-serif",
+    ),
+    "minimal": (
+        "ui-sans-serif, system-ui, sans-serif",
+        "ui-sans-serif, system-ui, sans-serif",
+    ),
+    "editorial": (
+        "ui-sans-serif, system-ui, sans-serif",
+        "ui-serif, Georgia, 'Times New Roman', serif",
+    ),
+    "playful": (
+        "ui-rounded, 'SF Pro Rounded', 'Comic Sans MS', system-ui, sans-serif",
+        "ui-rounded, 'SF Pro Rounded', system-ui, sans-serif",
+    ),
+    "technical": (
+        "ui-sans-serif, system-ui, sans-serif",
+        "ui-monospace, 'SF Mono', Menlo, Consolas, monospace",
+    ),
+    "soft": (
+        "ui-rounded, system-ui, sans-serif",
+        "ui-rounded, system-ui, sans-serif",
+    ),
+}
+
+
+# (padding_x, padding_y, body_font_weight) per density tier. Components
+# read --admin-padding-x / --admin-padding-y via Tailwind arbitrary
+# values like `p-[var(--admin-padding-y)_var(--admin-padding-x)]`.
+_DENSITY_SPACING: dict[str, dict[str, str]] = {
+    "compact":     {"padding_x": "0.75rem", "padding_y": "0.5rem",  "body_weight": "400"},
+    "comfortable": {"padding_x": "1rem",    "padding_y": "0.75rem", "body_weight": "400"},
+    "spacious":    {"padding_x": "1.5rem",  "padding_y": "1rem",    "body_weight": "400"},
+}
+
+
+def _font_stack_for_voice(voice: str) -> tuple[str, str]:
+    """Return (body_stack, heading_stack) CSS font-family strings."""
+    return _FONT_STACKS.get((voice or "").strip().lower(),
+                             _FONT_STACKS["professional"])
+
+
+def _density_spacing(density: str) -> dict[str, str]:
+    return _DENSITY_SPACING.get((density or "").strip().lower(),
+                                 _DENSITY_SPACING["comfortable"])
+
+
+def _adjust_hsl_for_intensity(hsl_str: str, intensity: str) -> str:
+    """Tweak the primary color's saturation according to cultural_intensity.
+
+    - ``calm``: reduce saturation by 15 points (more muted brand color).
+    - ``energetic``: boost saturation by 15 points (brighter accents).
+    - ``editorial`` (or anything else): keep saturation, drop lightness
+      slightly so headings + button accents read more 'authored'.
+
+    Caps S / L at [0, 100] so out-of-range Tailwind/CSS values never leak.
+    """
+    parts = (hsl_str or "").strip().replace("%", "").split()
+    if len(parts) != 3:
+        return hsl_str
+    try:
+        h_, s_, l_ = (int(parts[0]), int(parts[1]), int(parts[2]))
+    except ValueError:
+        return hsl_str
+
+    norm = (intensity or "").strip().lower()
+    if norm == "calm":
+        s_ = max(0, s_ - 15)
+    elif norm == "energetic":
+        s_ = min(100, s_ + 15)
+    elif norm == "editorial":
+        l_ = max(0, l_ - 3)
+
+    return f"{h_} {s_}% {l_}%"
+
 
 def _build_package_json(brand_name: str) -> str:
     pkg = {
-        "name":    f"{_slugify_brand(brand_name)}-admin",
+        "name": f"{_slugify_brand(brand_name)}-admin",
         "version": "0.1.0",
         "private": True,
+        "type": "module",
         "scripts": {
-            "dev":   "next dev",
-            "build": "next build",
-            "start": "next start",
-            "lint":  "next lint",
+            "dev": "vite",
+            "build": "vite build",
+            "preview": "vite preview",
         },
         "dependencies": {
-            "next":                    "^14.2.0",
-            "react":                   "^18.3.0",
-            "react-dom":               "^18.3.0",
-            "@supabase/ssr":           "^0.5.0",
-            "@supabase/supabase-js":   "^2.45.0",
-            "react-hook-form":         "^7.53.0",
-            "lucide-react":            "^0.440.0",
-            "clsx":                    "^2.1.0",
-            "tailwind-merge":          "^2.5.0",
+            "@supabase/supabase-js": "^2.45.0",
+            "clsx": "^2.1.1",
+            "lucide-react": "^0.460.0",
+            "react": "^19.0.0",
+            "react-dom": "^19.0.0",
+            "react-hook-form": "^7.53.0",
+            "react-router-dom": "^7.0.0",
+            "tailwind-merge": "^2.5.4",
         },
         "devDependencies": {
-            "autoprefixer": "^10.4.0",
-            "postcss":      "^8.4.0",
-            "tailwindcss":  "^3.4.0",
+            "@vitejs/plugin-react": "^4.3.0",
+            "autoprefixer": "^10.4.20",
+            "postcss": "^8.4.49",
+            "tailwindcss": "^3.4.17",
+            "vite": "^6.0.0",
         },
     }
     return json.dumps(pkg, indent=2) + "\n"
-
-
-_NEXT_CONFIG = """\
-/** @type {import('next').NextConfig} */
-const nextConfig = {
-  reactStrictMode: true,
-};
-
-module.exports = nextConfig;
-"""
-
-
-_JSCONFIG = """\
-{
-  "compilerOptions": {
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["./src/*"]
-    }
-  },
-  "include": ["src/**/*.js", "src/**/*.jsx"]
-}
-"""
-
-
-_GITIGNORE = """\
-node_modules/
-.next/
-out/
-.env.local
-.env.*.local
-.DS_Store
-*.log
-"""
-
-
-_ENV_EXAMPLE = """\
-# Copy to .env.local and fill in the values from the Supabase Dashboard.
-NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
-NEXT_PUBLIC_PROJECT_ID=
-NEXT_PUBLIC_TENANT_SCHEMA=
-NEXT_PUBLIC_BRAND_NAME=
-NEXT_PUBLIC_PRIMARY_COLOR=
-"""
 
 
 def _build_env_local(
@@ -293,72 +426,64 @@ def _build_env_local(
     primary_color: str,
 ) -> str:
     return (
-        "# AUTO-GENERATED — Lucid AI admin pipeline.\n"
-        "# Anon key — safe to ship to the browser; RLS + the\n"
-        "# get_tenant_collection_authenticated RPC enforce isolation.\n"
-        f"NEXT_PUBLIC_SUPABASE_URL={supabase_url}\n"
-        f"NEXT_PUBLIC_SUPABASE_ANON_KEY={supabase_anon_key}\n"
-        f"NEXT_PUBLIC_PROJECT_ID={project_id}\n"
-        f"NEXT_PUBLIC_TENANT_SCHEMA={tenant_schema}\n"
-        f"NEXT_PUBLIC_BRAND_NAME={brand_name}\n"
-        f"NEXT_PUBLIC_PRIMARY_COLOR={primary_color}\n"
+        "# AUTO-GENERATED - Lucid AI admin pipeline.\n"
+        "# Anon key is safe to ship to the browser; RLS and tenant RPCs enforce isolation.\n"
+        f"VITE_SUPABASE_URL={supabase_url}\n"
+        f"VITE_SUPABASE_ANON_KEY={supabase_anon_key}\n"
+        f"VITE_PROJECT_ID={project_id}\n"
+        f"VITE_TENANT_SCHEMA={tenant_schema}\n"
+        f"VITE_BRAND_NAME={brand_name}\n"
+        f"VITE_PRIMARY_COLOR={primary_color}\n"
     )
 
 
 def _build_readme(brand_name: str, data_model: DataModel) -> str:
     entities = ", ".join(t.plural_label or t.name for t in data_model.tables)
     return (
-        f"# {brand_name} — Admin\n\n"
+        f"# {brand_name} - Admin\n\n"
         f"Auto-generated by Lucid AI. Manages: {entities or '(no entities yet)'}.\n\n"
         "## Quickstart\n\n"
         "```bash\n"
         "npm install\n"
         "npm run dev\n"
         "```\n\n"
-        "Then open http://localhost:3000/login.\n\n"
+        "Then open http://localhost:5173/login.\n\n"
         "## Stack\n\n"
-        "- Next.js 14 App Router (JavaScript)\n"
-        "- Supabase Auth + Postgres (via tenant RPCs)\n"
-        "- Tailwind CSS + shadcn-style HSL design tokens\n"
-        "- react-hook-form, lucide-react\n\n"
-        "## What's here vs. what's coming\n\n"
-        "Step 3.5 (this commit) wired up the foundation: auth, sidebar,\n"
-        "dashboard, and stub CRUD pages.\n\n"
-        "Step 3.6 will replace the stub pages with real list / create /\n"
-        "edit UIs.\n"
+        "- React + Vite\n"
+        "- React Router\n"
+        "- Supabase Auth + tenant RPCs\n"
+        "- Tailwind CSS + HSL design tokens\n"
+        "- react-hook-form, lucide-react\n"
     )
 
 
-# ── src/lib ──────────────────────────────────────────────────────────
+# -- src/lib ---------------------------------------------------------------
 
 _LIB_SUPABASE_JS = """\
-/* AUTO-GENERATED — Lucid AI admin pipeline. */
-import { createBrowserClient } from "@supabase/ssr";
+/* AUTO-GENERATED - Lucid AI admin pipeline. */
+import { createClient } from "@supabase/supabase-js";
 
-let _client = null;
+let client = null;
 
 export function getSupabaseBrowserClient() {
-  // Cache the client so React's re-renders don't spawn a new
-  // websocket connection on every component mount.
-  if (_client) return _client;
-  const url     = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (client) return client;
+
+  const url = import.meta.env.VITE_SUPABASE_URL;
+  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
   if (!url || !anonKey) {
     throw new Error(
-      "Lucid: NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY is missing.",
+      "Lucid: VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY is missing.",
     );
   }
-  _client = createBrowserClient(url, anonKey);
-  return _client;
+
+  client = createClient(url, anonKey);
+  return client;
 }
 """
 
 
 def _build_db_admin_js(data_model: DataModel) -> str:
-    """`src/lib/db_admin.js` — list/create/update/delete wrappers around
-    migrations 026 + 027. Hits the authenticated RPCs only; the user's
-    JWT goes via the browser client we built in supabase.js.
-    """
     names = [t.name for t in data_model.tables]
     table_list_comment = (
         "/*\n * Entities exposed by this admin:\n"
@@ -366,104 +491,102 @@ def _build_db_admin_js(data_model: DataModel) -> str:
         + " */"
     )
     return (
-        '/* AUTO-GENERATED — Lucid AI admin pipeline. */\n'
-        f'{table_list_comment}\n'
+        "/* AUTO-GENERATED - Lucid AI admin pipeline. */\n"
+        f"{table_list_comment}\n"
         'import { getSupabaseBrowserClient } from "./supabase.js";\n'
-        '\n'
-        'const PROJECT_ID = process.env.NEXT_PUBLIC_PROJECT_ID;\n'
-        '\n'
-        '/**\n'
-        ' * List rows for an entity. Uses the authenticated read RPC\n'
-        ' * (migration 027) so non-public tables are readable to members.\n'
-        ' */\n'
-        'export async function listCollection(tableName, options = {}) {\n'
-        '  const supabase = getSupabaseBrowserClient();\n'
-        '  const { data, error } = await supabase.rpc(\n'
+        "\n"
+        "const PROJECT_ID = import.meta.env.VITE_PROJECT_ID;\n"
+        "\n"
+        "function projectId() {\n"
+        "  if (!PROJECT_ID) throw new Error(\"Lucid: VITE_PROJECT_ID is missing.\");\n"
+        "  return PROJECT_ID;\n"
+        "}\n"
+        "\n"
+        "export async function listCollection(tableName, options = {}) {\n"
+        "  const supabase = getSupabaseBrowserClient();\n"
+        "  const { data, error } = await supabase.rpc(\n"
         '    "get_tenant_collection_authenticated",\n'
-        '    {\n'
-        '      p_project_id:      PROJECT_ID,\n'
-        '      p_table_name:      tableName,\n'
-        '      p_order_by:        options.orderBy        ?? "created_at",\n'
+        "    {\n"
+        "      p_project_id: projectId(),\n"
+        "      p_table_name: tableName,\n"
+        '      p_order_by: options.orderBy ?? "created_at",\n'
         '      p_order_direction: options.orderDirection ?? "desc",\n'
-        '      p_limit:           options.limit          ?? 100,\n'
-        '      p_offset:          options.offset         ?? 0,\n'
-        '    },\n'
-        '  );\n'
-        '  if (error) throw error;\n'
-        '  return data || [];\n'
-        '}\n'
-        '\n'
-        '/** Insert one row. Returns the inserted row (with id + timestamps). */\n'
-        'export async function createRow(tableName, payload) {\n'
-        '  const supabase = getSupabaseBrowserClient();\n'
+        "      p_limit: options.limit ?? 100,\n"
+        "      p_offset: options.offset ?? 0,\n"
+        "    },\n"
+        "  );\n"
+        "  if (error) throw error;\n"
+        "  return data || [];\n"
+        "}\n"
+        "\n"
+        "export async function createRow(tableName, payload) {\n"
+        "  const supabase = getSupabaseBrowserClient();\n"
         '  const { data, error } = await supabase.rpc("set_tenant_row", {\n'
-        '    p_project_id: PROJECT_ID,\n'
-        '    p_table_name: tableName,\n'
-        '    p_payload:    payload,\n'
-        '  });\n'
-        '  if (error) throw error;\n'
-        '  return data;\n'
-        '}\n'
-        '\n'
-        '/** Patch a row by id. Unspecified columns retain their values. */\n'
-        'export async function updateRow(tableName, rowId, payload) {\n'
-        '  const supabase = getSupabaseBrowserClient();\n'
+        "    p_project_id: projectId(),\n"
+        "    p_table_name: tableName,\n"
+        "    p_payload: payload,\n"
+        "  });\n"
+        "  if (error) throw error;\n"
+        "  return data;\n"
+        "}\n"
+        "\n"
+        "export async function updateRow(tableName, rowId, payload) {\n"
+        "  const supabase = getSupabaseBrowserClient();\n"
         '  const { data, error } = await supabase.rpc("update_tenant_row", {\n'
-        '    p_project_id: PROJECT_ID,\n'
-        '    p_table_name: tableName,\n'
-        '    p_row_id:     rowId,\n'
-        '    p_payload:    payload,\n'
-        '  });\n'
-        '  if (error) throw error;\n'
-        '  return data;\n'
-        '}\n'
-        '\n'
-        '/** Hard delete a row by id. */\n'
-        'export async function deleteRow(tableName, rowId) {\n'
-        '  const supabase = getSupabaseBrowserClient();\n'
+        "    p_project_id: projectId(),\n"
+        "    p_table_name: tableName,\n"
+        "    p_row_id: rowId,\n"
+        "    p_payload: payload,\n"
+        "  });\n"
+        "  if (error) throw error;\n"
+        "  return data;\n"
+        "}\n"
+        "\n"
+        "export async function deleteRow(tableName, rowId) {\n"
+        "  const supabase = getSupabaseBrowserClient();\n"
         '  const { error } = await supabase.rpc("delete_tenant_row", {\n'
-        '    p_project_id: PROJECT_ID,\n'
-        '    p_table_name: tableName,\n'
-        '    p_row_id:     rowId,\n'
-        '  });\n'
-        '  if (error) throw error;\n'
-        '}\n'
+        "    p_project_id: projectId(),\n"
+        "    p_table_name: tableName,\n"
+        "    p_row_id: rowId,\n"
+        "  });\n"
+        "  if (error) throw error;\n"
+        "}\n"
     )
 
 
 _LIB_AUTH_JS = """\
-"use client";
-/* AUTO-GENERATED — Lucid AI admin pipeline. */
+/* AUTO-GENERATED - Lucid AI admin pipeline. */
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { getSupabaseBrowserClient } from "./supabase.js";
 
 export function useAuth() {
-  const [user, setUser]       = useState(null);
+  const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
-  const router = useRouter();
 
   useEffect(() => {
     const supabase = getSupabaseBrowserClient();
+    let mounted = true;
 
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      setUser(user);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!mounted) return;
+      setSession(session);
       setLoading(false);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        setUser(session?.user || null);
-        if (event === "SIGNED_OUT") {
-          router.push("/login");
-        }
+      (_event, session) => {
+        setSession(session);
+        setLoading(false);
       },
     );
 
-    return () => subscription.unsubscribe();
-  }, [router]);
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
 
-  return { user, loading };
+  return { session, user: session?.user || null, loading };
 }
 
 export async function signOut() {
@@ -474,21 +597,21 @@ export async function signOut() {
 
 
 _LIB_UTILS_JS = """\
-/* AUTO-GENERATED — Lucid AI admin pipeline. */
+/* AUTO-GENERATED - Lucid AI admin pipeline. */
 import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 
-/** Tailwind-aware classname merger. */
 export function cn(...inputs) {
   return twMerge(clsx(inputs));
 }
 
-/** Format an ISO date string for display in tables / forms. */
 export function formatDate(iso) {
   if (!iso) return "";
   try {
-    const d = new Date(iso);
-    return d.toLocaleString();
+    return new Intl.DateTimeFormat("en-US", {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(iso));
   } catch {
     return iso;
   }
@@ -496,153 +619,131 @@ export function formatDate(iso) {
 """
 
 
-# ── src/components ───────────────────────────────────────────────────
+# -- src/components --------------------------------------------------------
 
 _COMPONENT_AUTH_GUARD = """\
-"use client";
-/* AUTO-GENERATED — Lucid AI admin pipeline. */
+/* AUTO-GENERATED - Lucid AI admin pipeline. */
+import { Navigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth.js";
-import { useRouter } from "next/navigation";
-import { useEffect } from "react";
 
 export function AuthGuard({ children }) {
   const { user, loading } = useAuth();
-  const router = useRouter();
-
-  useEffect(() => {
-    if (!loading && !user) {
-      router.push("/login");
-    }
-  }, [user, loading, router]);
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-muted-foreground">Loading…</div>
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="text-sm text-muted-foreground">Loading...</div>
       </div>
     );
   }
-  if (!user) return null;
+
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+
   return children;
 }
 """
 
 
-def _build_sidebar(nav_items: list[dict[str, Any]], brand_name: str) -> str:
-    """Emit src/components/Sidebar.jsx wired to admin_plan.navigation."""
-    # Collect every distinct icon name so we only import what we use.
-    used_icons = sorted({item.get("icon") or "table" for item in nav_items})
+def _build_layout(nav_items: list[dict[str, Any]], brand_name: str) -> str:
+    used_icons = sorted({item.get("icon") or "table" for item in nav_items} | {"home", "table"})
     import_list = ", ".join(_icon_to_pascal(i) for i in used_icons)
     icon_map_entries = ",\n  ".join(
         f'"{name}": {_icon_to_pascal(name)}' for name in used_icons
     )
-
     nav_json = json.dumps(
         [
             {
                 "label": item["label"],
-                "route": item["route"],
-                "icon":  item.get("icon") or "table",
+                "route": _react_route(item["route"]),
+                "icon": item.get("icon") or "table",
             }
             for item in nav_items
         ],
         indent=2,
     )
-    safe_brand = json.dumps(brand_name)
-
     return (
-        '"use client";\n'
-        '/* AUTO-GENERATED — Lucid AI admin pipeline. */\n'
-        'import Link from "next/link";\n'
-        'import { usePathname } from "next/navigation";\n'
-        f'import {{ {import_list} }} from "lucide-react";\n'
+        "/* AUTO-GENERATED - Lucid AI admin pipeline. */\n"
+        'import { useState } from "react";\n'
+        'import { NavLink, useNavigate } from "react-router-dom";\n'
+        f'import {{ {import_list}, LogOut, Menu, X }} from "lucide-react";\n'
         'import { signOut } from "@/lib/auth.js";\n'
-        '\n'
-        f'const NAV = {nav_json};\n'
-        '\n'
-        'const ICONS = {\n'
-        f'  {icon_map_entries}\n'
-        '};\n'
-        '\n'
-        'export function Sidebar() {\n'
-        '  const pathname = usePathname();\n'
-        '  return (\n'
-        '    <aside className="w-64 bg-slate-900 text-slate-100 min-h-screen p-4 flex flex-col">\n'
-        f'      <div className="font-bold text-lg mb-6">{{{safe_brand}}}</div>\n'
-        '      <nav className="space-y-1 flex-1">\n'
-        '        {NAV.map((item) => {\n'
-        '          const Icon = ICONS[item.icon] || ICONS["table"];\n'
-        '          const isActive =\n'
-        '            item.route === "/"\n'
-        '              ? pathname === "/"\n'
-        '              : pathname.startsWith(item.route);\n'
-        '          return (\n'
-        '            <Link\n'
-        '              key={item.route}\n'
-        '              href={item.route}\n'
-        '              className={\n'
-        '                "flex items-center gap-3 px-3 py-2 rounded text-sm " +\n'
-        '                (isActive ? "bg-slate-700" : "hover:bg-slate-800")\n'
-        '              }\n'
-        '            >\n'
-        '              <Icon size={18} />\n'
-        '              <span>{item.label}</span>\n'
-        '            </Link>\n'
-        '          );\n'
-        '        })}\n'
-        '      </nav>\n'
-        '      <button\n'
-        '        onClick={() => signOut()}\n'
-        '        className="text-sm text-slate-400 hover:text-slate-200 px-3 py-2 text-left"\n'
-        '      >\n'
-        '        Sign out\n'
-        '      </button>\n'
-        '    </aside>\n'
-        '  );\n'
-        '}\n'
+        "\n"
+        f"const BRAND_NAME = {json.dumps(brand_name)};\n"
+        f"const NAV = {nav_json};\n"
+        "const ICONS = {\n"
+        f"  {icon_map_entries}\n"
+        "};\n"
+        "\n"
+        "export default function Layout({ children }) {\n"
+        "  const [sidebarOpen, setSidebarOpen] = useState(true);\n"
+        "  const navigate = useNavigate();\n"
+        "\n"
+        "  async function handleLogout() {\n"
+        "    await signOut();\n"
+        '    navigate("/login", { replace: true });\n'
+        "  }\n"
+        "\n"
+        "  return (\n"
+        '    <div className="flex min-h-screen bg-muted/30 text-foreground">\n'
+        '      <aside className={(sidebarOpen ? "w-64" : "w-16") + " flex shrink-0 flex-col border-r border-border bg-slate-950 text-slate-100 transition-all"}>\n'
+        '        <div className="flex h-14 items-center justify-between border-b border-slate-800 px-3">\n'
+        '          {sidebarOpen ? <span className="truncate text-sm font-semibold">{BRAND_NAME}</span> : null}\n'
+        '          <button type="button" className="rounded p-2 hover:bg-slate-800" onClick={() => setSidebarOpen((v) => !v)} aria-label="Toggle sidebar">\n'
+        '            {sidebarOpen ? <X size={17} /> : <Menu size={17} />}\n'
+        "          </button>\n"
+        "        </div>\n"
+        '        <nav className="flex-1 space-y-1 p-3">\n'
+        "          {NAV.map((item) => {\n"
+        "            const Icon = ICONS[item.icon] || ICONS.table;\n"
+        "            return (\n"
+        "              <NavLink\n"
+        "                key={item.route}\n"
+        "                to={item.route}\n"
+        "                end={item.route === \"/\"}\n"
+        "                className={({ isActive }) =>\n"
+        '                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition " +\n'
+        '                  (isActive ? "bg-slate-800 text-white" : "text-slate-300 hover:bg-slate-900 hover:text-white")\n'
+        "                }\n"
+        "              >\n"
+        "                <Icon size={18} />\n"
+        "                {sidebarOpen ? <span className=\"truncate\">{item.label}</span> : null}\n"
+        "              </NavLink>\n"
+        "            );\n"
+        "          })}\n"
+        "        </nav>\n"
+        '        <div className="border-t border-slate-800 p-3">\n'
+        '          <button type="button" onClick={handleLogout} className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm text-slate-300 hover:bg-slate-900 hover:text-white">\n'
+        "            <LogOut size={18} />\n"
+        "            {sidebarOpen ? <span>Sign out</span> : null}\n"
+        "          </button>\n"
+        "        </div>\n"
+        "      </aside>\n"
+        '      <main className="min-w-0 flex-1">\n'
+        '        <div className="mx-auto w-full max-w-7xl p-6">{children}</div>\n'
+        "      </main>\n"
+        "    </div>\n"
+        "  );\n"
+        "}\n"
     )
 
 
-_COMPONENT_HEADER = """\
-"use client";
-/* AUTO-GENERATED — Lucid AI admin pipeline. */
-import { useAuth, signOut } from "@/lib/auth.js";
-
-export function Header() {
-  const { user } = useAuth();
-  return (
-    <header className="border-b border-border bg-card px-6 py-3 flex items-center justify-between">
-      <div className="text-sm text-muted-foreground">
-        {user?.email || "Loading…"}
-      </div>
-      <button
-        type="button"
-        onClick={() => signOut()}
-        className="text-sm px-3 py-1 rounded hover:bg-muted"
-      >
-        Sign out
-      </button>
-    </header>
-  );
-}
-"""
-
-
 _COMPONENT_EMPTY_STATE = """\
-/* AUTO-GENERATED — Lucid AI admin pipeline. */
-import Link from "next/link";
+/* AUTO-GENERATED - Lucid AI admin pipeline. */
+import { Link } from "react-router-dom";
 
 export function EmptyState({ label, createRoute }) {
   return (
-    <div className="border border-dashed border-border rounded-lg p-12 text-center">
-      <h2 className="text-xl font-semibold mb-2">No {label} yet</h2>
-      <p className="text-muted-foreground mb-6">
-        Click below to create your first record.
+    <div className="rounded-lg border border-dashed border-border bg-card p-12 text-center">
+      <h2 className="mb-2 text-xl font-semibold">No {label} yet</h2>
+      <p className="mb-6 text-sm text-muted-foreground">
+        Create the first record to start managing this collection.
       </p>
       {createRoute ? (
         <Link
-          href={createRoute}
-          className="inline-flex items-center px-4 py-2 bg-primary text-primary-foreground rounded"
+          to={createRoute}
+          className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground"
         >
           Add {label.replace(/s$/, "")}
         </Link>
@@ -654,15 +755,12 @@ export function EmptyState({ label, createRoute }) {
 
 
 _COMPONENT_ENTITY_LIST_SKELETON = """\
-/* AUTO-GENERATED — Lucid AI admin pipeline. */
+/* AUTO-GENERATED - Lucid AI admin pipeline. */
 export function EntityListSkeleton() {
   return (
-    <div className="p-8 space-y-3">
+    <div className="space-y-3">
       {[0, 1, 2, 3, 4].map((i) => (
-        <div
-          key={i}
-          className="h-12 bg-muted/60 rounded animate-pulse"
-        />
+        <div key={i} className="h-12 animate-pulse rounded-md bg-muted" />
       ))}
     </div>
   );
@@ -671,360 +769,324 @@ export function EntityListSkeleton() {
 
 
 _COMPONENT_TOASTER = """\
-"use client";
-/* AUTO-GENERATED — Lucid AI admin pipeline. */
-// Placeholder wrapper — Step 3.6 swaps this for a real notification
-// surface. Kept as a no-op so other components can import it now
-// without an unresolved-import build break.
+/* AUTO-GENERATED - Lucid AI admin pipeline. */
 export function Toaster() {
   return null;
 }
 """
 
 
-# ── src/app ──────────────────────────────────────────────────────────
+# -- src/pages and app entry -----------------------------------------------
 
-def _build_root_layout(brand_name: str) -> str:
-    title = f"{brand_name} — Admin"
-    return (
-        '/* AUTO-GENERATED — Lucid AI admin pipeline. */\n'
-        'import "./globals.css";\n'
-        'import { AuthGuard } from "@/components/AuthGuard.jsx";\n'
-        'import { Sidebar } from "@/components/Sidebar.jsx";\n'
-        'import { Header } from "@/components/Header.jsx";\n'
-        'import { Toaster } from "@/components/Toaster.jsx";\n'
-        '\n'
-        f'export const metadata = {{ title: "{title}" }};\n'
-        '\n'
-        'export default function RootLayout({ children }) {\n'
-        '  return (\n'
-        '    <html lang="en">\n'
-        '      <body>\n'
-        '        <AuthGuard>\n'
-        '          <div className="flex min-h-screen">\n'
-        '            <Sidebar />\n'
-        '            <div className="flex-1 flex flex-col">\n'
-        '              <Header />\n'
-        '              <main className="flex-1">{children}</main>\n'
-        '            </div>\n'
-        '          </div>\n'
-        '        </AuthGuard>\n'
-        '        <Toaster />\n'
-        '      </body>\n'
-        '    </html>\n'
-        '  );\n'
-        '}\n'
-    )
+_MAIN_JSX = """\
+/* AUTO-GENERATED - Lucid AI admin pipeline. */
+import React from "react";
+import ReactDOM from "react-dom/client";
+import { BrowserRouter } from "react-router-dom";
+import App from "./App.jsx";
+import "./index.css";
 
-
-# /login lives outside the AuthGuard — own layout, no sidebar.
-_LOGIN_LAYOUT = """\
-/* AUTO-GENERATED — Lucid AI admin pipeline. */
-import "../globals.css";
-
-export default function LoginLayout({ children }) {
-  return (
-    <html lang="en">
-      <body>{children}</body>
-    </html>
-  );
-}
+ReactDOM.createRoot(document.getElementById("root")).render(
+  <React.StrictMode>
+    <BrowserRouter>
+      <App />
+    </BrowserRouter>
+  </React.StrictMode>,
+);
 """
 
 
+def _build_app_jsx(data_model: DataModel) -> str:
+    imports = [
+        'import { Navigate, Route, Routes } from "react-router-dom";',
+        'import { AuthGuard } from "@/components/AuthGuard.jsx";',
+        'import { Toaster } from "@/components/Toaster.jsx";',
+        'import Layout from "@/components/Layout.jsx";',
+        'import Login from "@/pages/Login.jsx";',
+        'import Dashboard from "@/pages/Dashboard.jsx";',
+    ]
+    routes = [
+        '        <Route path="/" element={<Dashboard />} />',
+    ]
+    for table in data_model.tables:
+        base = _pascal(table.name)
+        slug = _kebab(table.name)
+        imports.extend([
+            f'import {base}ListPage from "@/pages/{base}List.jsx";',
+            f'import {base}CreatePage from "@/pages/{base}Create.jsx";',
+            f'import {base}EditPage from "@/pages/{base}Edit.jsx";',
+        ])
+        routes.extend([
+            f'        <Route path="/{slug}" element={{<{base}ListPage />}} />',
+            f'        <Route path="/{slug}/new" element={{<{base}CreatePage />}} />',
+            f'        <Route path="/{slug}/:id" element={{<{base}EditPage />}} />',
+        ])
+    routes.append('        <Route path="*" element={<Navigate to="/" replace />} />')
+
+    return (
+        "/* AUTO-GENERATED - Lucid AI admin pipeline. */\n"
+        + "\n".join(imports)
+        + "\n\n"
+        "function ProtectedApp() {\n"
+        "  return (\n"
+        "    <AuthGuard>\n"
+        "      <Layout>\n"
+        "        <Routes>\n"
+        + "\n".join(routes)
+        + "\n"
+        "        </Routes>\n"
+        "      </Layout>\n"
+        "    </AuthGuard>\n"
+        "  );\n"
+        "}\n\n"
+        "export default function App() {\n"
+        "  return (\n"
+        "    <>\n"
+        "      <Routes>\n"
+        '        <Route path="/login" element={<Login />} />\n'
+        '        <Route path="/*" element={<ProtectedApp />} />\n'
+        "      </Routes>\n"
+        "      <Toaster />\n"
+        "    </>\n"
+        "  );\n"
+        "}\n"
+    )
+
+
 def _build_login_page(brand_name: str) -> str:
-    safe_brand = json.dumps(brand_name)
     return (
         '"use client";\n'
-        '/* AUTO-GENERATED — Lucid AI admin pipeline. */\n'
-        'import { useState } from "react";\n'
-        'import { useRouter } from "next/navigation";\n'
+        "/* AUTO-GENERATED - Lucid AI admin pipeline. */\n"
+        'import { useEffect, useState } from "react";\n'
+        'import { useNavigate } from "react-router-dom";\n'
+        'import { useAuth } from "@/lib/auth.js";\n'
         'import { getSupabaseBrowserClient } from "@/lib/supabase.js";\n'
-        '\n'
-        'export default function LoginPage() {\n'
-        '  const [email, setEmail]       = useState("");\n'
+        "\n"
+        f"const BRAND_NAME = {json.dumps(brand_name)};\n"
+        "\n"
+        "export default function Login() {\n"
+        '  const [email, setEmail] = useState("");\n'
         '  const [password, setPassword] = useState("");\n'
-        '  const [error, setError]       = useState(null);\n'
-        '  const [loading, setLoading]   = useState(false);\n'
-        '  const router = useRouter();\n'
-        '\n'
-        '  async function handleLogin(e) {\n'
-        '    e.preventDefault();\n'
-        '    setLoading(true);\n'
-        '    setError(null);\n'
-        '    const supabase = getSupabaseBrowserClient();\n'
-        '    const { error: authError } = await supabase.auth.signInWithPassword({\n'
-        '      email,\n'
-        '      password,\n'
-        '    });\n'
-        '    if (authError) {\n'
-        '      setError(authError.message);\n'
-        '    } else {\n'
-        '      router.push("/");\n'
-        '    }\n'
-        '    setLoading(false);\n'
-        '  }\n'
-        '\n'
-        '  return (\n'
-        '    <div className="min-h-screen flex items-center justify-center bg-muted">\n'
-        '      <div className="bg-card p-8 rounded-lg shadow-md w-full max-w-md">\n'
-        f'        <h1 className="text-2xl font-bold mb-6">Sign in to {{{safe_brand}}}</h1>\n'
+        "  const [error, setError] = useState(null);\n"
+        "  const [loading, setLoading] = useState(false);\n"
+        "  const { user, loading: authLoading } = useAuth();\n"
+        "  const navigate = useNavigate();\n"
+        "\n"
+        "  useEffect(() => {\n"
+        "    if (!authLoading && user) navigate(\"/\", { replace: true });\n"
+        "  }, [authLoading, user, navigate]);\n"
+        "\n"
+        "  async function handleLogin(event) {\n"
+        "    event.preventDefault();\n"
+        "    setLoading(true);\n"
+        "    setError(null);\n"
+        "    const supabase = getSupabaseBrowserClient();\n"
+        "    const { error: authError } = await supabase.auth.signInWithPassword({\n"
+        "      email,\n"
+        "      password,\n"
+        "    });\n"
+        "    if (authError) {\n"
+        "      setError(authError.message);\n"
+        "      setLoading(false);\n"
+        "      return;\n"
+        "    }\n"
+        '    navigate("/", { replace: true });\n'
+        "  }\n"
+        "\n"
+        "  return (\n"
+        '    <div className="flex min-h-screen items-center justify-center bg-muted/60 px-4">\n'
+        '      <div className="w-full max-w-md rounded-lg border border-border bg-card p-8 shadow-sm">\n'
+        '        <h1 className="mb-2 text-2xl font-semibold">Sign in</h1>\n'
+        '        <p className="mb-6 text-sm text-muted-foreground">{BRAND_NAME} admin</p>\n'
         '        <form onSubmit={handleLogin} className="space-y-4">\n'
-        '          <input\n'
+        "          <input\n"
         '            type="email"\n'
-        '            value={email}\n'
-        '            onChange={(e) => setEmail(e.target.value)}\n'
+        "            value={email}\n"
+        "            onChange={(event) => setEmail(event.target.value)}\n"
         '            placeholder="Email"\n'
-        '            className="w-full px-3 py-2 border border-border rounded bg-background"\n'
-        '            required\n'
+        '            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"\n'
+        "            required\n"
         '            autoComplete="email"\n'
-        '          />\n'
-        '          <input\n'
+        "          />\n"
+        "          <input\n"
         '            type="password"\n'
-        '            value={password}\n'
-        '            onChange={(e) => setPassword(e.target.value)}\n'
+        "            value={password}\n"
+        "            onChange={(event) => setPassword(event.target.value)}\n"
         '            placeholder="Password"\n'
-        '            className="w-full px-3 py-2 border border-border rounded bg-background"\n'
-        '            required\n'
+        '            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"\n'
+        "            required\n"
         '            autoComplete="current-password"\n'
-        '          />\n'
-        '          {error ? (\n'
-        '            <div className="text-destructive text-sm">{error}</div>\n'
-        '          ) : null}\n'
-        '          <button\n'
+        "          />\n"
+        '          {error ? <div className="text-sm text-destructive">{error}</div> : null}\n'
+        "          <button\n"
         '            type="submit"\n'
-        '            disabled={loading}\n'
-        '            className="w-full bg-primary text-primary-foreground py-2 rounded disabled:opacity-50"\n'
-        '          >\n'
-        '            {loading ? "Signing in…" : "Sign in"}\n'
-        '          </button>\n'
-        '        </form>\n'
-        '      </div>\n'
-        '    </div>\n'
-        '  );\n'
-        '}\n'
+        "            disabled={loading}\n"
+        '            className="w-full rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"\n'
+        "          >\n"
+        '            {loading ? "Signing in..." : "Sign in"}\n'
+        "          </button>\n"
+        "        </form>\n"
+        "      </div>\n"
+        "    </div>\n"
+        "  );\n"
+        "}\n"
     )
 
 
 def _build_dashboard_page(data_model: DataModel) -> str:
-    """Dashboard showing one tile per entity with live row count.
-
-    The tile count is fetched via the authenticated read RPC, so empty
-    tables show 0 (truthy), and unreachable tables show "—" (the
-    catch arm). Routes match the admin_plan's `/admin/<slug>` shape
-    BUT we're already inside the `/admin` mount point — the routes
-    on this dashboard are relative to the root, not nested under
-    /admin. We default to `/<slug>` here and document the alternative
-    in admin_pipeline if a future iteration wants the panel served
-    under /admin/.
-    """
     tiles = [
         {
-            "name":  t.name,
+            "name": t.name,
             "label": t.plural_label or t.name,
             "route": f"/{_kebab(t.name)}",
         }
         for t in data_model.tables
     ]
-    tiles_json = json.dumps(tiles, indent=2)
     return (
         '"use client";\n'
-        '/* AUTO-GENERATED — Lucid AI admin pipeline. */\n'
+        "/* AUTO-GENERATED - Lucid AI admin pipeline. */\n"
         'import { useEffect, useState } from "react";\n'
-        'import Link from "next/link";\n'
+        'import { Link } from "react-router-dom";\n'
         'import { listCollection } from "@/lib/db_admin.js";\n'
         'import { EntityListSkeleton } from "@/components/EntityListSkeleton.jsx";\n'
-        '\n'
-        f'const ENTITIES = {tiles_json};\n'
-        '\n'
-        'export default function DashboardPage() {\n'
-        '  const [counts, setCounts]   = useState({});\n'
-        '  const [loading, setLoading] = useState(true);\n'
-        '\n'
-        '  useEffect(() => {\n'
-        '    let cancelled = false;\n'
-        '    async function loadCounts() {\n'
-        '      const results = {};\n'
-        '      for (const entity of ENTITIES) {\n'
-        '        try {\n'
-        '          const rows = await listCollection(entity.name, { limit: 1000 });\n'
-        '          results[entity.name] = rows.length;\n'
-        '        } catch {\n'
-        '          results[entity.name] = null;\n'
-        '        }\n'
-        '      }\n'
-        '      if (!cancelled) {\n'
-        '        setCounts(results);\n'
-        '        setLoading(false);\n'
-        '      }\n'
-        '    }\n'
-        '    loadCounts();\n'
-        '    return () => { cancelled = true; };\n'
-        '  }, []);\n'
-        '\n'
-        '  if (loading) return <EntityListSkeleton />;\n'
-        '\n'
-        '  return (\n'
-        '    <div className="p-8">\n'
-        '      <h1 className="text-3xl font-bold mb-6">Dashboard</h1>\n'
-        '      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">\n'
-        '        {ENTITIES.map((entity) => (\n'
-        '          <Link\n'
-        '            key={entity.name}\n'
-        '            href={entity.route}\n'
-        '            className="bg-card p-6 rounded-lg shadow hover:shadow-md transition border border-border"\n'
-        '          >\n'
+        "\n"
+        f"const ENTITIES = {json.dumps(tiles, indent=2)};\n"
+        "\n"
+        "export default function Dashboard() {\n"
+        "  const [counts, setCounts] = useState({});\n"
+        "  const [loading, setLoading] = useState(true);\n"
+        "\n"
+        "  useEffect(() => {\n"
+        "    let cancelled = false;\n"
+        "    async function loadCounts() {\n"
+        "      const results = {};\n"
+        "      for (const entity of ENTITIES) {\n"
+        "        try {\n"
+        "          const rows = await listCollection(entity.name, { limit: 1000 });\n"
+        "          results[entity.name] = rows.length;\n"
+        "        } catch {\n"
+        "          results[entity.name] = null;\n"
+        "        }\n"
+        "      }\n"
+        "      if (!cancelled) {\n"
+        "        setCounts(results);\n"
+        "        setLoading(false);\n"
+        "      }\n"
+        "    }\n"
+        "    loadCounts();\n"
+        "    return () => { cancelled = true; };\n"
+        "  }, []);\n"
+        "\n"
+        "  if (loading) return <EntityListSkeleton />;\n"
+        "\n"
+        "  return (\n"
+        '    <div className="space-y-6">\n'
+        "      <div>\n"
+        '        <h1 className="text-3xl font-semibold">Dashboard</h1>\n'
+        '        <p className="text-sm text-muted-foreground">Live overview of your admin collections.</p>\n'
+        "      </div>\n"
+        '      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">\n'
+        "        {ENTITIES.map((entity) => (\n"
+        "          <Link\n"
+        "            key={entity.name}\n"
+        "            to={entity.route}\n"
+        '            className="rounded-lg border border-border bg-card p-5 shadow-sm transition hover:shadow-md"\n'
+        "          >\n"
         '            <div className="text-sm text-muted-foreground">{entity.label}</div>\n'
-        '            <div className="text-3xl font-bold mt-2">\n'
-        '              {counts[entity.name] ?? "—"}\n'
-        '            </div>\n'
-        '          </Link>\n'
-        '        ))}\n'
-        '      </div>\n'
-        '    </div>\n'
-        '  );\n'
-        '}\n'
+        '            <div className="mt-2 text-3xl font-semibold">{counts[entity.name] ?? "-"}</div>\n'
+        "          </Link>\n"
+        "        ))}\n"
+        "      </div>\n"
+        "    </div>\n"
+        "  );\n"
+        "}\n"
     )
 
 
-# ── Stub CRUD pages — Step 3.6 will replace these ────────────────────
-
 def _stub_list_page(table: TableDefinition, seed_count: int) -> str:
-    """List view stub. Shows the count so a user can confirm seeding
-    worked end-to-end before Step 3.6 lands."""
     label = table.plural_label or table.name
-    create_route = f"/{_kebab(table.name)}/new"
+    singular = table.singular_label or table.name
+    slug = _kebab(table.name)
+    base = _pascal(table.name)
     return (
-        '/* AUTO-GENERATED — Lucid AI admin pipeline. */\n'
-        '/* Step 3.6 will replace this with the real list view. */\n'
-        'import Link from "next/link";\n'
-        '\n'
-        'export default function Page() {\n'
-        '  return (\n'
-        '    <div className="p-8">\n'
-        f'      <h1 className="text-3xl font-bold mb-4">{label}</h1>\n'
-        '      <p className="text-muted-foreground mb-6">\n'
-        '        This page will be generated in Step 3.6 (CRUD codegen).<br />\n'
-        f'        Seed data: {seed_count} {label} (from Stage 4.7).\n'
-        '      </p>\n'
-        '      <div className="flex gap-3">\n'
-        f'        <Link href="{create_route}" className="px-4 py-2 bg-primary text-primary-foreground rounded">\n'
-        f'          Add {table.singular_label or table.name}\n'
-        '        </Link>\n'
-        '      </div>\n'
-        '    </div>\n'
-        '  );\n'
-        '}\n'
+        '"use client";\n'
+        "/* AUTO-GENERATED - Lucid AI admin pipeline. */\n"
+        "/* Step 3.6 will replace this with the real list view. */\n"
+        'import { Link } from "react-router-dom";\n'
+        'import { AuthGuard } from "@/components/AuthGuard.jsx";\n'
+        "\n"
+        f"export default function {base}ListPage() {{\n"
+        "  return (\n"
+        "    <AuthGuard>\n"
+        '      <div className="space-y-4">\n'
+        f'        <h1 className="text-3xl font-semibold">{label}</h1>\n'
+        '        <p className="text-sm text-muted-foreground">\n'
+        "          This page will be generated in Step 3.6 (CRUD codegen).<br />\n"
+        f"          Seed data: {seed_count} {label}.\n"
+        "        </p>\n"
+        f'        <Link to="/{slug}/new" className="inline-flex rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">Add {singular}</Link>\n'
+        "      </div>\n"
+        "    </AuthGuard>\n"
+        "  );\n"
+        "}\n"
     )
 
 
 def _stub_create_page(table: TableDefinition) -> str:
     label = table.singular_label or table.name
-    list_route = f"/{_kebab(table.name)}"
+    slug = _kebab(table.name)
+    base = _pascal(table.name)
     return (
-        '/* AUTO-GENERATED — Lucid AI admin pipeline. */\n'
-        '/* Step 3.6 will replace this with the real create form. */\n'
-        'import Link from "next/link";\n'
-        '\n'
-        'export default function Page() {\n'
-        '  return (\n'
-        '    <div className="p-8 max-w-2xl">\n'
-        f'      <h1 className="text-3xl font-bold mb-4">Add {label}</h1>\n'
-        '      <p className="text-muted-foreground mb-6">\n'
-        '        This form will be generated in Step 3.6 (CRUD codegen).\n'
-        '      </p>\n'
-        f'      <Link href="{list_route}" className="text-sm text-muted-foreground hover:underline">\n'
-        '        ← Back to list\n'
-        '      </Link>\n'
-        '    </div>\n'
-        '  );\n'
-        '}\n'
+        '"use client";\n'
+        "/* AUTO-GENERATED - Lucid AI admin pipeline. */\n"
+        "/* Step 3.6 will replace this with the real create form. */\n"
+        'import { Link } from "react-router-dom";\n'
+        'import { AuthGuard } from "@/components/AuthGuard.jsx";\n'
+        "\n"
+        f"export default function {base}CreatePage() {{\n"
+        "  return (\n"
+        "    <AuthGuard>\n"
+        '      <div className="max-w-2xl space-y-4">\n'
+        f'        <h1 className="text-3xl font-semibold">Add {label}</h1>\n'
+        '        <p className="text-sm text-muted-foreground">This form will be generated in Step 3.6 (CRUD codegen).</p>\n'
+        f'        <Link to="/{slug}" className="text-sm text-muted-foreground hover:underline">Back to list</Link>\n'
+        "      </div>\n"
+        "    </AuthGuard>\n"
+        "  );\n"
+        "}\n"
     )
 
 
 def _stub_edit_page(table: TableDefinition) -> str:
     label = table.singular_label or table.name
-    list_route = f"/{_kebab(table.name)}"
+    slug = _kebab(table.name)
+    base = _pascal(table.name)
     return (
-        '/* AUTO-GENERATED — Lucid AI admin pipeline. */\n'
-        '/* Step 3.6 will replace this with the real edit form. */\n'
-        'import Link from "next/link";\n'
-        '\n'
-        'export default function Page({ params }) {\n'
-        '  return (\n'
-        '    <div className="p-8 max-w-2xl">\n'
-        f'      <h1 className="text-3xl font-bold mb-4">Edit {label}</h1>\n'
-        '      <p className="text-muted-foreground mb-6">\n'
-        '        This form will be generated in Step 3.6 (CRUD codegen).<br />\n'
-        '        Row id: <code className="text-sm">{params.id}</code>\n'
-        '      </p>\n'
-        f'      <Link href="{list_route}" className="text-sm text-muted-foreground hover:underline">\n'
-        '        ← Back to list\n'
-        '      </Link>\n'
-        '    </div>\n'
-        '  );\n'
-        '}\n'
+        '"use client";\n'
+        "/* AUTO-GENERATED - Lucid AI admin pipeline. */\n"
+        "/* Step 3.6 will replace this with the real edit form. */\n"
+        'import { Link, useParams } from "react-router-dom";\n'
+        'import { AuthGuard } from "@/components/AuthGuard.jsx";\n'
+        "\n"
+        f"export default function {base}EditPage() {{\n"
+        "  const { id } = useParams();\n"
+        "  return (\n"
+        "    <AuthGuard>\n"
+        '      <div className="max-w-2xl space-y-4">\n'
+        f'        <h1 className="text-3xl font-semibold">Edit {label}</h1>\n'
+        '        <p className="text-sm text-muted-foreground">\n'
+        "          This form will be generated in Step 3.6 (CRUD codegen).<br />\n"
+        '          Row id: <code className="text-xs">{id}</code>\n'
+        "        </p>\n"
+        f'        <Link to="/{slug}" className="text-sm text-muted-foreground hover:underline">Back to list</Link>\n'
+        "      </div>\n"
+        "    </AuthGuard>\n"
+        "  );\n"
+        "}\n"
     )
 
 
-# ── Main entry ───────────────────────────────────────────────────────
-
-def _seed_counts_via_admin_client(
-    *,
-    data_model: DataModel,
-    tenant_schema: str,
-) -> dict[str, int]:
-    """Best-effort: how many seed rows landed per table.
-
-    Returns a {table_name: count} dict; tables not reachable show 0
-    (so stub pages emit `0 records` rather than crashing). This is a
-    cosmetic signal — used only to color the stub pages and to
-    populate the result dict's `tables_with_seed_data` /
-    `tables_empty` lists.
-
-    Implementation: read counts via a single SQL through `execute_ddl`.
-    Falls back to all-zeros on any error.
-    """
-    if not tenant_schema or not data_model.tables:
-        return {t.name: 0 for t in data_model.tables}
-
-    # Synchronous best-effort. We're inside a sync function so we
-    # don't await — instead we use the supabase-py sync client path
-    # via a tiny event loop. If anything throws we return zeros.
-    import asyncio
-    try:
-        from app.supabase_client import managed_admin_client
-    except Exception:
-        return {t.name: 0 for t in data_model.tables}
-
-    async def _run() -> dict[str, int]:
-        counts: dict[str, int] = {}
-        async with managed_admin_client() as c:
-            for table in data_model.tables:
-                # Quote the identifiers inline. format(...) is safe
-                # because tenant_schema + table.name passed the
-                # regex validator in tenant_sql_generator.
-                sql = (
-                    f'SELECT COUNT(*) AS n FROM "{tenant_schema}"."{table.name}"'
-                )
-                try:
-                    res = await c.rpc(
-                        "execute_ddl", {"p_sql": sql},
-                    ).execute()
-                    # execute_ddl returns NULL on success — no row data.
-                    # Fall back to a separate count via the read RPC.
-                    counts[table.name] = 0
-                except Exception:
-                    counts[table.name] = 0
-        return counts
-
-    try:
-        return asyncio.get_event_loop().run_until_complete(_run())
-    except RuntimeError:
-        # We're already inside a running loop — caller will skip
-        # this best-effort and stub pages just show 0.
-        return {t.name: 0 for t in data_model.tables}
-
+# -- Main entry -------------------------------------------------------------
 
 def build_admin_foundation(
     *,
@@ -1037,36 +1099,34 @@ def build_admin_foundation(
     supabase_anon_key: str,
     seed_counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
-    """Write every foundation file for the admin project.
-
-    Returns a dict:
-      • `files_written`: list of relative paths actually written
-      • `tables_with_seed_data`: tables whose seed_count > 0
-      • `tables_empty`: tables whose seed_count == 0 (or unknown)
-
-    `seed_counts` is optional and purely cosmetic — used to color
-    the stub list pages with the row count from Stage 4.7. Callers
-    that don't have it (e.g. dry-run scripts) can pass None and the
-    stubs will say "0 rows" without any DB round-trip.
-    """
-    branding   = admin_plan.get("branding") or {}
+    """Write every foundation file for the React/Vite admin project."""
+    branding = admin_plan.get("branding") or {}
     brand_name = branding.get("brand_name") or "Admin"
     primary_color = branding.get("primary_color") or "#0f172a"
-    nav_items  = admin_plan.get("navigation") or []
+    typography_voice = branding.get("typography_voice") or "professional"
+    layout_density = branding.get("layout_density") or "comfortable"
+    cultural_intensity = branding.get("cultural_intensity") or "calm"
+    nav_items = admin_plan.get("navigation") or []
+
+    body_font, heading_font = _font_stack_for_voice(typography_voice)
+    density = _density_spacing(layout_density)
+    primary_hsl = _adjust_hsl_for_intensity(
+        _hex_to_hsl_string(primary_color), cultural_intensity,
+    )
 
     if seed_counts is None:
         seed_counts = {t.name: 0 for t in data_model.tables}
 
     files: dict[str, str] = {}
 
-    # ── Project root ────────────────────────────────────────────────
-    files["package.json"]      = _build_package_json(brand_name)
-    files["next.config.js"]    = _NEXT_CONFIG
+    files["package.json"] = _build_package_json(brand_name)
+    files["index.html"] = _INDEX_HTML.replace("Lucid Admin", f"{brand_name} Admin")
+    files["vite.config.js"] = _VITE_CONFIG
     files["tailwind.config.js"] = _TAILWIND_CONFIG
-    files["postcss.config.js"] = _POSTCSS_CONFIG
-    files["jsconfig.json"]     = _JSCONFIG
-    files[".gitignore"]        = _GITIGNORE
-    files[".env.example"]      = _ENV_EXAMPLE
+    files["postcss.config.mjs"] = _POSTCSS_CONFIG
+    files["jsconfig.json"] = _JSCONFIG
+    files[".gitignore"] = _GITIGNORE
+    files[".env.example"] = _ENV_EXAMPLE
     files[".env.local"] = _build_env_local(
         supabase_url=supabase_url,
         supabase_anon_key=supabase_anon_key,
@@ -1077,44 +1137,44 @@ def build_admin_foundation(
     )
     files["README.md"] = _build_readme(brand_name, data_model)
 
-    # ── src/lib ─────────────────────────────────────────────────────
-    files["src/lib/supabase.js"]  = _LIB_SUPABASE_JS
-    files["src/lib/db_admin.js"]  = _build_db_admin_js(data_model)
-    files["src/lib/auth.js"]      = _LIB_AUTH_JS
-    files["src/lib/utils.js"]     = _LIB_UTILS_JS
-
-    # ── src/components ──────────────────────────────────────────────
-    files["src/components/AuthGuard.jsx"]          = _COMPONENT_AUTH_GUARD
-    files["src/components/Sidebar.jsx"]            = _build_sidebar(nav_items, brand_name)
-    files["src/components/Header.jsx"]             = _COMPONENT_HEADER
-    files["src/components/EmptyState.jsx"]         = _COMPONENT_EMPTY_STATE
-    files["src/components/EntityListSkeleton.jsx"] = _COMPONENT_ENTITY_LIST_SKELETON
-    files["src/components/Toaster.jsx"]            = _COMPONENT_TOASTER
-
-    # ── src/app ─────────────────────────────────────────────────────
-    files["src/app/globals.css"] = _GLOBALS_CSS_TEMPLATE.format(
-        primary_hsl=_hex_to_hsl_string(primary_color),
+    files["src/index.css"] = _INDEX_CSS_TEMPLATE.format(
+        primary_hsl=primary_hsl,
+        body_font=body_font,
+        heading_font=heading_font,
+        body_weight=density["body_weight"],
+        density_padding_x=density["padding_x"],
+        density_padding_y=density["padding_y"],
     )
-    files["src/app/layout.jsx"] = _build_root_layout(brand_name)
-    files["src/app/page.jsx"]   = _build_dashboard_page(data_model)
-    files["src/app/login/layout.jsx"] = _LOGIN_LAYOUT
-    files["src/app/login/page.jsx"]   = _build_login_page(brand_name)
+    files["src/main.jsx"] = _MAIN_JSX
+    files["src/App.jsx"] = _build_app_jsx(data_model)
 
-    # ── Per-entity stub pages ───────────────────────────────────────
+    files["src/lib/supabase.js"] = _LIB_SUPABASE_JS
+    files["src/lib/db_admin.js"] = _build_db_admin_js(data_model)
+    files["src/lib/auth.js"] = _LIB_AUTH_JS
+    files["src/lib/utils.js"] = _LIB_UTILS_JS
+
+    files["src/components/AuthGuard.jsx"] = _COMPONENT_AUTH_GUARD
+    files["src/components/Layout.jsx"] = _build_layout(nav_items, brand_name)
+    files["src/components/EmptyState.jsx"] = _COMPONENT_EMPTY_STATE
+    files["src/components/EntityListSkeleton.jsx"] = _COMPONENT_ENTITY_LIST_SKELETON
+    files["src/components/Toaster.jsx"] = _COMPONENT_TOASTER
+
+    files["src/pages/Login.jsx"] = _build_login_page(brand_name)
+    files["src/pages/Dashboard.jsx"] = _build_dashboard_page(data_model)
+
     tables_with_seed_data: list[str] = []
-    tables_empty:          list[str] = []
+    tables_empty: list[str] = []
     for table in data_model.tables:
-        slug = _kebab(table.name)
         count = seed_counts.get(table.name, 0)
         if count > 0:
             tables_with_seed_data.append(table.name)
         else:
             tables_empty.append(table.name)
-        files[f"src/app/{slug}/page.jsx"]        = _stub_list_page(table, count)
-        files[f"src/app/{slug}/new/page.jsx"]    = _stub_create_page(table)
-        files[f"src/app/{slug}/[id]/page.jsx"]   = _stub_edit_page(table)
+        base = _pascal(table.name)
+        files[f"src/pages/{base}List.jsx"] = _stub_list_page(table, count)
+        files[f"src/pages/{base}Create.jsx"] = _stub_create_page(table)
+        files[f"src/pages/{base}Edit.jsx"] = _stub_edit_page(table)
 
-    # ── Write everything ────────────────────────────────────────────
     written: list[str] = []
     for rel_path, content in files.items():
         abs_path = os.path.join(workspace_path, rel_path)
@@ -1124,7 +1184,7 @@ def build_admin_foundation(
         written.append(rel_path)
 
     logger.info(
-        "admin_foundation_builder: wrote %d files for %d tables "
+        "admin_foundation_builder: wrote %d React/Vite files for %d tables "
         "(seeded=%d empty=%d) at %s",
         len(written), len(data_model.tables),
         len(tables_with_seed_data), len(tables_empty),
@@ -1132,7 +1192,7 @@ def build_admin_foundation(
     )
 
     return {
-        "files_written":         written,
+        "files_written": written,
         "tables_with_seed_data": tables_with_seed_data,
-        "tables_empty":          tables_empty,
+        "tables_empty": tables_empty,
     }

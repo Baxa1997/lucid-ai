@@ -145,7 +145,7 @@ async def provision_tenant_for_project(
         return None
 
     await _send(websocket, "progress",
-                "🔐 Stage 4.6/6 — Provisioning tenant schema + applying SQL…")
+                "Setting up your database…")
 
     # Lazy imports keep import-time of this module cheap and let
     # tests patch these symbols on the module easily.
@@ -221,8 +221,7 @@ async def provision_tenant_for_project(
             )
             await _send(
                 websocket, "progress",
-                f"🔐 Tenant schema {tenant_schema} ready "
-                f"({apply_res['statements_executed']} DDL statements)",
+                "Database ready.",
             )
             return tenant_schema
     except Exception as exc:  # noqa: BLE001 — never surface DB errors to caller
@@ -232,8 +231,7 @@ async def provision_tenant_for_project(
         )
         await _send(
             websocket, "warning",
-            f"⚠️ Tenant provisioning failed ({exc}). "
-            "Continuing with JSON-only content.",
+            "Couldn't set up the database — continuing with local data only.",
         )
         return None
 
@@ -303,7 +301,7 @@ async def seed_tenant_for_project(
         return None
 
     await _send(websocket, "progress",
-                "🌱 Stage 4.7/6 — Generating + inserting seed data…")
+                "Adding sample data…")
 
     from app.supabase_client import managed_admin_client
     from app.services.seed_tenant_data import apply_seed_data, plan_seed_data
@@ -324,7 +322,7 @@ async def seed_tenant_for_project(
         )
         await _send(
             websocket, "warning",
-            f"⚠️ Seed generation failed ({exc}). Tables will be empty.",
+            "Couldn't generate sample data — starting empty.",
         )
         return None
 
@@ -333,7 +331,7 @@ async def seed_tenant_for_project(
         # miss rather than an error so the pipeline keeps going.
         await _send(
             websocket, "warning",
-            "⚠️ Seed generation returned no rows — tables will be empty.",
+            "No sample data generated — starting empty.",
         )
         return None
 
@@ -352,7 +350,7 @@ async def seed_tenant_for_project(
         )
         await _send(
             websocket, "warning",
-            f"⚠️ Seed insert threw ({exc}). Some tables may be partially seeded.",
+            "Sample data only partially loaded.",
         )
         return None
 
@@ -363,8 +361,7 @@ async def seed_tenant_for_project(
         )
         await _send(
             websocket, "warning",
-            f"⚠️ Seed insert failed on {result['failed_table']} "
-            f"after {result['tables_inserted']} table(s): {result['error']}",
+            "Sample data only partially loaded.",
         )
         return result
 
@@ -374,8 +371,7 @@ async def seed_tenant_for_project(
     )
     await _send(
         websocket, "progress",
-        f"🌱 Seed data: {result['rows_inserted']} rows across "
-        f"{result['tables_inserted']} table(s)",
+        "Sample data ready.",
     )
     return result
 
@@ -385,12 +381,17 @@ async def seed_tenant_for_project(
 async def resolve_tenant_for_project(
     project_id: str,
     admin_client: Any,
-) -> Optional[tuple[str, DataModel]]:
-    """For a given project_id, returns (tenant_schema, data_model).
+) -> Optional[tuple[str, DataModel, Optional[dict]]]:
+    """For a given project_id, returns (tenant_schema, data_model, visual_dna).
+
+    Backward-compat note: callers that destructure to 2 names will
+    break on this signature change. There's exactly one external
+    caller (admin_pipeline) and it's being updated alongside this.
 
     If project has parent_project_id set: returns parent's values
     (linked-project case — the admin pipeline writes into the website
-    project's tenant schema rather than its own).
+    project's tenant schema rather than its own AND inherits the
+    parent's visual_dna).
 
     If project has its own tenant_schema: returns those.
 
@@ -398,13 +399,16 @@ async def resolve_tenant_for_project(
     write into. Caller decides how to handle (admin pipeline would
     log + warn).
 
-    Used by admin_pipeline to determine where to write tenant data.
-    Pure read — no provisioning side-effects.
+    `visual_dna` may be None for projects created before migration 029
+    or for landing-only flows. Caller falls back to brand extraction.
+
+    Used by admin_pipeline to determine where to write tenant data
+    AND which visual identity to apply. Pure read — no side-effects.
     """
     # Fetch the project's tenancy metadata in one read.
     res = await (
         admin_client.table("chat_sessions")
-        .select("id, parent_project_id, tenant_schema, data_model")
+        .select("id, parent_project_id, tenant_schema, data_model, visual_dna")
         .eq("id", project_id)
         .limit(1)
         .execute()
@@ -424,7 +428,7 @@ async def resolve_tenant_for_project(
     if parent_id:
         parent_res = await (
             admin_client.table("chat_sessions")
-            .select("tenant_schema, data_model")
+            .select("tenant_schema, data_model, visual_dna")
             .eq("id", parent_id)
             .limit(1)
             .execute()
@@ -440,13 +444,23 @@ async def resolve_tenant_for_project(
         parent           = parent_rows[0]
         tenant_schema    = parent.get("tenant_schema")
         data_model_dict  = parent.get("data_model")
+        visual_dna       = parent.get("visual_dna")
         if not tenant_schema or not data_model_dict:
             return None
-        return tenant_schema, DataModel.model_validate(data_model_dict)
+        return (
+            tenant_schema,
+            DataModel.model_validate(data_model_dict),
+            visual_dna if isinstance(visual_dna, dict) else None,
+        )
 
     # Standalone: return the project's own values.
     tenant_schema   = project.get("tenant_schema")
     data_model_dict = project.get("data_model")
+    visual_dna      = project.get("visual_dna")
     if not tenant_schema or not data_model_dict:
         return None
-    return tenant_schema, DataModel.model_validate(data_model_dict)
+    return (
+        tenant_schema,
+        DataModel.model_validate(data_model_dict),
+        visual_dna if isinstance(visual_dna, dict) else None,
+    )

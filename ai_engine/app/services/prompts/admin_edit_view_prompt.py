@@ -7,8 +7,7 @@ Same shape as the create form, but:
   • submits via `updateRow` (migration 026 RPC)
   • exposes a Delete button at the bottom (with confirm)
 
-The id is read from Next.js's `params.id` via the page-component
-signature.
+The id is read from React Router's `useParams()`.
 """
 from __future__ import annotations
 
@@ -17,26 +16,32 @@ from app.services.admin_field_renderers import (
     format_field_examples,
 )
 from app.services.data_model import TableDefinition
+from app.services.prompts._visual_context import (
+    VISUAL_CONTEXT_RULE,
+    build_visual_context_block,
+)
 
 
 _SYSTEM_PROMPT = """\
-You are generating a React 18 / Next.js 14 App Router component for an
-admin panel EDIT form. The page reads the row id from `params.id`,
-loads the row, pre-fills the form, and lets the user save or delete.
+You are generating a React/Vite component for an admin panel EDIT form.
+The page reads the row id from React Router's `useParams()`, loads the
+row, pre-fills the form, and lets the user save or delete. Routing is
+React Router, not Next.js.
 
 OUTPUT REQUIREMENTS:
 - Single .jsx file, no TypeScript anywhere
 - Use Tailwind classes only
 - Use react-hook-form: useForm({ defaultValues }) once row is loaded
+- Import { Link, useNavigate, useParams } from "react-router-dom"
 - Import from "@/lib/db_admin.js": listCollection, updateRow, deleteRow
 - Import AuthGuard from "@/components/AuthGuard.jsx"
-- Component receives `{ params }` and reads params.id
+- Read the row id with `const { id } = useParams()`
 - Component must start with the "use client" directive
 - Wrap the entire return in <AuthGuard>
 - While the row is loading, render a generic "Loading…" block
 - If the row is not found (filter returned no match), render a
   "Not found" message with a back link to the list page
-- On submit success: useRouter().push("/<entity-slug>")
+- On submit success: navigate("/<entity-slug>")
 - Delete button: window.confirm + deleteRow + redirect to list
 
 FIELD-TYPE → INPUT MAPPING (use exactly):
@@ -62,13 +67,14 @@ PRE-FILL NORMALISATION:
 FORBIDDEN:
 - No fetch() — use listCollection / updateRow / deleteRow helpers
 - No direct supabase or @supabase/* imports
+- No next/link or next/navigation imports
 - No TypeScript syntax
 - No external form libraries other than react-hook-form
 - No id / created_at / updated_at fields in the form
 
 Return ONLY the file content for the requested path. The tool you
 must call to respond accepts a list of files; emit exactly one file.
-"""
+""" + "\n" + VISUAL_CONTEXT_RULE + "\n"
 
 
 def build_edit_view_prompt(
@@ -81,10 +87,12 @@ def build_edit_view_prompt(
     slug = entity.name.replace("_", "-")
     fields_block = format_fields_for_prompt(entity.fields)
     examples_block = format_field_examples(entity.fields)
+    visual_context = build_visual_context_block(admin_plan)
 
     user_prompt = f"""\
 Generate the EDIT form for the "{entity.name}" entity.
 
+{visual_context}
 ENTITY:       {entity.singular_label or entity.name}
 TABLE:        {entity.name}
 DESCRIPTION:  {entity.description}
@@ -97,7 +105,7 @@ PER-FIELD INPUT EXAMPLES:
 {examples_block}
 
 ROUTES:
-  this form: /{slug}/[id]
+  this form: /{slug}/:id
   list:      /{slug}
 
 ROW LOOKUP:
@@ -110,14 +118,14 @@ REQUIRED STRUCTURE:
 
   "use client";
   import {{ useEffect, useState }} from "react";
-  import {{ useRouter }} from "next/navigation";
+  import {{ Link, useNavigate, useParams }} from "react-router-dom";
   import {{ useForm }} from "react-hook-form";
   import {{ listCollection, updateRow, deleteRow }} from "@/lib/db_admin.js";
   import {{ AuthGuard }} from "@/components/AuthGuard.jsx";
 
-  export default function {entity.name.title().replace("_", "")}EditPage({{ params }}) {{
-    const id     = params.id;
-    const router = useRouter();
+  export default function {entity.name.title().replace("_", "")}EditPage() {{
+    const {{ id }} = useParams();
+    const navigate = useNavigate();
     const [row, setRow]               = useState(null);
     const [loading, setLoading]       = useState(true);
     const [error, setError]           = useState(null);
@@ -149,7 +157,7 @@ REQUIRED STRUCTURE:
       setSubmitting(true); setError(null);
       try {{
         await updateRow("{entity.name}", id, data);
-        router.push("/{slug}");
+        navigate("/{slug}");
       }} catch (e) {{
         setError(e.message || String(e));
         setSubmitting(false);
@@ -160,7 +168,7 @@ REQUIRED STRUCTURE:
       if (!window.confirm("Delete this row?")) return;
       try {{
         await deleteRow("{entity.name}", id);
-        router.push("/{slug}");
+        navigate("/{slug}");
       }} catch (e) {{
         setError(e.message || String(e));
       }}
@@ -175,7 +183,7 @@ REQUIRED STRUCTURE:
     );
   }}
 
-Generate src/app/{slug}/[id]/page.jsx. Return ONLY that one file's content.
+Generate src/pages/{entity.name.title().replace("_", "")}Edit.jsx. Return ONLY that one file's content.
 """
 
     return {"system": _SYSTEM_PROMPT, "user": user_prompt}

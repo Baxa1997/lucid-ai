@@ -103,26 +103,32 @@ class TestFoundationFiles:
         deps = pkg["dependencies"]
         # Spot-check every required dep mentioned in the spec.
         for required in (
-            "next", "react", "react-dom",
-            "@supabase/ssr", "@supabase/supabase-js",
+            "react", "react-dom", "react-router-dom",
+            "@supabase/supabase-js",
             "react-hook-form", "lucide-react",
             "clsx", "tailwind-merge",
         ):
             assert required in deps, f"missing dep: {required}"
         # And the build scripts
-        assert pkg["scripts"]["dev"]   == "next dev"
-        assert pkg["scripts"]["build"] == "next build"
+        assert pkg["scripts"]["dev"]   == "vite"
+        assert pkg["scripts"]["build"] == "vite build"
 
-    def test_writes_next_config(self, baseline_result):
-        cfg = _read(baseline_result["workspace"], "next.config.js")
-        assert "reactStrictMode" in cfg
-        assert "module.exports" in cfg
+    def test_writes_vite_config(self, baseline_result):
+        cfg = _read(baseline_result["workspace"], "vite.config.js")
+        assert "defineConfig" in cfg
+        assert "react()" in cfg
+        assert '"@"' in cfg
 
     def test_writes_tailwind_config_with_primary_color(self, tmp_path):
         # Use a non-default color so we can prove primary_color flows
         # into the generated globals.css via the HSL conversion.
         dm = _make_three_entity_model()
-        plan = build_admin_plan(dm, _visual_dna(color="#ff0066"))
+        # Use the energetic intensity so the saturation cap (100%) is
+        # idempotent on #ff0066, isolating "color flows through" from
+        # "saturation gets adjusted" (which is covered by other tests).
+        vd = _visual_dna(color="#ff0066")
+        vd["cultural_intensity"] = "energetic"
+        plan = build_admin_plan(dm, vd)
         build_admin_foundation(
             workspace_path=str(tmp_path),
             data_model=dm, admin_plan=plan,
@@ -134,23 +140,25 @@ class TestFoundationFiles:
         tw = _read(tmp_path, "tailwind.config.js")
         assert "hsl(var(--primary))" in tw
         # globals.css carries the HSL conversion of the brand color.
-        css = _read(tmp_path, "src/app/globals.css")
+        # Energetic intensity tops out at 100% saturation, so the cap
+        # makes the energetic boost a no-op for #ff0066.
+        css = _read(tmp_path, "src/index.css")
         expected_hsl = _hex_to_hsl_string("#ff0066")
-        assert f"--primary:              {expected_hsl}" in css, css
+        assert f"--primary: {expected_hsl}" in css, css
 
     def test_writes_env_local_with_credentials(self, baseline_result):
         env = _read(baseline_result["workspace"], ".env.local")
-        assert f"NEXT_PUBLIC_SUPABASE_URL={SUPA_URL}" in env
-        assert f"NEXT_PUBLIC_SUPABASE_ANON_KEY={SUPA_ANON}" in env
-        assert f"NEXT_PUBLIC_PROJECT_ID={UUID_VALID}" in env
-        assert f"NEXT_PUBLIC_TENANT_SCHEMA={SCHEMA}" in env
-        assert "NEXT_PUBLIC_BRAND_NAME=OpsCo" in env
-        assert "NEXT_PUBLIC_PRIMARY_COLOR=#0f172a" in env
+        assert f"VITE_SUPABASE_URL={SUPA_URL}" in env
+        assert f"VITE_SUPABASE_ANON_KEY={SUPA_ANON}" in env
+        assert f"VITE_PROJECT_ID={UUID_VALID}" in env
+        assert f"VITE_TENANT_SCHEMA={SCHEMA}" in env
+        assert "VITE_BRAND_NAME=OpsCo" in env
+        assert "VITE_PRIMARY_COLOR=#0f172a" in env
 
     def test_writes_supabase_js(self, baseline_result):
         src = _read(baseline_result["workspace"], "src/lib/supabase.js")
-        assert "createBrowserClient" in src
-        assert "@supabase/ssr" in src
+        assert "createClient" in src
+        assert "@supabase/supabase-js" in src
         assert "getSupabaseBrowserClient" in src
         # Throws on missing env vars
         assert "throw new Error" in src
@@ -176,11 +184,11 @@ class TestFoundationFiles:
         assert "useAuth" in src
         assert "signOut" in src
         assert "onAuthStateChange" in src
-        # Redirects on SIGNED_OUT
-        assert '"/login"' in src
+        guard = _read(baseline_result["workspace"], "src/components/AuthGuard.jsx")
+        assert '<Navigate to="/login" replace />' in guard
 
-    def test_writes_sidebar_with_navigation(self, baseline_result):
-        src = _read(baseline_result["workspace"], "src/components/Sidebar.jsx")
+    def test_writes_layout_with_navigation(self, baseline_result):
+        src = _read(baseline_result["workspace"], "src/components/Layout.jsx")
         # Each entity becomes a nav item
         for slug in ("/contacts", "/leads", "/orders"):
             assert slug in src
@@ -190,13 +198,13 @@ class TestFoundationFiles:
         assert "from \"lucide-react\"" in src
 
     def test_writes_login_page(self, baseline_result):
-        src = _read(baseline_result["workspace"], "src/app/login/page.jsx")
+        src = _read(baseline_result["workspace"], "src/pages/Login.jsx")
         assert "signInWithPassword" in src
         assert "type=\"email\"" in src
         assert "type=\"password\"" in src
 
     def test_writes_dashboard_page_with_entity_counts(self, baseline_result):
-        src = _read(baseline_result["workspace"], "src/app/page.jsx")
+        src = _read(baseline_result["workspace"], "src/pages/Dashboard.jsx")
         assert "listCollection" in src
         # Dashboard tiles per entity
         for slug in ("/contacts", "/leads", "/orders"):
@@ -212,16 +220,16 @@ class TestEntityPages:
     def test_creates_three_pages_per_entity(self, baseline_result):
         ws = baseline_result["workspace"]
         # 3 entities × 3 pages = 9 entity pages
-        for entity in ("contacts", "leads", "orders"):
-            assert (ws / f"src/app/{entity}/page.jsx").is_file()
-            assert (ws / f"src/app/{entity}/new/page.jsx").is_file()
-            assert (ws / f"src/app/{entity}/[id]/page.jsx").is_file()
+        for entity in ("Contacts", "Leads", "Orders"):
+            assert (ws / f"src/pages/{entity}List.jsx").is_file()
+            assert (ws / f"src/pages/{entity}Create.jsx").is_file()
+            assert (ws / f"src/pages/{entity}Edit.jsx").is_file()
 
     def test_stub_pages_explain_step_3_6(self, baseline_result):
         ws = baseline_result["workspace"]
-        list_page = _read(ws, "src/app/contacts/page.jsx")
-        new_page  = _read(ws, "src/app/contacts/new/page.jsx")
-        edit_page = _read(ws, "src/app/contacts/[id]/page.jsx")
+        list_page = _read(ws, "src/pages/ContactsList.jsx")
+        new_page  = _read(ws, "src/pages/ContactsCreate.jsx")
+        edit_page = _read(ws, "src/pages/ContactsEdit.jsx")
         # Stub pages reference Step 3.6 so a developer reading them
         # in isolation knows where the real implementation lives.
         for src in (list_page, new_page, edit_page):
@@ -234,16 +242,16 @@ class TestEntityPages:
             if page["page_type"] in ("auth", "dashboard", "layout"):
                 continue  # Shared shells handled separately
             entity = page["entity"]
-            route = page["route"]  # e.g. /admin/contacts
-            # admin_plan emits routes under /admin/<entity>. The
-            # foundation builder mounts the project at the root, so
-            # /admin/contacts maps to src/app/contacts/page.jsx.
-            # Strip the /admin prefix to compare:
-            assert route.startswith(f"/admin/{entity.replace('_', '-')}")
-            # And the file exists at the corresponding path:
+            route = page["route"]  # e.g. /contacts
             slug = entity.replace("_", "-")
-            tail = route[len(f"/admin/{slug}"):]
-            page_path = f"src/app/{slug}{tail}/page.jsx"
+            assert route.startswith(f"/{slug}")
+            base = "".join(part.capitalize() for part in entity.split("_"))
+            suffix = {
+                "list": "List",
+                "create": "Create",
+                "edit": "Edit",
+            }[page["page_type"]]
+            page_path = f"src/pages/{base}{suffix}.jsx"
             assert (ws / page_path).is_file(), (
                 f"{page['route']} → expected {page_path} but missing"
             )
@@ -261,8 +269,8 @@ class TestEntityPages:
             tenant_schema=SCHEMA, project_id=UUID_VALID,
             supabase_url=SUPA_URL, supabase_anon_key=SUPA_ANON,
         )
-        for tail in ("page.jsx", "new/page.jsx", "[id]/page.jsx"):
-            assert (tmp_path / f"src/app/purchase-orders/{tail}").is_file()
+        for tail in ("List.jsx", "Create.jsx", "Edit.jsx"):
+            assert (tmp_path / f"src/pages/PurchaseOrders{tail}").is_file()
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -287,9 +295,9 @@ class TestEmptyVsSeededHandling:
 
     def test_seed_count_appears_in_stub_list_page(self, baseline_result):
         ws = baseline_result["workspace"]
-        contacts_list = _read(ws, "src/app/contacts/page.jsx")
+        contacts_list = _read(ws, "src/pages/ContactsList.jsx")
         assert "Seed data: 5 Contacts" in contacts_list
-        leads_list = _read(ws, "src/app/leads/page.jsx")
+        leads_list = _read(ws, "src/pages/LeadsList.jsx")
         assert "Seed data: 0 Leads" in leads_list
 
     def test_no_seed_counts_passed_treated_as_all_empty(self, tmp_path):

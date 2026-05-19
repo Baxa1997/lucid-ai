@@ -82,9 +82,9 @@ class TestAdminPlanGeneration:
             p["route"] for p in pages if p.get("entity") == "contacts"
         )
         assert contact_routes == [
-            "/admin/contacts",
-            "/admin/contacts/[id]",
-            "/admin/contacts/new",
+            "/contacts",
+            "/contacts/:id",
+            "/contacts/new",
         ]
 
     def test_navigation_includes_each_entity(self):
@@ -93,13 +93,13 @@ class TestAdminPlanGeneration:
 
         # Dashboard always first, then one item per table
         assert nav[0]["label"] == "Dashboard"
-        assert nav[0]["route"] == "/admin"
+        assert nav[0]["route"] == "/"
 
         entity_routes = [item["route"] for item in nav[1:]]
         assert entity_routes == [
-            "/admin/contacts",
-            "/admin/leads",
-            "/admin/orders",
+            "/contacts",
+            "/leads",
+            "/orders",
         ]
 
         # Every nav item carries an icon string
@@ -132,12 +132,12 @@ class TestAdminPlanGeneration:
 
         # Nav has only Dashboard
         assert plan["navigation"] == [
-            {"label": "Dashboard", "route": "/admin", "icon": "home"},
+            {"label": "Dashboard", "route": "/", "icon": "home"},
         ]
 
     def test_table_with_snake_case_name_becomes_kebab_route(self):
         """Multi-word table names like `purchase_orders` should route
-        as `/admin/purchase-orders` per Next.js convention."""
+        as `/purchase-orders` in the React admin app."""
         dm = DataModel(
             version="1.0",
             tables=[_table("purchase_orders", "Purchase Order", "Purchase Orders")],
@@ -145,9 +145,9 @@ class TestAdminPlanGeneration:
         )
         plan = build_admin_plan(dm, _visual_dna())
         routes = [p["route"] for p in plan["pages"] if p.get("entity") == "purchase_orders"]
-        assert "/admin/purchase-orders" in routes
-        assert "/admin/purchase-orders/new" in routes
-        assert "/admin/purchase-orders/[id]" in routes
+        assert "/purchase-orders" in routes
+        assert "/purchase-orders/new" in routes
+        assert "/purchase-orders/:id" in routes
 
     def test_icon_picker_matches_keyword(self):
         """The icon mapping table is small; assert a couple of expected
@@ -165,11 +165,11 @@ class TestAdminPlanGeneration:
         )
         plan = build_admin_plan(dm, _visual_dna())
         nav = {item["route"]: item["icon"] for item in plan["navigation"]}
-        assert nav["/admin/contacts"]     == "users"
-        assert nav["/admin/orders"]       == "shopping-cart"
-        assert nav["/admin/appointments"] == "calendar-check"
+        assert nav["/contacts"]     == "users"
+        assert nav["/orders"]       == "shopping-cart"
+        assert nav["/appointments"] == "calendar-check"
         # Unmapped → default `table` icon
-        assert nav["/admin/widgets"]      == "table"
+        assert nav["/widgets"]      == "table"
 
     def test_pages_carry_page_name_field(self):
         """Stage 6 reads `page_name` for the breadcrumb / window title."""
