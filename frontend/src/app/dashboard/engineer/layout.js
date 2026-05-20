@@ -4,7 +4,6 @@ export const dynamic = "force-dynamic";
 
 import {
   Plus,
-  MessageSquare,
   FileText,
   Settings,
   Zap,
@@ -24,6 +23,7 @@ import {
   Gift,
   Share2,
   CreditCard,
+  Mail,
 } from "lucide-react";
 import Link from "next/link";
 import {useRouter, usePathname} from "next/navigation";
@@ -46,6 +46,8 @@ import {
   clearAllSupabaseCookies,
 } from "@/lib/supabase/client";
 import {listConversations} from "@/lib/conversations";
+import {useInvitations} from "@/hooks/useInvitations";
+import InvitationsListener from "@/components/notifications/InvitationsListener";
 
 const WizardContext = createContext({
   showWizard: false,
@@ -69,9 +71,10 @@ const navItems = [
     href: "/dashboard/engineer/integrations",
   },
   {
-    label: "Conversations",
-    icon: MessageSquare,
-    href: "/dashboard/engineer/conversations",
+    label: "Invitations",
+    icon: Mail,
+    href: "/dashboard/engineer/invitations",
+    badgeKey: "invitations",
   },
   {label: "Settings", icon: Settings, href: "/dashboard/engineer/settings"},
   {label: "Billing", icon: CreditCard, href: "/dashboard/engineer/billing"},
@@ -139,6 +142,7 @@ const NavItem = memo(function NavItem({
   collapsed,
   wizardActive,
   onWizardIntercept,
+  badgeCount = 0,
 }) {
   const Icon = item.icon;
   return (
@@ -159,17 +163,31 @@ const NavItem = memo(function NavItem({
             ? "bg-orange-50 dark:bg-orange-900/20 text-[#dc5426] dark:text-orange-400 font-semibold"
             : "text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.05] hover:text-slate-900 dark:hover:text-white font-medium",
         )}>
-        <Icon
-          className={cn(
-            "w-[20px] h-[20px] shrink-0 transition-colors",
-            active
-              ? "text-[#dc5426] dark:text-orange-400"
-              : "text-slate-500 dark:text-slate-400",
+        <div className="relative shrink-0">
+          <Icon
+            className={cn(
+              "w-[20px] h-[20px] transition-colors",
+              active
+                ? "text-[#dc5426] dark:text-orange-400"
+                : "text-slate-500 dark:text-slate-400",
+            )}
+            strokeWidth={1.75}
+          />
+          {collapsed && badgeCount > 0 && (
+            <span className="absolute -top-1 -right-1 min-w-[16px] h-[16px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+              {badgeCount > 9 ? "9+" : badgeCount}
+            </span>
           )}
-          strokeWidth={1.75}
-        />
+        </div>
         {!collapsed && (
-          <span className="flex-1 text-left truncate">{item.label}</span>
+          <>
+            <span className="flex-1 text-left truncate">{item.label}</span>
+            {badgeCount > 0 && (
+              <span className="ml-auto min-w-[20px] h-[20px] px-1.5 rounded-full bg-red-500 text-white text-[11px] font-bold flex items-center justify-center">
+                {badgeCount > 99 ? "99+" : badgeCount}
+              </span>
+            )}
+          </>
         )}
       </Link>
     </Tooltip>
@@ -210,6 +228,11 @@ export default function EngineerLayout({children}) {
 
   const [pendingNavHref, setPendingNavHref] = useState(null);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+
+  // Pending-invitation count — drives the sidebar badge + powers
+  // the Realtime channel that InvitationsListener listens on for
+  // toast / browser-notification dispatch.
+  const {count: invitationsCount} = useInvitations();
 
   useEffect(() => {
     if (showWizard && pathname.includes("/workspace/")) {
@@ -571,6 +594,9 @@ export default function EngineerLayout({children}) {
                     collapsed={collapsed}
                     wizardActive={wizardIsActive}
                     onWizardIntercept={(href) => setPendingNavHref(href)}
+                    badgeCount={
+                      item.badgeKey === "invitations" ? invitationsCount : 0
+                    }
                   />
                 ))}
               </div>
@@ -816,6 +842,9 @@ export default function EngineerLayout({children}) {
         <div className="fixed bottom-6 right-6 z-50">
           <ThemeModeSelector className="w-10 h-10 rounded-xl shadow-lg shadow-slate-900/10 dark:shadow-black/30 hover:shadow-xl hover:scale-105 transition-all duration-200 [&_svg]:w-4 [&_svg]:h-4" />
         </div>
+
+        {/* ══ INVITATION TOAST / BROWSER NOTIFICATION LISTENER ══ */}
+        <InvitationsListener />
       </div>
     </WizardContext.Provider>
   );

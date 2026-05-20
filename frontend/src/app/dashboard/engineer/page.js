@@ -51,7 +51,7 @@ import {
 import {useWizard} from "./layout";
 import CustomSelect from "@/components/ui/CustomSelect";
 import {getSupabaseBrowserClient} from "@/lib/supabase/client";
-import PendingInvitesBanner from "@/components/members/PendingInvitesBanner";
+import InvitationsCountBanner from "@/components/invitations/InvitationsCountBanner";
 
 // ── Helpers ──────────────────────────────────────
 function formatTime(dateStr) {
@@ -701,8 +701,10 @@ export default function EngineerDashboardPage() {
         );
       })()}
       <div className="flex-1 overflow-y-auto">
-        {/* ── Pending invitations (renders nothing when there are none) ── */}
-        <PendingInvitesBanner />
+        {/* ── Pending invitations (renders nothing when there are none) ──
+             Condensed single-line banner that links to the Invitations page.
+             Per-invite cards live on /dashboard/engineer/invitations now. */}
+        <InvitationsCountBanner />
 
         {/* ── HOME HERO ── */}
         <div className="max-w-[800px] mx-auto px-8 pt-[52px] pb-10 text-center">

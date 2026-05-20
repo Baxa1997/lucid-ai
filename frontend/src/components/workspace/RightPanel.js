@@ -632,8 +632,9 @@ export default function RightPanel() {
             onReject={rejectPlan}
           />
         ) : (
-          // Dashboard tab is plan-management; it never depends on the build,
-          // so let it render even while the preview is still being prepared.
+          // Settings tab (internal key still "dashboard") is project-management;
+          // it never depends on the build, so let it render even while the
+          // preview is still being prepared.
           rightPanel !== "dashboard" &&
           buildingActive && (!repoInfo.vercelUrl || previewLoading) && !previewFileMap && status !== "error"
         ) ? (
@@ -649,12 +650,20 @@ export default function RightPanel() {
           />
         ) : (
           <>
-            {/* DASHBOARD tab — base44-style project management surface */}
+            {/* SETTINGS tab (internal key still "dashboard" — label renamed
+                 in the parent's tab switcher). Sub-nav inside: General /
+                 Users / Billing / Danger Zone. */}
             {rightPanel === "dashboard" && (
               <ProjectDashboard
                 project={{
+                  // UUID PK — what project_members / project_invites FK ref.
+                  // Required for Users sub-tab API calls.
+                  id: conversation?.db_id || null,
+                  // URL slug (TEXT) — what the workspace route is keyed by.
                   project_id: conversationId,
                   title: conversation?.title,
+                  description: conversation?.description,
+                  project_type: conversation?.project_type,
                   created_at: conversation?.created_at,
                 }}
                 builtInUrl={vercelDeployUrl || repoInfo?.deployedUrl || ''}

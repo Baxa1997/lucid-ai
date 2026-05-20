@@ -3,42 +3,35 @@
 // ─────────────────────────────────────────────────────────
 //  ProjectDashboard
 //
-//  Base44-style project management surface, rendered inside
-//  the workspace's "Dashboard" tab. Three live sections:
-//    • Overview — app info, visibility, invites, badge
-//    • Domains  — built-in URL + locked custom domain (Starter+)
-//    • Users    — collaborators table + pending invites
+//  Project Settings surface, rendered inside the workspace's
+//  "Settings" tab (internal key still "dashboard" for stability).
+//  Sub-nav: General / Users / Domains / Billing / Danger Zone.
 //
 //  Pure presentational + a few handlers; the parent workspace
 //  owns subscription state, project metadata, and rename/delete.
 // ─────────────────────────────────────────────────────────
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Search, LayoutGrid, Users as UsersIcon, Database, BarChart3, Megaphone,
   Globe, Plug, Shield, Bot, Zap, FileText, Code2, Settings as SettingsIcon,
   Copy, Check, ExternalLink, Pencil, Star, Share2, ChevronDown,
   Eye, EyeOff, Lock, ArrowRight, Sliders, UserPlus, Diamond, Loader2,
+  CreditCard, AlertTriangle, Trash2, Send, Mail, AlertCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
+import { safeJsonFetch } from '@/lib/api/safeFetch';
 
-// Top-level sidebar nav. Active tabs get full styling;
-// "coming soon" tabs render a placeholder when clicked.
+// Top-level sidebar nav. Renamed and slimmed down to match the workspace
+// "Settings" tab spec: General / Users / Billing / Danger Zone.
+// Domains kept as a live tab since it's an existing shipped feature.
 const TABS = [
-  { key: 'overview',    label: 'Overview',       icon: LayoutGrid },
-  { key: 'users',       label: 'Users',          icon: UsersIcon  },
-  { key: 'data',        label: 'Data',           icon: Database,    locked: true, dropdown: true },
-  { key: 'analytics',   label: 'Analytics',      icon: BarChart3,   locked: true, badge: 'Beta' },
-  { key: 'social',      label: 'Social content', icon: Megaphone,   locked: true, badge: 'New' },
-  { key: 'domains',     label: 'Domains',        icon: Globe },
-  { key: 'integrations',label: 'Integrations',   icon: Plug,        locked: true },
-  { key: 'security',    label: 'Security',       icon: Shield,      locked: true },
-  { key: 'agents',      label: 'Agents',         icon: Bot,         locked: true },
-  { key: 'automations', label: 'Automations',    icon: Zap,         locked: true },
-  { key: 'logs',        label: 'Logs',           icon: FileText,    locked: true },
-  { key: 'api',         label: 'API',            icon: Code2,       locked: true },
-  { key: 'settings',    label: 'Settings',       icon: SettingsIcon, locked: true, dropdown: true },
+  { key: 'general',  label: 'General',     icon: SettingsIcon },
+  { key: 'users',    label: 'Users',       icon: UsersIcon    },
+  { key: 'domains',  label: 'Domains',     icon: Globe        },
+  { key: 'billing',  label: 'Billing',     icon: CreditCard   },
+  { key: 'danger',   label: 'Danger Zone', icon: AlertTriangle, danger: true },
 ];
 
 // ── Tiny helpers ─────────────────────────────────────────
@@ -90,7 +83,7 @@ function Sidebar({ activeTab, onTabChange }) {
   return (
     <aside className="w-[260px] shrink-0 border-r border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] flex flex-col">
       <div className="px-4 pt-4 pb-2">
-        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Dashboard</p>
+        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Settings</p>
       </div>
       <div className="px-3 pb-2">
         <div className="relative">
@@ -115,8 +108,12 @@ function Sidebar({ activeTab, onTabChange }) {
               className={cn(
                 'w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium mb-0.5 transition-colors text-left',
                 isActive
-                  ? 'bg-slate-100 dark:bg-white/[0.06] text-slate-900 dark:text-white'
-                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-white/[0.03]',
+                  ? tab.danger
+                    ? 'bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-300'
+                    : 'bg-slate-100 dark:bg-white/[0.06] text-slate-900 dark:text-white'
+                  : tab.danger
+                    ? 'text-red-600 dark:text-red-400 hover:bg-red-50/50 dark:hover:bg-red-500/5'
+                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-white/[0.03]',
               )}
             >
               <Icon className="w-4 h-4 shrink-0" />
@@ -441,166 +438,344 @@ function DomainsTab({ builtInUrl, canUseCustomDomain, onUpgradeClick, project })
 //  USERS TAB (with Users + Pending requests sub-tabs)
 // ─────────────────────────────────────────────────────────
 function UsersTab({ project }) {
-  const [subTab, setSubTab] = useState('users');     // 'users' | 'pending'
-  const [search, setSearch] = useState('');
-  const [roleFilter, setRoleFilter] = useState('all');
-  const [users, setUsers] = useState([]);
+  const projectId = project?.id;       // UUID PK (chat_sessions.id)
+  const [members, setMembers] = useState([]);
+  const [invites, setInvites] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [currentUserId, setCurrentUserId] = useState(null);
 
-  // Load owner from Supabase auth (the project creator).
-  // For v1 the only user is the owner — invitations land in Pending requests
-  // once the invite flow is wired.
+  // Invite form
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState(null);
+  const [success, setSuccess] = useState(null);
+
+  const isOwner = members.some(
+    (m) => m.user_id === currentUserId && m.role === 'owner',
+  );
+
+  const fetchAll = useCallback(async () => {
+    if (!projectId) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    try {
+      const [mRes, iRes] = await Promise.all([
+        safeJsonFetch(`/api/projects/${encodeURIComponent(projectId)}/members`).catch(() => ({ members: [] })),
+        safeJsonFetch(`/api/projects/${encodeURIComponent(projectId)}/invites`).catch(() => ({ invites: [] })),
+      ]);
+      setMembers(mRes?.members || []);
+      setInvites(iRes?.invites || []);
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
   useEffect(() => {
-    let cancelled = false;
     (async () => {
-      try {
-        const sb = getSupabaseBrowserClient();
-        const { data: { user } } = await sb.auth.getUser();
-        if (cancelled) return;
-        if (user) {
-          setUsers([{
-            id:    user.id,
-            name:  user.user_metadata?.full_name || user.user_metadata?.name || (user.email || '').split('@')[0],
-            email: user.email,
-            role:  'admin',
-            isOwner: true,
-          }]);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      const sb = getSupabaseBrowserClient();
+      const { data: { user } } = await sb.auth.getUser();
+      setCurrentUserId(user?.id || null);
     })();
-    return () => { cancelled = true; };
-  }, []);
+    fetchAll();
+  }, [fetchAll]);
 
-  const filtered = users.filter((u) => {
-    if (roleFilter !== 'all' && u.role !== roleFilter) return false;
-    const q = search.trim().toLowerCase();
-    if (!q) return true;
-    return (u.name || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q);
-  });
+  const handleInvite = async (e) => {
+    e?.preventDefault?.();
+    setError(null);
+    setSuccess(null);
+    const email = inviteEmail.trim();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setError('Please enter a valid email address.');
+      return;
+    }
+    if (!projectId) {
+      setError('Project not ready yet — try again in a moment.');
+      return;
+    }
+    setSending(true);
+    try {
+      const data = await safeJsonFetch(
+        `/api/projects/${encodeURIComponent(projectId)}/invites`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+        },
+      );
+      setSuccess(
+        data?.delivery === 'user_exists'
+          ? `${email} already has an account — they'll see the invitation immediately.`
+          : `Invitation sent to ${email}.`,
+      );
+      setInviteEmail('');
+      fetchAll();
+    } catch (err) {
+      setError(err.message || 'Failed to send invite.');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleRevoke = async (inviteId) => {
+    try {
+      await safeJsonFetch(`/api/invites/${encodeURIComponent(inviteId)}`, { method: 'DELETE' });
+      fetchAll();
+    } catch (err) {
+      setError(err.message || 'Failed to revoke invite.');
+    }
+  };
+
+  const handleRemove = async (userId) => {
+    if (!confirm('Remove this member from the project?')) return;
+    try {
+      await safeJsonFetch(
+        `/api/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`,
+        { method: 'DELETE' },
+      );
+      fetchAll();
+    } catch (err) {
+      setError(err.message || 'Failed to remove member.');
+    }
+  };
 
   return (
     <div className="max-w-5xl mx-auto px-8 py-8">
-      {/* Header */}
       <div className="flex items-start justify-between mb-6 gap-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white mb-1">Users</h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400">Manage the app&apos;s users and their roles</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            className="p-2.5 rounded-lg border border-slate-200 dark:border-[#2d333b] hover:bg-slate-50 dark:hover:bg-white/[0.04] text-slate-500"
-            title="Filter"
-          >
-            <Sliders className="w-4 h-4" />
-          </button>
-          <button className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-[13px] font-semibold hover:opacity-90">
-            Invite User
-          </button>
+          <p className="text-sm text-slate-500 dark:text-slate-400">Manage project members and invitations.</p>
         </div>
       </div>
 
-      {/* Sub-tabs */}
-      <div className="inline-flex items-center bg-slate-100 dark:bg-[#21262d] rounded-lg p-0.5 mb-6">
-        {[
-          { key: 'users',   label: 'Users' },
-          { key: 'pending', label: 'Pending requests' },
-        ].map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => setSubTab(tab.key)}
-            className={cn(
-              'px-4 h-8 rounded-md text-[13px] font-semibold transition-all',
-              subTab === tab.key
-                ? 'bg-white dark:bg-[#0d1117] text-slate-900 dark:text-white shadow-sm'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200',
-            )}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Users sub-tab */}
-      {subTab === 'users' && (
-        <div className="bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-2xl overflow-hidden">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-[#21262d] gap-3">
-            <h3 className="text-base font-bold text-slate-900 dark:text-white">Users</h3>
-            <div className="flex items-center gap-2 flex-1 max-w-md">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search by Email or Name"
-                  className="w-full pl-9 pr-3 py-2 text-[13px] rounded-lg border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] focus:outline-none focus:ring-1 focus:ring-[#dc5426]/40 text-slate-700 dark:text-slate-200"
-                />
-              </div>
-              <div className="relative">
-                <select
-                  value={roleFilter}
-                  onChange={(e) => setRoleFilter(e.target.value)}
-                  className="appearance-none pl-3 pr-8 py-2 text-[13px] rounded-lg border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] focus:outline-none focus:ring-1 focus:ring-[#dc5426]/40 text-slate-700 dark:text-slate-200"
-                >
-                  <option value="all">all roles</option>
-                  <option value="admin">admin</option>
-                  <option value="member">member</option>
-                  <option value="viewer">viewer</option>
-                </select>
-                <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" />
-              </div>
-            </div>
+      {/* Invite form (owners only) */}
+      {isOwner && (
+        <form onSubmit={handleInvite} className="mb-6 bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-2xl p-5">
+          <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">Invite a new member</h3>
+          <div className="flex items-center gap-2">
+            <input
+              type="email"
+              value={inviteEmail}
+              onChange={(e) => setInviteEmail(e.target.value)}
+              placeholder="teammate@example.com"
+              disabled={sending}
+              className="flex-1 px-3 py-2.5 text-[13px] rounded-lg border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500 text-slate-700 dark:text-slate-200"
+            />
+            <button
+              type="submit"
+              disabled={sending || !inviteEmail.trim()}
+              className="flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-blue-600 text-white text-[13px] font-semibold hover:bg-blue-700 disabled:opacity-60"
+            >
+              {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+              Send invitation
+            </button>
           </div>
-
-          {/* Table */}
-          <div className="grid grid-cols-[1.5fr_1fr_1.5fr] px-5 py-3 bg-slate-50 dark:bg-[#0d1117] border-b border-slate-100 dark:border-[#21262d]">
-            <div className="text-[12px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Name</div>
-            <div className="text-[12px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Role</div>
-            <div className="text-[12px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Email</div>
-          </div>
-
-          {loading ? (
-            <div className="px-5 py-8 flex items-center justify-center">
-              <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
-            </div>
-          ) : filtered.length === 0 ? (
-            <div className="px-5 py-12 text-center text-sm text-slate-500">No users match your filter.</div>
-          ) : (
-            filtered.map((u) => (
-              <div key={u.id} className="grid grid-cols-[1.5fr_1fr_1.5fr] px-5 py-4 items-center hover:bg-slate-50 dark:hover:bg-white/[0.02]">
-                <div>
-                  <p className="text-[14px] font-semibold text-slate-900 dark:text-white">{u.name || '—'}</p>
-                  {u.isOwner && <p className="text-[12px] text-slate-500 dark:text-slate-400">Owner</p>}
-                </div>
-                <div className="text-[14px] text-slate-600 dark:text-slate-300">{u.role}</div>
-                <div className="text-[14px] text-slate-600 dark:text-slate-300 truncate">{u.email}</div>
-              </div>
-            ))
+          {error && (
+            <p className="mt-2 text-xs text-red-600 dark:text-red-400 flex items-center gap-1.5">
+              <AlertCircle className="w-3.5 h-3.5" /> {error}
+            </p>
           )}
-        </div>
+          {success && (
+            <p className="mt-2 text-xs text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+              <Check className="w-3.5 h-3.5" /> {success}
+            </p>
+          )}
+        </form>
       )}
 
-      {/* Pending requests sub-tab */}
-      {subTab === 'pending' && (
+      {/* Members list */}
+      <div className="bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-2xl overflow-hidden mb-6">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-[#21262d]">
+          <h3 className="text-base font-bold text-slate-900 dark:text-white">Members ({members.length})</h3>
+        </div>
+        {loading ? (
+          <div className="px-5 py-8 flex items-center justify-center">
+            <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+          </div>
+        ) : members.length === 0 ? (
+          <div className="px-5 py-10 text-center text-sm text-slate-500">No members yet.</div>
+        ) : (
+          members.map((m) => {
+            const isSelf = m.user_id === currentUserId;
+            const canRemove = isOwner && !isSelf && m.role !== 'owner';
+            const label = m.name || m.email || m.user_id;
+            return (
+              <div key={m.user_id} className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 dark:border-[#21262d] last:border-b-0 hover:bg-slate-50 dark:hover:bg-white/[0.02]">
+                <div className="flex items-center gap-3 min-w-0">
+                  {m.avatar_url ? (
+                    <img src={m.avatar_url} alt="" className="w-8 h-8 rounded-full object-cover shrink-0" />
+                  ) : (
+                    <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-[#21262d] text-slate-500 grid place-items-center text-xs font-semibold shrink-0">
+                      {(label || '?').charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-[14px] font-semibold text-slate-900 dark:text-white truncate">
+                      {label}
+                      {isSelf && <span className="ml-1.5 text-xs text-slate-400 font-normal">(you)</span>}
+                    </p>
+                    {m.email && m.name && (
+                      <p className="text-[12px] text-slate-500 dark:text-slate-400 truncate">{m.email}</p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <span className={cn(
+                    'text-[11px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider',
+                    m.role === 'owner'
+                      ? 'bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-300'
+                      : 'bg-slate-100 dark:bg-[#21262d] text-slate-600 dark:text-slate-400',
+                  )}>
+                    {m.role || 'member'}
+                  </span>
+                  {canRemove && (
+                    <button
+                      onClick={() => handleRemove(m.user_id)}
+                      className="p-1.5 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10"
+                      title="Remove member"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* Pending invitations */}
+      {invites.length > 0 && (
         <div className="bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-2xl overflow-hidden">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-[#21262d] gap-3">
-            <h3 className="text-base font-bold text-slate-900 dark:text-white">Pending requests</h3>
-            <div className="relative flex-1 max-w-md">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-              <input
-                placeholder="Search by Email or Name"
-                disabled
-                className="w-full pl-9 pr-3 py-2 text-[13px] rounded-lg border border-slate-200 dark:border-[#2d333b] bg-slate-50 dark:bg-[#0d1117] text-slate-700 dark:text-slate-200 cursor-not-allowed"
-              />
+          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 dark:border-[#21262d]">
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">Pending invitations ({invites.length})</h3>
+          </div>
+          {invites.map((i) => (
+            <div key={i.invite_id} className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 dark:border-[#21262d] last:border-b-0">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-8 h-8 rounded-full bg-amber-100 dark:bg-amber-500/10 text-amber-700 dark:text-amber-300 grid place-items-center shrink-0">
+                  <Mail className="w-3.5 h-3.5" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[14px] font-semibold text-slate-900 dark:text-white truncate">{i.email}</p>
+                  <p className="text-[12px] text-slate-500 dark:text-slate-400">Pending · expires {new Date(i.expires_at).toLocaleDateString()}</p>
+                </div>
+              </div>
+              {isOwner && (
+                <button
+                  onClick={() => handleRevoke(i.invite_id)}
+                  className="px-3 py-1.5 rounded-md text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.05]"
+                >
+                  Revoke
+                </button>
+              )}
             </div>
-          </div>
-          <div className="border-2 border-dashed border-slate-200 dark:border-[#2d333b] m-5 rounded-xl py-16 text-center">
-            <p className="text-base font-bold text-slate-900 dark:text-white mb-1">No pending requests</p>
-            <p className="text-sm text-slate-500 dark:text-slate-400">There are currently no access requests awaiting approval</p>
-          </div>
+          ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────
+//  BILLING TAB — project-level billing summary + link to global billing
+// ─────────────────────────────────────────────────────────
+function BillingTab({ subscription, onUpgradeClick }) {
+  const planKey = subscription?.plan || 'free';
+  const planLabel = (planKey[0]?.toUpperCase() || '') + planKey.slice(1);
+  return (
+    <div className="max-w-3xl mx-auto px-8 py-8">
+      <h1 className="text-2xl font-bold text-slate-900 dark:text-white mb-1">Billing</h1>
+      <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
+        Billing is managed at the account level. This project inherits your account plan.
+      </p>
+
+      <div className="bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-2xl p-6 mb-4">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Current plan</p>
+            <p className="text-2xl font-bold text-slate-900 dark:text-white">{planLabel}</p>
+          </div>
+          <CreditCard className="w-6 h-6 text-slate-300" />
+        </div>
+        <button
+          onClick={onUpgradeClick}
+          className="flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-[13px] font-semibold hover:opacity-90"
+        >
+          Manage billing
+          <ArrowRight className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────
+//  DANGER ZONE TAB — delete project, transfer ownership
+// ─────────────────────────────────────────────────────────
+function DangerZoneTab({ project, onDelete }) {
+  const [confirmText, setConfirmText] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const requiredText = project?.title || 'this project';
+  const canDelete = confirmText.trim().toLowerCase() === requiredText.trim().toLowerCase();
+
+  const handleDelete = async () => {
+    if (!canDelete || deleting) return;
+    setDeleting(true);
+    try { await onDelete?.(); } finally { setDeleting(false); }
+  };
+
+  return (
+    <div className="max-w-3xl mx-auto px-8 py-8">
+      <h1 className="text-2xl font-bold text-slate-900 dark:text-white mb-1">Danger Zone</h1>
+      <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
+        Irreversible actions. Proceed with care.
+      </p>
+
+      {/* Transfer ownership (placeholder) */}
+      <div className="bg-white dark:bg-[#161b22] border border-amber-200/60 dark:border-amber-500/20 rounded-2xl p-5 mb-4">
+        <h3 className="text-base font-bold text-slate-900 dark:text-white mb-1">Transfer ownership</h3>
+        <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">
+          Hand off this project to another member. (Coming soon.)
+        </p>
+        <button
+          disabled
+          className="px-4 py-2 rounded-lg border border-slate-200 dark:border-[#2d333b] text-sm font-medium text-slate-400 cursor-not-allowed"
+        >
+          Transfer ownership
+        </button>
+      </div>
+
+      {/* Delete project */}
+      <div className="bg-white dark:bg-[#161b22] border border-red-200/60 dark:border-red-500/20 rounded-2xl p-5">
+        <h3 className="text-base font-bold text-red-700 dark:text-red-400 mb-1">Delete this project</h3>
+        <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">
+          Once you delete a project, there is no going back. All conversations, files, and history will be removed.
+        </p>
+        <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5">
+          Type <span className="font-mono text-slate-700 dark:text-slate-200">{requiredText}</span> to confirm
+        </label>
+        <input
+          value={confirmText}
+          onChange={(e) => setConfirmText(e.target.value)}
+          placeholder={requiredText}
+          className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-500 mb-3"
+        />
+        <button
+          onClick={handleDelete}
+          disabled={!canDelete || deleting}
+          className={cn(
+            'flex items-center gap-1.5 px-4 py-2.5 rounded-lg text-[13px] font-semibold',
+            canDelete && !deleting
+              ? 'bg-red-600 text-white hover:bg-red-700'
+              : 'bg-slate-100 dark:bg-[#21262d] text-slate-400 cursor-not-allowed',
+          )}
+        >
+          {deleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+          Delete project
+        </button>
+      </div>
     </div>
   );
 }
@@ -687,10 +862,8 @@ export default function ProjectDashboard({
   onOpenApp = () => {},
   onUpgradeClick = () => {},
 }) {
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useState('general');
   const canUseCustomDomain = subscription?.limits?.canUseCustomDomain ?? false;
-
-  const tabDef = TABS.find((t) => t.key === activeTab);
 
   return (
     <div className="flex h-full overflow-hidden bg-[#fafbfc] dark:bg-[#0d1117]">
@@ -700,13 +873,16 @@ export default function ProjectDashboard({
           <DashboardSkeleton />
         ) : (
           <>
-            {activeTab === 'overview' && (
+            {activeTab === 'general' && (
               <OverviewTab
                 project={project}
                 builtInUrl={builtInUrl}
                 onRename={onRename}
                 onOpenApp={onOpenApp}
               />
+            )}
+            {activeTab === 'users' && (
+              <UsersTab project={project} />
             )}
             {activeTab === 'domains' && (
               <DomainsTab
@@ -716,11 +892,17 @@ export default function ProjectDashboard({
                 project={project}
               />
             )}
-            {activeTab === 'users' && (
-              <UsersTab project={project} />
+            {activeTab === 'billing' && (
+              <BillingTab
+                subscription={subscription}
+                onUpgradeClick={onUpgradeClick}
+              />
             )}
-            {tabDef?.locked && (
-              <LockedTab name={tabDef.label} onUpgradeClick={onUpgradeClick} />
+            {activeTab === 'danger' && (
+              <DangerZoneTab
+                project={project}
+                onDelete={onDelete}
+              />
             )}
           </>
         )}

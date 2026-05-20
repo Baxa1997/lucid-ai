@@ -8,6 +8,7 @@ import {
   FolderGit2, Coins, Plus, TrendingUp, Lock,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { safeJsonFetch } from '@/lib/api/safeFetch';
 
 // ── Visual config per plan key (mirrors lib/subscription.js order) ──
 const PLAN_VISUALS = {
@@ -98,10 +99,12 @@ export default function BillingPage() {
   }, [searchParams]);
 
   const refreshSubscription = () => {
-    fetch('/api/stripe/subscription')
-      .then((r) => r.json())
-      .then((data) => { setSub(data); setLoading(false); })
-      .catch(() => setLoading(false));
+    safeJsonFetch('/api/stripe/subscription')
+      .then((data) => { setSub(data || null); setLoading(false); })
+      .catch((err) => {
+        console.error('Failed to load subscription:', err);
+        setLoading(false);
+      });
   };
 
   useEffect(refreshSubscription, []);
@@ -109,37 +112,41 @@ export default function BillingPage() {
   const handleSubscribe = async (planKey) => {
     setCheckoutLoading(`${planKey}_monthly`);
     try {
-      const res = await fetch('/api/stripe/checkout', {
+      const data = await safeJsonFetch('/api/stripe/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode: 'subscription', plan: planKey }),
       });
-      const data = await res.json();
-      if (data.url) window.location.href = data.url;
-      else alert(data.error || 'Checkout failed');
+      if (data?.url) window.location.href = data.url;
+      else alert(data?.error || 'Checkout failed');
+    } catch (err) {
+      alert(err.message || 'Checkout failed');
     } finally { setCheckoutLoading(''); }
   };
 
   const handleBuyPack = async (packKey) => {
     setCheckoutLoading(`pack_${packKey}`);
     try {
-      const res = await fetch('/api/stripe/checkout', {
+      const data = await safeJsonFetch('/api/stripe/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode: 'credit_pack', pack: packKey }),
       });
-      const data = await res.json();
-      if (data.url) window.location.href = data.url;
-      else alert(data.error || 'Checkout failed');
+      if (data?.url) window.location.href = data.url;
+      else alert(data?.error || 'Checkout failed');
+    } catch (err) {
+      alert(err.message || 'Checkout failed');
     } finally { setCheckoutLoading(''); }
   };
 
   const handlePortal = async () => {
     setPortalLoading(true);
     try {
-      const res = await fetch('/api/stripe/portal', { method: 'POST' });
-      const data = await res.json();
-      if (data.url) window.location.href = data.url;
+      const data = await safeJsonFetch('/api/stripe/portal', { method: 'POST' });
+      if (data?.url) window.location.href = data.url;
+      else alert(data?.error || 'Could not open billing portal');
+    } catch (err) {
+      alert(err.message || 'Could not open billing portal');
     } finally { setPortalLoading(false); }
   };
 

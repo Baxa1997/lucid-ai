@@ -32,6 +32,7 @@ const CREDIT_PACK_PRICES = {
  * Backwards compatible: if `mode` is omitted, defaults to subscription.
  */
 export async function POST(req) {
+  try {
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
   const authResult = await requireAuth();
   if (!authResult.ok) return authResult.response;
@@ -149,4 +150,11 @@ export async function POST(req) {
   });
 
   return NextResponse.json({ url: session.url });
+  } catch (err) {
+    console.error('Stripe checkout error:', err);
+    return NextResponse.json(
+      { error: err?.message || 'Failed to start checkout' },
+      { status: 500 }
+    );
+  }
 }

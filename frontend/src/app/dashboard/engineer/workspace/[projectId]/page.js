@@ -1684,7 +1684,10 @@ function ConversationPageInner({params}) {
               style={{background: "rgba(0,0,0,0.05)"}}>
               {[
                 {key: "preview", label: "Preview", visible: true},
-                {key: "dashboard", label: "Dashboard", visible: true},
+                // The internal key stays "dashboard" so RightPanel.js doesn't
+                // need to change — only the label is renamed to "Settings"
+                // (spec: workspace tabs become Preview / Settings / Code).
+                {key: "dashboard", label: "Settings", visible: true},
                 {key: "code", label: "Code", visible: codeTabVisible},
               ]
                 .filter((tab) => tab.visible)
