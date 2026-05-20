@@ -1,0 +1,1 @@
+Note: A2 didn't complete — only template was cloned, no real codegen

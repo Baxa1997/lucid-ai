@@ -667,7 +667,7 @@ def _build_layout(nav_items: list[dict[str, Any]], brand_name: str) -> str:
         "/* AUTO-GENERATED - Lucid AI admin pipeline. */\n"
         'import { useState } from "react";\n'
         'import { NavLink, useNavigate } from "react-router-dom";\n'
-        f'import {{ {import_list}, LogOut, Menu, X }} from "lucide-react";\n'
+        f'import {{ {import_list}, LogOut, Menu, X, User, Settings as SettingsIcon }} from "lucide-react";\n'
         'import { signOut } from "@/lib/auth.js";\n'
         "\n"
         f"const BRAND_NAME = {json.dumps(brand_name)};\n"
@@ -713,7 +713,21 @@ def _build_layout(nav_items: list[dict[str, Any]], brand_name: str) -> str:
         "            );\n"
         "          })}\n"
         "        </nav>\n"
-        '        <div className="border-t border-slate-800 p-3">\n'
+        '        <div className="space-y-1 border-t border-slate-800 p-3">\n'
+        '          <NavLink to="/profile" className={({ isActive }) =>\n'
+        '            "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition " +\n'
+        '            (isActive ? "bg-slate-800 text-white" : "text-slate-300 hover:bg-slate-900 hover:text-white")\n'
+        "          }>\n"
+        "            <User size={18} />\n"
+        "            {sidebarOpen ? <span>Profile</span> : null}\n"
+        "          </NavLink>\n"
+        '          <NavLink to="/settings" className={({ isActive }) =>\n'
+        '            "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition " +\n'
+        '            (isActive ? "bg-slate-800 text-white" : "text-slate-300 hover:bg-slate-900 hover:text-white")\n'
+        "          }>\n"
+        "            <SettingsIcon size={18} />\n"
+        "            {sidebarOpen ? <span>Settings</span> : null}\n"
+        "          </NavLink>\n"
         '          <button type="button" onClick={handleLogout} className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm text-slate-300 hover:bg-slate-900 hover:text-white">\n'
         "            <LogOut size={18} />\n"
         "            {sidebarOpen ? <span>Sign out</span> : null}\n"
@@ -797,6 +811,8 @@ ReactDOM.createRoot(document.getElementById("root")).render(
 
 
 def _build_app_jsx(data_model: DataModel) -> str:
+    from app.services.admin_plan import _detect_entity_views
+
     imports = [
         'import { Navigate, Route, Routes } from "react-router-dom";',
         'import { AuthGuard } from "@/components/AuthGuard.jsx";',
@@ -804,6 +820,8 @@ def _build_app_jsx(data_model: DataModel) -> str:
         'import Layout from "@/components/Layout.jsx";',
         'import Login from "@/pages/Login.jsx";',
         'import Dashboard from "@/pages/Dashboard.jsx";',
+        'import Settings from "@/pages/Settings.jsx";',
+        'import Profile from "@/pages/Profile.jsx";',
     ]
     routes = [
         '        <Route path="/" element={<Dashboard />} />',
@@ -821,6 +839,25 @@ def _build_app_jsx(data_model: DataModel) -> str:
             f'        <Route path="/{slug}/new" element={{<{base}CreatePage />}} />',
             f'        <Route path="/{slug}/:id" element={{<{base}EditPage />}} />',
         ])
+        # Extra views auto-detected by admin_plan (kanban for entities
+        # with a status enum, calendar for entities with a scheduled date).
+        extras = _detect_entity_views(table)
+        if "kanban" in extras:
+            imports.append(f'import {base}KanbanPage from "@/pages/{base}Kanban.jsx";')
+            routes.append(
+                f'        <Route path="/{slug}/kanban" element={{<{base}KanbanPage />}} />'
+            )
+        if "calendar" in extras:
+            imports.append(f'import {base}CalendarPage from "@/pages/{base}Calendar.jsx";')
+            routes.append(
+                f'        <Route path="/{slug}/calendar" element={{<{base}CalendarPage />}} />'
+            )
+    # Account routes — sit between entity routes and the catch-all so
+    # /settings + /profile resolve before the Navigate fallback.
+    routes.extend([
+        '        <Route path="/settings" element={<Settings />} />',
+        '        <Route path="/profile" element={<Profile />} />',
+    ])
     routes.append('        <Route path="*" element={<Navigate to="/" replace />} />')
 
     return (
@@ -1003,6 +1040,286 @@ def _build_dashboard_page(data_model: DataModel) -> str:
     )
 
 
+def _build_settings_page(brand_name: str) -> str:
+    """Generic Settings page — admin preferences placeholder.
+
+    Self-contained: AuthGuard wrapper, no external state dependencies.
+    Real settings (notification prefs, API keys, theme) get layered on
+    in follow-up codegen passes.
+    """
+    safe_brand = (brand_name or "Admin").replace('"', "'")
+    return (
+        '/* AUTO-GENERATED - Lucid AI admin pipeline. */\n'
+        'import { AuthGuard } from "@/components/AuthGuard.jsx";\n'
+        '\n'
+        'export default function Settings() {\n'
+        '  return (\n'
+        '    <AuthGuard>\n'
+        '      <div className="mx-auto max-w-3xl">\n'
+        '        <h1 className="mb-6 text-2xl font-bold">Settings</h1>\n'
+        '        <div className="space-y-6">\n'
+        '          <section className="rounded-lg border border-border bg-card p-6">\n'
+        '            <h2 className="mb-2 text-lg font-semibold">Workspace</h2>\n'
+        '            <p className="mb-4 text-sm text-muted-foreground">\n'
+        f'              You are administering <span className="font-medium text-foreground">{safe_brand}</span>.\n'
+        '            </p>\n'
+        '            <dl className="grid grid-cols-2 gap-3 text-sm">\n'
+        '              <dt className="text-muted-foreground">Workspace name</dt>\n'
+        f'              <dd className="font-medium">{safe_brand}</dd>\n'
+        '              <dt className="text-muted-foreground">Plan</dt>\n'
+        '              <dd className="font-medium">Internal · Pro</dd>\n'
+        '              <dt className="text-muted-foreground">Timezone</dt>\n'
+        '              <dd className="font-medium">Auto-detected</dd>\n'
+        '            </dl>\n'
+        '          </section>\n'
+        '          <section className="rounded-lg border border-border bg-card p-6">\n'
+        '            <h2 className="mb-2 text-lg font-semibold">Notifications</h2>\n'
+        '            <p className="text-sm text-muted-foreground">\n'
+        '              Configure how the team receives updates about records, comments, and assignments.\n'
+        '            </p>\n'
+        '          </section>\n'
+        '          <section className="rounded-lg border border-border bg-card p-6">\n'
+        '            <h2 className="mb-2 text-lg font-semibold">Danger zone</h2>\n'
+        '            <p className="text-sm text-muted-foreground">\n'
+        '              Destructive actions (delete workspace, transfer ownership) will land here once enabled.\n'
+        '            </p>\n'
+        '          </section>\n'
+        '        </div>\n'
+        '      </div>\n'
+        '    </AuthGuard>\n'
+        '  );\n'
+        '}\n'
+    )
+
+
+def _build_profile_page() -> str:
+    """Generic Profile page — current-user identity placeholder.
+
+    Reads the authenticated user from supabase, displays email + last
+    sign-in. Real avatar / name editing comes in follow-up codegen.
+    """
+    return (
+        '/* AUTO-GENERATED - Lucid AI admin pipeline. */\n'
+        'import { useEffect, useState } from "react";\n'
+        'import { AuthGuard } from "@/components/AuthGuard.jsx";\n'
+        'import { getSupabaseBrowserClient } from "@/lib/supabase.js";\n'
+        '\n'
+        'export default function Profile() {\n'
+        '  const [user, setUser] = useState(null);\n'
+        '  const [loading, setLoading] = useState(true);\n'
+        '\n'
+        '  useEffect(() => {\n'
+        '    let cancelled = false;\n'
+        '    const supabase = getSupabaseBrowserClient();\n'
+        '    supabase.auth.getUser().then(({ data }) => {\n'
+        '      if (!cancelled) {\n'
+        '        setUser(data?.user ?? null);\n'
+        '        setLoading(false);\n'
+        '      }\n'
+        '    });\n'
+        '    return () => { cancelled = true; };\n'
+        '  }, []);\n'
+        '\n'
+        '  return (\n'
+        '    <AuthGuard>\n'
+        '      <div className="mx-auto max-w-3xl">\n'
+        '        <h1 className="mb-6 text-2xl font-bold">Profile</h1>\n'
+        '        {loading ? (\n'
+        '          <div className="h-12 animate-pulse rounded-md bg-muted" />\n'
+        '        ) : (\n'
+        '          <section className="rounded-lg border border-border bg-card p-6">\n'
+        '            <div className="mb-6 flex items-center gap-4">\n'
+        '              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary text-2xl font-semibold text-primary-foreground">\n'
+        '                {(user?.email || "?")[0].toUpperCase()}\n'
+        '              </div>\n'
+        '              <div>\n'
+        '                <div className="text-lg font-semibold">{user?.email || "Not signed in"}</div>\n'
+        '                <div className="text-sm text-muted-foreground">\n'
+        '                  Member since {user?.created_at ? new Date(user.created_at).toLocaleDateString() : "—"}\n'
+        '                </div>\n'
+        '              </div>\n'
+        '            </div>\n'
+        '            <dl className="grid grid-cols-2 gap-3 text-sm">\n'
+        '              <dt className="text-muted-foreground">User ID</dt>\n'
+        '              <dd className="font-mono text-xs">{user?.id || "—"}</dd>\n'
+        '              <dt className="text-muted-foreground">Last sign-in</dt>\n'
+        '              <dd className="font-medium">{user?.last_sign_in_at ? new Date(user.last_sign_in_at).toLocaleString() : "—"}</dd>\n'
+        '            </dl>\n'
+        '          </section>\n'
+        '        )}\n'
+        '      </div>\n'
+        '    </AuthGuard>\n'
+        '  );\n'
+        '}\n'
+    )
+
+
+def _stub_kanban_page(table: TableDefinition) -> str:
+    """Read-only kanban placeholder. Groups rows by their status field
+    into columns. Real drag/drop comes in Stage 6 codegen.
+    """
+    label_plural = table.plural_label or table.name
+    base = _pascal(table.name)
+    slug = _kebab(table.name)
+    # Pick the status-flavoured field for grouping.
+    status_field_name = "status"
+    for f in (table.fields or []):
+        name = (f.name or "").lower()
+        if name in {"status", "stage", "pipeline_stage", "state", "phase"}:
+            status_field_name = f.name
+            break
+    return (
+        '/* AUTO-GENERATED - Lucid AI admin pipeline. */\n'
+        'import { useEffect, useState } from "react";\n'
+        'import { Link } from "react-router-dom";\n'
+        'import { AuthGuard } from "@/components/AuthGuard.jsx";\n'
+        'import { listCollection } from "@/lib/db_admin.js";\n'
+        '\n'
+        f'export default function {base}KanbanPage() {{\n'
+        '  const [rows, setRows] = useState([]);\n'
+        '  const [loading, setLoading] = useState(true);\n'
+        '\n'
+        '  useEffect(() => {\n'
+        '    let cancelled = false;\n'
+        f'    listCollection("{table.name}").then((data) => {{\n'
+        '      if (!cancelled) {\n'
+        '        setRows(Array.isArray(data) ? data : []);\n'
+        '        setLoading(false);\n'
+        '      }\n'
+        '    });\n'
+        '    return () => { cancelled = true; };\n'
+        '  }, []);\n'
+        '\n'
+        f'  const STATUS_FIELD = "{status_field_name}";\n'
+        '  const columns = {};\n'
+        '  rows.forEach((row) => {\n'
+        '    const key = row?.[STATUS_FIELD] || "unsorted";\n'
+        '    columns[key] = columns[key] || [];\n'
+        '    columns[key].push(row);\n'
+        '  });\n'
+        '  const columnNames = Object.keys(columns).sort();\n'
+        '\n'
+        '  return (\n'
+        '    <AuthGuard>\n'
+        '      <div className="mb-6 flex items-center justify-between">\n'
+        f'        <h1 className="text-2xl font-bold">{label_plural} Board</h1>\n'
+        f'        <Link to="/{slug}" className="rounded border border-border bg-card px-3 py-1.5 text-sm hover:bg-muted">List view</Link>\n'
+        '      </div>\n'
+        '      {loading ? (\n'
+        '        <div className="h-48 animate-pulse rounded-md bg-muted" />\n'
+        '      ) : (\n'
+        '        <div className="grid auto-cols-[280px] grid-flow-col gap-4 overflow-x-auto pb-4">\n'
+        '          {columnNames.map((status) => (\n'
+        '            <div key={status} className="flex flex-col rounded-lg border border-border bg-muted/40 p-3">\n'
+        '              <div className="mb-2 flex items-center justify-between">\n'
+        '                <h3 className="text-sm font-semibold capitalize">{status.replace(/_/g, " ")}</h3>\n'
+        '                <span className="rounded-full bg-card px-2 py-0.5 text-xs">{columns[status].length}</span>\n'
+        '              </div>\n'
+        '              <div className="space-y-2">\n'
+        '                {columns[status].map((row) => (\n'
+        f'                  <Link key={{row.id}} to={{`/{slug}/${{row.id}}`}} className="block rounded-md border border-border bg-card p-3 text-sm shadow-sm hover:border-primary">\n'
+        '                    <div className="font-medium">{row.name || row.title || row.first_name || row.id}</div>\n'
+        '                    <div className="text-xs text-muted-foreground">#{row.id}</div>\n'
+        '                  </Link>\n'
+        '                ))}\n'
+        '              </div>\n'
+        '            </div>\n'
+        '          ))}\n'
+        '        </div>\n'
+        '      )}\n'
+        '    </AuthGuard>\n'
+        '  );\n'
+        '}\n'
+    )
+
+
+def _stub_calendar_page(table: TableDefinition) -> str:
+    """Read-only calendar placeholder. Renders an upcoming-events list
+    sorted by the entity's date field. A real month-grid view comes in
+    Stage 6 codegen.
+    """
+    label_plural = table.plural_label or table.name
+    base = _pascal(table.name)
+    slug = _kebab(table.name)
+    # Pick the date-flavoured field for sorting.
+    date_field_name = "created_at"
+    _CALENDAR_FIELD_HINTS = (
+        "scheduled_at", "start_date", "start_time", "due_date", "due_at",
+        "appointment_at", "booked_at", "event_date", "event_at",
+        "starts_at", "begins_at", "showing_at", "delivery_date",
+    )
+    for f in (table.fields or []):
+        ftype = (f.type or "").lower()
+        if ftype not in ("date", "datetime"):
+            continue
+        name_l = (f.name or "").lower()
+        if any(hint in name_l for hint in _CALENDAR_FIELD_HINTS):
+            date_field_name = f.name
+            break
+    return (
+        '/* AUTO-GENERATED - Lucid AI admin pipeline. */\n'
+        'import { useEffect, useState } from "react";\n'
+        'import { Link } from "react-router-dom";\n'
+        'import { AuthGuard } from "@/components/AuthGuard.jsx";\n'
+        'import { listCollection } from "@/lib/db_admin.js";\n'
+        '\n'
+        f'export default function {base}CalendarPage() {{\n'
+        '  const [rows, setRows] = useState([]);\n'
+        '  const [loading, setLoading] = useState(true);\n'
+        '\n'
+        '  useEffect(() => {\n'
+        '    let cancelled = false;\n'
+        f'    listCollection("{table.name}").then((data) => {{\n'
+        '      if (!cancelled) {\n'
+        '        setRows(Array.isArray(data) ? data : []);\n'
+        '        setLoading(false);\n'
+        '      }\n'
+        '    });\n'
+        '    return () => { cancelled = true; };\n'
+        '  }, []);\n'
+        '\n'
+        f'  const DATE_FIELD = "{date_field_name}";\n'
+        '  const sorted = [...rows].filter((r) => r?.[DATE_FIELD]).sort(\n'
+        '    (a, b) => new Date(a[DATE_FIELD]) - new Date(b[DATE_FIELD]),\n'
+        '  );\n'
+        '\n'
+        '  return (\n'
+        '    <AuthGuard>\n'
+        '      <div className="mb-6 flex items-center justify-between">\n'
+        f'        <h1 className="text-2xl font-bold">{label_plural} Calendar</h1>\n'
+        f'        <Link to="/{slug}" className="rounded border border-border bg-card px-3 py-1.5 text-sm hover:bg-muted">List view</Link>\n'
+        '      </div>\n'
+        '      {loading ? (\n'
+        '        <div className="h-48 animate-pulse rounded-md bg-muted" />\n'
+        '      ) : (\n'
+        '        <div className="rounded-lg border border-border bg-card">\n'
+        '          {sorted.length === 0 ? (\n'
+        '            <div className="p-8 text-center text-sm text-muted-foreground">\n'
+        f'              No upcoming {label_plural.lower()} yet.\n'
+        '            </div>\n'
+        '          ) : (\n'
+        '            <ul className="divide-y divide-border">\n'
+        '              {sorted.map((row) => (\n'
+        f'                <li key={{row.id}} className="flex items-center justify-between gap-4 p-4 hover:bg-muted/40">\n'
+        '                  <div>\n'
+        '                    <div className="font-medium">{row.name || row.title || row.first_name || `#${row.id}`}</div>\n'
+        '                    <div className="text-sm text-muted-foreground">\n'
+        '                      {new Date(row[DATE_FIELD]).toLocaleString()}\n'
+        '                    </div>\n'
+        '                  </div>\n'
+        f'                  <Link to={{`/{slug}/${{row.id}}`}} className="text-sm text-primary hover:underline">Open</Link>\n'
+        '                </li>\n'
+        '              ))}\n'
+        '            </ul>\n'
+        '          )}\n'
+        '        </div>\n'
+        '      )}\n'
+        '    </AuthGuard>\n'
+        '  );\n'
+        '}\n'
+    )
+
+
 def _stub_list_page(table: TableDefinition, seed_count: int) -> str:
     label = table.plural_label or table.name
     singular = table.singular_label or table.name
@@ -1086,6 +1403,88 @@ def _stub_edit_page(table: TableDefinition) -> str:
     )
 
 
+# -- Template cleanup -------------------------------------------------------
+# The react-admin template ships with a pre-built `users` feature, a
+# router, providers (react-query), services / store / api / i18n /
+# zustand wiring, and template UI primitives that import @radix-ui +
+# class-variance-authority. V2 doesn't use any of that — its codegen
+# is self-contained (raw Tailwind, no Radix, no react-query, no zustand).
+#
+# If we don't strip these paths first, V2's package.json (which only
+# pins clsx + tailwind-merge + lucide-react + react-router-dom + supabase
+# + react-hook-form) overwrites the template's rich one, but the
+# template's UI files remain on disk and try to import @radix-ui/* etc.
+# Either the build breaks (unresolved imports) or the dead code bloats
+# the bundle. Both are bad for a customer demo.
+#
+# This list is V2-specific. Update only when V2's foundation builder /
+# admin_codegen prompts start using more of the template surface.
+_TEMPLATE_PATHS_TO_STRIP: tuple[str, ...] = (
+    # Pre-built feature folders — replaced per-entity by V2's Stage 6
+    "src/features",
+    # Routing — V2 inlines all Routes in src/App.jsx
+    "src/router",
+    # Pre-built pages — V2 writes flat src/pages/{Login,Dashboard,…}.jsx
+    "src/pages/auth",
+    "src/pages/dashboard",
+    "src/pages/NotFoundPage.jsx",
+    # Old layout components — V2 writes flat src/components/Layout.jsx
+    "src/components/layout",
+    # Template UI primitives (Button/Input/Dialog/Select/etc.) —
+    # V2 doesn't import @/components/ui anywhere; the codegen prompts
+    # explicitly say "use Tailwind classes only, no shadcn primitives"
+    "src/components/ui",
+    # Services / store / api / i18n / providers / constants —
+    # V2 doesn't reference any of these
+    "src/services",
+    "src/store",
+    "src/api",
+    "src/i18n",
+    "src/providers",
+    "src/constants",
+    # Template-baked nav + icon configs — V2's Layout bakes nav inline
+    "src/config/navigation.js",
+    "src/config/icons.js",
+    # Template's separate styles dir — V2 writes src/index.css
+    "src/styles",
+)
+
+
+def _strip_template_defaults(workspace_path: str) -> list[str]:
+    """Remove template-provided files V2 doesn't need so the cloned
+    template doesn't leak dead code (or break the build with unresolved
+    @radix-ui imports) into the generated admin.
+
+    Idempotent: missing paths are skipped silently. Returns the list of
+    paths actually removed so the caller can log.
+    """
+    import shutil
+
+    removed: list[str] = []
+    for rel in _TEMPLATE_PATHS_TO_STRIP:
+        full = os.path.join(workspace_path, rel)
+        try:
+            if os.path.isdir(full):
+                shutil.rmtree(full)
+                removed.append(rel + "/")
+            elif os.path.isfile(full):
+                os.remove(full)
+                removed.append(rel)
+        except OSError as exc:
+            # Non-fatal — log and continue. Worst case is dead code left
+            # behind, which we already had before this function existed.
+            logger.warning(
+                "admin_foundation_builder: failed to strip %s — %s",
+                rel, exc,
+            )
+    if removed:
+        logger.info(
+            "admin_foundation_builder: stripped %d template path(s): %s",
+            len(removed), removed,
+        )
+    return removed
+
+
 # -- Main entry -------------------------------------------------------------
 
 def build_admin_foundation(
@@ -1100,6 +1499,9 @@ def build_admin_foundation(
     seed_counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Write every foundation file for the React/Vite admin project."""
+    # Strip the template's pre-built defaults FIRST so the clean slate
+    # matches what V2 writes. See `_TEMPLATE_PATHS_TO_STRIP` for the why.
+    _stripped = _strip_template_defaults(workspace_path)
     branding = admin_plan.get("branding") or {}
     brand_name = branding.get("brand_name") or "Admin"
     primary_color = branding.get("primary_color") or "#0f172a"
@@ -1161,6 +1563,10 @@ def build_admin_foundation(
 
     files["src/pages/Login.jsx"] = _build_login_page(brand_name)
     files["src/pages/Dashboard.jsx"] = _build_dashboard_page(data_model)
+    files["src/pages/Settings.jsx"] = _build_settings_page(brand_name)
+    files["src/pages/Profile.jsx"] = _build_profile_page()
+
+    from app.services.admin_plan import _detect_entity_views
 
     tables_with_seed_data: list[str] = []
     tables_empty: list[str] = []
@@ -1174,6 +1580,15 @@ def build_admin_foundation(
         files[f"src/pages/{base}List.jsx"] = _stub_list_page(table, count)
         files[f"src/pages/{base}Create.jsx"] = _stub_create_page(table)
         files[f"src/pages/{base}Edit.jsx"] = _stub_edit_page(table)
+        # Field-shape-driven extra views. Each placeholder is a fully
+        # functional read-only surface so users can navigate to it
+        # immediately; Stage 6 codegen (when ADMIN_CODEGEN_MOCK=false)
+        # replaces with richer drag/drop kanban + month-grid calendar.
+        extras = _detect_entity_views(table)
+        if "kanban" in extras:
+            files[f"src/pages/{base}Kanban.jsx"] = _stub_kanban_page(table)
+        if "calendar" in extras:
+            files[f"src/pages/{base}Calendar.jsx"] = _stub_calendar_page(table)
 
     written: list[str] = []
     for rel_path, content in files.items():

@@ -1665,7 +1665,7 @@ async def websocket_agent(websocket: WebSocket):
                 _clarify_question = await check_prompt_clarity(
                     task=task,
                     already_clarified=_existing_clarify,
-                    timeout_s=12.0,
+                    timeout_s=22.0,
                 )
 
             # If AI clarity check passed (or skipped), fall back to keyword detector

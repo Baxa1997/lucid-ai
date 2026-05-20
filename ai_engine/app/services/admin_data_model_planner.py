@@ -111,15 +111,167 @@ COMMON ADMIN DOMAINS AND THEIR ENTITIES:
 """
 
 
-def _build_user_prompt(intent: dict, purpose_data: dict) -> str:
+# Hard ceiling — protects against runaway entities (each table costs
+# 3 CRUD pages + foundation files + seed rows + Stage 4.6 DDL). Even
+# the largest realistic admin (Salesforce/Hubspot enterprise) tops
+# out around 15-20 entities BEFORE multi-product splits.
+_HARD_MAX_ENTITIES = 20
+
+
+def _compute_entity_range(
+    intent: dict | None,
+    purpose_data: dict | None,
+) -> tuple[int, int]:
+    """Return (min_entities, max_entities) keyed off business_category.
+
+    Sizing principle: simple internal tools (e.g. fitness tracker) need
+    3-5 entities; heavy CRMs/ERPs/marketplaces need 8-15. The website
+    pipeline uses the same shape (_compute_page_range) for archetype-
+    driven sizing — admin gets a parallel implementation.
+
+    Hard ceiling _HARD_MAX_ENTITIES (20) is enforced upstream by the
+    Pydantic validator + downstream DDL/seed cost.
+    """
+    category = (intent or {}).get("business_category", "").strip().lower()
+    subcategory = (intent or {}).get("business_subcategory", "").strip().lower()
+    purpose = ((purpose_data or {}).get("primary_purpose") or "").strip().lower()
+
+    # CRM / sales pipeline / ERP — heavy entity counts
+    if (
+        "crm" in category or "crm" in subcategory or "crm" in purpose
+        or "erp" in category or "erp" in subcategory
+        or "sales" in category or "marketing" in subcategory
+    ):
+        return (6, 12)
+
+    # Marketplace / multi-sided platform
+    if "marketplace" in category or "marketplace" in subcategory:
+        return (7, 14)
+
+    # Logistics / TMS / dispatch / fleet — operations admins
+    if (
+        "logistics" in category or "transport" in category
+        or "dispatch" in subcategory or "fleet" in subcategory
+        or "tms" in subcategory
+    ):
+        return (6, 12)
+
+    # E-commerce admin
+    if "ecommerce" in category or "e-commerce" in category or "retail" in category:
+        return (5, 10)
+
+    # Healthcare / clinic / hospital management
+    if "health" in category or "clinic" in subcategory or "hospital" in subcategory:
+        return (5, 11)
+
+    # Education / LMS
+    if "education" in category or "school" in subcategory or "lms" in subcategory:
+        return (5, 10)
+
+    # Real estate
+    if "real_estate" in category or "real estate" in category or "property" in subcategory:
+        return (5, 10)
+
+    # SaaS dashboard / multi-tenant ops
+    if "saas" in category or "saas" in subcategory:
+        return (5, 11)
+
+    # Default: simple internal tool / single-purpose admin
+    return (3, 6)
+
+
+def _format_research_for_planner(admin_research: dict | None) -> str:
+    """Extract entity-relevant blocks from research markdown.
+
+    Pulls CORE_ENTITIES, ENTITY_FIELDS, STATUS_ENUMS, RELATIONSHIPS,
+    and INDUSTRY_TERMINOLOGY from entity_research. Caps at ~3000 chars
+    to keep the planner prompt manageable.
+
+    Returns "" when no research is available — caller stitches the
+    block inline so an empty value just collapses cleanly.
+    """
+    if not admin_research:
+        return ""
+
+    entity_md = admin_research.get("entity_research") or ""
+    if not entity_md.strip():
+        return ""
+
+    wanted_blocks = (
+        "CORE_ENTITIES",
+        "ENTITY_FIELDS",
+        "STATUS_ENUMS",
+        "RELATIONSHIPS",
+        "INDUSTRY_TERMINOLOGY",
+    )
+    parts: list[str] = []
+    for header in wanted_blocks:
+        body = _extract_md_block(entity_md, header)
+        if body:
+            parts.append(f"=== {header} ===\n{body}")
+
+    if not parts:
+        return ""
+
+    blob = "\n\n".join(parts)
+    if len(blob) > 3000:
+        blob = blob[:3000] + "\n…(truncated)"
+
+    return (
+        "\nGROUNDED RESEARCH (real industry data — use to refine entity "
+        "choices, field names, and status enum values; the user's prompt "
+        "still wins on what they specifically asked for):\n"
+        f"{blob}\n"
+    )
+
+
+def _extract_md_block(markdown: str, header: str) -> str:
+    """Pull text between ``===HEADER===`` and the next ``===`` marker."""
+    if not markdown or not header:
+        return ""
+    needle = f"==={header}==="
+    idx = markdown.find(needle)
+    if idx < 0:
+        return ""
+    start = idx + len(needle)
+    next_idx = markdown.find("===", start + 3)
+    end = next_idx if next_idx > 0 else len(markdown)
+    return markdown[start:end].strip()
+
+
+def _build_user_prompt(
+    intent: dict,
+    purpose_data: dict,
+    admin_research: dict | None = None,
+) -> str:
     """Render the per-project prompt with the user's actual description
-    and the upstream classifier signals inlined."""
+    and the upstream classifier signals inlined.
+
+    When `admin_research` is provided (the dict from
+    `run_admin_entity_research`), the relevant blocks — CORE_ENTITIES,
+    ENTITY_FIELDS, STATUS_ENUMS, RELATIONSHIPS, INDUSTRY_TERMINOLOGY —
+    are injected so the planner can ground entity discovery in real
+    industry vocab + actual status workflows instead of generic
+    "customer/order/product" defaults.
+
+    Entity-count range is computed dynamically from business_category
+    (`_compute_entity_range`) so a CRM picks 6-12 entities while a
+    simple internal tool picks 3-6. The old hardcoded "3-6" cap is gone.
+    """
     original_prompt  = intent.get("original_prompt") or ""
     category         = intent.get("business_category") or "?"
     subcategory      = intent.get("business_subcategory") or "?"
     industry         = (purpose_data.get("industry")
                         or intent.get("business_category") or "?")
     primary_purpose  = purpose_data.get("primary_purpose") or "operational"
+
+    min_ent, max_ent = _compute_entity_range(intent, purpose_data)
+    logger.info(
+        "admin_data_model_planner: entity range %d-%d (category=%r subcategory=%r)",
+        min_ent, max_ent, category, subcategory,
+    )
+
+    research_block = _format_research_for_planner(admin_research)
 
     return f"""\
 Design the database for this internal admin tool.
@@ -132,7 +284,7 @@ BUSINESS CONTEXT:
 - Subcategory: {subcategory}
 - Industry: {industry}
 - Tool purpose: {primary_purpose}
-
+{research_block}
 What entities does the user need to MANAGE in this tool?
 
 For each entity, identify the fields that the admin user will
@@ -164,7 +316,10 @@ CRITICAL OUTPUT RULES:
 - Singletons section should be empty {{}} unless there's a system-level
   config like a logo URL
 - For relationships, use *_slug fields (no foreign keys in v1)
-- Most admin tools have 3-6 entities — don't artificially expand
+- Pick {min_ent}-{max_ent} entities for THIS category — go higher only if the
+  domain genuinely needs it (CRM/ERP/marketplace = many entities;
+  simple internal tools = few). Don't artificially pad with generic
+  tables (audit_log, settings, notifications) unless the prompt asks.
 
 Return ONLY this JSON structure:
 {{
@@ -211,6 +366,7 @@ async def plan_admin_data_model(
     parent_data_model: Optional[DataModel] = None,
     project_id: str = "",
     model_variant: Literal["flash", "pro", "flash-3", "pro-3.1"] = "pro-3.1",
+    admin_research: Optional[dict] = None,
 ) -> DataModel:
     """Return a validated `DataModel` optimised for admin/CRUD use.
 
@@ -255,8 +411,15 @@ async def plan_admin_data_model(
         model_variant,
     )
 
-    user_prompt = _build_user_prompt(intent, purpose_data)
+    user_prompt = _build_user_prompt(intent, purpose_data, admin_research)
     full_prompt = _SYSTEM_PROMPT + "\n\n" + user_prompt
+    if admin_research and admin_research.get("entity_research"):
+        logger.info(
+            "admin_data_model_planner: prompt enriched with research "
+            "(entity=%d chars, sources=%d)",
+            len(admin_research["entity_research"]),
+            admin_research.get("entity_sources", 0),
+        )
 
     model = await _call_gemini_with_validation(
         prompt=full_prompt,

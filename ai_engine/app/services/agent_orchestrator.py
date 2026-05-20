@@ -374,16 +374,42 @@ class AgentOrchestrator:
 
         # ── 6. Completion path ─────────────────────────────────────
         workspace_path: str | None = None
+        pipeline_error: Exception | None = None
         try:
             workspace_path = pipeline_task.result()
             if workspace_path and session:
                 session.workspace_dir = workspace_path
-        except Exception:
-            pass
+        except Exception as exc:
+            pipeline_error = exc
+            logger.warning(
+                "Pipeline task raised — suppressing completion summary: %s",
+                exc,
+            )
 
         # Re-hydrate after completion — wizard pipeline creates the repo in
         # Phase 7, so session.repo_url may now be set for the first time.
         await self._hydrate_repo_url(session, pipeline_user, chat_session_id, user_jwt)
+
+        # If the pipeline raised (Anthropic credits depleted, network failure,
+        # etc.), the error event has already been emitted from
+        # project_generator.call_claude_for_json. Don't follow it with a
+        # "Task completed" + Changed files block — the file list is from
+        # earlier successful steps, not from the failed codegen, and showing
+        # both is confusing ("Why does it say completed if it errored?").
+        if pipeline_error is not None:
+            await ws_transition(
+                session, websocket, WorkspaceState.READY,
+                "Ready for next instruction.",
+            )
+            try:
+                await websocket.send_json({
+                    "type": "status",
+                    "status": "ready",
+                    "message": "Ready for next instruction.",
+                })
+            except Exception:
+                pass
+            return TaskResult(stopped=False, summary="", workspace_path=workspace_path)
 
         summary = await self._send_completion(
             session=session,

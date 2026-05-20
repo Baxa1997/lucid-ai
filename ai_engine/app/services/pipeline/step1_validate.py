@@ -43,9 +43,13 @@ def _looks_like_garbage(raw: str) -> str:
         # consonant-mashing like "dfgdfgdfg" or "qwrtqwrt".
         if vowels / len(letters) < 0.15:
             return "Description doesn't look like a real sentence. Please describe your project in plain words."
-    # Need at least 3 distinct ≥3-char tokens — a real prompt has multiple words.
+    # Need at least 2 distinct ≥3-char tokens — short business descriptors like
+    # "kino website", "yoga studio", "coffee shop" are legitimate intent and
+    # should pass. Pure single-word inputs ("website", "app") still fail since
+    # they carry no domain signal. The other heuristics above (length, vowel
+    # ratio, repeated-cluster) catch the real garbage cases.
     tokens = {t for t in re.findall(r"[a-z]{3,}", text)}
-    if len(tokens) < 3:
+    if len(tokens) < 2:
         return "Please describe your project in a few words — e.g. 'modern coffee shop landing page' or 'fitness coach portfolio'."
     return ""
 
@@ -120,12 +124,49 @@ async def validate_inputs(
             _description = _hdr("description")  # e.g. "netflix style blog"
             _backend     = _hdr("backend")      # e.g. "none"
 
-            _garbage_reason = _looks_like_garbage(_description)
-            if _garbage_reason:
-                logger.info("validate_inputs: rejecting garbage wizard description %r — %s",
-                            _description[:80], _garbage_reason)
-                await websocket.send_json({"type": "error", "message": f"❌ {_garbage_reason}"})
-                return None
+            # If the user has already answered clarifying questions
+            # ([LUCID_CLARIFY::…] markers prepended in ws.py), they have
+            # engaged with the system meaningfully — don't reject them now
+            # based on a short description like "acca website". The Q&A
+            # itself proved the input is real intent, not keyboard mashing.
+            _already_clarified = "[LUCID_CLARIFY::" in _task_str
+            if not _already_clarified:
+                _garbage_reason = _looks_like_garbage(_description)
+                if _garbage_reason:
+                    logger.info("validate_inputs: rejecting garbage wizard description %r — %s",
+                                _description[:80], _garbage_reason)
+                    await websocket.send_json({"type": "error", "message": f"❌ {_garbage_reason}"})
+                    return None
+
+            # ── Smart stack resolution when user picked "Choose for me" ─────
+            # The wizard sends `stack=auto` for "Choose for me" (or sometimes
+            # an empty stack). _TEMPLATE_REGISTRY only knows concrete stacks
+            # (nextjs, react, vue), so without resolution the registry lookup
+            # misses → no clone URL → fallback to local skeleton + a warning
+            # in the chat. To make this smart, classify the description into
+            # nextjs | react | vue BEFORE the registry lookup.
+            #
+            # Two-tier classifier (see quick_stack_classifier.py):
+            #   • Layer 1: keyword pre-filter (zero LLM cost, ~µs)
+            #   • Layer 2: Gemini Flash structured output (~$0.001, ~1-2s)
+            # Both fail-soft to "nextjs" so this step can never block.
+            if _stack.lower() in ("", "auto"):
+                from app.services.quick_stack_classifier import classify_stack
+                _resolved_stack = await classify_stack(_description, timeout_s=8.0)
+                logger.info(
+                    "NEW_PROJECT_MODE: stack=%r resolved via classifier → %r",
+                    _stack or "auto", _resolved_stack,
+                )
+                # Inform the user that we picked a stack for them
+                try:
+                    _STACK_LABELS = {"nextjs": "Next.js", "react": "React + Vite", "vue": "Vue.js"}
+                    await websocket.send_json({
+                        "type": "progress",
+                        "message": f"🎯 Auto-selected stack: {_STACK_LABELS.get(_resolved_stack, _resolved_stack)}",
+                    })
+                except Exception:
+                    pass
+                _stack = _resolved_stack
 
             # ── Resolve which template repo to clone (backend registry) ────
             # We NO LONGER depend on clone_url from the frontend.

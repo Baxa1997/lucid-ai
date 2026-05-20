@@ -170,12 +170,23 @@ function PlanBubble({ msg }) {
   const { planData, fileWrites = [] } = msg;
   if (!planData) return null;
 
-  const pages       = planData.pages    || [];
-  const entities    = planData.entities || [];
-  const description = planData.description || '';
+  const pages        = planData.pages    || [];
+  const pagesNested  = planData.pages_nested || [];
+  const entities     = planData.entities || [];
+  const description  = planData.description || '';
   // legacy fallbacks
   const legacyFeatures   = planData.features    || [];
   const legacyComponents = planData.components  || [];
+
+  // Label rule: when we have a nested page→sections breakdown OR the
+  // flat pages clearly carry routes, this is a multi-page plan → "Pages".
+  // Single-page landings emit flat sections-disguised-as-pages without
+  // routes → "Sections". `entities` is no longer the deciding signal.
+  const flatHasRoutes = pages.some(
+    (p) => typeof p === 'object' && (p.route || p.path),
+  );
+  const isMultiPage = pagesNested.length > 0 || flatHasRoutes;
+  const groupLabel = isMultiPage ? 'Pages' : 'Sections';
 
   // Confirmation state — only for new (non-history) plan messages
   const requiresConfirmation = planData.requiresConfirmation && !msg.fromHistory;
@@ -225,11 +236,57 @@ function PlanBubble({ msg }) {
               </div>
             )}
 
-            {/* Pages / Sections */}
-            {(pages.length > 0 || legacyFeatures.length > 0) && (
+            {/* Pages / Sections — nested when available, flat fallback otherwise */}
+            {pagesNested.length > 0 ? (
               <div>
                 <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1.5">
-                  {entities.length > 0 ? 'Pages' : 'Sections'}
+                  {groupLabel}
+                </p>
+                <div className="space-y-2.5">
+                  {pagesNested.map((page, pi) => (
+                    <div key={pi}>
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-[13px] font-semibold text-slate-800 dark:text-slate-100">
+                          {page.name}
+                        </span>
+                        {page.route && (
+                          <span className="text-[11px] font-mono text-slate-400 dark:text-slate-500">
+                            {page.route}
+                          </span>
+                        )}
+                      </div>
+                      {page.purpose && (
+                        <p className="text-[12px] text-slate-500 dark:text-slate-400 mt-0.5">
+                          {page.purpose}
+                        </p>
+                      )}
+                      {(page.sections || []).length > 0 && (
+                        <div className="ml-3 mt-1 space-y-0.5 border-l border-slate-100 dark:border-[#2d333b] pl-3">
+                          {(page.sections || []).map((s, si) => (
+                            <div key={si} className="flex items-start gap-2">
+                              <span className="text-slate-300 dark:text-slate-600 text-[12px] mt-0.5 shrink-0">·</span>
+                              <span className="text-[12.5px] leading-snug">
+                                <span className="font-medium text-slate-700 dark:text-slate-200">
+                                  {(s.type || 'section').replace(/_/g, ' ')}
+                                </span>
+                                {s.headline && (
+                                  <span className="text-slate-500 dark:text-slate-400">
+                                    {' '}— {s.headline}
+                                  </span>
+                                )}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (pages.length > 0 || legacyFeatures.length > 0) && (
+              <div>
+                <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1.5">
+                  {groupLabel}
                 </p>
                 <div className="space-y-1">
                   {(pages.length > 0 ? pages : legacyFeatures.map(f => ({ name: f, desc: '' }))).map((p, i) => (

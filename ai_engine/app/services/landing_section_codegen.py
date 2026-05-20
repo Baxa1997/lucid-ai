@@ -821,6 +821,26 @@ MANDATORY RULES
     Same rule for `.map()` callbacks: `items.map(x => <><Title/><Body/></>)` not
     `items.map(x => <Title/> <Body/>)`. The outer element of a map iteration must carry
     `key={{...}}` — fragments accept it via `<Fragment key={{...}}>` or a wrapping <div>.
+14. CARD GRIDS MUST WRAP — NEVER COMPRESS CARDS INTO A SINGLE NON-WRAPPING ROW.
+    Cards squeezed below their natural content width get clipped letters ("V T" instead of
+    "Walking Tours"). To prevent this:
+      • PREFER CSS Grid with explicit responsive breakpoints:
+        `grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6`
+        — guarantees cards wrap to new rows at every viewport size.
+      • OR use auto-fit for truly fluid grids:
+        `grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-6`
+        — each card is AT LEAST 240px wide, expands to fill, wraps when needed.
+      • IF you use flex for cards, you MUST add `flex-wrap` AND `min-w-[200px]` on each card.
+        Never `flex` without `flex-wrap` for card collections.
+      • NEVER apply `overflow-hidden` to the CARD TEXT CONTAINER (the div holding title +
+        description). Overflow-hidden is allowed ONLY on image containers and decorative blobs.
+      • NEVER apply `whitespace-nowrap` to card titles or descriptions — let multi-word titles
+        wrap to 2 lines instead of getting clipped.
+      • NEVER apply a fixed `w-24` / `w-32` / `w-40` / `w-48` to cards unless the design
+        signature is icon-only chips (single ≤2-word label). Real cards (title + description
+        + icon) need at least `w-full` inside a grid cell OR `min-w-[200px]` in a flex row.
+      • For intentional text truncation (long descriptions in a fixed-height card), use
+        `line-clamp-2` or `line-clamp-3` on the description block ONLY — never on the title.
 
 ANIMATION (REQUIRED — every section MUST animate on scroll)
   • Import the Reveal component:  `import Reveal from "@/components/ui/Reveal";`

@@ -33,6 +33,12 @@ const CREDIT_PACK_PRICES = {
  */
 export async function POST(req) {
   try {
+  if (!process.env.STRIPE_SECRET_KEY) {
+    return NextResponse.json(
+      { error: 'Billing is not configured for this deployment. Missing STRIPE_SECRET_KEY env var.' },
+      { status: 503 }
+    );
+  }
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
   const authResult = await requireAuth();
   if (!authResult.ok) return authResult.response;

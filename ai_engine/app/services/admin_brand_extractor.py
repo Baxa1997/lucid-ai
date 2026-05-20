@@ -69,20 +69,70 @@ gets 1-3 words max except primary_color which is a hex code.
 """
 
 
+def _extract_visual_context(admin_research: dict[str, Any] | None) -> str:
+    """Pull the visually-relevant slices out of admin research markdown.
+
+    Returns at most ~1500 chars of context — enough to anchor the
+    extractor's decisions without flooding the small Flash call. We
+    look for the VISUAL_REFERENCES section (operations research) and
+    INDUSTRY_TERMINOLOGY (entity research) since those two influence
+    palette vibe and typography voice respectively.
+    """
+    if not admin_research:
+        return ""
+
+    parts: list[str] = []
+    operations = admin_research.get("operations_research") or ""
+    entity = admin_research.get("entity_research") or ""
+
+    refs = _extract_block(operations, "VISUAL_REFERENCES")
+    if refs:
+        parts.append("VISUAL_REFERENCES (real admin products in this space):\n" + refs)
+
+    terms = _extract_block(entity, "INDUSTRY_TERMINOLOGY")
+    if terms:
+        parts.append("INDUSTRY_TERMINOLOGY (domain voice):\n" + terms)
+
+    return "\n\n".join(parts)[:1500]
+
+
+def _extract_block(markdown: str, header: str) -> str:
+    """Pull text between ``===HEADER===`` and the next ``===`` marker."""
+    if not markdown or not header:
+        return ""
+    needle = f"==={header}==="
+    idx = markdown.find(needle)
+    if idx < 0:
+        return ""
+    start = idx + len(needle)
+    next_idx = markdown.find("===", start + 3)
+    end = next_idx if next_idx > 0 else len(markdown)
+    return markdown[start:end].strip()
+
+
 def _build_user_prompt(
     *,
     brand_name: str,
     industry: str,
     audience: str,
     purpose: str,
+    research_context: str = "",
 ) -> str:
+    research_block = ""
+    if research_context:
+        research_block = (
+            "\n\nREAL-WORLD REFERENCES (from grounded research — use these to "
+            "anchor your visual signals to actual products in this space, not "
+            "generic admin tropes):\n"
+            f"{research_context}\n"
+        )
     return f"""\
 Based on this admin tool's context, extract visual identity signals.
 
 Tool name: {brand_name}
 Industry: {industry}
 Audience: {audience}
-Purpose: {purpose}
+Purpose: {purpose}{research_block}
 
 Return JSON only, with this exact shape:
 {{
@@ -132,6 +182,7 @@ async def extract_admin_brand_signals(
     intent: dict[str, Any],
     purpose_data: dict[str, Any],
     gemini_key: str = "",
+    admin_research: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Light-weight Gemini Flash extraction of brand signals for
     standalone admin generation.
@@ -139,6 +190,12 @@ async def extract_admin_brand_signals(
     Returns a 6-field dict — ``brand_name`` plus the 5 visual signals
     that admin prompts consume. Always returns a valid dict (defaults
     on extractor failure) so callers never need to guard against None.
+
+    When `admin_research` is passed (the dict returned by
+    `run_admin_entity_research`), the prompt is enriched with the
+    VISUAL_REFERENCES block from operations_research so signals are
+    anchored to real admin products in this domain (Salesforce vs
+    Notion vs Linear vs HubSpot) instead of generic "professional".
 
     ~$0.005 per call. For linked admins (parent_project_id set), the
     admin pipeline calls ``pipeline_tenant.resolve_tenant_for_project``
@@ -160,11 +217,18 @@ async def extract_admin_brand_signals(
         or "operations"
     )
 
+    # Pull the VISUAL_REFERENCES + INDUSTRY_TERMINOLOGY blocks from the
+    # research. These map directly to the visual fields the extractor
+    # decides — palette vibe, layout density, motif. Everything else
+    # (entities, KPIs) belongs to the data-model planner and is omitted.
+    research_context = _extract_visual_context(admin_research)
+
     prompt = _SYSTEM_PROMPT + "\n\n" + _build_user_prompt(
         brand_name=brand_name,
         industry=industry,
         audience=audience,
         purpose=purpose,
+        research_context=research_context,
     )
 
     try:

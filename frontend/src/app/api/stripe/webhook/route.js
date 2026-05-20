@@ -130,6 +130,13 @@ async function applyCreditPack(supabase, session) {
 // POST /api/stripe/webhook
 // ─────────────────────────────────────────────────────────
 export async function POST(req) {
+  if (!process.env.STRIPE_SECRET_KEY || !process.env.STRIPE_WEBHOOK_SECRET) {
+    console.error('[stripe/webhook] Missing STRIPE_SECRET_KEY or STRIPE_WEBHOOK_SECRET');
+    return NextResponse.json(
+      { error: 'Webhook not configured' },
+      { status: 503 }
+    );
+  }
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
   const body = await req.text();
   const sig  = req.headers.get('stripe-signature');

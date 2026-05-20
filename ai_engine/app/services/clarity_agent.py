@@ -130,7 +130,7 @@ OR
 async def check_prompt_clarity(
     task: str,
     already_clarified: dict,
-    timeout_s: float = 12.0,
+    timeout_s: float = 22.0,
 ) -> Optional[dict]:
     """Return a question dict if clarification needed, else None.
 
@@ -187,13 +187,18 @@ async def check_prompt_clarity(
     }
 
     try:
+        # gemini-3.1-pro-preview gives noticeably better intent inference on
+        # short / ambiguous prompts ("acca website", "agency") and produces
+        # tighter, more relevant follow-up questions than 2.5-flash. The
+        # latency cost (~1–2s extra) is worth it because clarification is
+        # gated on a real Q&A — happens once at the start of a session.
         raw = await structured_distill(
             prompt,
             timeout_s,
             label="clarity_check",
             response_schema=response_schema,
-            max_tokens=320,
-            model="gemini-2.5-flash",
+            max_tokens=480,
+            model="gemini-3.1-pro-preview",
         )
         result = json.loads(raw) if isinstance(raw, str) else raw
         if not isinstance(result, dict):

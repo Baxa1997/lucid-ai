@@ -4,20 +4,36 @@ consistency.
 Stages:
   0.5  Purpose classification    (Gemini)
   1    Intent analysis           (Gemini)
-  2    Domain research           (Gemini, lighter than website —
-                                  focused on entity discovery)
-  3    Visual DNA / branding     (Gemini Pro, lighter than website)
-  4    Plan: entities + views    (Gemini Flash)
-  4.5  Data model planning       (reuse Phase 2 — same DataModel
-                                  shape works for admin)
-  4.6  Tenant provisioning       (resolve linked OR provision new)
-  4.7  Seed data                 (reuse Phase 2)
-  5    Foundation files          (deterministic — Step 3.5 will fill)
-  6    CRUD codegen              (Claude — Step 3.6 will fill)
-  7    Build verification        (reuse from website)
-
-This module is structurally complete but stages 5-6 are stubs in
-Step 3.3. Stage 5 lands in Step 3.5, Stage 6 in Step 3.6.
+  2    Research                  STUB — admin_entity_research not built;
+                                  planner output is the only entity signal
+  3    Visual DNA / branding     (Gemini Flash via admin_brand_extractor
+                                  for standalone; parent inheritance for
+                                  linked admins)
+  4    Admin plan                (deterministic from data_model:
+                                  3 pages/entity + 3 shared pages,
+                                  navigation built from entity list)
+  4.5  Data model planning       (shared admin_data_model_planner —
+                                  same DataModel shape as website)
+  4.6  Tenant provisioning       (resolve linked OR provision new
+                                  per-project schema + DDL apply)
+  4.7  Seed data                 (Gemini Pro Preview → realistic rows
+                                  for every collection; INSERTed)
+  5    Foundation files          WIRED — calls build_admin_foundation:
+                                  package.json, Vite config, AuthGuard,
+                                  Login, Dashboard, Layout, supabase.js,
+                                  db_admin.js, auth.js, .env.local, README
+  6    CRUD codegen              WIRED — generate_one_admin_page runs
+                                  N×3 (entity × {list, create, edit})
+                                  in parallel under a Semaphore.
+                                  Default ADMIN_CODEGEN_MOCK=true writes
+                                  contract-honoring placeholders (zero
+                                  Anthropic cost); set =false with a live
+                                  ANTHROPIC_API_KEY to run real Claude
+                                  Sonnet 4.6 codegen. Output goes through
+                                  admin_codegen_validator before write.
+  7    Build verification        WIRED — BuildValidator runs a Vite build
+                                  by default in real-codegen mode; mock
+                                  mode skips unless ADMIN_BUILD_VALIDATE=true
 
 Linking model (admin vs website):
   • Standalone admin (parent_project_id NULL) → provisions its own
@@ -26,11 +42,19 @@ Linking model (admin vs website):
     data_model from the parent via `resolve_tenant_for_project`,
     skips Stages 4.5/4.6/4.7 entirely (data already exists).
 
+Feature flag:
+  ADMIN_PIPELINE_V2_ENABLED=true routes admin_dashboard / crm / tms /
+  saas_dashboard archetypes through this pipeline. While off, the
+  caller falls through to legacy admin generation in project_generator.py.
+  Default OFF.
+
 Failure model:
   Returns False on any hard failure so the caller can fall through
   to legacy admin generation. Failures inside Stages 4.6/4.7 are
   non-fatal (matches website_pipeline) — they degrade the generated
-  admin to a placeholder but don't break the pipeline.
+  admin to a placeholder but don't break the pipeline. Stage 6 with
+  mock=false treats validator errors and missing files as fatal;
+  mock=true is always treated as success.
 """
 from __future__ import annotations
 
@@ -106,12 +130,136 @@ async def _phase(websocket: Any, phase: int, title: str, desc: str, status: str)
 
 # ── Stage 3 stub: minimal "visual DNA" for admins ────────────────────
 
+def _build_admin_plan_data(
+    *,
+    brand_name: str,
+    data_model: Any,
+    admin_plan: dict[str, Any],
+    visual_dna: dict[str, Any],
+    admin_research: dict[str, Any] | None,
+    intent: dict[str, Any],
+) -> dict[str, Any]:
+    """Assemble the plan_data dict the frontend's PlanBubble renders.
+
+    Mirrors the shape produced by project_generator._plan_data so the
+    same React component can render both website plans and admin plans
+    without branching. Fields:
+      • intro                 — bold-prefixed brand statement
+      • description           — short summary including research sources
+      • entities              — list of {name, desc, count} per table
+      • pages_nested          — per-entity {name, route, sections} groups
+      • design                — visual_dna summary line
+      • requiresConfirmation  — False for admin (we don't have a gate yet)
+    """
+    category = (intent.get("business_category") or "internal tool").strip()
+    tables = list(getattr(data_model, "tables", None) or [])
+    entity_count = len(tables)
+
+    # Research summary line — mention the sources so the user sees
+    # research actually happened. Falls back gracefully if research
+    # was skipped or returned empty.
+    research_summary = ""
+    if admin_research:
+        e_sources = int(admin_research.get("entity_sources") or 0)
+        o_sources = int(admin_research.get("operations_sources") or 0)
+        if e_sources or o_sources:
+            research_summary = (
+                f" Grounded in {e_sources + o_sources} web sources "
+                f"from real {category} admin tools."
+            )
+
+    plural_entities = ", ".join(
+        (t.plural_label or t.name) for t in tables[:6]
+    ) if tables else "no entities yet"
+    description = (
+        f"A {category} admin dashboard managing **{entity_count}** "
+        f"entit{'y' if entity_count == 1 else 'ies'}: "
+        f"{plural_entities}.{research_summary}"
+    )
+
+    # Entity list — one row per table with field-count hint.
+    entities_list: list[dict[str, str]] = []
+    for t in tables:
+        field_count = len(getattr(t, "fields", None) or [])
+        entities_list.append({
+            "name": t.plural_label or t.name,
+            "desc": (
+                (getattr(t, "description", "") or "").strip()
+                or f"{field_count} fields · CRUD list/create/edit"
+            )[:140],
+        })
+
+    # Pages_nested: group admin_plan pages by their entity. The admin_plan
+    # emits 3 pages per entity (List/New/Edit) plus a Dashboard, Login,
+    # Layout. We render entity groups + a standalone Dashboard group.
+    pages_nested: list[dict[str, Any]] = []
+
+    # Dashboard first
+    pages_nested.append({
+        "name":     "Dashboard",
+        "route":    "/",
+        "purpose":  f"Home overview with KPIs across all {entity_count} entities.",
+        "sections": [
+            {"type": "kpi_cards", "headline": "Top-line metrics"},
+            {"type": "recent_activity", "headline": "Latest changes"},
+        ],
+    })
+
+    # Then one group per entity
+    for t in tables:
+        slug = (t.name or "").replace("_", "-")
+        label_plural = t.plural_label or t.name
+        label_singular = t.singular_label or t.name
+        pages_nested.append({
+            "name":     label_plural,
+            "route":    f"/{slug}",
+            "purpose":  (getattr(t, "description", "") or "").strip()[:200],
+            "sections": [
+                {"type": "list_view",   "headline": f"All {label_plural}",
+                 "details": "Searchable, sortable table with row actions"},
+                {"type": "create_view", "headline": f"New {label_singular}",
+                 "details": "Validated form for adding records"},
+                {"type": "edit_view",   "headline": f"Edit {label_singular}",
+                 "details": "Update an existing row, with delete action"},
+            ],
+        })
+
+    # Design summary line
+    voice = visual_dna.get("typography_voice", "professional")
+    intensity = visual_dna.get("cultural_intensity", "calm")
+    density = visual_dna.get("layout_density", "comfortable")
+    color = visual_dna.get("primary_color", "")
+    design_parts = [f"{voice} voice", f"{intensity} mood", f"{density} density"]
+    if color:
+        design_parts.insert(0, f"primary {color}")
+    design_line = " · ".join(design_parts)
+
+    return {
+        "intro": (
+            f"I'll build **{brand_name}** — a "
+            f"**{category}** admin dashboard. Here's my plan:"
+        ),
+        "description": description,
+        "entities":    entities_list,
+        "pages_nested": pages_nested,
+        # Flat `pages` mirrors pages_nested for downstream code that
+        # only reads the flat shape (history records, older renderers).
+        "pages": [
+            {"name": p["name"], "desc": p.get("purpose") or ""}
+            for p in pages_nested
+        ],
+        "design": design_line,
+        "requiresConfirmation": True,
+    }
+
+
 async def _resolve_admin_visual_dna(
     *,
     intent: dict[str, Any],
     purpose_data: dict[str, Any],
     parent_visual_dna: Optional[dict[str, Any]],
     gemini_key: str,
+    admin_research: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Decide which visual_dna applies to this admin run.
 
@@ -121,7 +269,11 @@ async def _resolve_admin_visual_dna(
     voice, applied to a CRUD shell.
 
     Standalone admin (no parent, or parent has no visual_dna):
-    extract a 6-field signal set via Gemini Flash.
+    extract a 6-field signal set via Gemini Flash. When
+    `admin_research` is provided (output of `run_admin_entity_research`),
+    the extractor uses the VISUAL_REFERENCES + INDUSTRY_TERMINOLOGY
+    blocks to ground signals against real admin products in this
+    space rather than generic "professional" defaults.
 
     Always returns a dict with at minimum brand_name + primary_color.
     On Gemini failure for standalone admins, returns the
@@ -137,13 +289,15 @@ async def _resolve_admin_visual_dna(
         return parent_visual_dna
 
     logger.info(
-        "_resolve_admin_visual_dna: standalone admin — extracting own brand signals",
+        "_resolve_admin_visual_dna: standalone admin — extracting own brand signals (research=%s)",
+        "yes" if (admin_research and admin_research.get("operations_research")) else "no",
     )
     from app.services.admin_brand_extractor import extract_admin_brand_signals
     return await extract_admin_brand_signals(
         intent=intent,
         purpose_data=purpose_data,
         gemini_key=gemini_key,
+        admin_research=admin_research,
     )
 
 
@@ -253,15 +407,75 @@ async def run_admin_pipeline(
         intent.get("brand_personality"),
     )
 
-    # ── Stage 2: Research (LIGHTER than website) ────────────────────
-    # Step 3.3 stub: empty result. Step 3.4 may build an
-    # admin_entity_research.py if entity discovery beyond what the
-    # data_model planner already gives us turns out to matter.
-    logger.warning(
-        "[%s] Admin Stage 2 SKIPPED: reason=step_3_3_stub "
-        "(admin_entity_research not yet implemented — using planner output as the only entity signal)",
-        project_id,
+    # ── Stage 2: Grounded research (entities + operations) ──────────
+    # Two parallel Gemini Pro + google_search calls that produce
+    # industry-grounded signals for downstream stages:
+    #   • entity_research     → vocab + status enums + relationships
+    #                            (consumed by admin_data_model_planner)
+    #   • operations_research → KPIs + workflows + visual references
+    #                            (consumed by admin_brand_extractor +
+    #                             admin_plan dashboard surface)
+    # Cached per-project via pipeline_cache so re-runs are free.
+    # Skippable via ADMIN_RESEARCH_ENABLED=false for cheap dry runs.
+    await _send(websocket, "progress", "Researching your industry…")
+
+    from app.services.admin_entity_research import run_admin_entity_research
+    from app.services.pipeline_cache import pipeline_cache
+
+    admin_research: dict[str, Any] = {
+        "entity_research": "", "operations_research": "",
+        "entity_sources": 0, "operations_sources": 0, "all_urls": [],
+    }
+    research_enabled = (
+        os.environ.get("ADMIN_RESEARCH_ENABLED", "true").strip().lower()
+        in ("1", "true", "yes")
     )
+    if not research_enabled:
+        logger.info(
+            "[%s] Admin Stage 2 SKIPPED: reason=ADMIN_RESEARCH_ENABLED=false",
+            project_id,
+        )
+    else:
+        cached_research = pipeline_cache.get(
+            project_id, "admin_research", intent, purpose_data,
+        )
+        if cached_research is not None:
+            admin_research = cached_research
+            logger.info(
+                "[%s] Admin Stage 2 CACHE HIT: entity=%d chars operations=%d chars",
+                project_id,
+                len(admin_research.get("entity_research") or ""),
+                len(admin_research.get("operations_research") or ""),
+            )
+        else:
+            try:
+                admin_research = await run_admin_entity_research(
+                    intent,
+                    purpose_data=purpose_data,
+                    timeout_s=120.0,
+                    websocket=websocket,
+                )
+                pipeline_cache.set(
+                    project_id, "admin_research", admin_research,
+                    intent, purpose_data,
+                )
+                logger.info(
+                    "[%s] Admin Stage 2 COMPLETE: entity=%d chars (%d sources), "
+                    "operations=%d chars (%d sources)",
+                    project_id,
+                    len(admin_research["entity_research"]),
+                    admin_research["entity_sources"],
+                    len(admin_research["operations_research"]),
+                    admin_research["operations_sources"],
+                )
+            except Exception as exc:
+                # Non-fatal: research is enrichment, not gate. Empty
+                # research means downstream falls back to the original
+                # planner-only behavior.
+                logger.warning(
+                    "[%s] Admin Stage 2 FAILED (non-fatal): %s — continuing without research",
+                    project_id, exc, exc_info=True,
+                )
 
     # ── Linked-admin detection (early) ──────────────────────────────
     # We need to know is_linked BEFORE Stage 3 so that visual_dna can
@@ -336,6 +550,7 @@ async def run_admin_pipeline(
         purpose_data=purpose_data,
         parent_visual_dna=linked_visual_dna,
         gemini_key=gemini_key,
+        admin_research=admin_research,
     )
     logger.info(
         "[%s] Admin Stage 3 COMPLETE: brand=%r primary_color=%s "
@@ -398,6 +613,7 @@ async def run_admin_pipeline(
             gemini_key=gemini_key,
             parent_data_model=linked_data_model,  # None for standalone
             project_id=project_id,
+            admin_research=admin_research,
         )
     except Exception as exc:
         logger.error(
@@ -443,6 +659,152 @@ async def run_admin_pipeline(
         project_id, plan["brand"]["name"],
         len(plan["pages"]), len(plan["navigation"]),
     )
+
+    # ── Stage 4 UI: emit the plan card so the user sees what we'll build ─
+    # Same shape as the website pipeline's plan card — frontend's
+    # PlanBubble renders the same component for both. Best-effort emit;
+    # the confirmation gate below ONLY engages when the emit succeeded.
+    _plan_emitted_ok = False
+    try:
+        plan_data = _build_admin_plan_data(
+            brand_name=visual_dna.get("brand_name", "Admin"),
+            data_model=data_model,
+            admin_plan=plan,
+            visual_dna=visual_dna,
+            admin_research=admin_research,
+            intent=intent,
+        )
+        await websocket.send_json({
+            "type": "chat_message",
+            "role": "agent",
+            "messageType": "plan",
+            "planData": plan_data,
+        })
+        _plan_emitted_ok = True
+        logger.info(
+            "[%s] Admin Stage 4 UI: plan card emitted (entities=%d pages_nested=%d)",
+            project_id, len(plan_data.get("entities", [])),
+            len(plan_data.get("pages_nested", [])),
+        )
+        # Persist so a ws reconnect during the confirmation window can
+        # re-emit the same envelope — mirrors website pipeline behavior.
+        try:
+            from app.services.project_generator import save_persisted_plan
+            await save_persisted_plan(project_id, plan_data, task=description)
+        except Exception as _persist_exc:
+            logger.warning(
+                "[%s] Admin Stage 4 UI: plan persist failed (non-fatal) — %s",
+                project_id, _persist_exc,
+            )
+    except Exception as _plan_emit_exc:
+        logger.warning(
+            "[%s] Admin Stage 4 UI: plan card emit failed (non-fatal) — %s",
+            project_id, _plan_emit_exc, exc_info=True,
+        )
+
+    # ── Stage 4 Gate: wait for user to confirm or reject the plan ──
+    # Mirrors project_generator's pattern. Uses the same confirmation
+    # registry so ws.py routes the user's button click here. Gate runs
+    # ONLY when the plan card actually went out — otherwise we'd block
+    # forever on a future the user can never resolve.
+    if _plan_emitted_ok:
+        from app.services.project_generator import (
+            _confirmation_key,
+            register_plan_confirmation,
+            clear_persisted_plan,
+            PLAN_CONFIRM_TIMEOUT_SECONDS,
+            pending_plan_confirmations,
+        )
+
+        _gate_key = _confirmation_key(websocket, project_id)
+        try:
+            await websocket.send_json({
+                "type": "plan_awaiting_confirmation",
+                "message": "Review your plan above and click 'Looks Good' to start building.",
+            })
+        except Exception as _await_send_err:
+            logger.warning(
+                "[%s] Admin Stage 4 Gate: plan_awaiting_confirmation send failed — %s",
+                project_id, _await_send_err,
+            )
+
+        _plan_future = register_plan_confirmation(_gate_key)
+        try:
+            _confirmation = await asyncio.wait_for(
+                _plan_future, timeout=PLAN_CONFIRM_TIMEOUT_SECONDS,
+            )
+            if not _confirmation.get("confirmed", True):
+                _correction = _confirmation.get("correction", "")
+                if _correction:
+                    await _send(
+                        websocket, "progress",
+                        f"🔄 Got it — adjusting: {_correction[:60]}…",
+                    )
+                    logger.info(
+                        "[%s] Admin plan rejected — correction=%r",
+                        project_id, _correction[:120],
+                    )
+                    try:
+                        setattr(websocket, "_plan_correction", _correction)
+                    except Exception:
+                        pass
+                    await clear_persisted_plan(project_id)
+                    return False
+                logger.info(
+                    "[%s] Admin plan rejected without correction — aborting",
+                    project_id,
+                )
+                await _send(
+                    websocket, "warning",
+                    "❌ Plan rejected — generation aborted.",
+                )
+                await clear_persisted_plan(project_id)
+                return False
+            logger.info(
+                "[%s] Admin plan confirmed by user — proceeding to provisioning",
+                project_id,
+            )
+            await _send(
+                websocket, "progress",
+                "✅ Plan confirmed — building your dashboard…",
+            )
+            await clear_persisted_plan(project_id)
+        except asyncio.TimeoutError:
+            logger.info(
+                "[%s] Admin plan confirmation timed out after %ds — aborting",
+                project_id, PLAN_CONFIRM_TIMEOUT_SECONDS,
+            )
+            pending_plan_confirmations.pop(_gate_key, None)
+            await clear_persisted_plan(project_id)
+            try:
+                await _send(
+                    websocket, "warning",
+                    "⏱️ Plan expired after 30 minutes — send your message again "
+                    "to rebuild (research is cached, so it'll be quick).",
+                )
+            except Exception:
+                pass
+            return False
+        except Exception as _conf_err:
+            logger.warning(
+                "[%s] Admin plan confirmation aborted: %s",
+                project_id, _conf_err, exc_info=True,
+            )
+            pending_plan_confirmations.pop(_gate_key, None)
+            await clear_persisted_plan(project_id)
+            try:
+                await _send(
+                    websocket, "warning",
+                    "❌ Plan confirmation failed — generation aborted. Please retry.",
+                )
+            except Exception:
+                pass
+            return False
+    else:
+        logger.warning(
+            "[%s] Admin Stage 4 Gate: skipping — plan was never emitted",
+            project_id,
+        )
 
     # ── Stage 4.6: Tenant provisioning ──────────────────────────────
     # Standalone: provision via Phase 2 helper. Linked: already done

@@ -48,7 +48,16 @@ function PlanReviewPanel({planData, onConfirm, onReject}) {
   const [rejected, setRejected] = useState(false);
 
   const pages = planData?.pages || [];
+  const pagesNested = planData?.pages_nested || [];
   const entities = planData?.entities || [];
+
+  // Multi-page when nested data exists OR flat pages carry routes.
+  // Landing pages emit sections-disguised-as-pages without routes.
+  const flatHasRoutes = pages.some(
+    (p) => typeof p === "object" && (p.route || p.path),
+  );
+  const isMultiPage = pagesNested.length > 0 || flatHasRoutes;
+  const groupLabel = isMultiPage ? "Pages" : "Sections";
 
   const handleConfirm = () => {
     setConfirmed(true);
@@ -147,11 +156,60 @@ function PlanReviewPanel({planData, onConfirm, onReject}) {
           </section>
         )}
 
-        {/* Pages / Sections */}
-        {pages.length > 0 && (
+        {/* Pages / Sections — nested when available, flat fallback otherwise */}
+        {pagesNested.length > 0 ? (
           <section>
             <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-2">
-              {entities.length > 0 ? "Pages" : "Sections"}
+              {groupLabel}
+            </p>
+            <div className="space-y-3">
+              {pagesNested.map((page, pi) => (
+                <div
+                  key={pi}
+                  className="px-3 py-2.5 rounded-lg bg-slate-50 dark:bg-[#161b22] border border-slate-100 dark:border-[#2d333b]">
+                  <div className="flex items-baseline gap-2">
+                    <ArrowRight className="w-3.5 h-3.5 text-orange-400 dark:text-[#dc5426] shrink-0 self-center" />
+                    <span className="text-[13px] font-semibold text-slate-800 dark:text-slate-100">
+                      {page.name}
+                    </span>
+                    {page.route && (
+                      <span className="text-[11px] font-mono text-slate-400 dark:text-slate-500">
+                        {page.route}
+                      </span>
+                    )}
+                  </div>
+                  {page.purpose && (
+                    <p className="ml-5 mt-1 text-[12px] text-slate-500 dark:text-slate-400 leading-snug">
+                      {page.purpose}
+                    </p>
+                  )}
+                  {(page.sections || []).length > 0 && (
+                    <div className="ml-5 mt-2 space-y-0.5 border-l border-slate-200 dark:border-[#2d333b] pl-3">
+                      {(page.sections || []).map((s, si) => (
+                        <div key={si} className="flex items-start gap-2">
+                          <span className="text-slate-300 dark:text-slate-600 text-[12px] mt-0.5 shrink-0">·</span>
+                          <span className="text-[12.5px] leading-snug">
+                            <span className="font-medium text-slate-700 dark:text-slate-200">
+                              {(s.type || "section").replace(/_/g, " ")}
+                            </span>
+                            {s.headline && (
+                              <span className="text-slate-500 dark:text-slate-400">
+                                {" "}— {s.headline}
+                              </span>
+                            )}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : pages.length > 0 && (
+          <section>
+            <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-2">
+              {groupLabel}
             </p>
             <div className="grid grid-cols-1 gap-1.5">
               {pages.map((p, i) => (

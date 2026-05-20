@@ -119,6 +119,22 @@ services:
       - UNSPLASH_ACCESS_KEY=${UNSPLASH_ACCESS_KEY}
       - DEFAULT_MODEL_PROVIDER=${DEFAULT_MODEL_PROVIDER:-google}
       - MAX_ITERATIONS=200
+      # v2 website pipeline — per-page parallel Claude + visual_dna-driven design.
+      # Gates multi-page consumer_website / portfolio / blog / marketplace prompts onto
+      # website_pipeline.py. Off → legacy 3-phase flow (single Claude call, slow + generic).
+      - WEBSITE_PIPELINE_V2_ENABLED=${WEBSITE_PIPELINE_V2_ENABLED:-true}
+      # v2 admin pipeline — React + Vite stack with AuthGuard + Login + Dashboard + per-entity CRUD.
+      # ADMIN_PIPELINE_V2_ENABLED=true routes admin_dashboard / crm / tms / saas_dashboard
+      # prompts through admin_pipeline.py (grounded research + brand extractor + data model
+      # planner + foundation builder + parallel CRUD codegen). Off → legacy Next.js admin.
+      - ADMIN_PIPELINE_V2_ENABLED=${ADMIN_PIPELINE_V2_ENABLED:-true}
+      # Stage 2 grounded research (2 parallel Gemini Pro + search calls). ~$0.10-0.20 / admin.
+      # Set to false for cheap dry runs — research output is enrichment, not gate.
+      - ADMIN_RESEARCH_ENABLED=${ADMIN_RESEARCH_ENABLED:-true}
+      # Stage 6 CRUD codegen — true writes placeholder JSX (no Anthropic), false calls
+      # Claude Sonnet 4.6. Default false now that template-strip + foundation fixes
+      # land — real CRUD per entity (~$1-2 / admin generation).
+      - ADMIN_CODEGEN_MOCK=${ADMIN_CODEGEN_MOCK:-false}
       - SANDBOX_IMAGE=nikolaik/python-nodejs:python3.11-nodejs20
       - SANDBOX_CONTAINER_PREFIX=lucid-sandbox-
       - SANDBOX_MEMORY_LIMIT=2g

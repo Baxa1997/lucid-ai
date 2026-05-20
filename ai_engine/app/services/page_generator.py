@@ -306,6 +306,31 @@ def _build_user_prompt(
     # foundation layer wrote src/lib/db.js for us).
     collections_block = _build_collections_block(data_model)
 
+    # Detail-route hint — set on list pages (detail_template=True) so the
+    # generated list cards link to the deterministically-built detail page
+    # at /<route>/[slug]. Without this, list pages render but clicking
+    # cards goes nowhere.
+    detail_hint_block = ""
+    if page.get("detail_template"):
+        detail_source = (page.get("detail_source") or slug).strip().lower()
+        route_slug_clean = route.lstrip("/")
+        detail_hint_block = (
+            "\n\n══ LIST → DETAIL ROUTE HINT ══\n"
+            "This page is a LIST page paired with a detail route.\n"
+            f"A detail view is already generated at /{route_slug_clean}/[slug].\n"
+            "\n"
+            "RULES for any card/tile/row that represents one item:\n"
+            "  • Wrap it in <Link> from next/link so it navigates into the detail page:\n"
+            f"      <Link href={{`/{route_slug_clean}/${{item.slug || item.id}}`}}>...</Link>\n"
+            "  • Items come from a pre-built JSON data file. Import directly:\n"
+            f"      import items from \"@/data/{detail_source}.json\";\n"
+            "  • Map over `items` to render the list — do NOT hard-code sample\n"
+            "    items inline. Each item has at minimum:\n"
+            "      { id, slug, title, image_url, description, ... }\n"
+            "  • Items in src/data/*.json are the LIST source; per-section\n"
+            "    headers/subtitles still live in the page content JSON.\n"
+        )
+
     content_json_path = f"src/content/pages/{slug}.json"
     content_import_path = f"@/content/pages/{slug}.json"
 
@@ -405,7 +430,7 @@ PAGE PURPOSE
 {page_purpose or '(general page for this route)'}
 
 SECTIONS TO BUILD ({len(section_specs)} total) — generate each as its own .jsx file under {component_pages_dir}/:
-{section_block}{images_block}{collections_block}{content_block}
+{section_block}{images_block}{collections_block}{detail_hint_block}{content_block}
 
 REQUIRED OUTPUT FILES
 1. {page_file}

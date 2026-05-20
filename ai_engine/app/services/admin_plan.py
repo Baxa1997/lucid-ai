@@ -123,13 +123,88 @@ _SHARED_PAGES: list[dict[str, Any]] = [
         "entity":    None,
         "page_name": "Admin Layout",
     },
+    # Account surfaces — every real admin needs these. Accessed via the
+    # user-menu in the layout's top bar, not the entity sidebar.
+    {
+        "route":     "/settings",
+        "page_type": "settings",
+        "entity":    None,
+        "page_name": "Settings",
+    },
+    {
+        "route":     "/profile",
+        "page_type": "profile",
+        "entity":    None,
+        "page_name": "Profile",
+    },
 ]
 
 
+def _detect_entity_views(table: TableDefinition) -> list[str]:
+    """Inspect an entity's fields and return extra view tokens.
+
+    Returns a subset of {"kanban", "calendar"}. The CRUD trio
+    (list/create/edit) is always present; these are ADDITIONAL views
+    that ship when the field shape obviously supports them:
+
+      • kanban   — table has a `status` (or pipeline/stage) field with
+                   enum values. Stage 6 codegen renders a column-per-
+                   status board with draggable cards.
+      • calendar — table has a date/datetime field whose name suggests
+                   scheduling (scheduled_at, start_date, due_date,
+                   appointment_at, etc.). Stage 6 renders a month view.
+
+    Deliberately conservative: false positives ship a useless extra
+    surface, so we require BOTH a field-name match AND the right field
+    type. False negatives just mean the user gets the standard CRUD —
+    no functional break.
+    """
+    fields = getattr(table, "fields", None) or []
+    views: list[str] = []
+
+    # Kanban detection — need a text/enum field whose name screams "status"
+    _KANBAN_FIELD_NAMES = {
+        "status", "stage", "pipeline_stage", "lead_status", "deal_status",
+        "state", "phase", "kind", "step",
+    }
+    for f in fields:
+        name = (f.name or "").lower()
+        ftype = (f.type or "").lower()
+        if name in _KANBAN_FIELD_NAMES and ftype == "text":
+            enum_vals = getattr(f, "enum_values", None) or []
+            # Need at least 2 enum values to make columns meaningful;
+            # without enum_values the field is free-text and kanban
+            # won't render coherently.
+            if len(enum_vals) >= 2:
+                views.append("kanban")
+                break
+
+    # Calendar detection — date/datetime field whose name signals scheduling
+    _CALENDAR_FIELD_HINTS = (
+        "scheduled_at", "start_date", "start_time", "due_date", "due_at",
+        "appointment_at", "booked_at", "event_date", "event_at",
+        "starts_at", "begins_at", "showing_at", "delivery_date",
+    )
+    for f in fields:
+        name = (f.name or "").lower()
+        ftype = (f.type or "").lower()
+        if ftype not in ("date", "datetime"):
+            continue
+        if any(hint in name for hint in _CALENDAR_FIELD_HINTS):
+            views.append("calendar")
+            break
+
+    return views
+
+
 def _entity_pages_for(table: TableDefinition) -> list[dict[str, Any]]:
-    """Standard CRUD page trio for one entity table."""
+    """Standard CRUD page trio for one entity table — plus any
+    auto-detected extra views (kanban / calendar) the entity's fields
+    support. Extra views are at /{slug}/kanban, /{slug}/calendar so
+    they sit alongside the list view, not replace it.
+    """
     slug = table.name.replace("_", "-")
-    return [
+    pages: list[dict[str, Any]] = [
         {
             "route":     f"/{slug}",
             "page_type": "list",
@@ -149,6 +224,23 @@ def _entity_pages_for(table: TableDefinition) -> list[dict[str, Any]]:
             "page_name": f"Edit {table.singular_label or table.name}",
         },
     ]
+    extras = _detect_entity_views(table)
+    plural_label = table.plural_label or table.name
+    if "kanban" in extras:
+        pages.append({
+            "route":     f"/{slug}/kanban",
+            "page_type": "kanban",
+            "entity":    table.name,
+            "page_name": f"{plural_label} Board",
+        })
+    if "calendar" in extras:
+        pages.append({
+            "route":     f"/{slug}/calendar",
+            "page_type": "calendar",
+            "entity":    table.name,
+            "page_name": f"{plural_label} Calendar",
+        })
+    return pages
 
 
 def build_admin_plan(

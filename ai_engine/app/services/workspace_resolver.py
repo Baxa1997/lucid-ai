@@ -55,10 +55,48 @@ _TEMPLATE_NAMES: dict[str, str] = {
     "nextjs":          "Next.js",
     "nextjs-website":  "Next.js",
     "react":           "React",
-    "react-admin":     "React",
+    "react-admin":     "React + Vite (Admin)",
     "vue":             "Vue",
     "vue-admin":       "Vue",
 }
+
+
+# Heuristic admin-intent detection. Runs on the user's project description
+# before the real classifier fires (which happens later in the pipeline).
+# When this hits, the resolver overrides "Next.js" / "Auto" template
+# display with "React + Vite (Admin)" so the loading screen matches what
+# the admin_pipeline (Stage 5 onwards) will actually write to disk.
+#
+# Source: kept narrow on purpose — false positives here are worse than
+# false negatives. We only override on UNAMBIGUOUS admin phrasing.
+_ADMIN_INTENT_PATTERNS = (
+    r"\badmin\s+(?:panel|dashboard|tool|interface|portal)\b",
+    r"\bcrm\b",
+    r"\btms\b",  # transport management system
+    r"\berp\b",
+    r"\bcms\b",
+    r"\binternal\s+(?:tool|app|dashboard|admin)\b",
+    r"\bback[\s-]?office\b",
+    r"\bsaas\s+dashboard\b",
+    r"\boperations?\s+dashboard\b",
+    r"\bmanagement\s+(?:system|panel|dashboard|tool)\b",
+    r"\binventory\s+management\b",
+    r"\blead\s+management\b",
+    r"\bcustomer\s+management\b",
+)
+_ADMIN_INTENT_RE = re.compile("|".join(_ADMIN_INTENT_PATTERNS), re.IGNORECASE)
+
+
+def _looks_like_admin(description: str) -> bool:
+    """Return True if the description unambiguously signals an admin tool.
+
+    Pure regex match — fast (~µs), no LLM call. The real classifier
+    runs later in the pipeline and is authoritative; this is just for
+    making the loading-screen message accurate while the user waits.
+    """
+    if not description:
+        return False
+    return bool(_ADMIN_INTENT_RE.search(description))
 
 
 # ── Result dataclass ─────────────────────────────────────────────────────────
@@ -202,9 +240,32 @@ async def _resolve_new_project(
 
     stack       = _hdr("stack")
     description = _hdr("description")
-    template    = _TEMPLATE_NAMES.get(stack.lower(), stack.capitalize() or "Next.js")
 
-    logger.info("resolver: Path A — new project (stack=%s, desc=%s)", stack, description[:60])
+    # If the user picked "Choose for me" (stack=auto) or the default
+    # stack=nextjs, run a quick admin-intent heuristic. When the
+    # description unambiguously describes an admin tool, override the
+    # display template so the loading screen reflects what the
+    # admin_pipeline will actually write to disk (React + Vite + AuthGuard
+    # + CRUD pages), not the wizard's nextjs default.
+    is_default_stack = stack.lower() in ("", "auto", "nextjs", "nextjs-website")
+    if is_default_stack and _looks_like_admin(description):
+        effective_stack = "react-admin"
+        logger.info(
+            "resolver: detected admin intent in description — overriding "
+            "template display (was %r → react-admin)", stack or "auto",
+        )
+    else:
+        effective_stack = stack
+
+    template = _TEMPLATE_NAMES.get(
+        effective_stack.lower(),
+        effective_stack.capitalize() or "Next.js",
+    )
+
+    logger.info(
+        "resolver: Path A — new project (stack=%s, effective=%s, desc=%s)",
+        stack, effective_stack, description[:60],
+    )
 
     await _progress(websocket, "Analyzing your project description...", pct=10)
     await _progress(websocket, f"Selecting template: {template}...", pct=40)
@@ -213,8 +274,8 @@ async def _resolve_new_project(
     result = ResolveResult(
         path=ResolvePath.NEW_PROJECT,
         message=f"Setting up your {template} project...",
-        detail=f"Template: {template} · Stack: {stack or 'nextjs'}",
-        stack=stack,
+        detail=f"Template: {template} · Stack: {effective_stack or 'nextjs'}",
+        stack=effective_stack,
         template_name=template,
         description=description,
     )

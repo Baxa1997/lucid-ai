@@ -2177,6 +2177,25 @@ async def _expand_short_prompt(
     if len(_clean.split()) > 4 or len(_clean) > 50:
         return description
 
+    # Locale hint derived from the ORIGINAL short input — must be captured
+    # before expansion. The expansion that follows would otherwise silently
+    # translate "kino" / Cyrillic / etc. into English and we'd lose the
+    # market signal. We feed the hint back into the expansion prompt so the
+    # resulting brief stays anchored to the user's actual market.
+    _origin_locale = _detect_user_locale_hint(_clean)
+    _locale_clause = ""
+    if _origin_locale:
+        _locale_clause = (
+            f"\n\nLOCALE NOTE: The user wrote in a {_origin_locale} context. "
+            "The expanded brief MUST reflect that market — pick a brand/concept "
+            "name that would feel native there (NOT a Western default), reference "
+            "the local audience by name, and mention 1-2 market-native peers (e.g. "
+            "Russian/CIS movies → Kinopoisk/IVI/Okko; CIS commerce → Wildberries/"
+            "Ozon/Uzum; Arabic commerce → Noon/Talabat; Chinese platforms → "
+            "Tmall/JD/Douyin) as the design reference. Do NOT translate the "
+            "concept into a Western/English-speaking equivalent."
+        )
+
     try:
         # Flash is plenty for prompt expansion; thinkingBudget=0 keeps it sub-second.
         _model = "gemini-2.5-flash"
@@ -2200,6 +2219,7 @@ async def _expand_short_prompt(
             "'The app', 'A modern', 'Build', 'Create'.\n\n"
             "Output ONLY the expanded brief as a single paragraph. "
             "No preamble, no headers, no quotes, no markdown, no bullet lists."
+            f"{_locale_clause}"
         )
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
@@ -2756,6 +2776,69 @@ _CULTURE_KEYWORDS_IN_PROMPT = (
 )
 
 
+# ──────────────────────────────────────────────────────────────────────
+#  Locale detection — hint Gemini to use market-native references
+#
+#  The deep-research prompt asks Gemini to enumerate reference sites
+#  ("MUBI", "Netflix", "Amazon"). Gemini's training is heavily English-
+#  weighted, so prompts written in Cyrillic / Arabic / CJK — or using
+#  non-English Latin terms native to a region like "kino" (Slavic) or
+#  "magazin" (Slavic/Turkic for store) — produce *wrong* references.
+#  A Russian user wanting a movie site wants Kinopoisk / IVI / Okko,
+#  not Criterion Channel.
+#
+#  We add a small locale hint based on the prompt's script + a short
+#  keyword list. When set, the hint is injected into the research prompt
+#  to bias references toward the user's market.
+# ──────────────────────────────────────────────────────────────────────
+
+
+# Non-English Latin terms whose presence strongly indicates a CIS-market user
+# even when the rest of the prompt is romanised. Compiled here so the same
+# list can be reused by other locale-aware logic in the future.
+_CIS_LATIN_TERMS = frozenset({
+    "kino", "kopiyasi", "saytim", "saytni", "kerak", "magazin", "magazinim",
+    "uzum", "wildberries", "ozon", "yandex", "kinopoisk", "ivi",
+    "okko", "megogo", "vkontakte", "vk", "rutube", "dzen",
+})
+
+
+def _detect_user_locale_hint(description: str) -> str:
+    """Detect the user's market from script + native keywords.
+
+    Returns a short locale label (used to anchor research references) or
+    "" when the prompt is plain English with no non-English signal. English
+    is the default path and gets no special treatment.
+    """
+    text = (description or "").strip().lower()
+    if not text:
+        return ""
+
+    # ── Script detection (highest confidence) ──
+    for ch in text:
+        cp = ord(ch)
+        if 0x0400 <= cp <= 0x04FF:  # Cyrillic
+            return "Russian / CIS (Russia, Ukraine, Belarus, Uzbekistan, Kazakhstan)"
+        if 0x0600 <= cp <= 0x06FF:  # Arabic
+            return "Arabic-speaking market (UAE, Saudi Arabia, Egypt, Morocco)"
+        if 0x3040 <= cp <= 0x30FF:  # Hiragana / Katakana
+            return "Japanese market"
+        if 0xAC00 <= cp <= 0xD7AF:  # Hangul
+            return "South Korean market"
+        if 0x4E00 <= cp <= 0x9FFF:  # CJK Unified Ideographs
+            return "Chinese market (mainland China, Hong Kong, Taiwan)"
+
+    # ── Latin-script keyword fallback ──
+    # Romanised CIS terms — common when a Russian/Uzbek user types on an
+    # English keyboard. Tokens are 3+ chars matched against the term list.
+    import re as _re_locale
+    words = set(_re_locale.findall(r"[a-z]{3,}", text))
+    if _CIS_LATIN_TERMS & words:
+        return "Russian / CIS (Russia, Uzbekistan, Kazakhstan, Ukraine)"
+
+    return ""
+
+
 def _pick_cultural_anchor(description: str, domain: str) -> str:
     """Pre-pick a regional anchor for ambiguous prompts; return "" otherwise.
 
@@ -2812,6 +2895,8 @@ async def gemini_deep_research(
     classification: dict,   # rich dict from classify_project_type_ai
     stack: str,
     websocket,
+    *,
+    locale_hint_override: str = "",
 ) -> str:
     """Ultra-deep product research via Gemini with internet search.
 
@@ -2825,6 +2910,19 @@ async def gemini_deep_research(
     is_single_page = classification.get("is_single_page", False)
     has_admin = classification.get("has_admin_features", False)
     is_locked = classification.get("classification_locked", False)
+
+    # ── Locale hint (Python-side, derived from prompt script + keywords) ──
+    # Anchors reference brands to the user's actual market when the prompt
+    # is in a non-English script or uses native non-English terms. Without
+    # this hint Gemini defaults to English-speaking references for every
+    # non-English prompt — wrong for Russian/CIS/Arabic/CJK users.
+    #
+    # `locale_hint_override` is the caller's chance to pass a locale derived
+    # from the ORIGINAL (pre-expansion) prompt — `_expand_short_prompt` will
+    # otherwise translate non-English short prompts into English, erasing
+    # the signal _detect_user_locale_hint reads. When the override is set
+    # we prefer it; the per-description detection is the fallback.
+    _locale_hint = locale_hint_override or _detect_user_locale_hint(description)
 
     # ── Cultural anchor pre-selection (Python-side, hard constraint) ────
     # When the user's prompt is ambiguous ("a restaurant", "a coffee shop"),
@@ -2847,6 +2945,39 @@ async def gemini_deep_research(
         "portfolio": "portfolio / showcase site (work samples + bio + contact)",
         "marketplace": "marketplace platform (buyers + sellers + listings)",
     }.get(layout_archetype, layout_archetype.replace("_", " "))
+
+    # Locale block — inserted near the top of the research prompt so it
+    # influences EVERY downstream step (search queries + sites picked +
+    # nav vocabulary + copy language). Empty when prompt is plain English.
+    _locale_block = ""
+    if _locale_hint:
+        _locale_block = f"""
+
+╔══════════════════════════════════════════════════════════════════════════╗
+║  LOCALE CONTEXT — HARD CONSTRAINT                                        ║
+╠══════════════════════════════════════════════════════════════════════════╣
+║  The user's prompt is written for the {_locale_hint} market.
+║                                                                          ║
+║  In ===SITES_ANALYZED===, you MUST prioritise references NATIVE to this  ║
+║  market over English-language defaults. The structure (page layouts,     ║
+║  nav vocabulary), the copy, AND the visual language often differ from    ║
+║  the English-speaking default — research the actual native market.       ║
+║                                                                          ║
+║  Hint references by domain (find more via search, do NOT stop at these): ║
+║   • Russian/CIS movies/streaming → Kinopoisk, IVI, Okko, START, Megogo   ║
+║   • Russian/CIS e-commerce → Wildberries, Ozon, Yandex.Market, Uzum      ║
+║   • Russian/CIS social/media → VK, Telegram, Dzen, Rutube                ║
+║   • Arabic e-commerce → Noon, Talabat, Jarir, Carrefour KSA              ║
+║   • Chinese platforms → Tmall, JD, Douyin, Bilibili, Weibo, Xiaohongshu  ║
+║   • Japanese marketplaces → Rakuten, Mercari, Yahoo Shopping             ║
+║   • Korean platforms → Coupang, 11Street, Naver Shopping                 ║
+║                                                                          ║
+║  At least 2 of your 4 search queries MUST use the native language —      ║
+║  English-only searches return the wrong references for this market.      ║
+║  Copy (taglines, section headings) must be authored in the user's        ║
+║  language, not translated from English defaults.                         ║
+╚══════════════════════════════════════════════════════════════════════════╝
+"""
 
     _cultural_anchor_block = ""
     if _cultural_anchor_override:
@@ -2875,6 +3006,7 @@ Research and blueprint a production-quality web application.
 PROJECT: "{description}"
 INITIAL TYPE: {_archetype_label} | DOMAIN: {domain}
 TECH STACK: {stack}
+{_locale_block}
 {_cultural_anchor_block}
 
 ═══════════════════════════════════════════════════════════════
@@ -7177,6 +7309,7 @@ def _validate_plan_data(plan_data: dict, archetype: str) -> list[str]:
     issues: list[str] = []
     brand = (plan_data.get("intro") or "")
     pages = plan_data.get("pages") or []
+    pages_nested = plan_data.get("pages_nested") or []
     entities = plan_data.get("entities") or []
     design = (plan_data.get("design") or "").lower()
     description = (plan_data.get("description") or "").strip()
@@ -7201,6 +7334,16 @@ def _validate_plan_data(plan_data: dict, archetype: str) -> list[str]:
     elif archetype in _multipage:
         if len(pages) < 3:
             issues.append(f"too_few_pages:{len(pages)}")
+        # Visibility into how often research feeds nested sections vs not.
+        # Not a hard block — the flat fallback renders correctly when
+        # research only produced page names. Promote to a block once the
+        # field is reliably populated upstream.
+        if not pages_nested:
+            issues.append("missing_pages_nested")
+        else:
+            empty_pages = sum(1 for p in pages_nested if not (p.get("sections") or []))
+            if empty_pages:
+                issues.append(f"pages_nested_thin:{empty_pages}/{len(pages_nested)}")
     elif archetype in _admin:
         if not entities:
             issues.append("no_entities")
@@ -7504,6 +7647,14 @@ async def _generate_new_project_inner(
     # prose-heavy expansion (which can leak phrases like "This project is for…"
     # into downstream fields). When no expansion happens, the two are identical.
     original_description = description.split("\n\n---\n\n")[0].strip()
+
+    # Capture locale signal from the ORIGINAL prompt before expansion. The
+    # expansion step translates short non-English prompts into English brief
+    # paragraphs ("kino website qber" → "Qber is a modern art-house cinema
+    # platform…") which strips the market signal — by then `kino` is gone
+    # and the deep-research locale block would never fire.
+    _original_locale_hint = _detect_user_locale_hint(original_description)
+
     description = await _expand_short_prompt(
         description, _layout_archetype, _domain, websocket,
     )
@@ -7669,6 +7820,7 @@ async def _generate_new_project_inner(
             research, _intent = await asyncio.gather(
                 gemini_deep_research(
                     description, _classification, stack, websocket,
+                    locale_hint_override=_original_locale_hint,
                 ),
                 _safe_intent(),
             )
@@ -8794,9 +8946,19 @@ async def _generate_new_project_inner(
 
         # ── Section/page items ────────────────────────────────
         # Priority 1: schema sections (landing pages)
-        # Priority 2: schema pages (admin panels)
+        # Priority 2: schema pages (admin panels / multi-page sites)
         # Priority 3: parse keywords from the user's description
-        _page_items = []
+        #
+        # `_page_items`   is the flat, backward-compatible list every consumer
+        #                 (history records, RightPanel fallback) reads.
+        # `_pages_nested` is the new nested shape: pages with their `sections`
+        #                 array preserved from `_parse_pages_block`. Frontend
+        #                 prefers this when present; falls back to `_page_items`
+        #                 when absent (single-page landings, thin research,
+        #                 legacy history). Content stays 100% from Gemini —
+        #                 we copy fields straight through, no synthesis here.
+        _page_items: list[dict] = []
+        _pages_nested: list[dict] = []
 
         if _sections:
             for s in _sections[:10]:
@@ -8812,8 +8974,47 @@ async def _generate_new_project_inner(
                 name  = p.get("title") or p.get("name", "")
                 ptype = p.get("type", "")
                 desc  = p.get("description", "") or ptype.replace("_", " ")
-                if name:
-                    _page_items.append({"name": name, "desc": desc[:80]})
+                if not name:
+                    continue
+                _page_items.append({"name": name, "desc": desc[:80]})
+
+                # Build the nested entry. Each section's `details` is the
+                # subheadline (1-2 sentence supporting copy from research),
+                # falling back to a short rendering of `content.items` when
+                # the parser only captured a flat content blob.
+                page_sections: list[dict] = []
+                for s in (p.get("sections") or []):
+                    if not isinstance(s, dict):
+                        continue
+                    stype = (s.get("type") or "section").strip()
+                    if not stype:
+                        continue
+                    headline = (s.get("headline") or "").strip()
+                    subheadline = (s.get("subheadline") or "").strip()
+                    if not subheadline:
+                        # _parse_pages_block puts the inline `content: ...`
+                        # value under content.items. Use it as the details
+                        # line so the section reads as more than a bare type.
+                        content = s.get("content") or {}
+                        if isinstance(content, dict):
+                            subheadline = str(content.get("items") or "").strip()
+                    page_sections.append({
+                        "type":     stype[:40],
+                        "headline": headline[:140],
+                        "details":  subheadline[:220],
+                    })
+                _pages_nested.append({
+                    "name":     name,
+                    "route":    (p.get("path") or "").strip(),
+                    "purpose":  (p.get("purpose") or p.get("description") or "")[:240],
+                    "sections": page_sections,
+                })
+
+        # If no page in `_pages_nested` actually carried any sections (thin
+        # research), drop the field — frontend then falls back to flat
+        # rendering rather than showing a chrome of empty page groups.
+        if _pages_nested and not any(p["sections"] for p in _pages_nested):
+            _pages_nested = []
 
         # Fallback: parse keywords from the description so the plan is never empty
         if not _page_items:
@@ -9098,6 +9299,11 @@ async def _generate_new_project_inner(
             "design":      _design_line,
             "requiresConfirmation": True,
         }
+        # Only attach the nested page→sections breakdown when we actually
+        # have one — keeps the payload clean for landing pages, follow-up
+        # edits, and history-rehydrated plans that never had this field.
+        if _pages_nested:
+            _plan_data["pages_nested"] = _pages_nested
 
         # Surface the Supabase migration in the plan when we wrote one.
         # User-friendly framing — no jargon about RLS or migrations files.
@@ -9136,11 +9342,15 @@ async def _generate_new_project_inner(
                 _layout_archetype, _plan_issues,
             )
         else:
+            _nested = _plan_data.get("pages_nested") or []
+            _section_total = sum(len(p.get("sections") or []) for p in _nested)
             logger.info(
-                "plan_validate: archetype=%s OK pages=%d entities=%d",
+                "plan_validate: archetype=%s OK pages=%d entities=%d nested=%d sections_total=%d",
                 _layout_archetype,
                 len(_plan_data.get("pages") or []),
                 len(_plan_data.get("entities") or []),
+                len(_nested),
+                _section_total,
             )
 
         try:
