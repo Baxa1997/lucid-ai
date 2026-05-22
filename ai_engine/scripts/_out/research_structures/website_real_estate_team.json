@@ -1,0 +1,237 @@
+{
+  "brand": {
+    "name": "Coast & Co",
+    "tagline": "Miami's premier luxury real estate team, connecting you with exceptional coastal living.",
+    "domain": "real_estate"
+  },
+  "pages": [
+    {
+      "route": "/",
+      "title": "Home",
+      "purpose": "Introduce Coast & Co, showcase featured luxury listings, and highlight key services and the Miami lifestyle.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "icon-grid-3",
+          "archetype": "icon-grid-3"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "asymmetric-12col",
+          "archetype": "asymmetric-12col"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "glass-cards-bg",
+          "archetype": "glass-cards-bg"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-3"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/listings",
+      "title": "Luxury Listings",
+      "purpose": "Display a curated collection of available luxury properties, allowing users to browse and filter.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "oversized-watermark",
+          "archetype": "oversized-watermark"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "grid-3"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "listings"
+    },
+    {
+      "route": "/buy",
+      "title": "Buying Guide",
+      "purpose": "Provide resources and guidance for prospective luxury home buyers, outlining the purchasing process.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "asymmetric-split",
+          "archetype": "asymmetric-split"
+        },
+        {
+          "type": "process",
+          "layout_hint": "numbered-stepper",
+          "archetype": "numbered-stepper"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "split-image-bullets",
+          "archetype": "split-image-bullets"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "two-column"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/sell",
+      "title": "Selling Guide",
+      "purpose": "Offer insights and services for homeowners looking to sell their luxury properties, detailing the selling journey.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "type-wrapping-product",
+          "archetype": "type-wrapping-product"
+        },
+        {
+          "type": "how_it_works",
+          "layout_hint": "split-image-bullets",
+          "archetype": "split-image-bullets"
+        },
+        {
+          "type": "stats",
+          "layout_hint": "stat-band"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/agents",
+      "title": "Our Agents",
+      "purpose": "Introduce the expert real estate agents at Coast & Co, highlighting their experience and specializations.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-4"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "marquee-row",
+          "archetype": "marquee-row"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "agents"
+    },
+    {
+      "route": "/neighborhoods",
+      "title": "Miami Neighborhoods",
+      "purpose": "Showcase various luxury neighborhoods in Miami, providing an overview of each area's unique character and amenities.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "video-mask",
+          "archetype": "video-mask"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "bento-mosaic",
+          "archetype": "bento-mosaic"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "two-column"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/resources",
+      "title": "Client Resources",
+      "purpose": "Offer valuable resources and articles for both buyers and sellers, covering market trends, financing, and luxury living.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "card-stack",
+          "archetype": "card-stack"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "grid-3",
+          "archetype": "icon-grid-3"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/about",
+      "title": "About Coast & Co",
+      "purpose": "Tell the story of Coast & Co, its mission, values, and commitment to luxury real estate in Miami.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "story",
+          "layout_hint": "split-image-left"
+        },
+        {
+          "type": "philosophy",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-3"
+        },
+        {
+          "type": "press",
+          "layout_hint": "logo-strip"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/contact",
+      "title": "Contact Us",
+      "purpose": "Provide multiple ways for clients to get in touch with Coast & Co, including a contact form, phone, and location details.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "contact",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "locations",
+          "layout_hint": "grid-2"
+        },
+        {
+          "type": "newsletter",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    }
+  ]
+}

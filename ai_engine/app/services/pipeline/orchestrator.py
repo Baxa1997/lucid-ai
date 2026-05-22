@@ -34,6 +34,7 @@ from .step5_fixers import _fix_broken_layout_imports
 from .step1_validate import validate_inputs
 from .step2_clone import clone_with_openhands
 from .step3_classify import classify_task
+from .step3b_edit_intent import extract_edit_intent, EditIntent
 from .step4_explore import explore_with_gemini, gemini_research, gemini_create_plan
 from .step4b_images import analyze_images
 from .step5_execute import execute_with_claude, execute_project_in_batches
@@ -58,10 +59,145 @@ _NM_CACHE_ROOT = NODE_MODULES_CACHE_ROOT
 # on a repo we generated ourselves it wastes ~80 % of tokens accumulating
 # tool-use context across turns to do work that fits in one call.
 
+def _intent_from_editable_target(
+    target: dict,
+    workspace_path: str,
+) -> EditIntent:
+    """Turn a click-to-edit payload into a confident EditIntent.
+
+    Two payload shapes are accepted:
+
+      (1) Editable-wrapped (preferred) — element had a
+          ``data-editable-path`` attribute. Shape::
+
+            { "path": "hero.title",
+              "type": "text" | "longtext" | "image_url" | "url",
+              "file": "src/components/sections/Hero.jsx",   # optional
+              "fuzzy": false }
+
+          We trust the path/file fully: the element was rendered by
+          our own ``<Editable>`` wrapper, no LLM guessing. Confidence
+          = 100, scope = narrow.
+
+      (2) Fuzzy fallback — any other DOM element the listener could
+          identify (heading, paragraph, button, image, …). Shape::
+
+            { "path": "h1:Welcome to…",
+              "type": "text" | "image_url",
+              "fuzzy": true,
+              "tag": "h1",
+              "text": "Welcome to Acme Studios",
+              "className": "text-5xl font-bold",
+              "src": "/hero.jpg" }   # only for tag=img
+
+          We can\\u2019t name the exact file, but the visible text (or
+          image src) is almost always unique across the workspace and
+          ``literal_anchors`` triggers a grep in step3b that locates
+          it. Confidence = 85 (one notch below the wrapper path), still
+          narrow scope so the direct-edit fast path stays in play.
+
+    Empty / malformed targets return a non-actionable EditIntent so
+    the caller falls back to the Flash extractor.
+    """
+    if not isinstance(target, dict):
+        return EditIntent()
+    dot_path = (target.get("path") or "").strip()
+    file_hint = (target.get("file") or "").strip().lstrip("/")
+    fuzzy = bool(target.get("fuzzy"))
+    text_snippet = (target.get("text") or "").strip()
+    img_src = (target.get("src") or "").strip()
+
+    if not dot_path and not file_hint and not text_snippet and not img_src:
+        return EditIntent()
+
+    candidates: list[str] = []
+    if file_hint:
+        candidates.append(file_hint)
+
+    # ``literal_anchors`` are the strings step3b will grep for in the
+    # workspace. The dot-path is included for wrapper-mode disambig
+    # (a file may contain many data-editable-path attributes). For
+    # fuzzy mode the visible text or image src IS the locator.
+    anchors: list[str] = []
+    if dot_path:
+        anchors.append(dot_path)
+    if text_snippet and len(text_snippet) >= 4:
+        # Grep needs enough specificity. Trim very long snippets — the
+        # first ~80 chars are plenty for uniqueness in a small project.
+        anchors.append(text_snippet[:80])
+    if img_src and not img_src.startswith("data:"):
+        # Inline data: URLs are huge and not useful for grep. File-path
+        # sources (./hero.jpg, /images/x.png, http://…) all work.
+        anchors.append(img_src)
+
+    # Fuzzy mode needs candidate_files populated for ``is_actionable``
+    # to be True; without files, the router falls through to the
+    # extractor (which is default-off). Resolve anchors → real paths
+    # via the same grep step3b uses for hallucination defense. Errors
+    # are swallowed — worst case we return non-actionable and the
+    # legacy Gemini file walker takes over.
+    if fuzzy and anchors and not candidates:
+        try:
+            from .step3b_edit_intent import _grep_anchors
+            matches = _grep_anchors(workspace_path, anchors)
+            for rel in matches:
+                if rel not in candidates:
+                    candidates.append(rel)
+        except Exception as exc:
+            logger.debug("_intent_from_editable_target: fuzzy grep failed: %s", exc)
+
+    # Section hint:
+    #   • Wrapper mode: leading dot-segment ("hero" from "hero.title").
+    #   • Fuzzy mode: don\\u2019t guess — the section is whatever file
+    #     happens to contain the text anchor.
+    head = dot_path.split(".")[0] if dot_path and not fuzzy else ""
+    target_sections = [head.lower()] if head else []
+
+    # ``type`` from the wrapper / fuzzy payload maps cleanly to our
+    # change_type vocab. Image clicks always mean content (swap src);
+    # everything else is content unless the caller flagged style.
+    raw_type = (target.get("type") or "").strip().lower()
+    if raw_type in ("text", "longtext", "image_url", "url"):
+        change_type = "content"
+    elif raw_type in ("class", "style"):
+        change_type = "style"
+    else:
+        change_type = "content"
+
+    # Wrapper-mode also points at the runtime content JSON as a
+    # secondary candidate so direct-edit can update the on-disk copy
+    # of the text the user is editing.
+    if not fuzzy:
+        landing_json = os.path.join(workspace_path, "src", "content", "landing.json")
+        if os.path.isfile(landing_json):
+            rel = "src/content/landing.json"
+            if rel not in candidates:
+                candidates.append(rel)
+
+    # Fuzzy mode is slightly less certain than wrapper mode, but a
+    # rendered visible-text match in our own generated repo is still
+    # very high-signal — we keep narrow scope so the direct-edit
+    # path stays eligible, just notch confidence down a tier.
+    confidence = 85 if fuzzy else 100
+
+    return EditIntent(
+        target_pages=[],
+        target_sections=target_sections,
+        target_components=[],
+        candidate_files=candidates,
+        change_type=change_type,
+        literal_anchors=anchors,
+        scope="narrow",
+        confidence=confidence,
+        extracted=True,
+    )
+
+
 def _route_edit_mode(
     validated: dict,
     classification: dict,
     relevant_files: list[str],
+    edit_intent: "EditIntent | None" = None,
 ) -> str:
     """Return ``"direct"`` or ``"sdk"`` for the current follow-up task.
 
@@ -74,9 +210,16 @@ def _route_edit_mode(
 
       2. Gemini classified the task as simple (``ui_simple`` or
          ``feature_simple``) — complex redesigns need multi-turn work.
+         OVERRIDE: when Step 3b produced an actionable narrow intent,
+         the structured target (a literal class swap, a copy edit) is
+         more authoritative than the freeform task_type heuristic, so
+         we accept higher task_types too.
 
       3. Gemini identified ≤ 3 files AND ≤ 4 total relevant files from
          the file walk — anything bigger deserves the agent.
+         OVERRIDE: when Step 3b is actionable we trust up to 6 files
+         since the targets came from a workspace-grounded extractor
+         rather than an LLM file walk.
 
       4. At least one relevant file was found — no files means no target.
     """
@@ -84,14 +227,21 @@ def _route_edit_mode(
     if not validated.get("platform_repo_url") and not validated.get("is_platform_owned"):
         return "sdk"
 
-    # Rule 2 — simple task type.
+    intent_actionable = bool(
+        edit_intent is not None and getattr(edit_intent, "is_actionable", False)
+    )
+
+    # Rule 2 — simple task type. Bypassed when Step 3b gave us a
+    # structured narrow intent — the intent IS the simplicity proof.
     task_type = str(classification.get("task_type", "")).lower()
-    if task_type not in ("ui_simple", "feature_simple"):
+    if task_type not in ("ui_simple", "feature_simple") and not intent_actionable:
         return "sdk"
 
     # Rule 3 — small blast radius.
     files_estimate = int(classification.get("files_estimate", 99))
-    if files_estimate > 3 or len(relevant_files) > 4:
+    max_files = 6 if intent_actionable else 4
+    max_estimate = 5 if intent_actionable else 3
+    if files_estimate > max_estimate or len(relevant_files) > max_files:
         return "sdk"
 
     # Rule 4 — must have a target.
@@ -193,6 +343,7 @@ async def run_pipeline(
     chat_session_id: str = "",
     images: list = None,
     session=None,
+    editable_target: dict | None = None,
 ) -> str | None:
     """Run all pipeline steps sequentially.
 
@@ -634,6 +785,54 @@ async def run_pipeline(
             await _send_phase(3, "Classifying task", f"Assigned to {model} ({classification.get('complexity', 'medium')})", "done")
             await asyncio.sleep(0.8)
 
+            # ── Phase 3b: Structured edit-intent extraction ───────────
+            # Two paths into the same EditIntent:
+            #   (1) User clicked an element in the preview — the frontend
+            #       sent ``editable_target = {path, type, file}``. The
+            #       user already pointed at the exact thing they want
+            #       changed, so we synthesize a 100%-confidence intent
+            #       and skip the Flash extractor entirely.
+            #   (2) Plain text prompt — run the workspace-grounded Flash
+            #       extractor. Fail-open: any error returns an empty
+            #       EditIntent and the legacy file walk runs unchanged.
+            edit_intent: EditIntent = EditIntent()
+            if editable_target:
+                try:
+                    edit_intent = _intent_from_editable_target(
+                        editable_target, workspace_path,
+                    )
+                    try:
+                        await websocket.send_json({
+                            "type": "progress",
+                            "message": (
+                                f"🎯 Editing selected element: "
+                                f"{editable_target.get('path') or editable_target.get('file') or 'target'}"
+                            ),
+                        })
+                    except Exception:
+                        pass
+                except Exception as _et_err:
+                    logger.warning(
+                        "Phase 3b: editable_target synthesis failed — %s "
+                        "(falling back to extractor)",
+                        _et_err,
+                    )
+                    edit_intent = EditIntent()
+            if not edit_intent.is_actionable:
+                try:
+                    edit_intent = await extract_edit_intent(
+                        task=task,
+                        workspace_path=workspace_path,
+                        classification=classification,
+                        websocket=websocket,
+                    )
+                except Exception as _intent_err:
+                    logger.warning(
+                        "Phase 3b: edit-intent extractor raised — %s",
+                        _intent_err,
+                    )
+                    edit_intent = EditIntent()
+
         # ── Phase 3b: Generate CLAUDE.md (new projects only) ──
         if validated.get("scratch_mode") or validated.get("new_project_mode"):
             try:
@@ -749,6 +948,7 @@ async def run_pipeline(
                 workspace_path,
                 classification,
                 websocket,
+                edit_intent=edit_intent,
             )
             await asyncio.sleep(0.8)
             await _send_phase(4, "Exploring codebase", "Implementation plan ready", "done")
@@ -807,13 +1007,18 @@ async def run_pipeline(
             # for the full decision rules. A direct-path failure (bad JSON,
             # old_string not matched, HTTP error) falls through to the SDK
             # so the user never sees the optimisation miss.
-            edit_path = _route_edit_mode(validated, classification, relevant_files)
+            edit_path = _route_edit_mode(
+                validated, classification, relevant_files,
+                edit_intent=edit_intent,
+            )
             logger.info(
-                "Phase 5 router: path=%s task_type=%s files_estimate=%s relevant=%d",
+                "Phase 5 router: path=%s task_type=%s files_estimate=%s relevant=%d "
+                "intent_scope=%s intent_conf=%d intent_actionable=%s",
                 edit_path,
                 classification.get("task_type"),
                 classification.get("files_estimate"),
                 len(relevant_files),
+                edit_intent.scope, edit_intent.confidence, edit_intent.is_actionable,
             )
 
             success = False
@@ -839,6 +1044,11 @@ async def run_pipeline(
                     (session.user_id if session else None)
                     or (user.get("user_id") if isinstance(user, dict) else None)
                 )
+                # When Step 3b locked the target with confidence, give
+                # the direct path a wider file budget — extractor-anchored
+                # candidates are more trustworthy than Gemini file-walk picks,
+                # so the extra slots don't loosen the safety contract.
+                _direct_max_files = 6 if edit_intent.is_actionable else 4
                 success = await execute_direct_edit(
                     task=task,
                     workspace_path=workspace_path,
@@ -849,6 +1059,7 @@ async def run_pipeline(
                     websocket=websocket,
                     manifest=_manifest_text,
                     user_id=_user_id_for_billing,
+                    max_files=_direct_max_files,
                 )
                 if not success:
                     logger.info("Direct-edit path declined — falling back to SDK")

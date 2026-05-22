@@ -1,0 +1,448 @@
+{
+  "brand": {
+    "name": "Little Roots",
+    "tagline": "Modern Pediatric Care for Seattle Families",
+    "description": "A text-first, boutique pediatric clinic blending beautiful physical spaces with 24/7 virtual care and lactation support.",
+    "domain": "littleroots.care",
+    "business_info": {
+      "address": "1200 Westlake Ave N, Seattle, WA 98109",
+      "phone": "(206) 555-0123",
+      "email": "hello@littleroots.care",
+      "hours": "Mon-Fri: 8am - 6pm\nSat: 9am - 1pm\n24/7 Virtual Care for Members"
+    },
+    "social": [
+      {
+        "label": "instagram",
+        "href": "https://instagram.com/littleroots"
+      },
+      {
+        "label": "facebook",
+        "href": "https://facebook.com/littleroots"
+      }
+    ]
+  },
+  "palette": {
+    "primary": "160 40% 30%",
+    "secondary": "30 60% 70%",
+    "accent": "45 90% 60%",
+    "background": "40 30% 96%",
+    "foreground": "210 50% 15%",
+    "muted": "150 20% 85%",
+    "border": "40 20% 85%",
+    "card": "0 0% 100%"
+  },
+  "typography": {
+    "heading_font": "Fraunces",
+    "body_font": "DM Sans",
+    "scale": "balanced"
+  },
+  "motif": "organic",
+  "design_system": {
+    "motion": "organic",
+    "accent_shape": "blob",
+    "surface": "elevated",
+    "image_treatment": "masked",
+    "section_rhythm": "balanced"
+  },
+  "personality": {
+    "tone": "encouraging",
+    "vibe_keywords": [
+      "warm",
+      "reassuring",
+      "playful",
+      "earthy"
+    ],
+    "energy": "medium"
+  },
+  "header_archetype": "transparent-pill",
+  "footer_archetype": "mega-columns",
+  "references": [
+    {
+      "url": "https://modernpediatrics.co",
+      "name": "Modern Pediatrics",
+      "why": "Exact-match for concierge pediatrics blending physical and virtual care with a membership model.",
+      "section_order": [
+        "hero",
+        "trust_bar",
+        "how_it_works",
+        "services",
+        "pricing",
+        "faq"
+      ],
+      "notable_features": [
+        "Zip code checker",
+        "SMS widget",
+        "Sticky header"
+      ]
+    },
+    {
+      "url": "https://bravecare.com",
+      "name": "Brave Care",
+      "why": "Best-in-class pediatric design proving medical spaces can look premium and kid-friendly.",
+      "section_order": [
+        "hero",
+        "trust_bar",
+        "services",
+        "gallery",
+        "testimonials"
+      ],
+      "notable_features": [
+        "Clinic gallery slider",
+        "Symptom checker tool"
+      ]
+    },
+    {
+      "url": "https://hellotend.com",
+      "name": "Tend",
+      "why": "Masterclass in making medical visits feel like luxury hospitality experiences.",
+      "section_order": [
+        "hero",
+        "value_prop",
+        "gallery",
+        "services",
+        "reviews"
+      ],
+      "notable_features": [
+        "Immersive video background",
+        "Interactive booking widget"
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "id": "hero-main",
+      "type": "hero",
+      "role": "Establish the modern, warm clinic vibe and drive booking.",
+      "headline": "Pediatric care that feels like home.",
+      "subheadline": "Expert medical care for Seattle kids, with 24/7 text access and beautiful clinics designed for families.",
+      "layout_hint": "asymmetric-split",
+      "archetype": "card-stack",
+      "interactivity": "Primary CTA triggers a smooth-scroll to the booking flow.",
+      "cta": {
+        "label": "Book a Visit",
+        "href": "#booking"
+      },
+      "image_queries": [
+        "modern pediatric clinic interior warm sunlight"
+      ],
+      "items": []
+    },
+    {
+      "id": "trust-ticker",
+      "type": "trust_bar",
+      "role": "Build immediate local credibility.",
+      "nav_label": "Trust",
+      "headline": "Trusted by 1,000+ Seattle Families",
+      "layout_hint": "logo-strip",
+      "interactivity": "Auto-scrolling logo marquee of local affiliations.",
+      "items": [
+        {
+          "value": "Seattle",
+          "label": "Parent Magazine"
+        },
+        {
+          "value": "Top Doc",
+          "label": "2024 Award"
+        },
+        {
+          "value": "UW",
+          "label": "Medicine Partner"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "paradigm-shift",
+      "type": "comparison",
+      "role": "Contrast traditional care with the Little Roots model.",
+      "nav_label": "Why Us",
+      "headline": "A different kind of doctor's visit.",
+      "subheadline": "We've reimagined pediatrics to remove the stress and keep the focus on your child.",
+      "layout_hint": "comparison-table",
+      "interactivity": "Hover states highlight the benefits of the Little Roots column.",
+      "items": [
+        {
+          "title": "Traditional Clinics",
+          "description": "Long wait times, sterile rooms, and phone tag for every question."
+        },
+        {
+          "title": "Little Roots",
+          "description": "On-time starts, boutique spaces, and 24/7 direct text access to your doctor."
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "care-services",
+      "type": "features",
+      "role": "Detail the core medical offerings.",
+      "nav_label": "Services",
+      "headline": "Comprehensive care for every stage.",
+      "subheadline": "From newborn lactation support to adolescent wellness, we are your family's health partner.",
+      "layout_hint": "grid-4",
+      "archetype": "icon-grid-3",
+      "interactivity": "Cards expand on click to show detailed service descriptions.",
+      "items": [
+        {
+          "title": "Well-Child Visits",
+          "description": "Comprehensive check-ups that track growth, development, and long-term wellness.",
+          "icon": "Stethoscope"
+        },
+        {
+          "title": "Lactation Support",
+          "description": "Expert guidance from certified consultants to help you and your baby thrive.",
+          "icon": "Baby"
+        },
+        {
+          "title": "24/7 Telehealth",
+          "description": "Text or video call your pediatrician anytime, day or night, for peace of mind.",
+          "icon": "Smartphone"
+        },
+        {
+          "title": "Vaccinations",
+          "description": "Evidence-based immunization schedules in a calm, gentle environment.",
+          "icon": "Syringe"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "how-it-works",
+      "type": "process",
+      "role": "Explain the hybrid care journey.",
+      "nav_label": "Process",
+      "headline": "Simple, modern, and connected.",
+      "subheadline": "We've streamlined the healthcare experience so you can focus on what matters.",
+      "layout_hint": "timeline",
+      "archetype": "numbered-stepper",
+      "interactivity": "Steps animate in sequence as the user scrolls down.",
+      "items": [
+        {
+          "title": "Book Online",
+          "description": "Schedule a same-day or next-day visit through our easy web portal.",
+          "value": "01"
+        },
+        {
+          "title": "Visit the Clinic",
+          "description": "Relax in our beautiful Seattle space while your child receives expert care.",
+          "value": "02"
+        },
+        {
+          "title": "Stay Connected",
+          "description": "Follow up with your doctor via text or video for any lingering questions.",
+          "value": "03"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "clinic-tour",
+      "type": "gallery",
+      "role": "Showcase the premium hospitality-inspired space.",
+      "nav_label": "Gallery",
+      "headline": "A space designed for comfort.",
+      "subheadline": "Our Seattle clinic features organic materials, kid-friendly nooks, and a calming atmosphere.",
+      "layout_hint": "grid-3",
+      "archetype": "bento-mosaic",
+      "interactivity": "Lightbox gallery with keyboard navigation for full-screen viewing.",
+      "image_queries": [
+        "modern clinic waiting room wood plants",
+        "pediatric exam room colorful mural",
+        "nursing room comfortable chair",
+        "seattle neighborhood street view clinic",
+        "child playing with wooden toys in clinic",
+        "friendly pediatrician smiling at baby"
+      ],
+      "items": []
+    },
+    {
+      "id": "mid-cta",
+      "type": "mid_cta_banner",
+      "role": "Re-engage parents with a low-friction offer.",
+      "headline": "Meet your pediatrician first.",
+      "subheadline": "Schedule a free 15-minute virtual meet-and-greet to see if Little Roots is the right fit for your family.",
+      "layout_hint": "centered-stack",
+      "interactivity": "Button opens a calendar booking modal.",
+      "cta": {
+        "label": "Schedule Meet & Greet",
+        "href": "#booking"
+      },
+      "items": [],
+      "image_queries": []
+    },
+    {
+      "id": "care-team",
+      "type": "team",
+      "role": "Humanize the brand with provider profiles.",
+      "nav_label": "Team",
+      "headline": "Meet our expert care team.",
+      "subheadline": "Board-certified pediatricians and specialists dedicated to your child's health.",
+      "layout_hint": "carousel",
+      "interactivity": "Hovering over a doctor's photo reveals their medical philosophy.",
+      "items": [
+        {
+          "title": "Dr. Sarah Chen",
+          "description": "Board-certified Pediatrician with 12 years of experience in neonatal care.",
+          "label": "Lead Pediatrician",
+          "image_query": "female pediatrician portrait smiling"
+        },
+        {
+          "title": "Maya Rodriguez, IBCLC",
+          "description": "Certified Lactation Consultant specializing in breastfeeding challenges.",
+          "label": "Lactation Specialist",
+          "image_query": "female medical professional portrait"
+        },
+        {
+          "title": "Dr. James Wilson",
+          "description": "Pediatrician focused on adolescent health and preventative wellness.",
+          "label": "Pediatrician",
+          "image_query": "male pediatrician portrait smiling"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "parent-reviews",
+      "type": "testimonials",
+      "role": "Provide social proof from local parents.",
+      "nav_label": "Reviews",
+      "headline": "Loved by Seattle parents.",
+      "subheadline": "See why families across the city are making the switch to Little Roots.",
+      "layout_hint": "grid-3",
+      "archetype": "glass-cards-bg",
+      "interactivity": "Testimonial cards have a subtle hover lift effect.",
+      "items": [
+        {
+          "title": "Emily R.",
+          "description": "The ability to text Dr. Chen at 2am when my son had a fever was a total game changer. I've never felt so supported.",
+          "label": "Capitol Hill Parent",
+          "value": "5.0"
+        },
+        {
+          "title": "David L.",
+          "description": "The clinic is so beautiful my kids actually look forward to going. No more waiting rooms or stressful visits.",
+          "label": "Ballard Parent",
+          "value": "5.0"
+        },
+        {
+          "title": "Jessica M.",
+          "description": "The lactation support here saved my breastfeeding journey. Maya was patient, kind, and incredibly knowledgeable.",
+          "label": "Queen Anne Parent",
+          "value": "5.0"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "common-questions",
+      "type": "faq",
+      "role": "Address insurance and membership concerns.",
+      "nav_label": "FAQ",
+      "headline": "Your questions, answered.",
+      "subheadline": "Everything you need to know about insurance, memberships, and our care model.",
+      "layout_hint": "accordion",
+      "interactivity": "FAQ accordion with smooth open/close transitions.",
+      "items": [
+        {
+          "title": "Do you accept insurance?",
+          "description": "Yes, we accept most major PPO insurance plans for medical visits. Our membership fee covers the non-clinical amenities like 24/7 texting."
+        },
+        {
+          "title": "What is the membership fee?",
+          "description": "Our membership is $40/month per child, which provides direct access to your doctor and our custom parent app."
+        },
+        {
+          "title": "Can I book a same-day appointment?",
+          "description": "Absolutely. We reserve slots every day for urgent sick visits to ensure your child is seen when they need it most."
+        },
+        {
+          "title": "How does the 24/7 texting work?",
+          "description": "Members can message our clinical team anytime through our secure app for medical advice, refills, or scheduling."
+        },
+        {
+          "title": "Where are you located?",
+          "description": "Our flagship clinic is located in the South Lake Union neighborhood of Seattle, with easy parking for parents."
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "booking",
+      "type": "booking_form",
+      "role": "Final conversion point.",
+      "nav_label": "Book",
+      "headline": "Join the Little Roots family.",
+      "subheadline": "Start your journey toward better pediatric care today. Select a visit type to begin.",
+      "layout_hint": "centered-stack",
+      "interactivity": "Multi-step form that captures visit type before redirecting to the scheduler.",
+      "items": [
+        {
+          "title": "Well-Child Visit",
+          "description": "Routine check-up and vaccinations."
+        },
+        {
+          "title": "Sick Visit",
+          "description": "Urgent care for coughs, fevers, or rashes."
+        },
+        {
+          "title": "Lactation Consult",
+          "description": "Specialized feeding support."
+        }
+      ],
+      "cta": {
+        "label": "Check Availability",
+        "href": "#"
+      },
+      "image_queries": []
+    },
+    {
+      "id": "footer",
+      "type": "footer",
+      "role": "site-wide nav",
+      "headline": "Little Roots",
+      "subheadline": "",
+      "layout_hint": "footer-columns",
+      "items": [],
+      "image_queries": []
+    }
+  ],
+  "page_features": [
+    "sticky_cta",
+    "floating_chat"
+  ],
+  "design_seed": 3754,
+  "primary_cta": {
+    "label": "Book Appointment",
+    "href": "#booking"
+  },
+  "domain_keywords": [
+    "modern pediatric clinic",
+    "seattle family doctor",
+    "lactation consultant seattle",
+    "virtual pediatric care",
+    "boutique healthcare interior"
+  ],
+  "ctas": {
+    "primary": {
+      "label": "Get started",
+      "href": "#contact"
+    },
+    "secondary": {
+      "label": "Learn more",
+      "href": "#features"
+    }
+  },
+  "design_tokens": {
+    "card_class": "bg-card shadow-md hover:shadow-xl rounded-3xl",
+    "button_radius_class": "rounded-full",
+    "image_radius_class": "rounded-[40%_60%_70%_30%/40%_50%_60%_50%]",
+    "section_padding_class": "py-16 sm:py-20 lg:py-24",
+    "transition_class": "transition-all duration-700 ease-out",
+    "hover_lift_class": "hover:-translate-y-1 hover:shadow-md",
+    "_resolved_accent_shape": "blob",
+    "_resolved_surface": "elevated",
+    "_resolved_motion": "organic",
+    "_resolved_section_rhythm": "balanced",
+    "_resolved_image_treatment": "masked"
+  }
+}

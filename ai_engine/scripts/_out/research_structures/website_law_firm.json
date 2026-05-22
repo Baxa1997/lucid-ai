@@ -1,0 +1,199 @@
+{
+  "brand": {
+    "name": "Carrillo Law",
+    "tagline": "Your trusted partner for a new beginning in the United States.",
+    "domain": "services_local"
+  },
+  "pages": [
+    {
+      "route": "/",
+      "title": "Home",
+      "purpose": "The homepage introduces Carrillo Law, highlights its core services, and establishes trust and warmth to encourage visitors to explore further.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "icon-grid-3",
+          "archetype": "icon-grid-3"
+        },
+        {
+          "type": "how_it_works",
+          "layout_hint": "numbered-stepper",
+          "archetype": "numbered-stepper"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "marquee-row",
+          "archetype": "marquee-row"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-3"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/visa-types",
+      "title": "Visa Types",
+      "purpose": "This page provides an overview of the various visa categories Carrillo Law specializes in, helping potential clients identify their specific needs.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "features",
+          "layout_hint": "grid-2",
+          "archetype": "icon-grid-3"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "two-column"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "visa_types"
+    },
+    {
+      "route": "/attorneys",
+      "title": "Our Attorneys",
+      "purpose": "This page introduces the legal team at Carrillo Law, showcasing their expertise, experience, and commitment to clients.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "split-image-left"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-3"
+        },
+        {
+          "type": "philosophy",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "two-column"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "attorneys"
+    },
+    {
+      "route": "/success-stories",
+      "title": "Success Stories",
+      "purpose": "This page highlights successful client cases, demonstrating the firm's capabilities and building confidence with prospective clients.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "asymmetric-split"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "big-quote-portrait",
+          "archetype": "big-quote-portrait"
+        },
+        {
+          "type": "stats",
+          "layout_hint": "stat-band"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "success_stories"
+    },
+    {
+      "route": "/consultation",
+      "title": "Schedule a Consultation",
+      "purpose": "This page provides clear information on how to schedule a consultation, outlining the process and what to expect.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "process",
+          "layout_hint": "numbered-stepper",
+          "archetype": "numbered-stepper"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        },
+        {
+          "type": "contact",
+          "layout_hint": "two-column"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/about",
+      "title": "About Us",
+      "purpose": "The About Us page tells the story of Carrillo Law, its mission, values, and commitment to the community.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "split-image-right"
+        },
+        {
+          "type": "story",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "philosophy",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-4"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "two-column"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/contact",
+      "title": "Contact Us",
+      "purpose": "This page provides all necessary contact information and a form for inquiries, making it easy for clients to reach out.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "contact",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "locations",
+          "layout_hint": "grid-2"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        }
+      ],
+      "detail_template": false
+    }
+  ]
+}

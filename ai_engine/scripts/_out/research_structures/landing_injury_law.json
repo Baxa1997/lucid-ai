@@ -1,0 +1,372 @@
+{
+  "brand": {
+    "name": "Hartwell Law",
+    "tagline": "Houston's Dedicated Car Accident Advocates",
+    "description": "Aggressive representation for Houston car accident victims. No fee unless we win, and your initial case review is always free.",
+    "domain": "hartwelllaw.com",
+    "business_info": {
+      "address": "1200 Smith St, Houston, TX 77002",
+      "phone": "(713) 555-0199",
+      "email": "intake@hartwelllaw.com",
+      "hours": "Open 24/7 for Emergency Case Reviews"
+    }
+  },
+  "palette": {
+    "primary": "215 30% 15%",
+    "secondary": "40 20% 90%",
+    "accent": "15 60% 45%",
+    "background": "40 15% 96%",
+    "foreground": "215 20% 10%",
+    "muted": "30 10% 60%",
+    "border": "40 15% 85%",
+    "card": "0 0% 100%"
+  },
+  "typography": {
+    "heading_font": "Cormorant Garamond",
+    "body_font": "Inter",
+    "scale": "balanced"
+  },
+  "motif": "editorial",
+  "design_system": {
+    "motion": "subtle",
+    "accent_shape": "hairline",
+    "surface": "flat",
+    "image_treatment": "natural",
+    "section_rhythm": "balanced"
+  },
+  "personality": {
+    "tone": "confident",
+    "vibe_keywords": [
+      "authoritative",
+      "empathetic",
+      "premium",
+      "resolute"
+    ],
+    "energy": "medium"
+  },
+  "header_archetype": "transparent-pill",
+  "footer_archetype": "mega-columns",
+  "references": [
+    {
+      "url": "https://www.sutliffstout.com",
+      "name": "Sutliff & Stout",
+      "why": "Standard high-converting local legal structure tailored to the Houston market.",
+      "section_order": [
+        "hero",
+        "trust_bar",
+        "features",
+        "team",
+        "testimonials",
+        "contact_form"
+      ],
+      "notable_features": [
+        "Animated settlement counters",
+        "Interactive practice area grid"
+      ]
+    },
+    {
+      "url": "https://www.forthepeople.com",
+      "name": "Morgan & Morgan",
+      "why": "Gold standard for aggressive conversion optimization and multi-step lead capture.",
+      "section_order": [
+        "hero",
+        "trust_bar",
+        "lead_form",
+        "features",
+        "stats"
+      ],
+      "notable_features": [
+        "Multi-step lead capture",
+        "24/7 live intake chat"
+      ]
+    },
+    {
+      "url": "https://psbr.law",
+      "name": "Panish Shea Boyle Ravipudi",
+      "why": "Premium national firm showing how to balance high-end branding with aggressive results.",
+      "section_order": [
+        "hero",
+        "stats",
+        "features",
+        "press",
+        "team"
+      ],
+      "notable_features": [
+        "Editorial typography",
+        "Interactive verdict carousel"
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "id": "hero-intake",
+      "type": "hero",
+      "role": "Immediate lead capture and value proposition",
+      "headline": "Injured in a Houston Car Accident? We Fight. You Recover.",
+      "subheadline": "Get the compensation you deserve with Hartwell Law. No upfront costs, no hidden fees, and no payment unless we win your case.",
+      "layout_hint": "asymmetric-split",
+      "archetype": "card-stack",
+      "interactivity": "multi-step form validation for accident date and type",
+      "cta": {
+        "label": "Free Case Review",
+        "href": "#case-review"
+      },
+      "image_queries": [
+        "houston skyline highway traffic sunset"
+      ],
+      "items": []
+    },
+    {
+      "id": "authority-bar",
+      "type": "trust_bar",
+      "role": "Social proof and authority building",
+      "headline": "Proven Results for Houston Families",
+      "layout_hint": "logo-strip",
+      "interactivity": "auto-scrolling settlement ticker",
+      "items": [
+        {
+          "title": "$2.5 Million",
+          "label": "Auto Accident Settlement"
+        },
+        {
+          "title": "$1.8 Million",
+          "label": "Trucking Collision Verdict"
+        },
+        {
+          "title": "Top 100",
+          "label": "Trial Lawyers Association"
+        },
+        {
+          "title": "SuperLawyers",
+          "label": "2023 Award Recipient"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "practice-areas",
+      "type": "features",
+      "nav_label": "Expertise",
+      "role": "Segmenting leads by accident type",
+      "headline": "Specialized Representation for Serious Injuries",
+      "subheadline": "Our firm focuses exclusively on personal injury litigation to ensure maximum recovery for our clients.",
+      "layout_hint": "grid-4",
+      "archetype": "icon-grid-3",
+      "interactivity": "hover states reveal specific case filing deadlines",
+      "items": [
+        {
+          "title": "Car Accidents",
+          "description": "Navigating complex insurance claims and liability disputes after a passenger vehicle collision.",
+          "icon": "Car"
+        },
+        {
+          "title": "Trucking Wrecks",
+          "description": "Holding commercial trucking companies accountable for federal safety violations and negligence.",
+          "icon": "Truck"
+        },
+        {
+          "title": "Motorcycle Crashes",
+          "description": "Protecting the rights of riders against biased investigations and severe road injuries.",
+          "icon": "Bike"
+        },
+        {
+          "title": "Wrongful Death",
+          "description": "Compassionate legal support for families seeking justice after a fatal accident.",
+          "icon": "Heart"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "no-fee-guarantee",
+      "type": "value_prop",
+      "nav_label": "Guarantee",
+      "role": "Removing financial barriers to entry",
+      "headline": "The Hartwell No-Fee Guarantee",
+      "subheadline": "We believe everyone deserves elite legal counsel, regardless of their current financial situation.",
+      "layout_hint": "split-image-bullets",
+      "archetype": "numbered-stepper",
+      "interactivity": "smooth-scroll to contact form on bullet click",
+      "items": [
+        {
+          "title": "Zero Upfront Costs",
+          "description": "We cover all investigation and filing fees so you can focus on your medical recovery."
+        },
+        {
+          "title": "Contingency Based",
+          "description": "Our legal fee is a percentage of the final settlement. If we don't win, you owe us nothing."
+        },
+        {
+          "title": "Free Consultations",
+          "description": "Speak directly with an attorney to evaluate your claim at no cost to you."
+        }
+      ],
+      "image_queries": [
+        "lawyer shaking hands with client"
+      ]
+    },
+    {
+      "id": "attorney-profile",
+      "type": "team",
+      "nav_label": "Attorneys",
+      "role": "Humanizing the firm and building trust",
+      "headline": "Meet Your Lead Advocates",
+      "subheadline": "Experienced litigators who aren't afraid to take your case to a Houston jury.",
+      "layout_hint": "grid-2",
+      "items": [
+        {
+          "title": "James Hartwell, Esq.",
+          "description": "Founding Partner with over 15 years of experience in Texas personal injury law.",
+          "label": "Lead Trial Attorney",
+          "image_query": "professional male lawyer portrait suit"
+        },
+        {
+          "title": "Sarah Miller, Esq.",
+          "description": "Specialist in commercial trucking litigation and insurance negotiation.",
+          "label": "Senior Associate",
+          "image_query": "professional female lawyer portrait office"
+        }
+      ],
+      "image_queries": [
+        "professional male lawyer portrait suit",
+        "professional female lawyer portrait office"
+      ],
+      "interactivity": ""
+    },
+    {
+      "id": "client-success",
+      "type": "testimonials",
+      "nav_label": "Reviews",
+      "role": "Social proof through client stories",
+      "headline": "What Our Clients Say",
+      "subheadline": "Real stories of recovery and justice from across the Greater Houston area.",
+      "layout_hint": "carousel",
+      "archetype": "glass-cards-bg",
+      "interactivity": "video lightbox for client video testimonials",
+      "items": [
+        {
+          "title": "Michael R.",
+          "description": "After my truck accident, I was overwhelmed. Hartwell Law took over everything and got me a settlement that covered all my surgeries.",
+          "label": "Google Review",
+          "value": "5.0"
+        },
+        {
+          "title": "Elena G.",
+          "description": "They treated me like family, not just a case number. I highly recommend them to anyone injured in Houston.",
+          "label": "Yelp Review",
+          "value": "5.0"
+        },
+        {
+          "title": "David W.",
+          "description": "The communication was excellent. I always knew what was happening with my case and the final result exceeded my expectations.",
+          "label": "Avvo Review",
+          "value": "5.0"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "common-questions",
+      "type": "faq",
+      "nav_label": "FAQ",
+      "role": "Addressing objections and providing immediate value",
+      "headline": "Accident Recovery FAQ",
+      "subheadline": "Answers to the most common questions we hear from accident victims in Texas.",
+      "layout_hint": "accordion",
+      "interactivity": "FAQ accordion with smooth open/close",
+      "items": [
+        {
+          "title": "How much is my car accident case worth?",
+          "description": "Case value depends on medical bills, lost wages, pain and suffering, and insurance limits. We provide a detailed valuation during your free review."
+        },
+        {
+          "title": "How long do I have to file a claim in Texas?",
+          "description": "Generally, the statute of limitations is two years from the date of the accident, but certain factors can shorten this window significantly."
+        },
+        {
+          "title": "Do I have to go to court?",
+          "description": "Most cases settle out of court. However, we prepare every case as if it is going to trial to ensure the insurance company takes us seriously."
+        },
+        {
+          "title": "What if the other driver didn't have insurance?",
+          "description": "We can explore Uninsured Motorist (UM) coverage and other avenues to ensure you are still compensated for your injuries."
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "case-review",
+      "type": "lead_form",
+      "role": "Final conversion point",
+      "headline": "Start Your Free Case Evaluation",
+      "subheadline": "Tell us about your accident. Our legal team will review your details and contact you within 24 hours.",
+      "layout_hint": "two-column",
+      "interactivity": "form submission triggers a 'Success' modal with immediate next steps",
+      "items": [
+        {
+          "title": "Full Name"
+        },
+        {
+          "title": "Phone Number"
+        },
+        {
+          "title": "Accident Date"
+        },
+        {
+          "title": "Brief Description of Injuries"
+        }
+      ],
+      "cta": {
+        "label": "Submit My Case",
+        "href": "#submit"
+      },
+      "image_queries": []
+    },
+    {
+      "id": "footer",
+      "type": "footer",
+      "role": "site-wide nav",
+      "headline": "Hartwell Law",
+      "subheadline": "",
+      "layout_hint": "footer-columns",
+      "items": [],
+      "image_queries": []
+    }
+  ],
+  "page_features": [
+    "sticky_cta",
+    "floating_chat",
+    "exit_intent"
+  ],
+  "ctas": {
+    "primary": {
+      "label": "Call Now: (713) 555-0199",
+      "href": "tel:7135550199"
+    },
+    "secondary": {
+      "label": "Learn more",
+      "href": "#features"
+    }
+  },
+  "domain_keywords": [
+    "houston highway traffic",
+    "lawyer office interior",
+    "car accident scene",
+    "legal documents gavel",
+    "houston skyline night"
+  ],
+  "design_seed": 5125,
+  "design_tokens": {
+    "card_class": "bg-card rounded-lg",
+    "button_radius_class": "rounded-md",
+    "image_radius_class": "rounded-md",
+    "section_padding_class": "py-16 sm:py-20 lg:py-24",
+    "transition_class": "transition-all duration-300",
+    "hover_lift_class": "hover:-translate-y-0.5 hover:shadow-md",
+    "_resolved_accent_shape": "hairline",
+    "_resolved_surface": "flat",
+    "_resolved_motion": "subtle",
+    "_resolved_section_rhythm": "balanced",
+    "_resolved_image_treatment": "natural"
+  }
+}

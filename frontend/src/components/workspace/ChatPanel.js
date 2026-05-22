@@ -39,6 +39,9 @@ export default function ChatPanel() {
     isWizardMode,
     setConversation,
     agentStatus,
+    // Click-to-edit (Base44) — chip + WS payload field
+    editSelection,
+    clearEditSelection,
   } = useWorkspace();
 
   // ── Chat-local state ────────────────────────────────────
@@ -93,9 +96,18 @@ export default function ChatPanel() {
     if (!chatInput.trim() && attachedImages.length === 0) return;
     panelOverrideRef.current = true;
     const text = chatInput.trim();
-    sendMessage(text, attachedImages, { mode: chatMode, webSearch: webSearchEnabled });
+    // Attach any pending click-to-edit selection. Backend reads
+    // ``editable_target`` to skip extractor vocab and route straight
+    // to the direct-edit fast path with a 100%-confidence EditIntent.
+    const sendOptions = {
+      mode: chatMode,
+      webSearch: webSearchEnabled,
+      ...(editSelection ? { editableTarget: editSelection } : {}),
+    };
+    sendMessage(text, attachedImages, sendOptions);
     setChatInput('');
     setAttachedImages([]);
+    if (editSelection) clearEditSelection?.();
 
     if (conversation?.id && text) {
       saveChatMessage(conversationId, { role: 'user', content: text });
@@ -271,6 +283,34 @@ export default function ChatPanel() {
     });
   }, []);
 
+  // ── Paste handler ───────────────────────────────────────
+  // Cmd/Ctrl+V of a clipboard image (e.g. a screenshot) attaches the
+  // image like the picker / drop paths. preventDefault only when an
+  // image item is present so plain-text paste keeps working normally.
+  const handlePaste = useCallback((e) => {
+    const items = Array.from(e.clipboardData?.items || []);
+    const imageItems = items.filter(
+      (it) => it.kind === 'file' && it.type.startsWith('image/'),
+    );
+    if (imageItems.length === 0) return;
+    e.preventDefault();
+    imageItems.forEach((it) => {
+      const file = it.getAsFile();
+      if (!file) return;
+      setAttachedImages((prev) => {
+        if (prev.length >= 5) return prev;
+        return [...prev, { name: file.name || 'pasted-image', data: null, file, size: file.size }];
+      });
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        setAttachedImages((prev) =>
+          prev.map((img) => (img.file === file ? { ...img, data: ev.target.result } : img)),
+        );
+      };
+      reader.readAsDataURL(file);
+    });
+  }, []);
+
   // ── Render ──────────────────────────────────────────────
   return (
     <>
@@ -421,8 +461,19 @@ export default function ChatPanel() {
         </div>
       )}
 
-      {/* Input bar */}
-      <div className="shrink-0 bg-[#f8f9fc] dark:bg-[#0d1117] px-3 pb-3">
+      {/* Input bar — also a drop target so dragging an image directly
+          onto the textarea triggers the overlay (the chat-stream onDragEnter
+          alone misses drops aimed at the input). */}
+      <div
+        className="shrink-0 bg-[#f8f9fc] dark:bg-[#0d1117] px-3 pb-3"
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}>
+        {/* Click-to-edit lives entirely in the preview-side overlay
+            (PreviewEditOverlay). We deliberately don't repeat the
+            selection as a chip here — it would duplicate the overlay's
+            tag badge and confuse the user about where to type. The
+            selection is still attached to the next outbound message
+            via handleSend reading editSelection from context. */}
         {attachedImages.length > 0 && (
           <div className="mb-2">
             <div className="flex gap-2 flex-wrap">
@@ -458,7 +509,8 @@ export default function ChatPanel() {
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="What would you like to change?"
+              onPaste={handlePaste}
+              placeholder="What would you like to change? (paste or drop images)"
               className="w-full px-4 pt-3.5 pb-8 min-h-[80px] max-h-[240px] outline-none text-[13px] text-[#1f2937] dark:text-slate-100 placeholder:text-[#9ca3af] dark:placeholder:text-slate-500 resize-none leading-relaxed break-words"
               style={{ background: 'transparent', wordBreak: 'break-word', overflowWrap: 'break-word' }}
               rows={2}

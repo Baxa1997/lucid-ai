@@ -36,8 +36,8 @@ from typing import Any
 SECTION_SCHEMAS: dict[str, dict[str, Any]] = {
 
     "hero": {
-        "headline": "STRING — 5-10 words, bold and direct, the page's primary message",
-        "subheadline": "STRING — 1-2 sentences supporting the headline",
+        "headline": "STRING — 5-10 words, bold and direct, the page's primary message. Must use the brand's actual voice (industry vocab + regional anchors) — never generic SaaS-speak.",
+        "subheadline": "STRING — 1-2 sentences supporting the headline, concrete nouns and numbers",
         "body": "STRING — optional 1-2 sentence supporting paragraph; '' if not needed",
         "primary_cta": {
             "label": "STRING — button text, 2-4 words, action verb",
@@ -48,9 +48,10 @@ SECTION_SCHEMAS: dict[str, dict[str, Any]] = {
             "href": "STRING — empty string if no secondary CTA",
         },
         "image": {
-            "url": "STRING — Unsplash/CDN URL or '' if no hero image",
+            "url": "STRING — '' (the downstream Unsplash binder fills this from image_queries[0])",
             "alt": "STRING — descriptive alt text, '' if no image",
         },
+        "image_queries": "ARRAY[1]: STRING — exactly ONE Unsplash search query (3-6 words). Must be a CONCRETE SUBJECT noun rooted in this brand's actual work — e.g. 'freight truck highway sunset' (not 'logistics hero'); 'sourdough crust crumb closeup' (not 'restaurant hero'); 'boutique paris balcony wood floor' (not 'hotel hero'). NEVER 'modern <industry> hero' — that's exactly the generic pattern we are killing.",
     },
 
     "value_prop": {
@@ -59,7 +60,7 @@ SECTION_SCHEMAS: dict[str, dict[str, Any]] = {
         "items": [
             {
                 "title": "STRING — value bullet title, 2-4 words",
-                "body": "STRING — 1-2 sentence explanation",
+                "body": "STRING — 1-2 sentence CONCRETE benefit (not 'we do it well'); cite an actual differentiator",
                 "icon": "STRING — lucide-react icon name, e.g. 'Zap', 'Shield', 'Star'",
             },
         ],
@@ -70,8 +71,8 @@ SECTION_SCHEMAS: dict[str, dict[str, Any]] = {
         "subheadline": "STRING — 1 sentence elaboration",
         "items": [
             {
-                "title": "STRING — feature title",
-                "body": "STRING — 1-2 sentence description",
+                "title": "STRING — feature title (2-5 words, specific capability)",
+                "body": "STRING — 1-2 sentence concrete description (what it actually does, not 'streamlines your workflow')",
                 "icon": "STRING — lucide-react icon name",
                 "image": {
                     "url": "STRING — '' if not used",
@@ -117,9 +118,9 @@ SECTION_SCHEMAS: dict[str, dict[str, Any]] = {
         "subheadline": "STRING — '' if not needed",
         "items": [
             {
-                "quote": "STRING — 1-3 sentence testimonial",
-                "name": "STRING — person's name",
-                "role": "STRING — title, e.g. 'CTO'",
+                "quote": "STRING — 18-30 word direct quote that SOUNDS like the audience speaks (use voice phrases); avoid 'great service, would recommend'",
+                "name": "STRING — person's real-sounding name (not 'John Doe')",
+                "role": "STRING — title, e.g. 'CTO' or 'Owner-Operator, 12 years'",
                 "company": "STRING — company name",
                 "avatar": {
                     "url": "STRING — '' if no photo",
@@ -127,6 +128,7 @@ SECTION_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
             },
         ],
+        "image_queries": "ARRAY[3-4]: STRING — one PORTRAIT query per testimonial item, parallel to items[]. E.g. 'professional portrait smiling cdl truck driver', 'female restaurant owner kitchen apron'. NOT 'business person headshot'.",
     },
 
     "cta_block": {
@@ -141,16 +143,17 @@ SECTION_SCHEMAS: dict[str, dict[str, Any]] = {
             "href": "STRING — '' if not used",
         },
         "image": {
-            "url": "STRING — '' if not used",
+            "url": "STRING — '' (binder fills from image_queries[0] if present)",
             "alt": "STRING — '' if not used",
         },
+        "image_queries": "ARRAY[0-1]: STRING — empty array if pure-text CTA; one query if you want a backdrop photo. Concrete subject, not 'business action'.",
     },
 
     "story": {
         "headline": "STRING — section headline",
-        "body": "STRING — 2-4 paragraph narrative, separated by \\n\\n",
+        "body": "STRING — 2-4 paragraph narrative, separated by \\n\\n. PERSONAL voice, REAL details (year founded, city, what changed), not 'on a mission to revolutionize'",
         "image": {
-            "url": "STRING — '' if not used",
+            "url": "STRING — '' (binder fills from image_queries[0])",
             "alt": "STRING — '' if not used",
         },
         "milestones": [
@@ -160,6 +163,7 @@ SECTION_SCHEMAS: dict[str, dict[str, Any]] = {
                 "body": "STRING — 1 sentence detail",
             },
         ],
+        "image_queries": "ARRAY[1-2]: STRING — 1-2 photo queries matching the narrative (founders working, original location, etc.) — NOT 'team meeting'.",
     },
 
     "team": {
@@ -167,15 +171,16 @@ SECTION_SCHEMAS: dict[str, dict[str, Any]] = {
         "subheadline": "STRING — '' if not needed",
         "items": [
             {
-                "name": "STRING — full name",
+                "name": "STRING — real-sounding full name",
                 "role": "STRING — title",
-                "bio": "STRING — 1-2 sentence bio",
+                "bio": "STRING — 1-2 sentence bio with a specific detail (years exp, prior role, specialty)",
                 "avatar": {
                     "url": "STRING",
                     "alt": "STRING",
                 },
             },
         ],
+        "image_queries": "ARRAY[3-6]: STRING — one portrait query per team member, parallel to items[]. Vary subjects to avoid stock-photo sameness.",
     },
 
     "contact": {
@@ -239,11 +244,73 @@ SECTION_SCHEMAS: dict[str, dict[str, Any]] = {
         "subheadline": "STRING — '' if not needed",
         "items": [
             {
-                "image_url": "STRING — image URL",
+                "image_url": "STRING — '' (binder fills from image_queries parallel index)",
                 "caption": "STRING — '' if no caption",
                 "alt": "STRING — descriptive alt text",
             },
         ],
+        "image_queries": "ARRAY[4-8]: STRING — DISTINCT subject queries (no duplicates), parallel to items[]. Each must be a concrete subject noun, not a vibe word. E.g. 'kyoto temple sunset garden', 'sourdough loaf crumb closeup', 'workshop hand-stitched leather'.",
+    },
+
+    # ── Domain-specific section types that website_plan can emit ─────────
+    # These were missing from the original schema set, which meant
+    # expand_page_brief dropped them silently and Claude saw zero content
+    # for restaurant menus, press lists, multi-location pages, etc.
+
+    "menu": {
+        "headline": "STRING — e.g. 'Dishes' or 'Today's menu'",
+        "subheadline": "STRING — '' if not needed",
+        "items": [
+            {
+                "title": "STRING — dish name (real-sounding, not 'Signature Burger')",
+                "body": "STRING — 12-22 word ingredient sentence — proteins, sauce, side, technique",
+                "price": "STRING — e.g. '$18' or '' if not relevant",
+                "image": {
+                    "url": "STRING — '' (binder fills)",
+                    "alt": "STRING",
+                },
+            },
+        ],
+        "image_queries": "ARRAY[4-8]: STRING — one cuisine+dish query per item, parallel to items[]. E.g. 'spaghetti carbonara plated marble', 'wood-fired margherita pizza closeup'.",
+    },
+
+    "press": {
+        "headline": "STRING — e.g. 'Recognized for excellence'",
+        "subheadline": "STRING — '' or one plain sentence; NO pill words",
+        "items": [
+            {
+                "title": "STRING — actual publication / award NAME (e.g. 'Eater NY', 'James Beard Foundation', 'The Infatuation') — NEVER an adjective like 'Authentic' or 'Passionate'",
+                "body": "STRING — 8-16 word quote or accolade WITH attribution",
+                "value": "STRING — year or rating (e.g. '2024', '4.7') or ''",
+                "label": "STRING — publication name verbatim, same as title",
+            },
+        ],
+    },
+
+    "locations": {
+        "headline": "STRING — e.g. 'Visit us'",
+        "subheadline": "STRING — '' if not needed",
+        "items": [
+            {
+                "name": "STRING — branch/location name",
+                "address": "STRING — full street address",
+                "phone": "STRING — phone number or ''",
+                "hours": "STRING — e.g. 'Mon-Fri 9-6, Sat 10-4'",
+                "directions_url": "STRING — Google Maps URL or ''",
+            },
+        ],
+        "image_queries": "ARRAY[1-3]: STRING — storefront exterior queries, one per location ideally. E.g. 'brooklyn restaurant storefront brownstone'.",
+    },
+
+    "reservation": {
+        "headline": "STRING — e.g. 'Reserve a table'",
+        "subheadline": "STRING — 1 sentence intro",
+        "instructions": "STRING — 1-2 sentence note about reservation policy or '' ",
+        "primary_cta": {
+            "label": "STRING — e.g. 'Book a table'",
+            "href": "STRING — typically '#reservation-form' or external booking URL",
+        },
+        "fields_hint": "STRING — comma-separated form field names, e.g. 'name, email, party-size, date, time, notes'",
     },
 }
 
@@ -255,6 +322,9 @@ SECTION_TYPE_ALIASES: dict[str, str] = {
     "value-prop": "value_prop",
     "feature_grid": "features",
     "features_grid": "features",
+    "services": "features",
+    "capabilities": "features",
+    "benefits": "value_prop",
     "pricing": "pricing_table",
     "plans": "pricing_table",
     "social_proof": "testimonials",
@@ -263,6 +333,10 @@ SECTION_TYPE_ALIASES: dict[str, str] = {
     "call_to_action": "cta_block",
     "about": "story",
     "our_story": "story",
+    "philosophy": "story",
+    "mission": "story",
+    "values": "story",
+    "history": "story",
     "team_members": "team",
     "contact_form": "contact",
     "stats_block": "stats",
@@ -271,8 +345,20 @@ SECTION_TYPE_ALIASES: dict[str, str] = {
     "trusted_by": "logos",
     "process": "how_it_works",
     "steps": "how_it_works",
+    "journey": "how_it_works",
     "subscribe": "newsletter",
     "image_gallery": "gallery",
+    # Domain-specific (now have dedicated schemas):
+    "dishes": "menu",
+    "featured_dishes": "menu",
+    "menu_items": "menu",
+    "awards": "press",
+    "publications": "press",
+    "press_features": "press",
+    "branches": "locations",
+    "stores": "locations",
+    "reservations": "reservation",
+    "booking": "reservation",
 }
 
 
@@ -294,6 +380,10 @@ SECTION_DESCRIPTIONS: dict[str, str] = {
     "how_it_works": "Numbered process explanation. 3-5 steps that read in sequence.",
     "newsletter": "Email capture for marketing. Promise something specific in subscription value.",
     "gallery": "Visual showcase. Photos do the work; captions are optional supporting context.",
+    "menu": "Restaurant / food menu. Each item is a real-sounding dish name + ingredient sentence + price.",
+    "press": "Publications, awards, recognition. Title is the publication NAME (Eater NY, James Beard, etc.) — never an adjective.",
+    "locations": "Multi-branch listings. Each entry is a real address + hours + phone.",
+    "reservation": "Reservation / booking interface. Either a form or an external booking link.",
 }
 
 

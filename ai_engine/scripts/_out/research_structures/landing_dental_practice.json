@@ -1,0 +1,384 @@
+{
+  "brand": {
+    "name": "Bloom Dental",
+    "tagline": "Modern Dentistry for the Austin Lifestyle",
+    "description": "Experience hospitality-driven dental care in Austin. From routine cleanings to Invisalign, we treat your smile with modern technology.",
+    "domain": "bloomdentalatx.com",
+    "business_info": {
+      "address": "1201 S Congress Ave, Austin, TX 78704",
+      "phone": "(512) 555-0198",
+      "email": "hello@bloomdentalatx.com",
+      "hours": "Mon-Fri: 8am - 6pm\nSat: 9am - 2pm\nSun: Closed"
+    },
+    "social": [
+      {
+        "label": "instagram",
+        "href": "https://instagram.com/bloomdentalatx"
+      },
+      {
+        "label": "facebook",
+        "href": "https://facebook.com/bloomdentalatx"
+      }
+    ]
+  },
+  "palette": {
+    "primary": "140 30% 25%",
+    "secondary": "20 60% 65%",
+    "accent": "150 40% 80%",
+    "background": "40 20% 96%",
+    "foreground": "210 15% 15%",
+    "muted": "30 10% 85%",
+    "border": "40 15% 90%",
+    "card": "0 0% 100%"
+  },
+  "typography": {
+    "heading_font": "Fraunces",
+    "body_font": "DM Sans",
+    "scale": "expressive"
+  },
+  "motif": "organic",
+  "design_system": {
+    "motion": "organic",
+    "accent_shape": "pill",
+    "surface": "elevated",
+    "image_treatment": "natural",
+    "section_rhythm": "balanced"
+  },
+  "personality": {
+    "tone": "encouraging",
+    "vibe_keywords": [
+      "warm",
+      "fresh",
+      "holistic",
+      "inviting",
+      "modern"
+    ],
+    "energy": "medium"
+  },
+  "header_archetype": "transparent-pill",
+  "footer_archetype": "mega-columns",
+  "page_features": [
+    "sticky_cta",
+    "floating_chat"
+  ],
+  "references": [
+    {
+      "url": "https://hellotend.com",
+      "name": "Tend Dental",
+      "why": "Gold standard for hospitality-driven dental experiences with seamless booking and modern aesthetics.",
+      "section_order": [
+        "hero",
+        "trust_bar",
+        "value_prop",
+        "features",
+        "locations",
+        "testimonials"
+      ],
+      "notable_features": [
+        "interactive service grid",
+        "booking modal",
+        "sticky_cta"
+      ]
+    },
+    {
+      "url": "https://austincosmetic.com",
+      "name": "Austin Cosmetic Dentistry",
+      "why": "Strong local competitor focusing on visual proof and high-ticket cosmetic results.",
+      "section_order": [
+        "hero",
+        "gallery",
+        "team",
+        "testimonials"
+      ],
+      "notable_features": [
+        "before/after sliders",
+        "video testimonials"
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "id": "hero-welcome",
+      "type": "hero",
+      "role": "Establish hospitality vibe and drive immediate booking",
+      "headline": "A dental experience that actually feels like a breath of fresh air.",
+      "subheadline": "Modern, judgment-free dentistry in the heart of Austin. Book your cleaning or consultation in seconds.",
+      "layout_hint": "asymmetric-split",
+      "archetype": "video-mask",
+      "interactivity": "filter widget for 'Reason for Visit' including Cleaning, Whitening, and Invisalign",
+      "image_queries": [
+        "modern dental clinic interior plants sunlight"
+      ],
+      "cta": {
+        "label": "Book Online",
+        "href": "#booking"
+      },
+      "items": []
+    },
+    {
+      "id": "trust-ticker",
+      "type": "trust_bar",
+      "role": "Build immediate local authority",
+      "headline": "Austin's most loved dental studio",
+      "layout_hint": "logo-strip",
+      "items": [
+        {
+          "title": "Austin Monthly",
+          "label": "Best of ATX 2023"
+        },
+        {
+          "title": "Google Reviews",
+          "label": "4.9 Stars (500+)"
+        },
+        {
+          "title": "Invisalign",
+          "label": "Platinum Provider"
+        }
+      ],
+      "image_queries": [],
+      "interactivity": ""
+    },
+    {
+      "id": "philosophy",
+      "type": "philosophy",
+      "nav_label": "Story",
+      "role": "Differentiate from clinical corporate dentistry",
+      "headline": "Dental done differently.",
+      "subheadline": "We've redesigned the dental visit from the ground up to prioritize your comfort and peace of mind.",
+      "layout_hint": "grid-3",
+      "archetype": "icon-grid-3",
+      "interactivity": "hover cards reveal detailed philosophy text",
+      "items": [
+        {
+          "title": "Judgment-Free Care",
+          "description": "No lectures, just solutions. We meet you where you are in your oral health journey.",
+          "icon": "Heart"
+        },
+        {
+          "title": "Transparent Pricing",
+          "description": "Know exactly what you'll pay before you sit in the chair. No hidden fees or surprises.",
+          "icon": "DollarSign"
+        },
+        {
+          "title": "Modern Technology",
+          "description": "From 3D scans to Netflix-equipped ceilings, we use tech to make visits faster and easier.",
+          "icon": "Sparkles"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "services",
+      "type": "features",
+      "nav_label": "Services",
+      "role": "Showcase core offerings with e-commerce clarity",
+      "headline": "Curated care for your smile.",
+      "subheadline": "Whether you need a routine refresh or a total transformation, we have you covered.",
+      "layout_hint": "grid-3",
+      "archetype": "icon-grid-3",
+      "interactivity": "cards flip to show starting prices and insurance info",
+      "items": [
+        {
+          "title": "Cleanings & Exams",
+          "description": "Gentle, thorough preventive care using the latest ultrasonic technology.",
+          "image_query": "dental cleaning tools professional"
+        },
+        {
+          "title": "Professional Whitening",
+          "description": "In-office and take-home options that deliver dramatic results without the sensitivity.",
+          "image_query": "woman smiling white teeth"
+        },
+        {
+          "title": "Invisalign",
+          "description": "Clear, comfortable aligners to straighten your smile discreetly and efficiently.",
+          "image_query": "invisalign clear aligners hand"
+        }
+      ],
+      "image_queries": [
+        "dental cleaning tools professional",
+        "woman smiling white teeth",
+        "invisalign clear aligners hand"
+      ]
+    },
+    {
+      "id": "results-gallery",
+      "type": "gallery",
+      "nav_label": "Results",
+      "role": "Visual proof of cosmetic expertise",
+      "headline": "Real smiles, real confidence.",
+      "subheadline": "Browse our gallery of Invisalign and whitening transformations from our Austin patients.",
+      "layout_hint": "bento-mosaic",
+      "archetype": "bento-mosaic",
+      "interactivity": "interactive before/after image sliders",
+      "image_queries": [
+        "teeth whitening before after",
+        "straight teeth smile close up",
+        "happy person smiling Austin",
+        "dental patient transformation",
+        "clear aligner results"
+      ],
+      "items": []
+    },
+    {
+      "id": "meet-the-doctor",
+      "type": "team",
+      "nav_label": "About",
+      "role": "Humanize the practice",
+      "headline": "Meet Dr. Bloom.",
+      "subheadline": "A native Austinite dedicated to combining clinical excellence with a boutique patient experience.",
+      "layout_hint": "split-image-right",
+      "items": [
+        {
+          "title": "Dr. Sarah Bloom",
+          "description": "With over 10 years of experience, Dr. Bloom specializes in cosmetic dentistry and patient comfort.",
+          "label": "Lead Dentist",
+          "image_query": "female dentist portrait modern office"
+        }
+      ],
+      "image_queries": [
+        "female dentist portrait modern office"
+      ],
+      "interactivity": ""
+    },
+    {
+      "id": "special-offer",
+      "type": "mid_cta_banner",
+      "role": "Re-engage and lower barrier to entry",
+      "headline": "Ready to start your journey?",
+      "subheadline": "New patients get a $99 cleaning, exam, and X-ray special. Or book a free Invisalign consultation.",
+      "layout_hint": "centered-stack",
+      "cta": {
+        "label": "Claim Special",
+        "href": "#booking"
+      },
+      "items": [],
+      "image_queries": [],
+      "interactivity": ""
+    },
+    {
+      "id": "reviews",
+      "type": "testimonials",
+      "nav_label": "Reviews",
+      "role": "Social proof from local community",
+      "headline": "What our patients are saying.",
+      "layout_hint": "carousel",
+      "archetype": "glass-cards-bg",
+      "interactivity": "autoplay carousel with manual navigation",
+      "items": [
+        {
+          "title": "Jordan M.",
+          "description": "The most beautiful dental office I've ever seen. The staff is so kind and I actually enjoyed my cleaning!",
+          "label": "Google Review",
+          "value": "5.0"
+        },
+        {
+          "title": "Elena R.",
+          "description": "Finally found a dentist in Austin that doesn't make me feel anxious. My Invisalign process has been seamless.",
+          "label": "Yelp Review",
+          "value": "5.0"
+        },
+        {
+          "title": "Chris T.",
+          "description": "Transparent pricing and high-tech equipment. I love that I can book everything online without calling.",
+          "label": "Google Review",
+          "value": "5.0"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "common-questions",
+      "type": "faq",
+      "nav_label": "FAQ",
+      "role": "Overcome insurance and anxiety objections",
+      "headline": "Frequently Asked Questions",
+      "layout_hint": "accordion",
+      "interactivity": "smooth-opening accordion rows",
+      "items": [
+        {
+          "title": "Do you accept my insurance?",
+          "description": "We are in-network with most major PPO plans and offer transparent out-of-pocket rates for those without insurance."
+        },
+        {
+          "title": "How long does Invisalign take?",
+          "description": "Most cases are completed within 6 to 12 months, though Dr. Bloom will provide a specific timeline during your consultation."
+        },
+        {
+          "title": "Is the whitening treatment painful?",
+          "description": "We use a specialized desensitizing formula that provides professional results with minimal to no discomfort."
+        },
+        {
+          "title": "Where are you located?",
+          "description": "We are located on South Congress, with dedicated parking available for all patients."
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "contact-form",
+      "type": "lead_form",
+      "nav_label": "Contact",
+      "role": "Capture high-intent leads",
+      "headline": "Have a question?",
+      "subheadline": "Send us a message and our team will get back to you within one business hour.",
+      "layout_hint": "two-column",
+      "items": [
+        {
+          "title": "Full Name"
+        },
+        {
+          "title": "Email Address"
+        },
+        {
+          "title": "Service of Interest"
+        },
+        {
+          "title": "Message"
+        }
+      ],
+      "image_queries": [],
+      "interactivity": ""
+    },
+    {
+      "id": "footer",
+      "type": "footer",
+      "role": "site-wide nav",
+      "headline": "Bloom Dental",
+      "subheadline": "",
+      "layout_hint": "footer-columns",
+      "items": [],
+      "image_queries": []
+    }
+  ],
+  "ctas": {
+    "primary": {
+      "label": "Book Online",
+      "href": "#booking"
+    },
+    "secondary": {
+      "label": "Learn more",
+      "href": "#features"
+    }
+  },
+  "domain_keywords": [
+    "modern dental office Austin",
+    "Invisalign consultation",
+    "teeth whitening professional",
+    "boutique dentist interior",
+    "happy patient smile"
+  ],
+  "design_seed": 3802,
+  "design_tokens": {
+    "card_class": "bg-card shadow-md hover:shadow-xl rounded-2xl",
+    "button_radius_class": "rounded-full",
+    "image_radius_class": "rounded-2xl",
+    "section_padding_class": "py-16 sm:py-20 lg:py-24",
+    "transition_class": "transition-all duration-700 ease-out",
+    "hover_lift_class": "hover:-translate-y-1 hover:shadow-md",
+    "_resolved_accent_shape": "pill",
+    "_resolved_surface": "elevated",
+    "_resolved_motion": "organic",
+    "_resolved_section_rhythm": "balanced",
+    "_resolved_image_treatment": "natural"
+  }
+}

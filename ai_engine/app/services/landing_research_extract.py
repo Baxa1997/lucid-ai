@@ -33,9 +33,114 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Any
 
 from app.services.landing_gemini import structured_distill
+
+
+_HSL_RE = re.compile(r"^\s*(\d{1,3}(?:\.\d+)?)\s+(\d{1,3}(?:\.\d+)?)%\s+(\d{1,3}(?:\.\d+)?)%\s*$")
+
+
+def _hsl_saturation(hsl: str) -> float | None:
+    """Parse an HSL string like '30 35% 45%' and return the saturation
+    percentage (0-100). Returns None for unparseable input."""
+    if not isinstance(hsl, str):
+        return None
+    m = _HSL_RE.match(hsl)
+    if not m:
+        return None
+    try:
+        return float(m.group(2))
+    except Exception:
+        return None
+
+
+def _hsl_lightness(hsl: str) -> float | None:
+    if not isinstance(hsl, str):
+        return None
+    m = _HSL_RE.match(hsl)
+    if not m:
+        return None
+    try:
+        return float(m.group(3))
+    except Exception:
+        return None
+
+
+def _palette_mood(bg_l: float | None, prim_sat: float | None) -> str:
+    """Single-word mood read from background lightness + primary saturation —
+    purely for the log line so we can scan logs and see the design vibe."""
+    if bg_l is None:
+        bg_l = 90
+    if prim_sat is None:
+        prim_sat = 0
+    if bg_l < 25:
+        return "moody" if prim_sat >= 50 else "dark-neutral"
+    if bg_l < 60:
+        return "mid-tone"
+    if prim_sat < 30:
+        return "bland-saas"
+    if prim_sat < 50:
+        return "muted-warm"
+    return "bold-warm"
+
+
+def _log_picked_palette(palette: dict, *, source: str) -> None:
+    """Log the picked palette in a single readable block so any generation
+    can be diagnosed from logs alone. Also surfaces saturation warnings.
+
+    Output shape (multi-line, one INFO log line):
+
+        palette PICKED (source=gemini_research) name='Warm Tuscan Earth' mood=bold-warm
+          primary    hsl( 15 65% 45%)  sat=65% lit=45%
+          secondary  hsl(180 30% 35%)
+          accent     hsl( 40 80% 55%)  sat=80%
+          background hsl( 35 25% 96%)  sat=25% lit=96%   ← tinted neutral ✓
+          foreground hsl( 20 30% 18%)
+          muted      hsl( 30 20% 92%)
+          border     hsl( 30 20% 85%)
+          card       hsl( 40 30% 98%)
+    """
+    name = (palette.get("name") or "(unnamed)").strip()
+    prim = (palette.get("primary") or "").strip()
+    bg = (palette.get("background") or "").strip()
+    prim_sat = _hsl_saturation(prim)
+    bg_sat = _hsl_saturation(bg)
+    bg_l = _hsl_lightness(bg)
+    mood = _palette_mood(bg_l, prim_sat)
+
+    def _tag(slot: str) -> str:
+        hsl = (palette.get(slot) or "").strip()
+        sat = _hsl_saturation(hsl)
+        lit = _hsl_lightness(hsl)
+        markers = []
+        if slot == "primary" and sat is not None:
+            markers.append(f"sat={sat:.0f}%")
+            if sat < 40:
+                markers.append("⚠ BLAND (sat<40%)")
+        elif slot == "accent" and sat is not None:
+            markers.append(f"sat={sat:.0f}%")
+        elif slot == "background" and sat is not None:
+            markers.append(f"sat={sat:.0f}%")
+            if lit is not None:
+                markers.append(f"lit={lit:.0f}%")
+            if sat == 0 and lit in (0, 100):
+                markers.append("⚠ PURE WHITE/BLACK")
+            elif sat > 5:
+                markers.append("← tinted ✓")
+            if lit is not None and lit < 25:
+                markers.append("← DARK BG (Bella Luna pattern)")
+        return f"  {slot:<10} hsl({hsl:>14})" + (
+            "   " + "  ".join(markers) if markers else ""
+        )
+
+    slots = ("primary", "secondary", "accent", "background", "foreground", "muted", "border", "card")
+    body = "\n".join(_tag(s) for s in slots)
+    logger.info(
+        "palette PICKED (source=%s) name=%r mood=%s\n%s",
+        source, name, mood, body,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -452,7 +557,21 @@ EXTRACT into JSON matching the schema:
 
 • chosen_typography: pick ONE pairing from TYPOGRAPHY_RESEARCH ===TYPEFACE_PAIRINGS=== that best fits {personality} + {tone}. heading_font and body_font MUST be exact Google Fonts family names. rationale: 1 sentence on why this fits.
 
-• chosen_palette: pick ONE palette from COLOR_RESEARCH ===RECOMMENDED_PALETTES=== that best fits the brief. All 8 slots required as HSL strings in format "H S% L%" (no commas, no hsl() wrapper, no hex). Example: "30 35% 45%". Include the palette's descriptive name.
+• chosen_palette: pick ONE palette from COLOR_RESEARCH ===RECOMMENDED_PALETTES=== using these
+  selection rules (in priority order):
+    1. The palette's PRIMARY saturation must be ≥ 45%. Reject any palette with primary saturation
+       below 40% — those produce bland SaaS output and are the #1 complaint mode.
+    2. Background must be a TINTED brand-tuned neutral (any non-zero saturation is fine), NOT pure
+       white "0 0% 100%" or pure black "0 0% 0%". For moody categories (luxury, fine dining, premium
+       audio, fragrance, fashion), PREFER a dark background palette (background L < 25%).
+    3. Among palettes that pass 1 + 2, pick the one whose PRIMARY hue is most brand-distinctive for
+       THIS {category} + {personality} + {tone} — reference the Mood and "Brand distinctiveness"
+       lines that the research wrote per palette.
+    4. WCAG AA ratio for foreground-on-background should pass; if forced to choose between a
+       distinctive palette that fails WCAG and a bland one that passes, prefer the distinctive one
+       and we'll adjust the foreground in design tokens.
+  All 8 slots required as HSL strings in format "H S% L%" (no commas, no hsl() wrapper, no hex).
+  Example: "30 35% 45%". Include the palette's descriptive name.
 
 • dominant_paradigm: ONE word/phrase from VISUAL_RESEARCH ===DOMINANT_PARADIGMS=== that the chosen design language commits to. Examples: editorial-warm, brutalist-minimal, expressive-maximalist, bento-modular, glassmorphism-futuristic, hand-crafted-illustrated.
 
@@ -539,7 +658,13 @@ async def extract_research_signals(
     #      compete with the lighter calls for the Vertex per-project
     #      concurrency window.
     _VISUAL_DNA_TIMEOUT_S = 180.0
-    _VISUAL_DNA_MAX_TOKENS = 4000
+    # Bumped 4000 → 6000. The schema has 22 section_anatomies fields each
+    # capped at 250 chars, plus 6 other string fields. With a long prompt
+    # (research dumps embedded) Pro's reasoning tokens eat into the response
+    # budget and the JSON truncates mid-string — observed in the LogiFleet
+    # run as "Unterminated string at char 1088, SALVAGED 5 keys". 6000 gives
+    # the model headroom even on the largest brief.
+    _VISUAL_DNA_MAX_TOKENS = 6000
     # Pin visual_dna to gemini-2.5-pro. Pro is ~2× slower than Flash
     # (~30-45s vs ~15-20s) but follows brevity constraints reliably.
     # Flash exhibited a runaway-generation pattern on abstract briefs
@@ -561,8 +686,13 @@ async def extract_research_signals(
             model=_VISUAL_DNA_MODEL,
         )
 
-    # Phase 1: light signal extracts run concurrently — both ~4k max tokens,
-    # both reliably complete in <30s.
+    # Phase 1: light signal extracts run concurrently.
+    # design_signals bumped 4096→8192 because the upgraded chosen_palette
+    # prompt (per-category hue guide + composition recipe + mood/distinctiveness
+    # rationale per palette) plus a longer per_section_approaches list
+    # routinely produces ~5k tokens of output before the JSON closes — at 4096
+    # it was truncating mid-string and the salvage path lost chosen_palette
+    # entirely, falling the brief back to _default_palette().
     domain_raw, design_raw = await asyncio.gather(
         structured_distill(
             domain_prompt, timeout_s,
@@ -570,7 +700,7 @@ async def extract_research_signals(
         ),
         structured_distill(
             design_prompt, timeout_s,
-            label="design_signals", response_schema=_DESIGN_SIGNALS_SCHEMA, max_tokens=4096,
+            label="design_signals", response_schema=_DESIGN_SIGNALS_SCHEMA, max_tokens=8192,
         ),
     )
 
@@ -779,6 +909,19 @@ def enrich_brief_with_signals(brief: dict, signals: dict) -> dict:
     if all(palette.get(slot) for slot in palette_slots):
         brief["palette"] = {slot: palette[slot] for slot in palette_slots}
         brief.setdefault("_research", {})["palette_name"] = palette.get("name", "")
+        _log_picked_palette(palette, source="gemini_research")
+    elif palette:
+        # Partial palette returned — log what was missing so we can spot
+        # research-output drift in the wild. The brief.palette stays unset
+        # here and the downstream merge in landing_brief.py backfills from
+        # _default_palette() — which is now a warm editorial neutral, not
+        # the old SaaS blue.
+        missing = [s for s in palette_slots if not palette.get(s)]
+        logger.warning(
+            "palette: research returned partial palette (name=%r), missing slots: %s — "
+            "falling back to defaults for those slots",
+            palette.get("name", "?"), missing,
+        )
 
     # Typography override
     typo = design.get("chosen_typography") or {}

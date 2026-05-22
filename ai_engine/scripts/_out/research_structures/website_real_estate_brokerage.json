@@ -1,0 +1,262 @@
+{
+  "brand": {
+    "name": "Coast & Co",
+    "tagline": "Miami's Premier Luxury Real Estate Team: Where Coastal Living Meets Unrivaled Expertise.",
+    "domain": "real_estate"
+  },
+  "pages": [
+    {
+      "route": "/",
+      "title": "Luxury Miami Real Estate",
+      "purpose": "Showcase Coast & Co's expertise in luxury Miami real estate, highlight key listings, and establish trust.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "trust_bar",
+          "layout_hint": "logo-strip"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "icon-grid-3",
+          "archetype": "icon-grid-3"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "bento-mosaic",
+          "archetype": "bento-mosaic"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "glass-cards-bg",
+          "archetype": "glass-cards-bg"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/listings",
+      "title": "Available Properties",
+      "purpose": "Display a comprehensive list of available luxury properties with filtering options, allowing users to browse and inquire.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "asymmetric-split",
+          "archetype": "asymmetric-split"
+        },
+        {
+          "type": "lead_form",
+          "layout_hint": "split-image-right"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "listings"
+    },
+    {
+      "route": "/neighborhoods",
+      "title": "Miami Neighborhoods",
+      "purpose": "Provide detailed information about Miami's luxury neighborhoods, helping buyers find their ideal location.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "oversized-watermark",
+          "archetype": "oversized-watermark"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "grid-3",
+          "archetype": "icon-grid-3"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        },
+        {
+          "type": "lead_form",
+          "layout_hint": "split-image-left"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/agents",
+      "title": "Our Expert Team",
+      "purpose": "Introduce the Coast & Co team members, highlighting their expertise and commitment to client success.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "asymmetric-split",
+          "archetype": "asymmetric-split"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-3"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "marquee-row",
+          "archetype": "marquee-row"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "agents"
+    },
+    {
+      "route": "/sell-with-us",
+      "title": "Sell Your Property",
+      "purpose": "Outline the process and benefits of selling a luxury property with Coast & Co, encouraging potential sellers to connect.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "video-mask",
+          "archetype": "video-mask"
+        },
+        {
+          "type": "process",
+          "layout_hint": "numbered-stepper",
+          "archetype": "numbered-stepper"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "split-image-bullets",
+          "archetype": "split-image-bullets"
+        },
+        {
+          "type": "quote_form",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "big-quote-portrait",
+          "archetype": "big-quote-portrait"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/buying-guides",
+      "title": "Luxury Buying Guides",
+      "purpose": "Offer valuable resources and guides for prospective luxury home buyers, establishing Coast & Co as a trusted advisor.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "type-wrapping-product",
+          "archetype": "type-wrapping-product"
+        },
+        {
+          "type": "features",
+          "layout_hint": "grid-2",
+          "archetype": "icon-grid-3"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "split-image-left"
+        },
+        {
+          "type": "lead_form",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "guides"
+    },
+    {
+      "route": "/about",
+      "title": "About Coast & Co",
+      "purpose": "Share the story, mission, and values of Coast & Co, building a deeper connection with the audience.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "card-stack",
+          "archetype": "card-stack"
+        },
+        {
+          "type": "story",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "philosophy",
+          "layout_hint": "split-image-right"
+        },
+        {
+          "type": "trust_bar",
+          "layout_hint": "stat-band"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "asymmetric-12col",
+          "archetype": "asymmetric-12col"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/contact",
+      "title": "Contact Us",
+      "purpose": "Provide clear contact information and a direct form for inquiries, facilitating communication with potential clients.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "contact_form",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "locations",
+          "layout_hint": "grid-2"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    }
+  ]
+}

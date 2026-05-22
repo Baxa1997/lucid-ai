@@ -164,19 +164,56 @@ Return markdown with EXACTLY these 4 sections:
 • Cultural color considerations specific to {geo_specifics}
 
 ===RECOMMENDED_PALETTES===
-3-4 distinct palettes. ONE block per palette:
-• Palette name: <descriptive, e.g. "Warm Tuscan Earth">
-  Primary:    HSL <H S% L%> / Hex <#xxxxxx>
+3-4 distinct palettes. The COMPOSITION you are aiming for in each palette mirrors the way modern
+brand sites (Apple, Chanel, Aesop, Bella Luna, Veloretti, modern architecture studios) actually
+work — restrained, with ONE brand-distinctive accent doing most of the personality work:
+
+  - background: a TINTED brand-tuned neutral, NOT pure #ffffff and NOT pure #000000.
+                Examples of acceptable backgrounds:
+                  • warm cream    (~35° H, 25% S, 96% L) for Italian/hospitality/luxury
+                  • cool off-white(~210° H, 15% S, 97% L) for tech / architecture / minimalist
+                  • sage-tinted   (~80° H, 12% S, 95% L) for wellness / nature / audio
+                  • deep charcoal (~30° H, 8% S, 12% L) for moody luxury / dark fine dining
+                                                       / premium audio (Chanel, Bella Luna, WAAW pattern)
+  - foreground: high-contrast against background (WCAG AA ≥ 7:1 ideal). Tint matched to background.
+  - primary:    THE brand-distinctive color. Saturation MUST be ≥ 45% (this is the visual hook).
+                Pick a hue that signals THIS category specifically, not a default SaaS blue.
+                Examples for category guidance:
+                  • Italian / Mediterranean restaurant → warm amber (~30°-40° H, 60-80% S)
+                  • Luxury / fashion / fragrance       → mustard (~40° H, 80% S) or deep gold
+                  • Architecture / design studio       → deep purple (~270° H, 70% S) or chartreuse
+                  • Audio / tech-with-personality      → lime (~70° H, 70% S) + teal duo
+                  • Travel / silk road / cultural      → terracotta (~15° H, 65% S) + sage support
+                  • Coffee / cafe                      → roast brown (~25° H, 50% S) + cream
+                  • Spa / wellness / clean beauty      → sage (~120° H, 25% S, 45% L) or muted rose
+                  • Cycling / outdoor performance      → safety orange OR full grayscale (Veloretti pattern)
+                  • Boutique hotel / resort            → ocean / sand / sunset earth tone
+                Saturation < 40% is FORBIDDEN here. A muted primary produces a bland SaaS page.
+  - accent:     complementary to primary, smaller flourishes only. Saturation ≥ 40%.
+  - secondary:  supporting tone that holds chips / badges / soft backgrounds.
+  - muted:      a step away from background — for alternating section surfaces, secondary text.
+  - border:     between background and muted in lightness; never pure black or pure white.
+  - card:       contrasts gently with background (lighter if dark page, slightly different tint if light).
+
+ONE block per palette:
+• Palette name: <descriptive, e.g. "Warm Tuscan Earth", "Charcoal & Amber", "Architectural Violet">
+  Primary:    HSL <H S% L%> / Hex <#xxxxxx>     [saturation must be ≥45%]
   Secondary:  HSL <H S% L%> / Hex <#xxxxxx>
-  Accent:     HSL <H S% L%> / Hex <#xxxxxx>
-  Background: HSL <H S% L%> / Hex <#xxxxxx>
+  Accent:     HSL <H S% L%> / Hex <#xxxxxx>     [saturation must be ≥40%]
+  Background: HSL <H S% L%> / Hex <#xxxxxx>     [tinted neutral — NOT #ffffff, NOT #000000]
   Foreground: HSL <H S% L%> / Hex <#xxxxxx>
   Muted:      HSL <H S% L%> / Hex <#xxxxxx>
   Border:     HSL <H S% L%> / Hex <#xxxxxx>
   Card:       HSL <H S% L%> / Hex <#xxxxxx>
   Used by (real site): <name + URL>
   Personality: <one sentence>
+  Mood: <one word — "moody luxury" / "warm editorial" / "calm minimal" / "energetic" / etc.>
+  Brand distinctiveness: <one sentence explaining what makes the PRIMARY hue signal THIS category>
   WCAG AA: foreground-on-background <PASS / FAIL with ratio>; primary-on-background <PASS / FAIL>
+
+At LEAST 2 of the 3-4 palettes should include a DARK background variant (charcoal / deep brown /
+muted graphite). Reference sites use dark backgrounds far more than the SaaS-default-white most AI
+generators produce — give the picker that option for moody / luxury / fine-dining / premium brands.
 
 ===DARK_MODE_ADAPTATION===
 For each recommended palette: how does it translate to dark mode?

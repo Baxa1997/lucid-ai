@@ -201,11 +201,21 @@ async def bind_section_images(
     industry: str,
     visual_dna: dict,
     count_needed: int,
+    *,
+    section_queries: list[str] | None = None,
 ) -> list[dict]:
     """Bind images for one section. Returns [{url, alt, photographer, photographer_url}].
 
     Honors section policy: returns [] for icon-only sections (features,
     pricing, faq, etc.) regardless of ``count_needed``.
+
+    When ``section_queries`` is non-empty, fetches ONE image per query so
+    sibling items (testimonial portraits, gallery shots, team headshots)
+    are visually distinct. Without this, every section across every site
+    in the same industry pulls from the same `f"{industry} hero"` search,
+    which is the documented root cause of "all generated websites feel
+    generic". Falls back to the generic single-query path when the brief
+    didn't supply queries.
     """
     s_type = (section_type or "").strip().lower()
     policy = _SECTION_POLICY.get(s_type)
@@ -215,6 +225,36 @@ async def bind_section_images(
     if count_needed <= 0:
         return []
 
+    # Brief-supplied per-item queries take precedence — they're the only
+    # path that produces photo variety across the site.
+    cleaned_queries: list[str] = [
+        q.strip() for q in (section_queries or []) if isinstance(q, str) and q.strip()
+    ]
+    if cleaned_queries:
+        # Cap at count_needed so we don't over-fetch. Pad by repeating the
+        # last query if count_needed > len(queries) — keeps len == count.
+        if len(cleaned_queries) < count_needed:
+            cleaned_queries = cleaned_queries + [cleaned_queries[-1]] * (count_needed - len(cleaned_queries))
+        else:
+            cleaned_queries = cleaned_queries[:count_needed]
+
+        # Fetch one image per query in parallel — small enough to avoid
+        # Unsplash rate limits even on a 6-image gallery.
+        results = await asyncio.gather(*[
+            search_unsplash(q, count=1) for q in cleaned_queries
+        ])
+        out: list[dict] = []
+        for q, batch in zip(cleaned_queries, results):
+            if batch:
+                # Override alt with the actual query so it reads as the
+                # subject the brief described, not the generic industry term.
+                img = dict(batch[0])
+                img.setdefault("alt", q)
+                out.append(img)
+        if out:
+            return out
+        # Fall through to legacy path if every per-query fetch returned []
+
     query = _build_query(s_type, section_purpose, industry, visual_dna or {})
     return await search_unsplash(query, count=count_needed)
 
@@ -222,11 +262,20 @@ async def bind_section_images(
 def _count_for_section(section: dict, section_type: str) -> int:
     """Decide how many images this section needs.
 
-    - Honors per-section default from _SECTION_POLICY.
+    - When the brief supplies section.image_queries, that's the source of
+      truth — fetch exactly that many. Override the policy default so a
+      hero with 1 query gets 1 image and a gallery with 8 queries gets 8.
+      Capped at 12 as a sanity ceiling.
+    - Otherwise honors per-section default from _SECTION_POLICY.
     - For collection-style sections (testimonials, team, menu, gallery)
-      where the plan already lists items, prefer min(item_count, policy_default)
-      so we don't over-fetch.
+      where the plan already lists items, prefer min(item_count, policy_default).
     """
+    queries = section.get("image_queries")
+    if isinstance(queries, list):
+        clean = [q for q in queries if isinstance(q, str) and q.strip()]
+        if clean:
+            return min(len(clean), 12)
+
     policy = _SECTION_POLICY.get(section_type)
     if not policy:
         return 1  # unknown section type → 1 image
@@ -275,10 +324,20 @@ async def bind_page_images(
         type_counts[s_type] = type_counts.get(s_type, 0) + 1
         key = s_type if type_counts[s_type] == 1 else f"{s_type}_{type_counts[s_type]}"
         purpose_text = (s.get("purpose") or s.get("description") or "").strip()
+        # Brief-supplied per-item queries — propagate through so the binder
+        # can fetch one distinct image per query instead of N copies of
+        # f"{industry} hero". This is the single biggest knob against
+        # "every site's hero looks identical" — without it, the schema bump
+        # in section_schemas (image_queries field) is dead weight.
+        section_queries: list[str] = []
+        raw_qs = s.get("image_queries")
+        if isinstance(raw_qs, list):
+            section_queries = [q for q in raw_qs if isinstance(q, str) and q.strip()]
         tasks.append((key, bind_section_images(
             section_type=s_type, section_purpose=purpose_text,
             industry=industry, visual_dna=visual_dna,
             count_needed=count,
+            section_queries=section_queries or None,
         )))
 
     if not tasks:

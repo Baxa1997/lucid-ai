@@ -1,0 +1,427 @@
+{
+  "brand": {
+    "name": "Common Ground",
+    "tagline": "A Sanctuary for Yoga and Breathwork in Brooklyn",
+    "description": "A community-driven studio offering transformative vinyasa, restorative breathwork, and sound healing in the heart of Brooklyn.",
+    "domain": "commongroundbrooklyn.com",
+    "business_info": {
+      "address": "124 Union St, Brooklyn, NY 11231",
+      "phone": "(718) 555-0192",
+      "email": "hello@commongroundbrooklyn.com",
+      "hours": "Mon-Fri: 6:30am - 9:00pm\nSat-Sun: 8:00am - 7:00pm"
+    },
+    "social": [
+      {
+        "label": "instagram",
+        "href": "https://instagram.com/commongroundbrooklyn"
+      },
+      {
+        "label": "facebook",
+        "href": "https://facebook.com/commongroundbrooklyn"
+      }
+    ]
+  },
+  "palette": {
+    "primary": "35 25% 90%",
+    "secondary": "25 30% 75%",
+    "accent": "15 60% 45%",
+    "background": "40 20% 96%",
+    "foreground": "0 0% 15%",
+    "muted": "30 10% 60%",
+    "border": "35 15% 85%",
+    "card": "40 25% 98%"
+  },
+  "typography": {
+    "heading_font": "Cormorant Garamond",
+    "body_font": "DM Sans",
+    "scale": "expressive"
+  },
+  "motif": "editorial",
+  "design_system": {
+    "motion": "organic",
+    "accent_shape": "rounded",
+    "surface": "flat",
+    "image_treatment": "natural",
+    "section_rhythm": "balanced"
+  },
+  "personality": {
+    "tone": "grounded",
+    "vibe_keywords": [
+      "earthy",
+      "editorial",
+      "calm",
+      "inviting",
+      "intentional"
+    ],
+    "energy": "low"
+  },
+  "header_archetype": "transparent-pill",
+  "footer_archetype": "minimalist-row",
+  "page_features": [
+    "sticky_cta",
+    "floating_chat"
+  ],
+  "references": [
+    {
+      "url": "https://frequencymind.com",
+      "name": "Frequency Breathwork",
+      "why": "Modern breathwork aesthetic with polished digital scaling and dark mode gradients.",
+      "section_order": [
+        "hero",
+        "value_prop",
+        "app_cta",
+        "schedule",
+        "testimonials"
+      ],
+      "notable_features": [
+        "3D animations",
+        "horizontal scroll"
+      ]
+    },
+    {
+      "url": "https://nyc.modoyoga.com",
+      "name": "Modo Yoga NYC",
+      "why": "High-conversion booking flow and clear intro offers for a local Brooklyn audience.",
+      "section_order": [
+        "hero",
+        "intro_offer",
+        "class_types",
+        "pillars",
+        "testimonials"
+      ],
+      "notable_features": [
+        "location toggle",
+        "sticky_cta"
+      ]
+    },
+    {
+      "url": "https://shambhalayogadance.com",
+      "name": "Shambhala Yoga & Dance",
+      "why": "Standard local community flow with MindBody integration and neighborhood messaging.",
+      "section_order": [
+        "hero",
+        "about",
+        "schedule",
+        "pricing",
+        "events"
+      ],
+      "notable_features": [
+        "floating_chat",
+        "MindBody widget"
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "id": "hero-sanctuary",
+      "type": "hero",
+      "role": "Establish the atmosphere and drive immediate bookings.",
+      "headline": "Find Your Center in the Heart of Brooklyn",
+      "subheadline": "A dedicated space for intentional movement, deep breathwork, and community connection.",
+      "layout_hint": "full-bleed-overlay",
+      "archetype": "video-mask",
+      "interactivity": "smooth-scroll CTA to the intro offer section",
+      "image_queries": [
+        "yoga studio sunlight wood floor"
+      ],
+      "cta": {
+        "label": "Book a Mat",
+        "href": "#schedule"
+      },
+      "items": []
+    },
+    {
+      "id": "authority-ticker",
+      "type": "trust_bar",
+      "role": "Build immediate local and industry credibility.",
+      "headline": "Recognized for Excellence in Wellness",
+      "layout_hint": "logo-strip",
+      "interactivity": "auto-scrolling marquee of press mentions",
+      "items": [
+        {
+          "title": "Vogue",
+          "label": "Vogue",
+          "description": "The most intentional breathwork experience in New York."
+        },
+        {
+          "title": "NYT",
+          "label": "NYT",
+          "description": "A sanctuary for those seeking quiet in the city."
+        },
+        {
+          "title": "TimeOut Brooklyn",
+          "label": "TimeOut Brooklyn",
+          "description": "Voted Best Yoga Studio in Brooklyn 2023."
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "the-method",
+      "type": "philosophy",
+      "nav_label": "Story",
+      "role": "Explain the studio's unique three-pillar approach.",
+      "headline": "The Common Ground Method",
+      "subheadline": "We bridge the gap between ancient wisdom and modern urban living.",
+      "layout_hint": "grid-3",
+      "archetype": "icon-grid-3",
+      "interactivity": "hover states reveal deeper philosophical context for each pillar",
+      "items": [
+        {
+          "title": "Mindful Yoga",
+          "description": "Vinyasa and Yin practices designed to align the physical body and quiet the mind.",
+          "icon": "Sun"
+        },
+        {
+          "title": "Conscious Breath",
+          "description": "Guided breathwork sessions to release tension and access deeper states of consciousness.",
+          "icon": "Wind"
+        },
+        {
+          "title": "Rooted Community",
+          "description": "A welcoming space for Brooklyn locals to connect, share, and grow together.",
+          "icon": "Users"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "class-offerings",
+      "type": "menu",
+      "nav_label": "Classes",
+      "role": "Showcase the variety of classes available.",
+      "headline": "Our Daily Practices",
+      "subheadline": "From high-intensity flow to meditative stillness, find the practice you need today.",
+      "layout_hint": "carousel",
+      "archetype": "photo-card-grid",
+      "interactivity": "filter pills to sort by intensity and class type",
+      "items": [
+        {
+          "title": "Grounding Vinyasa",
+          "description": "A fluid, breath-to-movement flow focused on building strength and internal heat.",
+          "value": "60 Min",
+          "image_query": "yoga vinyasa flow woman"
+        },
+        {
+          "title": "Somatic Breathwork",
+          "description": "Active meditation using rhythmic breathing to clear emotional blockages.",
+          "value": "75 Min",
+          "image_query": "breathwork meditation group"
+        },
+        {
+          "title": "Restorative Sound",
+          "description": "Gentle stretching paired with a therapeutic Himalayan singing bowl sound bath.",
+          "value": "90 Min",
+          "image_query": "sound bath crystal bowls"
+        },
+        {
+          "title": "The Foundation",
+          "description": "A slow-paced alignment workshop perfect for beginners and seasoned practitioners alike.",
+          "value": "60 Min",
+          "image_query": "yoga alignment teacher"
+        }
+      ],
+      "image_queries": [
+        "yoga vinyasa flow woman",
+        "breathwork meditation group",
+        "sound bath crystal bowls",
+        "yoga alignment teacher"
+      ]
+    },
+    {
+      "id": "intro-hook",
+      "type": "mid_cta_banner",
+      "role": "Convert hesitant users with a high-value entry offer.",
+      "headline": "New to the Ground?",
+      "subheadline": "Experience two weeks of unlimited yoga and breathwork for just $50.",
+      "layout_hint": "stat-band",
+      "interactivity": "pulsing button animation to draw focus",
+      "cta": {
+        "label": "Claim Intro Offer",
+        "href": "#pricing"
+      },
+      "items": [],
+      "image_queries": []
+    },
+    {
+      "id": "the-guides",
+      "type": "team",
+      "nav_label": "Teachers",
+      "role": "Humanize the brand through instructor profiles.",
+      "headline": "Guided by Experience",
+      "subheadline": "Our teachers are lifelong students dedicated to your personal transformation.",
+      "layout_hint": "grid-3",
+      "interactivity": "hover over headshots to see instructor's favorite mantra and Spotify playlist link",
+      "items": [
+        {
+          "title": "Elena Rossi",
+          "description": "Lead Vinyasa instructor with 15 years of experience in somatic healing.",
+          "label": "Founder",
+          "image_query": "yoga teacher portrait woman"
+        },
+        {
+          "title": "Marcus Chen",
+          "description": "Specialist in pranayama and traditional Himalayan breathwork techniques.",
+          "label": "Breathwork Lead",
+          "image_query": "meditation teacher portrait man"
+        },
+        {
+          "title": "Sarah Jenkins",
+          "description": "Sound therapist and restorative yoga guide focused on nervous system regulation.",
+          "label": "Senior Teacher",
+          "image_query": "wellness practitioner portrait"
+        }
+      ],
+      "image_queries": [
+        "yoga teacher portrait woman",
+        "meditation teacher portrait man",
+        "wellness practitioner portrait"
+      ]
+    },
+    {
+      "id": "studio-gallery",
+      "type": "gallery",
+      "nav_label": "Space",
+      "role": "Showcase the physical environment to reduce anxiety.",
+      "headline": "The Sanctuary",
+      "subheadline": "Designed for peace. Natural light, sustainable materials, and room to breathe.",
+      "layout_hint": "carousel",
+      "archetype": "bento-mosaic",
+      "interactivity": "lightbox gallery with keyboard navigation",
+      "image_queries": [
+        "minimalist yoga studio interior",
+        "yoga mats stacked neatly",
+        "meditation room incense",
+        "studio tea lounge",
+        "natural light window yoga",
+        "wellness studio reception"
+      ],
+      "items": []
+    },
+    {
+      "id": "social-proof",
+      "type": "testimonials",
+      "nav_label": "Reviews",
+      "role": "Build trust through community feedback.",
+      "headline": "Community Voices",
+      "layout_hint": "carousel",
+      "archetype": "glass-cards-bg",
+      "interactivity": "autoplay carousel with manual navigation arrows",
+      "items": [
+        {
+          "title": "Julianne M.",
+          "description": "The most welcoming studio in Brooklyn. The breathwork sessions have completely changed how I handle stress.",
+          "label": "Google Review",
+          "value": "5.0"
+        },
+        {
+          "title": "David K.",
+          "description": "Beautiful space, incredible teachers, and a real sense of community. Not your typical corporate gym vibe.",
+          "label": "ClassPass",
+          "value": "5.0"
+        },
+        {
+          "title": "Amina T.",
+          "description": "The sound baths here are transformative. I leave every class feeling lighter and more grounded.",
+          "label": "Google Review",
+          "value": "5.0"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "common-questions",
+      "type": "faq",
+      "nav_label": "FAQ",
+      "role": "Address common objections and logistics.",
+      "headline": "Everything You Need to Know",
+      "layout_hint": "accordion",
+      "interactivity": "smooth-opening accordion panels",
+      "items": [
+        {
+          "title": "Do I need to bring my own mat?",
+          "description": "We provide premium Manduka mats for all students at no extra charge, though you are welcome to bring your own."
+        },
+        {
+          "title": "Is breathwork safe for beginners?",
+          "description": "Absolutely. Our Somatic Breathwork classes are designed to be accessible for all levels, with modifications provided."
+        },
+        {
+          "title": "What is your cancellation policy?",
+          "description": "Classes must be cancelled at least 12 hours in advance to avoid a late-cancel fee or loss of credit."
+        },
+        {
+          "title": "Do you have showers?",
+          "description": "We have spacious changing rooms and a tea lounge, but we do not have shower facilities at this location."
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "corporate-inquiry",
+      "type": "lead_form",
+      "nav_label": "Private",
+      "role": "Capture high-ticket corporate and private event leads.",
+      "headline": "Bring Wellness to Your Team",
+      "subheadline": "Inquire about private group sessions, corporate workshops, or studio rentals.",
+      "layout_hint": "two-column",
+      "interactivity": "form validation with success message upon submission",
+      "items": [
+        {
+          "title": "Full Name"
+        },
+        {
+          "title": "Email Address"
+        },
+        {
+          "title": "Inquiry Type",
+          "details": "Corporate Wellness, Private Event, Studio Rental"
+        },
+        {
+          "title": "Message"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "footer",
+      "type": "footer",
+      "role": "site-wide nav",
+      "headline": "Common Ground",
+      "subheadline": "",
+      "layout_hint": "footer-columns",
+      "items": [],
+      "image_queries": []
+    }
+  ],
+  "ctas": {
+    "primary": {
+      "label": "Book a Class",
+      "href": "#schedule"
+    },
+    "secondary": {
+      "label": "Learn more",
+      "href": "#features"
+    }
+  },
+  "domain_keywords": [
+    "brooklyn yoga studio",
+    "breathwork meditation nyc",
+    "vinyasa yoga class",
+    "sound healing brooklyn",
+    "wellness sanctuary"
+  ],
+  "design_tokens": {
+    "card_class": "bg-card rounded-xl",
+    "button_radius_class": "rounded-md",
+    "image_radius_class": "rounded-xl",
+    "section_padding_class": "py-16 sm:py-20 lg:py-24",
+    "transition_class": "transition-all duration-700 ease-out",
+    "hover_lift_class": "hover:-translate-y-1 hover:shadow-md",
+    "_resolved_accent_shape": "rounded",
+    "_resolved_surface": "flat",
+    "_resolved_motion": "organic",
+    "_resolved_section_rhythm": "balanced",
+    "_resolved_image_treatment": "natural"
+  }
+}

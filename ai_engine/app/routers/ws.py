@@ -1768,6 +1768,10 @@ async def websocket_agent(websocket: WebSocket):
             followup_images = data.get("images", [])
             chat_mode = data.get("mode", "edit")       # "edit" (default) or "discuss"
             web_search = data.get("web_search", True)  # frontend toggle
+            # Click-to-edit payload from the preview iframe — when present the
+            # pipeline synthesizes a 100%-confidence EditIntent directly
+            # instead of running the workspace-grounded extractor.
+            followup_editable_target = data.get("editable_target")
 
             # Heartbeat ping — respond and continue
             if msg_type == "ping":
@@ -2168,6 +2172,7 @@ async def websocket_agent(websocket: WebSocket):
                 user_jwt=user_jwt,
                 task=content,
                 images=followup_images,
+                editable_target=followup_editable_target,
             )
             if _followup_result.stopped:
                 explicit_stop = True

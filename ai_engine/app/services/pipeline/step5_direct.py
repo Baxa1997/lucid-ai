@@ -114,13 +114,20 @@ _APPLY_EDITS_TOOL: dict[str, Any] = {
 def _load_files(
     workspace_path: str,
     rel_paths: list[str],
+    *,
+    max_files: int = _MAX_FILES,
 ) -> tuple[dict[str, str], list[str]]:
-    """Read up to ``_MAX_FILES`` files from ``rel_paths``.
+    """Read up to ``max_files`` files from ``rel_paths``.
 
     Returns ``(loaded, skipped)`` where ``loaded[path] = content`` and
     ``skipped`` names files that were dropped (too big, missing, or
     outside the workspace). Order is preserved so the first few files the
     caller listed get priority under the total-size cap.
+
+    ``max_files`` defaults to the conservative ``_MAX_FILES`` (4) so
+    legacy callers see no behaviour change; the orchestrator bumps it
+    to 6 when Step 3b's edit-intent extractor produced a confident
+    narrow target.
     """
     workspace_real = os.path.realpath(workspace_path)
     loaded: dict[str, str] = {}
@@ -128,7 +135,7 @@ def _load_files(
     total_chars = 0
 
     for rel in rel_paths:
-        if len(loaded) >= _MAX_FILES:
+        if len(loaded) >= max_files:
             skipped.append(rel)
             continue
         if not rel or not isinstance(rel, str):
@@ -194,8 +201,15 @@ async def execute_direct_edit(
     manifest: str = "",
     timeout_s: float = 120.0,
     user_id: str | None = None,
+    max_files: int = _MAX_FILES,
 ) -> bool:
     """Run the direct-API edit path.
+
+    ``max_files`` defaults to the conservative budget (4). The caller
+    raises it (typically to 6) when Step 3b's edit-intent extractor
+    produced a confident narrow target — extractor-anchored files are
+    more reliable than Gemini's freeform file walk, so the extra slots
+    don't loosen the safety properties.
 
     Returns:
         True  — all edits applied cleanly to disk.
@@ -209,7 +223,7 @@ async def execute_direct_edit(
         logger.info("execute_direct_edit: no relevant files from Phase 4 — skipping")
         return False
 
-    files, skipped = _load_files(workspace_path, relevant_files)
+    files, skipped = _load_files(workspace_path, relevant_files, max_files=max_files)
     if not files:
         logger.info("execute_direct_edit: all candidate files dropped (%s)", skipped[:3])
         return False

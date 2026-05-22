@@ -31,12 +31,19 @@ async def explore_with_gemini(
     workspace_path: str,
     classification: dict,
     websocket: WebSocket,
+    edit_intent=None,
 ) -> tuple[str, list[str]]:
     """Read specific codebase files and generate implementation plan.
 
     Returns ``(plan_text, relevant_file_paths)``. The router picks the
     direct-API edit path when the relevant-files list is short enough,
     since that list is exactly what the single-call edit would operate on.
+
+    When ``edit_intent`` is supplied and ``is_actionable`` (Step 3b
+    extractor produced a confident narrow target), we skip the Gemini
+    file-filter call entirely and use the extractor's candidate_files
+    as the relevant set. Lower-confidence intents are merged into the
+    Gemini-returned list as priority files rather than replacing it.
 
     NEVER raises — on failure, returns ``("", [])``.
     """
@@ -77,35 +84,73 @@ async def explore_with_gemini(
     except Exception as e:
         logger.warning("explore_with_gemini file walk error: %s", e)
 
+    # ── Step 3b shortcut ─────────────────────────────────────────────
+    # When the edit-intent extractor produced a confident narrow target,
+    # we skip the Gemini file-filter call entirely — that filter is just
+    # an LLM trying to guess what the extractor already proved.
+    intent_actionable = bool(
+        edit_intent is not None
+        and getattr(edit_intent, "is_actionable", False)
+    )
+    intent_files = list(getattr(edit_intent, "candidate_files", None) or []) if edit_intent else []
+    if intent_actionable:
+        try:
+            await websocket.send_json({
+                "type": "progress",
+                "message": (
+                    f"⚡ Skipping file-walk — Step 3b locked {len(intent_files)} target file"
+                    f"{'s' if len(intent_files) != 1 else ''}"
+                ),
+            })
+        except Exception:
+            pass
+
     # STEP 2: Ask Gemini which files are relevant
-    relevant_files = []
+    #         (skipped entirely when Step 3b already locked the targets)
+    relevant_files: list[str] = list(intent_files) if intent_actionable else []
     fallback_count = 10
-    try:
-        from app.services.gemini_http import gemini_post
-        from app.services.llm_retry import classify_http_error
-        from knowledge.loader import safe_gemini_text
+    if not intent_actionable:
+        try:
+            from app.services.gemini_http import gemini_post
+            from app.services.llm_retry import classify_http_error
+            from knowledge.loader import safe_gemini_text
 
-        file_tree_str = "\\n".join(file_paths)
+            # NOTE: real newlines (not "\\n") — Gemini sees one path per line so
+            # the file tree reads as a list. The earlier escaped form rendered
+            # as a single 50K-char blob with literal backslash-n separators.
+            file_tree_str = "\n".join(file_paths)
 
-        # Hard limit just in case repo has massive number of files
-        if len(file_tree_str) > 50000:
-            file_tree_str = file_tree_str[:50000] + "\\n... (truncated)"
+            # Hard limit just in case repo has massive number of files
+            if len(file_tree_str) > 50000:
+                file_tree_str = file_tree_str[:50000] + "\n... (truncated)"
 
-        # Dynamic file count based on task complexity
-        complexity = classification.get("complexity", "medium")
-        if complexity == "simple":
-            file_range = "3-5"
-            fallback_count = 5
-        elif complexity == "complex":
-            file_range = "8-15"
-            fallback_count = 15
-        else:
-            file_range = "5-10"
-            fallback_count = 10
+            # Dynamic file count based on task complexity
+            complexity = classification.get("complexity", "medium")
+            if complexity == "simple":
+                file_range = "3-5"
+                fallback_count = 5
+            elif complexity == "complex":
+                file_range = "8-15"
+                fallback_count = 15
+            else:
+                file_range = "5-10"
+                fallback_count = 10
 
-        filter_prompt = f"""Task type: {classification.get('task_type', 'feature')}
+            # When Step 3b ran but wasn't confident enough to bypass the
+            # filter, surface its hints so Gemini biases toward them rather
+            # than re-discovering the same targets from scratch.
+            intent_hint_block = ""
+            if edit_intent is not None and intent_files:
+                intent_hint_block = (
+                    "\nPRIORITY FILES (a structured pre-pass flagged these as "
+                    "likely targets — include them unless clearly wrong):\n"
+                    + "\n".join(f"  • {p}" for p in intent_files[:6])
+                    + "\n"
+                )
+
+            filter_prompt = f"""Task type: {classification.get('task_type', 'feature')}
 Task: {task}
-
+{intent_hint_block}
 Here are the files in the repository:
 {file_tree_str}
 
@@ -121,47 +166,56 @@ IMPORTANT SELECTION RULES:
 Return ONLY a valid JSON list of file paths. No markdown formatting, no backticks, just the JSON array.
 Example: ["src/app/page.js", "src/components/Header.js"]"""
 
-        # Tiny JSON list output — temperature=0 for determinism, thinking_budget=0
-        # to cut ~3-5s of reasoning latency.
-        _filter_payload = {
-            "contents": [{"parts": [{"text": filter_prompt}]}],
-            "generationConfig": {
-                "temperature": 0,
-                "thinkingConfig": {"thinkingBudget": 0},
-            },
-        }
+            # Tiny JSON list output — temperature=0 for determinism, thinking_budget=0
+            # to cut ~3-5s of reasoning latency.
+            _filter_payload = {
+                "contents": [{"parts": [{"text": filter_prompt}]}],
+                "generationConfig": {
+                    "temperature": 0,
+                    "thinkingConfig": {"thinkingBudget": 0},
+                },
+            }
 
-        async def _do_filter():
-            status, data, raw = await asyncio.wait_for(
-                gemini_post(
-                    model=GEMINI_MODEL,
-                    payload=_filter_payload,
-                    timeout_s=60.0,
-                    label="step4_filter_files",
-                ),
-                timeout=60,
-            )
-            if status != 200 or data is None:
-                raise classify_http_error(status if status > 0 else 500, raw or "")
-            return data
+            async def _do_filter():
+                status, data, raw = await asyncio.wait_for(
+                    gemini_post(
+                        model=GEMINI_MODEL,
+                        payload=_filter_payload,
+                        timeout_s=60.0,
+                        label="step4_filter_files",
+                    ),
+                    timeout=60,
+                )
+                if status != 200 or data is None:
+                    raise classify_http_error(status if status > 0 else 500, raw or "")
+                return data
 
-        filter_data = await call_with_retry(_do_filter, label="step4_filter_files", websocket=websocket)
+            filter_data = await call_with_retry(_do_filter, label="step4_filter_files", websocket=websocket)
 
-        text = safe_gemini_text(filter_data).strip()
-        if "```" in text:
-            # Extract JSON from markdown fencing
-            parts = text.split("```")
-            if len(parts) >= 3:
-                text = parts[1]
-            if text.startswith("json"):
-                text = text[4:]
+            text = safe_gemini_text(filter_data).strip()
+            if "```" in text:
+                # Extract JSON from markdown fencing
+                parts = text.split("```")
+                if len(parts) >= 3:
+                    text = parts[1]
+                if text.startswith("json"):
+                    text = text[4:]
 
-        relevant_files = json.loads(text.strip())
-        if not isinstance(relevant_files, list):
+            relevant_files = json.loads(text.strip())
+            if not isinstance(relevant_files, list):
+                relevant_files = file_paths[:fallback_count]
+        except Exception as e:
+            logger.warning("explore_with_gemini file filtering failed: %s", e)
             relevant_files = file_paths[:fallback_count]
-    except Exception as e:
-        logger.warning("explore_with_gemini file filtering failed: %s", e)
-        relevant_files = file_paths[:fallback_count]
+
+        # Merge Step 3b hints in as priority files when the extractor ran
+        # but wasn't confident enough to bypass the filter. Keeps Gemini's
+        # picks first (they had richer context) but never drops a hint
+        # the extractor explicitly named.
+        if intent_files:
+            for rel in intent_files:
+                if rel not in relevant_files:
+                    relevant_files.append(rel)
 
     try:
         await websocket.send_json({
@@ -190,14 +244,16 @@ Example: ["src/app/page.js", "src/components/Header.js"]"""
         except Exception:
             pass
 
-    files_content = "\\n\\n".join(
-        f"=== FILE: {path} ===\\n{content}"
+    # Real newlines — see the file_tree_str note above. The escaped form
+    # used to flatten every file into one ribbon of literal \\n separators.
+    files_content = "\n\n".join(
+        f"=== FILE: {path} ===\n{content}"
         for path, content in all_files.items()
     )
 
     # Ensure we still have some fallback limit if single files are huge
     if len(files_content) > 100000:
-       files_content = files_content[:100000] + "\\n... (truncated)"
+        files_content = files_content[:100000] + "\n... (truncated)"
 
     # STEP 4: Send focused context to Gemini
     try:
@@ -277,7 +333,7 @@ EXACT CHANGES:
 
     except Exception as e:
         logger.warning("explore_with_gemini Gemini plan generation failed: %s", e)
-        plan = f"Task: {task}\\nImplement this directly in the most relevant file."
+        plan = f"Task: {task}\nImplement this directly in the most relevant file."
 
     try:
         await websocket.send_json({

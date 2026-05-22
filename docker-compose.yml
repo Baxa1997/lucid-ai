@@ -92,6 +92,11 @@ services:
       - PYTHONPATH=.
       - PORT=8000
       - DISPLAY=:99
+      # Persist generated workspaces to the bind-mounted /app/storage so
+      # every project survives container restarts and is accessible from
+      # the host at ./workspaces/. Without this, runs land in container-only
+      # /tmp and are lost on reaper sweep or restart.
+      - LUCID_TMP_ROOT=/app/storage
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
       # JWT secret from Supabase Dashboard → Settings → API → JWT Settings
@@ -123,6 +128,18 @@ services:
       # Gates multi-page consumer_website / portfolio / blog / marketplace prompts onto
       # website_pipeline.py. Off → legacy 3-phase flow (single Claude call, slow + generic).
       - WEBSITE_PIPELINE_V2_ENABLED=${WEBSITE_PIPELINE_V2_ENABLED:-true}
+      # Stage 4 plan-card gate — show the plan and wait for the user to click
+      # "Looks Good" before launching Stage 5 parallel Claude codegen (~$1–2).
+      # Default ON. Set to 0 for demos that want speed over a redirect option.
+      - WEBSITE_PLAN_CONFIRM_ENABLED=${WEBSITE_PLAN_CONFIRM_ENABLED:-true}
+      # Per-section codegen for website pages (default ON, ~30-50% more spend).
+      # ON  → one Claude call per SECTION (matches landing quality, ~$2-3/site).
+      # OFF → one Claude call per PAGE (cheaper but formulaic, ~$1.50/site).
+      - WEBSITE_PER_SECTION_CODEGEN_ENABLED=${WEBSITE_PER_SECTION_CODEGEN_ENABLED:-true}
+      # Per-page anatomy refiner (Option C — Gemini Flash specializes each
+      # page's section anatomies so Hero on /home ≠ Hero on /about etc.).
+      # Default ON. ~$0.02/page (~$0.14 for 7-page site). Skip to save cost.
+      - WEBSITE_PAGE_ANATOMY_REFINER_ENABLED=${WEBSITE_PAGE_ANATOMY_REFINER_ENABLED:-true}
       # v2 admin pipeline — React + Vite stack with AuthGuard + Login + Dashboard + per-entity CRUD.
       # ADMIN_PIPELINE_V2_ENABLED=true routes admin_dashboard / crm / tms / saas_dashboard
       # prompts through admin_pipeline.py (grounded research + brand extractor + data model

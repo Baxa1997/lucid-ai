@@ -1,0 +1,214 @@
+{
+  "brand": {
+    "name": "Nomad Trails",
+    "tagline": "Unforgettable small-group adventures, crafted for the curious traveler.",
+    "domain": "hospitality_travel"
+  },
+  "pages": [
+    {
+      "route": "/",
+      "title": "Home",
+      "purpose": "The entry point to Nomad Trails, showcasing our unique offerings, inspiring destinations, and building trust with potential travelers.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "trust_bar",
+          "layout_hint": "logo-strip"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "icon-grid-3",
+          "archetype": "icon-grid-3"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "bento-mosaic",
+          "archetype": "bento-mosaic"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "marquee-row",
+          "archetype": "marquee-row"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/tours",
+      "title": "Our Adventures",
+      "purpose": "A comprehensive listing of all available small-group adventure tours, allowing users to browse and filter by various criteria.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "features",
+          "layout_hint": "grid-3",
+          "archetype": "icon-grid-3"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "tours"
+    },
+    {
+      "route": "/destinations",
+      "title": "Destinations",
+      "purpose": "Showcases the diverse regions and countries where Nomad Trails operates, inspiring travelers and providing an entry point to tours by location.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "grid-3",
+          "archetype": "bento-mosaic"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "destinations"
+    },
+    {
+      "route": "/custom-trips",
+      "title": "Custom Trips",
+      "purpose": "Explains the process and benefits of creating a personalized adventure tour for private groups, catering to specific interests and needs.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "how_it_works",
+          "layout_hint": "numbered-stepper",
+          "archetype": "numbered-stepper"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "split-image-left",
+          "archetype": "split-image-bullets"
+        },
+        {
+          "type": "quote_form",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/reviews",
+      "title": "Traveler Reviews",
+      "purpose": "Dedicated page for showcasing authentic testimonials and reviews from past travelers, building social proof and trust.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "glass-cards-bg",
+          "archetype": "glass-cards-bg"
+        },
+        {
+          "type": "trust_bar",
+          "layout_hint": "logo-strip"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/about",
+      "title": "About Us",
+      "purpose": "Tells the story of Nomad Trails, its mission, values, and the team behind the adventures, fostering connection and transparency.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "story",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "philosophy",
+          "layout_hint": "split-image-right"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-3"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/contact",
+      "title": "Contact Us",
+      "purpose": "Provides various methods for users to get in touch with Nomad Trails, including a contact form, location details, and direct contact information.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "contact_form",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "locations",
+          "layout_hint": "grid-2"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        }
+      ],
+      "detail_template": false
+    }
+  ]
+}

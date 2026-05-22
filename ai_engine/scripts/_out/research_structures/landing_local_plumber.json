@@ -1,0 +1,379 @@
+{
+  "brand": {
+    "name": "Desert Plumbing",
+    "tagline": "Phoenix's 24/7 Emergency Response Team",
+    "description": "Fast, transparent, and reliable emergency plumbing for the Phoenix valley. No dispatch fees, flat-rate pricing, and 45-minute arrival.",
+    "domain": "desertplumbing.com",
+    "business_info": {
+      "address": "2415 E Camelback Rd, Phoenix, AZ 85016",
+      "phone": "(602) 555-0199",
+      "email": "dispatch@desertplumbing.com",
+      "hours": "Open 24/7 for Emergencies\nMon-Sun: 00:00 - 24:00"
+    }
+  },
+  "palette": {
+    "primary": "215 80% 20%",
+    "secondary": "25 70% 50%",
+    "accent": "190 90% 45%",
+    "background": "35 20% 96%",
+    "foreground": "215 30% 15%",
+    "muted": "30 10% 85%",
+    "border": "35 25% 85%",
+    "card": "0 0% 100%"
+  },
+  "typography": {
+    "heading_font": "Outfit",
+    "body_font": "Inter",
+    "scale": "expressive"
+  },
+  "motif": "warm",
+  "design_system": {
+    "motion": "energetic",
+    "accent_shape": "pill",
+    "surface": "elevated",
+    "image_treatment": "natural",
+    "section_rhythm": "balanced"
+  },
+  "personality": {
+    "tone": "confident",
+    "vibe_keywords": [
+      "fast",
+      "transparent",
+      "reliable",
+      "modern"
+    ],
+    "energy": "high"
+  },
+  "header_archetype": "transparent-pill",
+  "footer_archetype": "minimalist-row",
+  "references": [
+    {
+      "url": "https://www.parkerandsons.com",
+      "name": "Parker & Sons",
+      "why": "Mastery of high-urgency trust signals and sticky CTAs for the Phoenix market.",
+      "section_order": [
+        "hero",
+        "trust_bar",
+        "services_grid",
+        "why_choose_us",
+        "testimonials"
+      ],
+      "notable_features": [
+        "Sticky header with high-contrast phone",
+        "Online booking modal"
+      ]
+    },
+    {
+      "url": "https://www.georgebrazilplumbingelectrical.com",
+      "name": "George Brazil",
+      "why": "Excellent use of flat-rate pricing callouts and 24/7 emergency badges.",
+      "section_order": [
+        "hero",
+        "emergency_cta",
+        "services_list",
+        "reviews"
+      ],
+      "notable_features": [
+        "24/7 emergency badge",
+        "Flat-rate pricing callout"
+      ]
+    },
+    {
+      "url": "https://www.1800gotjunk.com",
+      "name": "1-800-GOT-JUNK",
+      "why": "The gold standard for 3-step 'how it works' visual flows and zip-code routing.",
+      "section_order": [
+        "hero",
+        "how_it_works",
+        "pricing_transparency",
+        "social_proof"
+      ],
+      "notable_features": [
+        "Zip code availability checker",
+        "3-step visual flow"
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "id": "hero-emergency",
+      "type": "hero",
+      "role": "Immediate urgency and dispatch check",
+      "headline": "Plumbing Emergency? We're Already on the Way.",
+      "subheadline": "Phoenix's fastest 24/7 response team. $0 dispatch fee, flat-rate pricing, and licensed experts at your door in 45 minutes.",
+      "layout_hint": "asymmetric-split",
+      "archetype": "card-stack",
+      "interactivity": "Zip code input field triggers a 'Checking Dispatcher Availability' animation",
+      "cta": {
+        "label": "Call (602) 555-0199",
+        "href": "tel:6025550199"
+      },
+      "image_queries": [
+        "plumber fixing pipe wrench water"
+      ],
+      "items": []
+    },
+    {
+      "id": "trust-ticker",
+      "type": "trust_bar",
+      "role": "Authority and licensing verification",
+      "headline": "Trusted Across the Valley",
+      "layout_hint": "logo-strip",
+      "interactivity": "Infinite horizontal scroll of trust badges and licenses",
+      "items": [
+        {
+          "title": "Licensed & Insured",
+          "description": "ROC #324512"
+        },
+        {
+          "title": "24/7 Dispatch",
+          "description": "Always a human, never a machine"
+        },
+        {
+          "title": "500+ 5-Star Reviews",
+          "description": "Top-rated on Google & Yelp"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "pricing-transparency",
+      "type": "benefits",
+      "nav_label": "Pricing",
+      "headline": "No Surprises. No Hidden Fees.",
+      "subheadline": "We believe in honest work at a fair price, even at 3:00 AM.",
+      "layout_hint": "grid-3",
+      "archetype": "icon-grid-3",
+      "interactivity": "Hover effects on cards reveal 'Price Match Guarantee' details",
+      "items": [
+        {
+          "title": "$0 Dispatch Fee",
+          "description": "We don't charge just to show up. You only pay for the actual repair work performed.",
+          "icon": "Zap"
+        },
+        {
+          "title": "Flat-Rate Quotes",
+          "description": "Know the exact cost before we start. No hourly billing games or hidden surcharges.",
+          "icon": "DollarSign"
+        },
+        {
+          "title": "No After-Hours Fees",
+          "description": "Emergency service shouldn't cost extra. Same low rates for nights, weekends, and holidays.",
+          "icon": "Clock"
+        }
+      ],
+      "role": "",
+      "image_queries": []
+    },
+    {
+      "id": "how-it-works",
+      "type": "process",
+      "nav_label": "Process",
+      "headline": "From Leak to Fixed in 3 Steps",
+      "subheadline": "We've streamlined our dispatch to get your home back to normal faster.",
+      "layout_hint": "stat-band",
+      "archetype": "numbered-stepper",
+      "interactivity": "Step numbers pulse to guide the user's eye through the flow",
+      "items": [
+        {
+          "title": "Call 24/7",
+          "description": "Speak with a local Phoenix dispatcher immediately to assess your emergency.",
+          "value": "01"
+        },
+        {
+          "title": "Rapid Dispatch",
+          "description": "Our nearest licensed plumber is routed to your GPS location within minutes.",
+          "value": "02"
+        },
+        {
+          "title": "Problem Solved",
+          "description": "Upfront quote provided, repair completed, and 100% satisfaction guaranteed.",
+          "value": "03"
+        }
+      ],
+      "role": "",
+      "image_queries": []
+    },
+    {
+      "id": "emergency-services",
+      "type": "features",
+      "nav_label": "Services",
+      "headline": "We Handle Every Phoenix Plumbing Crisis",
+      "subheadline": "From burst pipes in Scottsdale to water heaters in Tempe, we cover it all.",
+      "layout_hint": "grid-4",
+      "archetype": "icon-grid-3",
+      "interactivity": "Clicking a service opens a modal with a 'Common Signs' checklist",
+      "items": [
+        {
+          "title": "Burst Pipes",
+          "description": "Immediate shut-off and repair to prevent catastrophic water damage.",
+          "icon": "Droplets"
+        },
+        {
+          "title": "Clogged Drains",
+          "description": "Main line clearing and hydro-jetting for stubborn backups.",
+          "icon": "Filter"
+        },
+        {
+          "title": "Water Heaters",
+          "description": "Emergency repair or same-day replacement for leaking tanks.",
+          "icon": "Thermometer"
+        },
+        {
+          "title": "Slab Leaks",
+          "description": "Advanced leak detection to find and fix underground pipe failures.",
+          "icon": "Search"
+        }
+      ],
+      "role": "",
+      "image_queries": []
+    },
+    {
+      "id": "urgency-banner",
+      "type": "mid_cta_banner",
+      "headline": "Water Damage Doesn't Wait.",
+      "subheadline": "Every minute counts. Call now for immediate dispatch to your Phoenix home.",
+      "layout_hint": "centered-stack",
+      "interactivity": "Pulsing 'Call Now' button with click-to-call functionality",
+      "cta": {
+        "label": "Call (602) 555-0199",
+        "href": "tel:6025550199"
+      },
+      "role": "",
+      "items": [],
+      "image_queries": []
+    },
+    {
+      "id": "local-reviews",
+      "type": "testimonials",
+      "nav_label": "Reviews",
+      "headline": "What Your Neighbors Are Saying",
+      "subheadline": "Real feedback from Phoenix homeowners who needed help fast.",
+      "layout_hint": "carousel",
+      "archetype": "glass-cards-bg",
+      "interactivity": "Auto-playing carousel with manual navigation arrows",
+      "items": [
+        {
+          "title": "Sarah M., Arcadia",
+          "description": "Our water heater burst at 2 AM on a Sunday. Desert Plumbing was here in 30 minutes and didn't charge an extra emergency fee!",
+          "label": "Google Review",
+          "value": "5.0"
+        },
+        {
+          "title": "David L., Gilbert",
+          "description": "Transparent pricing from the start. They gave me a flat rate over the phone and stuck to it. Highly recommend.",
+          "label": "Yelp Review",
+          "value": "5.0"
+        },
+        {
+          "title": "James R., Phoenix",
+          "description": "Professional, clean, and fast. They fixed a major slab leak without tearing up my entire kitchen. Life savers.",
+          "label": "Google Review",
+          "value": "5.0"
+        }
+      ],
+      "role": "",
+      "image_queries": []
+    },
+    {
+      "id": "common-questions",
+      "type": "faq",
+      "nav_label": "FAQ",
+      "headline": "Emergency Plumbing FAQ",
+      "subheadline": "Everything you need to know before our plumber arrives.",
+      "layout_hint": "accordion",
+      "interactivity": "Smooth accordion toggle with auto-close of previous items",
+      "items": [
+        {
+          "title": "How fast can you get here?",
+          "description": "Our average response time across the Phoenix valley is 45 minutes or less, depending on traffic and your specific location."
+        },
+        {
+          "title": "Do you charge extra for nights or weekends?",
+          "description": "No. We offer the same flat-rate pricing 24 hours a day, 7 days a week, 365 days a year."
+        },
+        {
+          "title": "Are your plumbers licensed?",
+          "description": "Yes, every technician is fully licensed, background-checked, and drug-tested for your safety and peace of mind."
+        },
+        {
+          "title": "Do you offer free quotes?",
+          "description": "Absolutely. We provide a firm, flat-rate quote before any work begins so there are never any surprises on your bill."
+        }
+      ],
+      "role": "",
+      "image_queries": []
+    },
+    {
+      "id": "quote-request",
+      "type": "quote_form",
+      "nav_label": "Contact",
+      "headline": "Request a Free Quote",
+      "subheadline": "Not an emergency? Fill out the form below and we'll contact you within 1 hour.",
+      "layout_hint": "two-column",
+      "interactivity": "Form validation with success message and 'Urgency' toggle",
+      "items": [
+        {
+          "title": "Full Name"
+        },
+        {
+          "title": "Phone Number"
+        },
+        {
+          "title": "Zip Code"
+        },
+        {
+          "title": "Issue Type"
+        }
+      ],
+      "role": "",
+      "image_queries": []
+    },
+    {
+      "id": "footer",
+      "type": "footer",
+      "role": "site-wide nav",
+      "headline": "Desert Plumbing",
+      "subheadline": "",
+      "layout_hint": "footer-columns",
+      "items": [],
+      "image_queries": []
+    }
+  ],
+  "page_features": [
+    "sticky_cta",
+    "floating_chat",
+    "back_to_top"
+  ],
+  "ctas": {
+    "primary": {
+      "label": "Call 24/7 Now",
+      "href": "tel:6025550199"
+    },
+    "secondary": {
+      "label": "Learn more",
+      "href": "#features"
+    }
+  },
+  "domain_keywords": [
+    "plumbing repair tools",
+    "phoenix arizona desert landscape",
+    "water heater copper pipes",
+    "professional plumber smiling",
+    "modern home bathroom faucet"
+  ],
+  "design_seed": 8599,
+  "design_tokens": {
+    "card_class": "bg-card shadow-md hover:shadow-xl rounded-2xl",
+    "button_radius_class": "rounded-full",
+    "image_radius_class": "rounded-2xl",
+    "section_padding_class": "py-16 sm:py-20 lg:py-24",
+    "transition_class": "transition-all duration-300",
+    "hover_lift_class": "hover:-translate-y-1 hover:shadow-lg",
+    "_resolved_accent_shape": "pill",
+    "_resolved_surface": "elevated",
+    "_resolved_motion": "energetic",
+    "_resolved_section_rhythm": "balanced",
+    "_resolved_image_treatment": "natural"
+  }
+}

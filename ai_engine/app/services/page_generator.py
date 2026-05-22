@@ -35,10 +35,31 @@ def _content_separation_enabled() -> bool:
     raw = os.environ.get("CONTENT_SEPARATION_ENABLED", "1").strip().lower()
     return raw not in ("0", "false", "no", "off")
 
+
+def _per_section_codegen_enabled() -> bool:
+    """Per-section codegen for website pages (default ON).
+
+    OFF (=0/false): one Claude call per page generates all sections together
+    — cheaper but produces formulaic patterns (Claude juggles 4-6 sections
+    in one call → falls back to safe templates).
+
+    ON  (default): one Claude call PER SECTION (matches landing pipeline).
+    Each section gets focused prompt + full anatomy from visual_dna →
+    distinctive, research-grounded designs. ~30-50% more Anthropic spend
+    but landing-equivalent per-section quality.
+    """
+    raw = os.environ.get("WEBSITE_PER_SECTION_CODEGEN_ENABLED", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
 # Per-page generation params. Each page emits 1 composition file + 3-8
-# section components, totaling ~2-6k tokens — 16k gives plenty of headroom.
-_PAGE_MAX_TOKENS = 16000
-_PAGE_TIMEOUT_S = 120.0   # 1 call, 1 page, all its sections
+# section components. Content-rich pages (menus, locations, catalogs) can
+# blow past 16K; cap at the Sonnet 4.6 native ceiling so we never truncate.
+_PAGE_MAX_TOKENS = 64000
+_PAGE_TIMEOUT_S = 600.0   # 10 min — must cover 64K-token Sonnet 4.6 streams.
+                          # At ~150 tok/s a full 64K page = ~7 min; 120s killed
+                          # every page mid-stream and burned the full token budget
+                          # with zero output. Don't lower without also lowering
+                          # _PAGE_MAX_TOKENS in lockstep.
 _PAGE_MAX_ATTEMPTS = 2
 
 
@@ -73,9 +94,31 @@ def _section_component_name(slug: str, section_type: str) -> str:
 
 def _section_anatomy_for(visual_dna: dict, section_type: str) -> str:
     """Pull the structural anatomy spec for a given section type from
-    the extracted visual_dna. Returns empty string if missing."""
+    the extracted visual_dna. Returns empty string if missing.
+
+    Defensive: real visual_dna emits anatomies as strings (per the
+    extractor prompt - "ONE PARAGRAPH per section"), but bad/legacy
+    upstream data can occasionally produce dicts. Coerce to string
+    so we don't AttributeError on .strip().
+    """
     anatomies = (visual_dna or {}).get("section_anatomies") or {}
-    return (anatomies.get(section_type) or "").strip()
+    raw = anatomies.get(section_type)
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        return raw.strip()
+    if isinstance(raw, dict):
+        # Pick a useful field if present, otherwise JSON-encode.
+        for k in ("description", "anatomy", "layout", "spec"):
+            v = raw.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        try:
+            import json as _json
+            return _json.dumps(raw, ensure_ascii=False)[:300]
+        except Exception:
+            return ""
+    return str(raw).strip()
 
 
 def _build_system_prompt(
@@ -528,6 +571,20 @@ async def generate_one_page(
         data_model=data_model,
     )
 
+    # Log prompt size so we can diagnose token-budget issues.
+    # ~4 chars per token rough estimate. If sys + usr > 100K chars (~25K tokens)
+    # we're eating significant context budget that competes with output room.
+    logger.info(
+        "page_generator: page %s prompt sizes — sys=%d chars (~%dk tok), usr=%d chars (~%dk tok), "
+        "sections=%d, images=%s, has_data_model=%s",
+        route,
+        len(sys_p), len(sys_p) // 4000,
+        len(usr_p), len(usr_p) // 4000,
+        len(section_specs),
+        len((page_images or {})) if isinstance(page_images, dict) else "?",
+        bool(data_model),
+    )
+
     last_failure = "unknown"
     for attempt in range(1, _PAGE_MAX_ATTEMPTS + 1):
         try:
@@ -575,17 +632,34 @@ async def generate_one_page(
             if not isinstance(f, dict):
                 continue
             path = (f.get("path") or "").strip()
-            content = (f.get("content") or "")
+            content = f.get("content")
+            # Claude sometimes returns the `content` field as a dict (when its
+            # tool_use schema lets it emit structured JSON directly) rather
+            # than a serialized string. json.loads() on a dict raises a
+            # TypeError that the outer try/except json.JSONDecodeError below
+            # does NOT catch — the exception then propagates up and kills
+            # the whole page (the JSON object must be str, bytes or bytearray,
+            # not dict error). Coerce to string here so both code paths work.
+            if isinstance(content, (dict, list)):
+                try:
+                    content = json.dumps(content, ensure_ascii=False, indent=2)
+                except (TypeError, ValueError):
+                    content = ""
+            elif content is None:
+                content = ""
+            elif not isinstance(content, str):
+                content = str(content)
             if not path or not content:
                 continue
             if path.endswith("page.js") or path.endswith("page.jsx"):
                 saw_page_js = True
             if path.lstrip("/") == expected_content_path:
                 # Validate the JSON parses — otherwise it's just a wall of text.
+                # Now safe: content is guaranteed to be a string by the coercion above.
                 try:
                     json.loads(content)
                     saw_content_json = True
-                except json.JSONDecodeError as exc:
+                except (json.JSONDecodeError, TypeError) as exc:
                     logger.warning(
                         "page_generator: page %s content JSON failed to parse — %s",
                         route, exc,
@@ -620,6 +694,269 @@ async def generate_one_page(
         route, _PAGE_MAX_ATTEMPTS, last_failure,
     )
     return None
+
+
+# ── Per-section codegen (mirrors landing pipeline architecture) ───────
+
+# Each section gets its own focused Claude call. Total spend goes up
+# ~30-50% but per-section quality is much higher because:
+#   • Claude isn't juggling 4-6 unrelated sections in one response
+#   • Each call gets full anatomy + visual_dna + research context aimed
+#     at one section type
+#   • Failures are isolated — one bad section ≠ broken page
+_SECTION_INNER_CONCURRENCY = 4  # parallel sections within a single page
+
+
+async def generate_page_per_section(
+    *,
+    page: dict,
+    visual_dna: dict,
+    brand_name: str,
+    tagline: str,
+    domain: str,
+    api_key: str,
+    websocket: Any = None,
+    foundation_imports: dict[str, str] | None = None,
+    page_images: dict | None = None,
+    data_model: Any = None,
+    design_tokens: dict | None = None,
+    personality: dict | None = None,
+    voice_context: dict | None = None,
+    design_system: dict | None = None,
+) -> list[dict] | None:
+    """Per-section codegen — generates one Claude call per section in
+    parallel, then assembles a deterministic composition file.
+
+    Drop-in replacement for `generate_one_page` that produces the same
+    return shape: list of {path, content} for the composition file plus
+    each section component. No content/pages/<slug>.json — sections
+    embed their copy directly (matches landing pattern).
+
+    Reuses `landing_section_codegen._generate_one_section` so per-section
+    prompts, fallbacks, and validation are identical to the landing
+    pipeline's proven path.
+    """
+    from app.services.landing_section_codegen import _generate_one_section
+
+    route = (page.get("route") or page.get("path") or "/").strip()
+    slug = _slug_from_route(route)
+    raw_sections = page.get("sections") or []
+
+    # Normalize sections with stable IDs (so component names stay unique
+    # across pages — HomeHero, AboutHero, etc.).
+    prepared: list[dict[str, Any]] = []
+    for s in raw_sections:
+        if not isinstance(s, dict):
+            continue
+        s_type = (s.get("type") or s.get("name") or "section").strip().lower()
+        prepared.append({
+            **s,
+            "id": s.get("id") or f"{slug}_{s_type}",
+            "type": s_type,
+        })
+
+    if not prepared:
+        logger.warning("page_generator(per-section): page %s has no sections", route)
+        return None
+
+    label = f"page_generator(per-section)[{slug or 'home'}]"
+    logger.info(
+        "%s: starting — %d sections (parallel, sem=%d)",
+        label, len(prepared), _SECTION_INNER_CONCURRENCY,
+    )
+
+    # Visual DNA breakouts (defensive: missing fields → empty)
+    motif = (visual_dna.get("motif") or visual_dna.get("primary_motif") or "modern").strip()
+    palette = visual_dna.get("palette") or {}
+    typography = visual_dna.get("typography") or {}
+    personality_dict = personality or visual_dna.get("personality") or {}
+    references = visual_dna.get("references") or []
+    design_tokens_dict = design_tokens or visual_dna.get("design_tokens") or {}
+    # Project-derived design_system from website_pipeline. Without this,
+    # the section codegen prompt renders every enum at its hard-coded
+    # default (subtle/rounded/elevated/natural/balanced) — that's why
+    # every website used to feel identical regardless of brand/category.
+    design_system_dict = dict(design_system or {})
+
+    # Page-specific section anatomies (Option C — page_anatomy_refiner output)
+    # take precedence over the global ones from visual_dna. The refiner
+    # attaches `page["section_anatomies"]` per page; missing entries fall
+    # back to the global map so partial refinement is safe.
+    global_anatomies = dict(visual_dna.get("section_anatomies") or {})
+    page_anatomies = dict(page.get("section_anatomies") or {})
+    effective_anatomies = {**global_anatomies, **page_anatomies}
+    if page_anatomies:
+        logger.info(
+            "%s: using %d page-refined anatomies (overriding global)",
+            label, len(page_anatomies),
+        )
+    # Inject the effective anatomies into a shallow visual_dna copy so the
+    # downstream section prompt builder reads the page-specific versions.
+    visual_dna_for_page = {**visual_dna, "section_anatomies": effective_anatomies}
+
+    # Image flow: bind_page_images returns {section_type: [{url, alt, ...}]}
+    # keyed by section type (with _2/_3 suffixes for repeats). The landing
+    # section prompt instructs Claude that `section.images` is an array of
+    # URL STRINGS, and the runtime landing.json the components import has
+    # the same shape — so we flatten dicts → strings here. Without this
+    # Claude sees `[{url: "..."}]` in the SECTION SPEC, hardcodes that
+    # shape, and renders `<Image src={dict}>` which produces a broken icon.
+    if page_images and isinstance(page_images, dict):
+        type_seen: dict[str, int] = {}
+        for s in prepared:
+            s_type = (s.get("type") or "").strip().lower()
+            type_seen[s_type] = type_seen.get(s_type, 0) + 1
+            key = s_type if type_seen[s_type] == 1 else f"{s_type}_{type_seen[s_type]}"
+            raw_imgs = page_images.get(key) or page_images.get(s_type) or []
+            urls = [
+                (img.get("url") or "").strip()
+                for img in raw_imgs
+                if isinstance(img, dict) and (img.get("url") or "").strip()
+            ]
+            if urls:
+                s["images"] = urls
+                s["image_alts"] = [
+                    (img.get("alt") or "").strip()
+                    for img in raw_imgs if isinstance(img, dict)
+                ]
+
+    sem = asyncio.Semaphore(_SECTION_INNER_CONCURRENCY)
+
+    async def _one(idx: int, section: dict[str, Any]) -> dict[str, Any] | None:
+        async with sem:
+            try:
+                # Prev + next only, with the same fields landing uses
+                # (id/type/layout_hint/archetype). Passing every other
+                # section as before flooded the anti-monotony block with
+                # 6-10 siblings and diluted its effect — landing keeps it
+                # to 2 because the rule is "look DIFFERENT from neighbors,"
+                # not "look different from the whole page."
+                siblings: list[dict[str, Any]] = []
+                if idx - 1 >= 0:
+                    siblings.append(prepared[idx - 1])
+                if idx + 1 < len(prepared):
+                    siblings.append(prepared[idx + 1])
+                result = await _generate_one_section(
+                    section=section,
+                    siblings=siblings,
+                    brand_name=brand_name,
+                    motif=motif,
+                    palette=palette,
+                    typography=typography,
+                    design_system=design_system_dict,
+                    personality=personality_dict,
+                    references=references,
+                    design_tokens=design_tokens_dict,
+                    section_index=idx,
+                    section_count=len(prepared),
+                    api_key=api_key,
+                    websocket=websocket,
+                    voice_context=voice_context,
+                    visual_dna=visual_dna_for_page,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "%s: section %d (%s) threw — %s",
+                    label, idx, section.get("type"), exc,
+                )
+                return None
+            if not result:
+                return None
+            # Rewrite section path from landing's `src/components/sections/`
+            # to website's per-page structure: `src/components/pages/<slug>/`
+            old_path = result.get("path") or ""
+            content = result.get("content") or ""
+            if not old_path or not content:
+                return None
+            filename = os.path.basename(old_path)
+            new_path = f"src/components/pages/{slug}/{filename}"
+            return {"path": new_path, "content": content}
+
+    section_results = await asyncio.gather(
+        *[_one(i, s) for i, s in enumerate(prepared)],
+        return_exceptions=False,
+    )
+    section_files = [f for f in section_results if f]
+
+    if not section_files:
+        logger.error("%s: ALL %d sections failed", label, len(prepared))
+        return None
+
+    failed_count = len(prepared) - len(section_files)
+    if failed_count > 0:
+        logger.warning(
+            "%s: %d/%d sections succeeded (%d failed)",
+            label, len(section_files), len(prepared), failed_count,
+        )
+
+    # Composition file — deterministically built from successful sections
+    composition = _build_page_composition(page, slug, section_files, brand_name)
+    if composition:
+        return [composition] + section_files
+
+    return section_files
+
+
+def _build_page_composition(
+    page: dict,
+    slug: str,
+    section_files: list[dict],
+    brand_name: str,
+) -> dict | None:
+    """Build the page.js composition file that imports and renders
+    each section component."""
+    route = (page.get("route") or page.get("path") or "/").strip()
+    if route in ("", "/"):
+        route_path = "src/app/page.js"
+    else:
+        rel = route.lstrip("/")
+        # Skip dynamic routes — they're emitted by detail-route builder.
+        if "[" in rel or "]" in rel:
+            return None
+        route_path = f"src/app/{rel}/page.js"
+
+    imports: list[str] = []
+    body: list[str] = []
+    for f in section_files:
+        basename = os.path.basename(f["path"])
+        # Strip .jsx / .js
+        component = re.sub(r"\.(jsx|js)$", "", basename)
+        if not _VALID_COMPONENT.match(component):
+            continue
+        # Path relative to src/ — Next.js @/ alias
+        rel_import = f["path"].removeprefix("src/")
+        rel_import = re.sub(r"\.(jsx|js)$", "", rel_import)
+        imports.append(f'import {component} from "@/{rel_import}";')
+        body.append(f"      <{component} />")
+
+    if not imports:
+        return None
+
+    title = (page.get("title") or "Page").strip()
+    title_line = (
+        f"`{title} — ${{siteConfig.name}}`"
+        if route not in ("", "/")
+        else "`${siteConfig.name} — ${siteConfig.tagline}`"
+    )
+
+    content = (
+        'import { siteConfig } from "@/config/site";\n'
+        + "\n".join(imports) + "\n"
+        '\n'
+        'export const metadata = {\n'
+        f'  title: {title_line},\n'
+        '};\n'
+        '\n'
+        'export default function Page() {\n'
+        '  return (\n'
+        '    <main>\n'
+        + "\n".join(body) + "\n"
+        '    </main>\n'
+        '  );\n'
+        '}\n'
+    )
+
+    return {"path": route_path, "content": content}
 
 
 def plan_section_components_for_page(

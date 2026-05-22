@@ -46,7 +46,14 @@ _FALLBACK_SKELETONS: dict[str, str] = {
         "  • THREE stacked layers when bg media exists: media (z-0) → readability overlay (z-10) → content (z-20).\n"
         "  • Foreground content includes (in order): eyebrow tag → headline (text-5xl md:text-6xl lg:text-7xl, leading-[1.05]) → 1-line subhead (text-lg md:text-xl, max-w-xl) → ≥1 CTA + 0-1 secondary.\n"
         "  • Wrap content group in <Reveal variant=\"fade-up\">.\n"
-        "  • COMPOSITION (left-aligned vs centered, full-bleed photo vs split, where the eyebrow/cta land) is driven by visual_dna.layout_signature + visual_dna.section_flavors.hero. Apply ≥2 motifs/textures from visual_dna in concrete accent positions."
+        "  • COMPOSITION — pick ONE pattern from this catalog (driven by visual_dna.layout_signature + section_flavors.hero):\n"
+        "      A. FULL-BLEED PHOTO — hero image covers entire section as <Image fill object-cover>; readability overlay `bg-foreground/40` (light bg) or `bg-foreground/60` (over busy photo); content left-aligned in a max-w-2xl block. Best for travel / hospitality / restaurants / lifestyle. Headline allowed to use ONE italic accent word: `<span className=\"italic text-primary\">Table</span>` (the Bella Luna pattern).\n"
+        "      B. ASYMMETRIC SPLIT 60/40 — copy column (lg:col-span-3) on left with eyebrow + h1 + subhead + CTA; image column (lg:col-span-2) on right with a single large photo `aspect-[4/5]` + rounded-3xl + decorative motif overlay. No overlay on copy column. Best for editorial brands, architecture, premium product (the architecture-studio + Veloretti pattern).\n"
+        "      C. PRODUCT-STAGE DARK — dark surface (`bg-foreground text-background` or `bg-card`), single hero photo (a product, a dish, an architectural detail) centered with a soft radial glow underneath (`absolute inset-x-0 bottom-0 h-32 bg-primary/30 blur-3xl`); headline + sub copy bottom-left, CTA bottom-right. Best for luxury / fragrance / premium audio / fine dining (the Chanel + WAAW pattern).\n"
+        "      D. FLOATING COUNTER — main photo left or right at `aspect-[4/3]`, secondary photo card stacked at small size with a numbered indicator (`<span className=\"text-3xl font-bold\">03</span>` + `<ChevronLeft/>` `<ChevronRight/>` icons). Architecture / portfolio / gallery sites (the architecture-site pattern with `03→`).\n"
+        "      E. CENTERED EDITORIAL — fully centered, oversized serif headline that spans 3 lines (text-6xl md:text-7xl lg:text-8xl), 1-line eyebrow above, single CTA below; minimal photo treatment OR a small framed photo card at the bottom. Best for boutique / wedding / ceremony / cultural-institution brands.\n"
+        "    Default if visual_dna offers no signal: pick A for hospitality/travel, B for architecture/product, C for luxury/fragrance, E for ceremony/cultural.\n"
+        "  • Apply ≥2 motifs/textures from visual_dna in concrete accent positions (eyebrow ornament, divider, decorative SVG in a corner — small, not loud)."
     ),
     "menu": (
         "STRUCTURAL FLOOR — list-of-items section minimum:\n"
@@ -60,10 +67,16 @@ _FALLBACK_SKELETONS: dict[str, str] = {
     "gallery": (
         "STRUCTURAL FLOOR — image grid section minimum:\n"
         "  • Heading group above (eyebrow + h2 + subhead, max-w-2xl).\n"
-        "  • Responsive grid: `grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4` (or asymmetric variant — pick from visual_dna.layout_signature).\n"
-        "  • Tiles use varied aspect ratios (aspect-[4/5] | aspect-square | aspect-[3/4]) for editorial rhythm — never uniform thumbnails.\n"
-        "  • Each tile: `relative overflow-hidden` with photo as <Image fill object-cover> + hover scale.\n"
-        "  • Section root needs `overflow-hidden` to contain decorative blobs."
+        "  • Section root needs `overflow-hidden` to contain decorative blobs.\n"
+        "  • PATTERN — pick ONE from this catalog (driven by visual_dna.layout_signature + section_flavors.gallery):\n"
+        "      A. BENTO MOSAIC — `grid grid-cols-12 gap-3 md:gap-4` with 1 feature image at `col-span-7 row-span-2 aspect-[4/3]` + 2 stacked at `col-span-5 aspect-[3/2]` + 3-4 smaller `col-span-3 aspect-square` to fill. Editorial / architecture / portfolio brands (the architecture-site bottom-row pattern).\n"
+        "      B. SCROLL-SNAP HORIZONTAL — outer `flex gap-4 overflow-x-auto snap-x snap-mandatory pb-4 -mx-4 px-4` with each tile `min-w-[280px] md:min-w-[360px] snap-start aspect-[3/4] rounded-2xl`. Add a `text-xs text-muted-foreground` hint below: `← Scroll to explore`. Best for travel / destination / restaurant / story-led brands.\n"
+        "      C. NUMBERED COUNTER CAROUSEL — 1 large featured photo on left at `aspect-[4/3] rounded-3xl`, with a `<div className=\"absolute bottom-6 right-6\">` block showing `<span className=\"text-5xl font-bold text-background\">0{{currentIndex+1}}</span><span className=\"text-background/60\"> / 0{{section.images.length}}</span>` plus prev/next pill buttons. useState + Reveal. Architecture / portfolio (the architecture-site `03 ←→` pattern).\n"
+        "      D. MAGAZINE 12-COL ASYMMETRIC — `grid grid-cols-12 gap-4` with rows of (col-span-8 + col-span-4) alternating (col-span-4 + col-span-8). Each row has ONE feature image + 1-2 supporting smaller tiles. Editorial / publication / agency feel.\n"
+        "      E. UNIFORM 4-COL THUMBNAILS — `grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3` with all tiles at the same aspect-square. FALLBACK ONLY — picks this when content count exceeds 16 or none of A-D fits. Avoid for hero gallery sections.\n"
+        "    Default: A for editorial/architecture/portfolio, B for travel/destination/restaurant, C for portfolio with sequenced shots, D for magazine/agency, E only as last resort.\n"
+        "  • Tiles use varied aspect ratios (aspect-[4/5] | aspect-square | aspect-[3/4]) for editorial rhythm — never uniform thumbnails in A-D patterns.\n"
+        "  • Each tile: `relative overflow-hidden` with photo as <Image fill object-cover> + hover scale (`transition-transform duration-500 hover:scale-105`)."
     ),
     "testimonials": (
         "STRUCTURAL FLOOR — testimonial cards minimum:\n"
@@ -91,9 +104,16 @@ _FALLBACK_SKELETONS: dict[str, str] = {
     ),
     "story": (
         "STRUCTURAL FLOOR — narrative / about section minimum:\n"
-        "  • Two-column split (asymmetric is fine — driven by visual_dna.layout_signature): copy column with eyebrow + h2 + multi-paragraph body + optional small CTA, image/accent column with hero photo OR a stat panel OR a quote pull-out.\n"
         "  • Body copy uses `text-base md:text-lg text-muted-foreground leading-relaxed`, max-w-prose for readability.\n"
-        "  • Optional decorative element from visual_dna.decorative_motifs as a divider or accent."
+        "  • PATTERN — pick ONE from this catalog (driven by visual_dna.layout_signature + section_flavors.story):\n"
+        "      A. ITALIC-ACCENT EDITORIAL — single-column centered editorial layout with an oversized serif headline that splits across 2-3 lines (text-5xl md:text-6xl lg:text-7xl font-serif leading-[1.05]). ONE WORD inside the headline is wrapped in `<span className=\"italic text-primary\">Word</span>` for the accent hit. Body 2-3 paragraphs in a single max-w-2xl column, with a small framed photo card to the right at md+ breakpoint (`md:absolute md:right-8 md:bottom-8 md:w-1/3 aspect-[4/5] rounded-2xl`). Lifestyle / hospitality / boutique / fine dining (the Bella Luna pattern).\n"
+        "      B. TWO-PHOTO PULL-QUOTE — three-row layout: top row is one wide photo `aspect-[16/9] rounded-2xl`, middle row is a centered pull-quote `text-3xl md:text-4xl font-serif italic max-w-3xl mx-auto` with attribution below, bottom row is a 2-up photo grid (`grid grid-cols-2 gap-4 aspect-[16/9]`). Editorial / journalism / agency / cultural-institution.\n"
+        "      C. SCROLL-SNAP CHAPTERS — horizontal scroll with `flex overflow-x-auto snap-x snap-mandatory` and 3-4 `min-w-[80vw] snap-start` panels, each panel being a chapter (year/title heading + 2 paragraphs + 1 photo). Best for brand-story / heritage / decade-long-history pages.\n"
+        "      D. ASYMMETRIC TIMELINE — vertical narrative with year markers on the left (`text-sm uppercase tracking-widest text-primary`) and content on the right. Each entry: year → headline → 2 lines → optional photo. Connected by a thin `border-l-2 border-border` line, NEVER absolute-positioned overlapping cards. Heritage / brewery / law-firm / academic brands.\n"
+        "      E. ASYMMETRIC SPLIT — classic two-column split (asymmetric is fine): copy column with eyebrow + h2 + multi-paragraph body + optional small CTA, image column with hero photo OR a stat panel OR a quote pull-out. Default fallback when none of A-D fits.\n"
+        "    Default: A for hospitality/dining/boutique/lifestyle, B for editorial/cultural, C for heritage with decades of history, D for multi-decade timeline narratives, E only when others don't fit.\n"
+        "  • Optional decorative element from visual_dna.decorative_motifs as a divider or accent (e.g. a thin SVG flourish between paragraphs).\n"
+        "  • CRITICAL — for pattern D, NEVER absolute-position card chips overlapping each other. Cards stay in document flow. Overlapping timeline cards was a real bug in Laqod Tour."
     ),
     "process": (
         "STRUCTURAL FLOOR — process / how-it-works section minimum:\n"
@@ -590,6 +610,33 @@ export default function {component_name}() {{
     return {"path": file_path, "content": content, "fallback": True}
 
 
+# Per-slot palette table — shows each slot's HSL, the Tailwind class that
+# maps to it in globals.css, and the slot's intended role. Replaces the
+# previous opaque "--primary: 30 35% 45%;" dump, which Claude tended to
+# ignore in favor of bg-background / text-foreground everywhere.
+_PALETTE_SLOT_META = {
+    "primary":    ("bg-primary text-primary-foreground",   "brand color — use as a full surface on ≥1 band/CTA per page"),
+    "secondary":  ("bg-secondary text-secondary-foreground","supporting tone — chip / badge backgrounds, secondary surfaces"),
+    "accent":     ("bg-accent text-accent-foreground",      "pop color — small flourishes, highlights, badge underlays"),
+    "background": ("bg-background text-foreground",         "page surface — neutral default; do NOT use everywhere"),
+    "foreground": ("text-foreground",                       "primary text on light surfaces; flip to bg-foreground for dark bands"),
+    "muted":      ("bg-muted text-muted-foreground",        "subtle alternating section background; secondary text"),
+    "border":     ("border-border",                         "card / divider hairlines"),
+    "card":       ("bg-card text-card-foreground",          "card and panel surfaces — must contrast with section bg"),
+}
+
+
+def _format_palette_table(palette: dict) -> str:
+    rows: list[str] = []
+    for slot in ("primary", "secondary", "accent", "background", "foreground", "muted", "border", "card"):
+        hsl = (palette.get(slot) or "").strip()
+        if not hsl:
+            continue
+        classes, role = _PALETTE_SLOT_META[slot]
+        rows.append(f"  --{slot:<10} hsl({hsl:<14}) → {classes:<48}  ({role})")
+    return "\n".join(rows) if rows else "  (no palette — Tailwind defaults only)"
+
+
 def _system_prompt(
     brand_name: str,
     motif: str,
@@ -603,7 +650,7 @@ def _system_prompt(
     visual_dna: dict | None = None,
 ) -> str:
     """Per-call system prompt — small, focused, no rules unrelated to a single section."""
-    palette_lines = "\n".join(f"  --{k}: {v};" for k, v in palette.items())
+    palette_lines = _format_palette_table(palette)
     ds = design_system or {}
     dt = design_tokens or {}
     pers = personality or {}
@@ -768,7 +815,58 @@ MANDATORY RULES
    layout colors — those lock the page to one look and stop tracking the brief's
    palette. The post-gen pipeline logs warnings when it sees layout-color drift; treat
    it as a signal, not a hard error.
-3. Render the section to match the provided layout_hint.
+3. Render the section to match the provided layout_hint EXACTLY. The layout_hint vocab
+   maps to concrete JSX skeletons — pick the one that matches and use it as the structural
+   floor. Do NOT collapse `grid-3` to a centered-stack just because items are short, do NOT
+   render `split-image-left` as a centered photo, do NOT render `two-column` as a 3-up.
+   Vocab → skeleton (the OUTER container; inner card chrome still uses design tokens):
+     • centered-stack       → `flex flex-col items-center text-center max-w-3xl mx-auto gap-6`
+     • two-column           → `grid lg:grid-cols-2 gap-10 items-center` (text left, content right)
+     • split-image-left     → `grid lg:grid-cols-2 gap-10 items-center` — `<Image>` IS the left column
+     • split-image-right    → `grid lg:grid-cols-2 gap-10 items-center` — `<Image>` IS the right column
+     • grid-2               → `grid sm:grid-cols-2 gap-6 lg:gap-8`
+     • grid-3               → `grid sm:grid-cols-2 lg:grid-cols-3 gap-6`
+     • grid-4               → `grid sm:grid-cols-2 lg:grid-cols-4 gap-6`
+     • carousel             → horizontal `flex overflow-x-auto snap-x snap-mandatory gap-4` with `snap-center` children
+     • accordion            → vertical list of `<details>` or controlled `useState` rows with chevron icon
+     • logo-strip           → `flex flex-wrap items-center justify-center gap-x-12 gap-y-6`
+     • stat-band            → `grid grid-cols-2 md:grid-cols-4 divide-x divide-border` with HUGE numerals
+     • timeline             → vertical line with alternating-side cards (use `_NO_PHOTO_VARIANTS` style)
+     • comparison-table     → real `<table>` with `<thead>` row of plan names + feature rows
+     • media-quote          → `grid lg:grid-cols-[1.2fr_1fr] gap-12 items-center` with pull-quote left, image right
+   If layout_hint is missing/empty, use centered-stack for hero/CTA, grid-3 for value_prop/features,
+   split-image-right for story, asymmetric-12col bento for gallery — but ALWAYS pick deliberately.
+3a. BRIEF CONTENT IS AUTHORITATIVE — DO NOT INVENT WHEN THE BRIEF HAS IT.
+    The SECTION SPEC in the user prompt contains the Gemini-written brief for this
+    specific brand. When a brief field is non-empty, you MUST use it verbatim. Inventing
+    your own copy when the brief already wrote it is the documented root cause of
+    "every generated site reads the same." Specifically:
+      • If `section.headline` is non-empty, render it verbatim as the section's H1/H2.
+        Do NOT paraphrase. Do NOT swap it for a brand-name slogan. Do NOT skip it.
+      • If `section.subheadline` is non-empty, render it as the immediate supporting line.
+      • If `section.body` is non-empty, render it as the narrative paragraph (preserve
+        `\\n\\n` paragraph breaks).
+      • If `section.items` is a non-empty array, render EXACTLY `section.items.length`
+        items — no fewer, no more. Each item's `title`/`body`/`name`/`role`/`quote`/`value`/
+        `price`/`icon` field, when present, is the copy for that slot. Do NOT invent extra
+        items to fill a grid. Do NOT drop items because they don't fit your skeleton —
+        change the skeleton.
+      • If `section.image_queries` is a non-empty array, the binder has pre-bound matching
+        URLs into `section.images[i]`. Use `section.images[i]` as the `<Image src>` —
+        NEVER invent `/images/...` paths, NEVER hardcode Unsplash URLs, NEVER skip the
+        image. The alt text comes from `section.image_alts[i]` (fall back to the i-th
+        image_query when absent).
+      • If `section.primary_cta` / `section.cta` carries a label, render it verbatim on
+        the button. Use `landing.ctas.primary` only as a fallback when the section's
+        CTA is absent (see the CTA DATA SHAPE rule below).
+    Brief content trumps your priors. If the brief says headline "Freight that moves on
+    your schedule" you write that — not "Transform Your Logistics Today" or any other
+    generic headline you might prefer.
+3b. NEVER USE PLACEHOLDER NAMES OR LOREM IPSUM. If the brief gives you a name (testimonial
+    quote attribution, team member), use it. If the brief field is empty AND the section
+    requires a name slot, derive one that sounds like the brand's audience (e.g. for
+    Brooklyn restaurant: "Maya R., Park Slope"; for trucking: "Frank G., Owner-Operator,
+    Texarkana") — NEVER "John Doe", "Jane Smith", or "Customer Name".
 4. The component MUST default-export a React function whose name matches the file name
    (e.g. HeroSection.jsx → export default function HeroSection()).
 5. The outermost element MUST be `<section id="<section-id>" className="...">` so anchor links work.
@@ -949,6 +1047,38 @@ PROJECT_DESIGN_TOKENS — USE THESE EXACT TAILWIND CLASS STRINGS VERBATIM (do NO
     <button className="{dt.get("button_radius_class", "rounded-md")} bg-primary text-primary-foreground px-5 py-3">
   RULE: every card / panel / form / featured-list-item MUST start with the CARD class string above — no ad-hoc shadow / radius combinations. Every image container MUST use the image radius. Every button MUST use the button radius. The section root MUST use the section padding. This guarantees every section in the build matches.
 
+MODERN PATTERN ANCHORS (calibration set — match THIS quality bar, not generic 2018 SaaS)
+  The aesthetic target is the way modern brand sites actually look in 2025-2026, not the
+  generic template look that AI generators default to. Concrete reference anchors:
+    • BELLA LUNA TRATTORIA (Italian dining) — charcoal background, oversized serif headline
+      with ONE italic accent word ("Where Naples Comes to Your <em>Table</em>" in amber),
+      single asymmetric photo bottom-right, generous breathing space. Restaurant / fine
+      dining / hospitality should look like this — NOT a 3-column icon grid.
+    • CHANEL DIFFUSER (luxury / fragrance) — pure dark background, single product photo
+      centered with a glow underneath, headline + sub bottom-left, CTA pill bottom-right.
+      Luxury / fragrance / fashion / premium beauty should look like this — NOT a SaaS
+      hero with three feature cards below.
+    • WAAW (premium audio) — dark olive-tinted background, blurred product photo behind a
+      huge sans-serif headline with ONE word in lime ("DISCOVER A UNIQUE <em>EXPERIENCE</em>"),
+      pill nav with avatar + ORDER NOW CTA in top-right. Premium audio / tech-with-personality
+      should look like this.
+    • ARCHITECTURE STUDIO — light gray background, asymmetric split (building photo left,
+      headline right), purple CTA + purple icon, a stacked photo card with floating numbered
+      counter ("03 →"). Architecture / design / portfolio should look like this.
+    • VELORETTI (electric bikes) — pure cream/grayscale palette, single hero product photo
+      centered, minimalist serif wordmark + thin horizontal nav, small floating "Powerful
+      Motor" chip overlay, BUY button bottom-right. Premium product / outdoor / minimalist
+      brands should look like this — color discipline through restraint, NOT through
+      adding more colors.
+
+  Common DNA across these references — internalize this:
+    1. ONE primary surface (charcoal OR cream OR olive-tinted, NEVER pure #fff/#000).
+    2. ONE brand-distinctive accent used sparingly (CTA pill, italic word, icon stroke).
+    3. Generous breathing space; the headline takes 50%+ of the hero height.
+    4. Photo is real (full-bleed, centered, or asymmetric), not a placeholder gradient.
+    5. Type pairing has personality — display serif OR weighted geometric sans, not the
+       default Inter-on-Inter SaaS look.
+
 DESIGN CONTEXT
   Brand: {brand_name}
   Motif: {motif}
@@ -1127,6 +1257,50 @@ CARD WIDTH — FLUID GRID ONLY (no narrow/collapsed cards, no card-stack improvi
     Each cell is `w-full` — fluid; the grid handles distribution. If you write a width unit
     on a card (px / rem / Tailwind w-N), you have produced a defect.
 
+ABSOLUTE POSITIONING — NEVER OVERLAP COPY (universal rule, all section types)
+  Decorative absolute elements (gradient orbs, motif SVGs, watermark numbers, badge dots)
+  are allowed but MUST NOT sit on top of section copy. The Reliant Logistics value_prop
+  section shipped with 5 brand-pillar cards `absolute`-stacked on top of the headline
+  "Freight that moves on your schedule" — 5 cards smeared across 200px of vertical
+  space, every card overlapping the next, the headline showing through underneath. This
+  is the SAME class of bug as press/timeline overlap, but on a value_prop / why-choose
+  section it had no specific rule yet. It does now:
+  ✗ FORBIDDEN — ANY section type:
+    • Cards (value_prop pillars, why-choose chips, brand_pillars, benefit chips, feature
+      tiles, stat tiles, badge rows) rendered with `absolute` / `absolute inset-0` /
+      `absolute left-* top-*` so they stack over each other or over copy.
+    • Mid-animation states that LOOK overlapping at rest (e.g. cards with `translate-x-0`
+      initial that only spread out via a JS hover/animation that never fires server-side).
+      If you can't see the final layout in the static HTML, the initial render is broken.
+    • Headline copy + a grid of cards where the cards are `absolute` positioned over a
+      column the headline also occupies. Two-column splits are flex/grid, never absolute.
+    • Brand pillar / icon-label chips positioned absolutely in a "fanned arc" pattern.
+      Render them as a `grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4` row instead.
+  ✓ THE ONLY LEGITIMATE absolute children inside a section are:
+    • A SINGLE oversized watermark word/number at `text-foreground/[0.06]` BEHIND copy
+      (the copy must explicitly carry `relative z-10` to sit above it).
+    • A SINGLE decorative blob/orb/ring at `bg-primary/10 blur-3xl` in a corner.
+    • Photo overlays: `<div className="absolute inset-0 bg-gradient-to-t ..." />` ON TOP
+      of an `<Image fill>` inside the SAME `relative overflow-hidden` parent.
+    • The accent_shape decorative SVG in a corner, fixed size, single instance.
+  Multiple absolute children in the same section is a smell — if you have 2+, audit
+  whether you're trying to express a flow layout as positioned chips. Use grid/flex.
+  Final check before output: every `<article>`, `<li>`, `<a>` rendering a card /
+  chip / item MUST be a direct child of a `grid` or `flex` parent, NOT `absolute`.
+
+CTA DATA SHAPE — section.cta is {{label, href}} object, NEVER a string, may be absent
+  Pattern (verbatim — copy this exactly):
+    const cta = (section.cta && section.cta.href) ? section.cta : landing.ctas?.primary;
+    // then render: <Link href={{cta?.href || "#"}}>{{cta?.label || "Get started"}}</Link>
+  ✗ NEVER write `const cta = section?.cta || "Get started"` — `{{}}` is truthy in JS so
+    `cta` becomes `{{}}`, and a later `<span>{{cta}}</span>` throws the runtime error
+    "Objects are not valid as a React child (found: object with keys {{}})". This was
+    a real production crash on the Reliant Logistics build (6 hero/CTA sections).
+  ✗ NEVER render `{{section.cta}}` or `{{cta}}` directly as a JSX child — it is an object.
+    Always destructure: `{{cta.label}}` for the visible text, `cta.href` for the link.
+  ✓ When the section's CTA is missing/empty, fall back to `landing.ctas.primary`.
+    When BOTH are missing, render no CTA (don't emit a button with no label).
+
 CONTENT INSIDE A CARD — overflow + multi-column safety
   This applies to ANY content INSIDE a card or panel: stat triples, label/value rows,
   big-number callouts, side-by-side metrics, mini-tables. The card itself can be
@@ -1167,11 +1341,13 @@ SECTION SURFACE RHYTHM (forces the page to alternate, not look monotone)
   The user prompt for THIS section tells you which surface to use. Pick the OUTER section className
   from this menu — and pair it with the INNER card surface that has guaranteed contrast against it:
 
-    Section bg = `bg-background`   → inner cards: `bg-card border border-border` (lighter pop).
-    Section bg = `bg-muted/40`     → inner cards: `bg-background border border-border/60` (lighter pop).
-    Section bg = `bg-card`         → inner cards: `bg-muted/40 border border-border` (subtle indent).
-    Section bg = `bg-primary/5`    → inner cards: `bg-background border border-primary/20` (warm tint).
-    Section bg = `bg-foreground`   → inner cards: `bg-background/10 border border-background/15` (dark mode panel).
+    Section bg = `bg-background`                     → inner cards: `bg-card border border-border` (lighter pop).
+    Section bg = `bg-muted/40` or `bg-muted/50`      → inner cards: `bg-background border border-border/60` (lighter pop).
+    Section bg = `bg-card`                           → inner cards: `bg-muted/40 border border-border` (subtle indent).
+    Section bg = `bg-primary/5` or `bg-primary/10`   → inner cards: `bg-background border border-primary/20` (warm tint).
+    Section bg = `bg-accent/15`                      → inner cards: `bg-background border border-accent/30` (cool tint).
+    Section bg = `bg-foreground text-background`     → inner cards: `bg-background/10 border border-background/20 text-background` (dark mode panel).
+    Section bg = `bg-primary text-primary-foreground`→ inner cards: `bg-background/15 border border-primary-foreground/25 text-primary-foreground` (full color band).
 
   Required diversity rules:
     • NEVER ship two adjacent sections with the same outer bg. The user message lists the previous
@@ -1182,6 +1358,34 @@ SECTION SURFACE RHYTHM (forces the page to alternate, not look monotone)
       background section, or `bg-muted/40 border border-border` when the section IS bg-background.
       An input that visually disappears against its container is a FAILURE.
 
+BRAND COLOR DISCIPLINE (the references' aesthetic — restrained, not rainbow)
+  The way reference sites (Bella Luna, Chanel, Apple, Veloretti, modern studios) use color:
+    1. ONE primary surface dominates the page — the palette's `background` slot. This is
+       a brand-TUNED neutral (warm cream for Italian dining, charcoal for luxury, sand for
+       travel, cool gray for architecture). NOT pure white #fff or pure black #000.
+    2. The brand's saturated color (`primary`) appears SPARINGLY but UNMISTAKABLY:
+         ✓ The CTA pill (`bg-primary text-primary-foreground rounded-full`)
+         ✓ One italic accent WORD in the headline (`<span className="italic text-primary">`)
+         ✓ Eyebrow text above the heading (`text-primary uppercase tracking-[0.2em] text-xs`)
+         ✓ Icon stroke color (`<Icon className="text-primary" />`)
+         ✓ A thin underline beneath an active nav item (`border-b-2 border-primary`)
+         ✓ Decorative motif glyph color
+    3. The `accent` slot is for secondary highlights (badge underlays, small dots, ornaments) —
+       use AT MOST once per section, often not at all.
+
+  WHAT TO AVOID:
+    ✗ Section after section in `bg-primary` or `bg-accent/15` — that's the "rainbow page"
+      anti-pattern. The references DON'T do this.
+    ✗ Section that uses ONLY `bg-background` + `text-foreground` + `text-muted-foreground`
+      with NO appearance of `text-primary` / `bg-primary` ANYWHERE — that's monochrome SaaS.
+      Every section needs the brand color to APPEAR somewhere, just not as a full surface.
+    ✗ Defaulting to pure white or pure black. The palette's `background` and `foreground`
+      slots are brand-tuned neutrals; use those tokens, never `bg-white` / `bg-black` literals.
+
+  RULE OF THUMB: if you removed every neutral and only the brand-accent pixels remained,
+  there should still be enough to ANCHOR the brand (CTA + eyebrow + icon + accent word),
+  but not enough to overwhelm a calm, expensive-feeling page.
+
 QUALITY BAR
   • Sections that are GENERIC (centered headline + 3 plain icon cards) are a FAILURE — every section must offer something visually distinct.
   • Hero must NOT be a centered text block on flat color — it must use a real background image with overlay.
@@ -1190,6 +1394,8 @@ QUALITY BAR
   • Spacing follows the PIXEL-PRECISE LAYOUT TOKENS above.
   • DO NOT produce a section that is purely a paragraph of text — every section earns its place visually.
   • DO NOT default to a 3-column icon-card grid for non-photo sections — pick a NO-PHOTO LAYOUT VARIANT from the user message.
+  • DO NOT use literal `bg-white` / `bg-black` / `bg-gray-*` Tailwind classes — always use the palette tokens (`bg-background`, `bg-foreground`, `bg-muted`, etc.) so the brand-tuned neutrals come through.
+  • DO ensure the brand color appears in every section (CTA / eyebrow / icon / accent word) — see BRAND COLOR DISCIPLINE above.
 """
 
 
@@ -1212,12 +1418,34 @@ def _user_prompt(
         )
     sib_block = "\n".join(sib_summaries) or "  (none)"
 
-    # Visual rhythm cue: rotate through a 4-bg cycle so adjacent sections
-    # always differ AND the page reads as visually balanced (not just
-    # alternating two colors). Hero (index 0) is the photo hero so we still
-    # use bg-background under it. The cycle is tuned so primary/5 (warm
-    # tint) appears once near the middle for visual anchor.
-    _BG_CYCLE = ["bg-background", "bg-muted/40", "bg-card", "bg-primary/5"]
+    # Visual rhythm cue: rotate through a NEUTRAL-DOMINANT bg cycle.
+    # Reference sites (Bella Luna, Chanel, WAAW, Veloretti, architecture
+    # studios) use ONE primary surface across most of the page with subtle
+    # card-level variation; brand color appears in CTAs / eyebrows / icons,
+    # NOT as alternating full bands. Hero (index 0) is the photo hero so
+    # we still use bg-background under it.
+    #
+    # bold intensity (default) gets ONE optional inverse band (`bg-foreground
+    # text-background`) for visual rhythm — that's the "Bella Luna pattern":
+    # mostly-light page with one dark band, or vice versa. Subtle intensity
+    # never inverts.
+    vd_local = visual_dna or {}
+    is_bold = (vd_local.get("cultural_intensity") or "bold").strip().lower() != "subtle"
+
+    if is_bold:
+        # 5 stops: 3 neutrals + 1 warm tint + 1 inverse band. Neutral surfaces
+        # still dominate (3/5 stops) but the cycle has one real color hit
+        # and one inverse band over the course of a long page.
+        _BG_CYCLE = [
+            "bg-background",
+            "bg-muted/40",
+            "bg-card",
+            "bg-foreground text-background",   # one inverse band per cycle
+            "bg-background",
+        ]
+    else:
+        _BG_CYCLE = ["bg-background", "bg-muted/40", "bg-card", "bg-background"]
+
     if section_index == 0:
         bg_hint = "bg-background"
     else:
@@ -1473,10 +1701,14 @@ async def _generate_one_section(
                     websocket=websocket,
                     max_tokens=_SECTION_MAX_TOKENS,
                 ),
-                timeout=90.0,
+                # Was 90s — at 16K max_tokens that's borderline (~107s if Claude
+                # fills the budget at ~150 tok/s). Bumped to 240s so rich
+                # sections (pricing tables, testimonial carousels) don't get
+                # killed mid-stream and waste the partial response.
+                timeout=240.0,
             )
         except asyncio.TimeoutError:
-            last_failure_reason = "timeout after 90s"
+            last_failure_reason = "timeout after 240s"
             logger.warning(
                 "section %s: codegen timed out on attempt %d/%d — skipping",
                 section_id, attempt, max_attempts,
@@ -1734,7 +1966,7 @@ def _layout_system_prompt(
     category: str = "",
 ) -> str:
     """System prompt for header/footer codegen — anatomy-driven, JSON-fed."""
-    palette_lines = "\n".join(f"  --{k}: {v};" for k, v in palette.items())
+    palette_lines = _format_palette_table(palette)
     ds = design_system or {}
     dt = design_tokens or {}
     pers = personality or {}

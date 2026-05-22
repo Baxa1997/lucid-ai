@@ -1,0 +1,285 @@
+{
+  "brand": {
+    "name": "Forge Fitness Studio",
+    "tagline": "Forge your strength, ignite your potential. High-intensity workouts for lasting results.",
+    "domain": "fitness_wellness"
+  },
+  "pages": [
+    {
+      "route": "/",
+      "title": "Forge Fitness Studio | HIIT & Strength Training",
+      "purpose": "The homepage introduces Forge, highlights its core offerings, and guides visitors to find a studio or book a class.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "trust_bar",
+          "layout_hint": "logo-strip"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "icon-grid-3",
+          "archetype": "icon-grid-3"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "how_it_works",
+          "layout_hint": "numbered-stepper",
+          "archetype": "numbered-stepper"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "carousel",
+          "archetype": "big-quote-portrait"
+        },
+        {
+          "type": "locations",
+          "layout_hint": "grid-2"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/classes",
+      "title": "Our Classes | HIIT & Strength Workouts",
+      "purpose": "This page details the different types of HIIT and strength classes offered at Forge, explaining their benefits and structure.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "asymmetric-split",
+          "archetype": "asymmetric-split"
+        },
+        {
+          "type": "features",
+          "layout_hint": "split-image-bullets",
+          "archetype": "split-image-bullets"
+        },
+        {
+          "type": "how_it_works",
+          "layout_hint": "numbered-stepper",
+          "archetype": "numbered-stepper"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "classes"
+    },
+    {
+      "route": "/trainers",
+      "title": "Meet Our Expert Trainers | Forge Fitness",
+      "purpose": "Showcases the professional and experienced trainers at Forge, highlighting their expertise and passion for fitness.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-3"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "marquee-row",
+          "archetype": "marquee-row"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "trainers"
+    },
+    {
+      "route": "/membership",
+      "title": "Membership & Pricing | Forge Fitness",
+      "purpose": "Outlines the various membership options and pricing structures available at Forge, encouraging sign-ups.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "oversized-watermark",
+          "archetype": "oversized-watermark"
+        },
+        {
+          "type": "pricing",
+          "layout_hint": "comparison-table"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "icon-grid-3",
+          "archetype": "icon-grid-3"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        },
+        {
+          "type": "booking_form",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/schedule",
+      "title": "Class Schedule | Book Your Forge Workout",
+      "purpose": "Provides an up-to-date class schedule, allowing users to view available classes and book their sessions.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "booking_form",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/transformations",
+      "title": "Success Stories | Forge Fitness Transformations",
+      "purpose": "Showcases inspiring client transformation stories and testimonials, building trust and demonstrating results.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "type-wrapping-product",
+          "archetype": "type-wrapping-product"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "grid-2",
+          "archetype": "glass-cards-bg"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "bento-mosaic",
+          "archetype": "bento-mosaic"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/locations",
+      "title": "Our Studio Locations | Forge Fitness",
+      "purpose": "Lists all Forge studio locations, providing details and directions for each, and facilitating local class bookings.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "locations",
+          "layout_hint": "grid-2"
+        },
+        {
+          "type": "booking_form",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/about",
+      "title": "About Forge Fitness | Our Story & Philosophy",
+      "purpose": "Shares the brand's story, mission, and philosophy, connecting with the audience on a deeper level.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "video-mask",
+          "archetype": "video-mask"
+        },
+        {
+          "type": "story",
+          "layout_hint": "split-image-left"
+        },
+        {
+          "type": "philosophy",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-4"
+        },
+        {
+          "type": "stats",
+          "layout_hint": "stat-band"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/contact",
+      "title": "Contact Us | Forge Fitness Studio",
+      "purpose": "Provides various ways for visitors to get in touch with Forge, including a contact form and location details.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "contact_form",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "locations",
+          "layout_hint": "grid-2"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        }
+      ],
+      "detail_template": false
+    }
+  ]
+}

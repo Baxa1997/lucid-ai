@@ -1,0 +1,367 @@
+{
+  "brand": {
+    "name": "Vault",
+    "tagline": "The Institutional Standard for Crypto Trading & Custody",
+    "description": "Trade spot assets, earn staking rewards, and secure your capital with regulated, multi-sig institutional custody. Sign up in 60 seconds.",
+    "domain": "vault.io",
+    "social": [
+      {
+        "label": "twitter",
+        "href": "https://twitter.com/vault"
+      },
+      {
+        "label": "linkedin",
+        "href": "https://linkedin.com/company/vault"
+      }
+    ]
+  },
+  "palette": {
+    "primary": "160 100% 40%",
+    "secondary": "220 80% 60%",
+    "accent": "45 100% 50%",
+    "background": "240 10% 8%",
+    "foreground": "0 0% 98%",
+    "muted": "240 10% 50%",
+    "border": "240 10% 20%",
+    "card": "240 10% 12%"
+  },
+  "typography": {
+    "heading_font": "Plus Jakarta Sans",
+    "body_font": "Inter",
+    "scale": "balanced"
+  },
+  "motif": "luxe",
+  "design_system": {
+    "motion": "subtle",
+    "accent_shape": "squared",
+    "surface": "layered",
+    "image_treatment": "masked",
+    "section_rhythm": "balanced"
+  },
+  "personality": {
+    "tone": "confident",
+    "vibe_keywords": [
+      "secure",
+      "premium",
+      "institutional",
+      "fast"
+    ],
+    "energy": "medium"
+  },
+  "header_archetype": "mega-menu",
+  "footer_archetype": "mega-columns",
+  "references": [
+    {
+      "url": "https://coinbase.com",
+      "name": "Coinbase",
+      "why": "Gold standard for bridging retail simplicity with institutional-grade crypto services.",
+      "section_order": [
+        "hero",
+        "trust_bar",
+        "features",
+        "stats",
+        "cta"
+      ],
+      "notable_features": [
+        "Interactive portfolio chart",
+        "Live price ticker"
+      ]
+    },
+    {
+      "url": "https://kraken.com",
+      "name": "Kraken",
+      "why": "Balances onboarding speed with hardcore security and institutional messaging.",
+      "section_order": [
+        "hero",
+        "trust_bar",
+        "how_it_works",
+        "faq"
+      ],
+      "notable_features": [
+        "Tabbed product showcase",
+        "Animated vault graphic"
+      ]
+    },
+    {
+      "url": "https://gemini.com",
+      "name": "Gemini",
+      "why": "Projects a premium, regulated feel with focus on SOC certifications and compliance.",
+      "section_order": [
+        "hero",
+        "trust_bar",
+        "features",
+        "stats"
+      ],
+      "notable_features": [
+        "Top movers data cards",
+        "Editorial photography"
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "id": "hero-onboarding",
+      "type": "hero",
+      "role": "Drive immediate signups with speed and trust messaging.",
+      "headline": "Institutional Crypto Trading, Ready in 60 Seconds",
+      "subheadline": "Access deep liquidity, secure staking, and regulated custody on the world's most trusted digital asset platform.",
+      "layout_hint": "asymmetric-split",
+      "archetype": "type-wrapping-product",
+      "interactivity": "Email input field with instant validation and 60s countdown timer on hover.",
+      "image_queries": [
+        "crypto trading dashboard dark interface"
+      ],
+      "cta": {
+        "label": "Get Started",
+        "href": "#signup"
+      },
+      "items": []
+    },
+    {
+      "id": "regulatory-trust",
+      "type": "trust_bar",
+      "role": "Establish immediate compliance authority.",
+      "nav_label": "Trust",
+      "headline": "Regulated. Audited. Secure.",
+      "layout_hint": "logo-strip",
+      "interactivity": "Logos grayscale on default, colorize on hover with tooltip showing license details.",
+      "items": [
+        {
+          "title": "SOC 2 Type II",
+          "description": "Certified for security, availability, and confidentiality."
+        },
+        {
+          "title": "FinCEN",
+          "description": "Registered Money Services Business (MSB) in the United States."
+        },
+        {
+          "title": "ISO 27001",
+          "description": "International standard for information security management."
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "market-ticker",
+      "type": "stats",
+      "role": "Showcase real-time market action and liquidity.",
+      "nav_label": "Markets",
+      "headline": "Live Market Performance",
+      "layout_hint": "stat-band",
+      "interactivity": "Real-time flashing price updates with green/red 24h percentage changes.",
+      "items": [
+        {
+          "value": "$64,210.50",
+          "label": "Bitcoin BTC +2.4%"
+        },
+        {
+          "value": "$3,450.12",
+          "label": "Ethereum ETH -1.1%"
+        },
+        {
+          "value": "$145.88",
+          "label": "Solana SOL +5.7%"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "product-suite",
+      "type": "features",
+      "role": "Detail the core retail and institutional offerings.",
+      "nav_label": "Products",
+      "headline": "One Platform, Infinite Possibilities",
+      "subheadline": "Whether you are a first-time buyer or a hedge fund, Vault provides the tools you need.",
+      "layout_hint": "grid-3",
+      "archetype": "icon-grid-3",
+      "interactivity": "Cards expand on hover to reveal secondary feature list and API documentation links.",
+      "items": [
+        {
+          "title": "Spot Trading",
+          "description": "Execute trades with sub-millisecond latency and deep liquidity across 100+ digital asset pairs.",
+          "icon": "Zap"
+        },
+        {
+          "title": "Vault Staking",
+          "description": "Earn up to 12% APY on your idle assets with institutional-grade validator nodes and no lockups.",
+          "icon": "TrendingUp"
+        },
+        {
+          "title": "Cold Custody",
+          "description": "Protect your capital with FIPS 140-2 Level 3 hardware security modules and multi-sig authorization.",
+          "icon": "ShieldCheck"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "security-deep-dive",
+      "type": "how_it_works",
+      "role": "Explain the multi-sig security architecture.",
+      "nav_label": "Security",
+      "headline": "Fortress-Grade Security Architecture",
+      "subheadline": "Your assets never leave our regulated environment, protected by multi-layer encryption.",
+      "layout_hint": "split-image-bullets",
+      "archetype": "numbered-stepper",
+      "interactivity": "Scroll-triggered animation showing a transaction moving through 3 layers of authorization.",
+      "items": [
+        {
+          "title": "MPC Key Generation",
+          "description": "Private keys are never generated in full, preventing single points of failure.",
+          "value": "01"
+        },
+        {
+          "title": "Multi-Sig Approval",
+          "description": "Every institutional withdrawal requires 3-of-5 biometric approvals from your team.",
+          "value": "02"
+        },
+        {
+          "title": "Air-Gapped Storage",
+          "description": "98% of assets are kept in offline, geographically distributed cold storage vaults.",
+          "value": "03"
+        }
+      ],
+      "image_queries": [
+        "server room blue lights security"
+      ]
+    },
+    {
+      "id": "mid-conversion",
+      "type": "mid_cta_banner",
+      "role": "Re-engage users who have scrolled past the hero.",
+      "headline": "Ready to Secure Your Future?",
+      "subheadline": "Join 2M+ traders and institutions who trust Vault for their digital asset management.",
+      "layout_hint": "centered-stack",
+      "cta": {
+        "label": "Open Your Account",
+        "href": "#signup"
+      },
+      "items": [],
+      "image_queries": [],
+      "interactivity": ""
+    },
+    {
+      "id": "institutional-stats",
+      "type": "stats",
+      "role": "Provide social proof through scale.",
+      "nav_label": "Scale",
+      "headline": "The Numbers Behind the Trust",
+      "layout_hint": "stat-band",
+      "interactivity": "Animated counters that tick up from zero when the section enters the viewport.",
+      "items": [
+        {
+          "value": "$12B+",
+          "label": "Quarterly Volume"
+        },
+        {
+          "value": "150+",
+          "label": "Countries Supported"
+        },
+        {
+          "value": "0",
+          "label": "Security Breaches"
+        },
+        {
+          "value": "24/7",
+          "label": "Live Support"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "institutional-form",
+      "type": "quote_form",
+      "role": "Capture high-value enterprise leads.",
+      "nav_label": "Institutional",
+      "headline": "Enterprise Solutions",
+      "subheadline": "Custom liquidity, API access, and dedicated account management for institutional clients.",
+      "layout_hint": "two-column",
+      "interactivity": "Form fields highlight in primary green on focus; submit button shows loading state.",
+      "items": [
+        {
+          "title": "Company Name"
+        },
+        {
+          "title": "Estimated AUM"
+        },
+        {
+          "title": "Primary Interest",
+          "details": "Custody, Trading, or Staking"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "common-questions",
+      "type": "faq",
+      "role": "Address regulatory and technical objections.",
+      "nav_label": "FAQ",
+      "headline": "Frequently Asked Questions",
+      "layout_hint": "accordion",
+      "interactivity": "FAQ accordion with smooth open/close and auto-close of previous items.",
+      "items": [
+        {
+          "title": "Is Vault a regulated exchange?",
+          "description": "Yes, Vault is fully regulated in the US as an MSB and holds multiple international licenses for digital asset custody."
+        },
+        {
+          "title": "How long does verification take?",
+          "description": "Our automated KYC system verifies 90% of retail users in under 60 seconds using advanced biometric matching."
+        },
+        {
+          "title": "What are the staking rewards?",
+          "description": "Rewards vary by asset, ranging from 4% on ETH to 12% on emerging protocols, distributed daily."
+        },
+        {
+          "title": "Are my funds insured?",
+          "description": "We maintain a $500M insurance policy covering assets held in our cold storage system against theft or breach."
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "footer",
+      "type": "footer",
+      "role": "site-wide nav",
+      "headline": "Vault",
+      "subheadline": "",
+      "layout_hint": "footer-columns",
+      "items": [],
+      "image_queries": []
+    }
+  ],
+  "page_features": [
+    "sticky_cta",
+    "floating_chat",
+    "back_to_top"
+  ],
+  "ctas": {
+    "primary": {
+      "label": "Sign Up Now",
+      "href": "#signup"
+    },
+    "secondary": {
+      "label": "Learn more",
+      "href": "#features"
+    }
+  },
+  "domain_keywords": [
+    "crypto exchange interface",
+    "blockchain security vault",
+    "institutional finance dark",
+    "digital asset trading"
+  ],
+  "design_tokens": {
+    "card_class": "bg-card/80 backdrop-blur-sm border border-border rounded-lg",
+    "button_radius_class": "rounded-md",
+    "image_radius_class": "rounded-md",
+    "section_padding_class": "py-16 sm:py-20 lg:py-24",
+    "transition_class": "transition-all duration-300",
+    "hover_lift_class": "hover:-translate-y-0.5 hover:shadow-md",
+    "_resolved_accent_shape": "squared",
+    "_resolved_surface": "layered",
+    "_resolved_motion": "subtle",
+    "_resolved_section_rhythm": "balanced",
+    "_resolved_image_treatment": "masked"
+  }
+}

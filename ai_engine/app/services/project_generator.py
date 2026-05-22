@@ -1652,9 +1652,39 @@ async def call_claude_for_json(
                         logger.info("Salvaged %d files from truncated stream", len(salvaged["files"]))
                         return salvaged
 
+            # Detailed diagnostic — we need to know WHY Claude returned
+            # max_tokens with no tool_use input. Cases:
+            #  • text-only output: Claude wrote preamble/thinking text
+            #    instead of calling the tool (tool_choice failed)
+            #  • all chunks went to thinking: extended_thinking ate the
+            #    output budget before tool_use could fire
+            #  • empty stream: API aborted mid-response
+            # Count chunk types so we can tell these apart in logs.
+            _chunk_types: dict[str, int] = {}
+            _text_chars = 0
+            _thinking_chars = 0
+            for c in raw_chunks:
+                if c == "[DONE]":
+                    continue
+                try:
+                    _cj = json.loads(c)
+                except Exception:
+                    continue
+                t = _cj.get("type", "?")
+                _chunk_types[t] = _chunk_types.get(t, 0) + 1
+                if t == "content_block_delta":
+                    d = _cj.get("delta", {}) or {}
+                    if d.get("type") == "text_delta":
+                        _text_chars += len(d.get("text") or "")
+                    elif d.get("type") == "thinking_delta":
+                        _thinking_chars += len(d.get("thinking") or "")
             logger.error(
-                "Claude stream had no tool_use input (model=%s, stop=%s, error=%s, chunks=%d)",
+                "Claude stream had no tool_use input (model=%s, stop=%s, error=%s, "
+                "chunks=%d, in_tok=%d, out_tok=%d, text_chars=%d, thinking_chars=%d, "
+                "chunk_types=%s, max_tokens_sent=%d)",
                 use_model, stop_reason, _stream_error or "—", len(raw_chunks),
+                _in_tok, _out_tok, _text_chars, _thinking_chars,
+                _chunk_types, max_tokens,
             )
             _last_stream_error[0] = _stream_error or ""
             return None

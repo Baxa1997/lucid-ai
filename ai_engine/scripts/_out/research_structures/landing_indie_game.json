@@ -1,0 +1,348 @@
+{
+  "brand": {
+    "name": "Glasshouse",
+    "tagline": "A fragile world behind the panes.",
+    "description": "An atmospheric indie puzzle adventure where you manipulate perspective and light to navigate a hauntingly beautiful greenhouse world.",
+    "domain": "glasshouse-game.com",
+    "social": [
+      {
+        "label": "twitter",
+        "href": "https://twitter.com/glasshousegame"
+      },
+      {
+        "label": "youtube",
+        "href": "https://youtube.com/glasshousegame"
+      }
+    ]
+  },
+  "palette": {
+    "primary": "180 15% 85%",
+    "secondary": "160 20% 60%",
+    "accent": "40 80% 60%",
+    "background": "180 30% 10%",
+    "foreground": "180 15% 85%",
+    "muted": "180 10% 40%",
+    "border": "180 20% 20%",
+    "card": "180 25% 15%"
+  },
+  "typography": {
+    "heading_font": "Cormorant Garamond",
+    "body_font": "Inter",
+    "scale": "expressive"
+  },
+  "motif": "ethereal",
+  "design_system": {
+    "motion": "organic",
+    "accent_shape": "hairline",
+    "surface": "layered",
+    "image_treatment": "overlay",
+    "section_rhythm": "tight"
+  },
+  "personality": {
+    "tone": "mysterious",
+    "vibe_keywords": [
+      "fragile",
+      "immersive",
+      "cinematic",
+      "elegant"
+    ],
+    "energy": "low"
+  },
+  "header_archetype": "transparent-pill",
+  "footer_archetype": "minimalist-row",
+  "references": [
+    {
+      "url": "https://cocoongame.com",
+      "name": "Cocoon",
+      "why": "Masterful breakdown of complex puzzle mechanics using high-contrast visual snippets and minimal text.",
+      "section_order": [
+        "hero",
+        "features",
+        "gallery",
+        "press",
+        "newsletter"
+      ],
+      "notable_features": [
+        "Autoplay WebM snippets",
+        "High-contrast aesthetic",
+        "No-chrome UI"
+      ]
+    },
+    {
+      "url": "https://grisgame.com",
+      "name": "Gris",
+      "why": "The gold standard for atmospheric storytelling and watercolor-inspired visual flow.",
+      "section_order": [
+        "hero",
+        "story",
+        "press",
+        "cta"
+      ],
+      "notable_features": [
+        "Bleeding animations",
+        "Minimalist typography",
+        "Emotional resonance"
+      ]
+    },
+    {
+      "url": "https://viewfinder-game.com",
+      "name": "Viewfinder",
+      "why": "Uses the core game mechanic as a web design motif to instantly communicate the hook.",
+      "section_order": [
+        "hero",
+        "features",
+        "story",
+        "press",
+        "newsletter"
+      ],
+      "notable_features": [
+        "Parallax polaroids",
+        "Sticky wishlist CTA",
+        "Media asset presskit"
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "id": "hero-teaser",
+      "type": "hero",
+      "role": "Establish atmosphere and drive immediate wishlist intent.",
+      "headline": "Shatter the silence of the Glasshouse.",
+      "subheadline": "A haunting puzzle odyssey through a world of light, shadow, and fragile memories.",
+      "layout_hint": "full-bleed-overlay",
+      "archetype": "video-mask",
+      "interactivity": "Background video plays on hover with a subtle glass-shatter sound effect toggle.",
+      "cta": {
+        "label": "Wishlist on Steam",
+        "href": "#wishlist"
+      },
+      "image_queries": [
+        "dark abandoned greenhouse interior fog"
+      ],
+      "items": []
+    },
+    {
+      "id": "critical-acclaim",
+      "type": "trust_bar",
+      "role": "Build immediate credibility via industry recognition.",
+      "nav_label": "Awards",
+      "headline": "Official Selection & Recognition",
+      "layout_hint": "logo-strip",
+      "interactivity": "Logos gently pulse with a frosted glow when scrolled into view.",
+      "items": [
+        {
+          "title": "Day of the Devs",
+          "label": "Official Selection 2024"
+        },
+        {
+          "title": "IGF",
+          "label": "Excellence in Visual Art Nominee"
+        },
+        {
+          "title": "Eurogamer",
+          "label": "Most Anticipated Indie"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "mechanics-showcase",
+      "type": "features",
+      "role": "Demonstrate the unique light-bending puzzle mechanics.",
+      "nav_label": "Gameplay",
+      "headline": "Manipulate the Unseen",
+      "subheadline": "Use light and perspective to reshape the environment around you.",
+      "layout_hint": "split-image-bullets",
+      "archetype": "icon-grid-3",
+      "interactivity": "Hovering over a feature triggers a looping WebM clip of that specific mechanic.",
+      "items": [
+        {
+          "title": "Light Refraction",
+          "description": "Bend beams of light through ancient prisms to unlock hidden pathways.",
+          "icon": "Sun"
+        },
+        {
+          "title": "Perspective Shifts",
+          "description": "Change your point of view to bridge gaps that seem impossible from afar.",
+          "icon": "View"
+        },
+        {
+          "title": "Fragile Echoes",
+          "description": "Interact with delicate glass structures that react to your every movement.",
+          "icon": "Wind"
+        }
+      ],
+      "image_queries": [
+        "abstract light prism refraction dark"
+      ]
+    },
+    {
+      "id": "narrative-lore",
+      "type": "story",
+      "role": "Deepen immersion through world-building and mystery.",
+      "nav_label": "Story",
+      "headline": "A World Left in Shards",
+      "subheadline": "Uncover the history of the botanists who vanished, leaving only their echoes behind.",
+      "layout_hint": "two-column",
+      "interactivity": "Parallax layers move at different speeds to simulate looking through multiple panes of glass.",
+      "image_queries": [
+        "vintage botanical illustration overgrown"
+      ],
+      "items": []
+    },
+    {
+      "id": "mid-page-wishlist",
+      "type": "mid_cta_banner",
+      "role": "Re-engage the user halfway through the scroll.",
+      "headline": "Don't lose your way in the mist.",
+      "subheadline": "Join 50,000+ players following the development of Glasshouse.",
+      "layout_hint": "stat-band",
+      "cta": {
+        "label": "Follow on Steam",
+        "href": "#steam"
+      },
+      "items": [],
+      "image_queries": [],
+      "interactivity": ""
+    },
+    {
+      "id": "visual-gallery",
+      "type": "gallery",
+      "role": "Showcase the high-fidelity artistic direction.",
+      "nav_label": "Gallery",
+      "headline": "Captured Moments",
+      "layout_hint": "asymmetric-12col",
+      "archetype": "bento-mosaic",
+      "interactivity": "Lightbox gallery with keyboard navigation and a frosted glass overlay effect.",
+      "image_queries": [
+        "cinematic game screenshot greenhouse",
+        "ethereal light beams forest",
+        "macro glass texture cracks",
+        "mysterious silhouette in fog",
+        "overgrown Victorian architecture",
+        "glowing plants in dark room"
+      ],
+      "items": []
+    },
+    {
+      "id": "dev-updates",
+      "type": "press",
+      "role": "Show active development and community engagement.",
+      "nav_label": "Dev Blog",
+      "headline": "Notes from the Greenhouse",
+      "subheadline": "Latest updates, technical deep-dives, and concept art from the team.",
+      "layout_hint": "grid-3",
+      "interactivity": "Cards tilt slightly on hover using a 3D transform effect.",
+      "items": [
+        {
+          "title": "Devlog #12",
+          "description": "Deep dive into the procedural glass shattering system and sound design.",
+          "label": "March 2024"
+        },
+        {
+          "title": "Art Spotlight",
+          "description": "Exploring the color theory behind the Sunken Conservatory level.",
+          "label": "February 2024"
+        },
+        {
+          "title": "Community Q&A",
+          "description": "Answering your most frequent questions about the release timeline.",
+          "label": "January 2024"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "game-faq",
+      "type": "faq",
+      "role": "Address technical questions and platform availability.",
+      "nav_label": "FAQ",
+      "headline": "Common Inquiries",
+      "layout_hint": "accordion",
+      "interactivity": "FAQ accordion with smooth height transitions and glass-blur backgrounds.",
+      "items": [
+        {
+          "title": "What platforms will Glasshouse be on?",
+          "description": "We are initially launching on Steam (PC/Mac), with console versions planned for later in 2025."
+        },
+        {
+          "title": "When is the release date?",
+          "description": "We are targeting a late 2024 release. Wishlist on Steam to be notified the moment we launch."
+        },
+        {
+          "title": "Is there a playable demo?",
+          "description": "A public demo will be available during the upcoming Steam Next Fest."
+        },
+        {
+          "title": "What are the system requirements?",
+          "description": "Glasshouse is optimized for mid-range PCs, requiring at least a GTX 1060 or equivalent for the best experience."
+        },
+        {
+          "title": "Does the game support controllers?",
+          "description": "Yes, full controller support is implemented for Xbox, PlayStation, and Steam Deck."
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "newsletter-signup",
+      "type": "newsletter",
+      "role": "Capture emails for launch day notification.",
+      "headline": "Stay in the Light",
+      "subheadline": "Sign up for occasional updates and exclusive digital wallpapers.",
+      "layout_hint": "centered-stack",
+      "interactivity": "Success message triggers a small 'shatter' particle animation.",
+      "cta": {
+        "label": "Subscribe",
+        "href": "#submit"
+      },
+      "items": [],
+      "image_queries": []
+    },
+    {
+      "id": "footer",
+      "type": "footer",
+      "role": "site-wide nav",
+      "headline": "Glasshouse",
+      "subheadline": "",
+      "layout_hint": "footer-columns",
+      "items": [],
+      "image_queries": []
+    }
+  ],
+  "page_features": [
+    "sticky_cta",
+    "exit_intent"
+  ],
+  "ctas": {
+    "primary": {
+      "label": "Wishlist on Steam",
+      "href": "https://store.steampowered.com/app/glasshouse"
+    },
+    "secondary": {
+      "label": "Learn more",
+      "href": "#features"
+    }
+  },
+  "domain_keywords": [
+    "atmospheric greenhouse",
+    "glass refraction",
+    "indie game mystery",
+    "ethereal light beams",
+    "botanical ruins"
+  ],
+  "design_seed": 1671,
+  "design_tokens": {
+    "card_class": "bg-card/80 backdrop-blur-sm border border-border rounded-lg",
+    "button_radius_class": "rounded-md",
+    "image_radius_class": "rounded-md",
+    "section_padding_class": "py-12 sm:py-16",
+    "transition_class": "transition-all duration-700 ease-out",
+    "hover_lift_class": "hover:-translate-y-1 hover:shadow-md",
+    "_resolved_accent_shape": "hairline",
+    "_resolved_surface": "layered",
+    "_resolved_motion": "organic",
+    "_resolved_section_rhythm": "tight",
+    "_resolved_image_treatment": "overlay"
+  }
+}

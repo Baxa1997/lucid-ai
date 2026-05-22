@@ -3819,3 +3819,246 @@ async def run_all_fixers(
         )
     
     return results
+
+
+# ── Click-to-edit listener backfill (Base44 flow) ────────────────────
+#
+# Adds ``src/components/lucid/EditModeListener.jsx`` and its import +
+# render in ``src/app/layout.js`` for projects generated BEFORE the
+# listener was added to ``website_pipeline``'s foundation builder.
+# Idempotent — projects that already have it are no-ops.
+#
+# Without this, the workspace's "Edit" toolbar button toggles visually
+# but the iframe has no listener, so postMessage selections never
+# reach the parent and the user perceives the feature as broken.
+
+# Match either the `from "@/components/lucid/EditModeListener"` import
+# or a bare `EditModeListener` render — used to detect whether we've
+# already wired the layout.
+_EDIT_LISTENER_IMPORT_PATH = "@/components/lucid/EditModeListener"
+_EDIT_LISTENER_TAG = "<EditModeListener"
+
+
+def ensure_edit_mode_listener(workspace_path: str) -> str:
+    """Make sure the click-to-edit listener is present + wired.
+
+    Returns a short status string for logging:
+      • ``""``          — already wired (no-op)
+      • ``"written"``   — listener file was missing, just wrote it
+      • ``"patched"``   — layout missing the import/render, patched
+      • ``"both"``      — wrote the file AND patched the layout
+      • ``"no_layout"`` — no Next.js App Router layout found (likely
+                          a Vite admin or unsupported template; skip)
+
+    Idempotent — safe to call on every preview start. Failures bubble
+    up as logged warnings; never raises.
+    """
+    actions: list[str] = []
+
+    listener_path = os.path.join(
+        workspace_path, "src", "components", "lucid", "EditModeListener.jsx",
+    )
+    layout_path = _find_root_layout(workspace_path)
+
+    if not layout_path:
+        # No App Router layout to patch — likely a non-website project
+        # (e.g. Vite admin shell). Skip rather than guess at the right
+        # mount point.
+        return "no_layout"
+
+    # ── 1. Write or rewrite the listener ──────────────────
+    # Existing projects may have an older version of the listener on
+    # disk (e.g. one that only handles data-editable-path and ignores
+    # plain clicks). We compare the on-disk version marker against the
+    # current one and rewrite when stale.
+    try:
+        from app.services.website_pipeline import (
+            _build_edit_mode_listener_component,
+            _current_edit_mode_listener_version,
+        )
+    except Exception as exc:
+        logger.warning(
+            "post_generation_fixer: cannot import listener builder: %s", exc,
+        )
+        return ""
+
+    needs_write = True
+    if os.path.isfile(listener_path):
+        try:
+            with open(listener_path, "r", encoding="utf-8") as fh:
+                head = fh.read(400)
+            on_disk_version = _parse_listener_version(head)
+            if on_disk_version is not None and on_disk_version >= _current_edit_mode_listener_version():
+                needs_write = False
+        except Exception as exc:
+            logger.debug(
+                "post_generation_fixer: listener version probe failed: %s", exc,
+            )
+            # Fall through to rewrite — safer than skipping with unknown state.
+
+    if needs_write:
+        try:
+            os.makedirs(os.path.dirname(listener_path), exist_ok=True)
+            with open(listener_path, "w", encoding="utf-8") as fh:
+                fh.write(_build_edit_mode_listener_component())
+            actions.append("written")
+            logger.info(
+                "post_generation_fixer: wrote %s (version=%d)",
+                os.path.relpath(listener_path, workspace_path),
+                _current_edit_mode_listener_version(),
+            )
+        except Exception as exc:
+            logger.warning(
+                "post_generation_fixer: failed to write EditModeListener.jsx: %s",
+                exc,
+            )
+            return ""
+
+    # ── 2. Patch layout if it isn't already wired ─────────
+    try:
+        with open(layout_path, "r", encoding="utf-8") as fh:
+            layout_src = fh.read()
+    except Exception as exc:
+        logger.warning(
+            "post_generation_fixer: cannot read %s: %s", layout_path, exc,
+        )
+        return actions[0] if actions else ""
+
+    if _EDIT_LISTENER_IMPORT_PATH in layout_src and _EDIT_LISTENER_TAG in layout_src:
+        # Already wired — only return "written" if we did write step 1
+        return actions[0] if actions else ""
+
+    new_src = _patch_layout_for_listener(layout_src)
+    if new_src == layout_src:
+        # We couldn't find a safe insertion point — log and bail so we
+        # don't produce a broken layout file. The listener file may
+        # still be present for a manual fix.
+        logger.warning(
+            "post_generation_fixer: could not patch %s — no <Providers> "
+            "or </body> insertion point found",
+            os.path.relpath(layout_path, workspace_path),
+        )
+        return actions[0] if actions else ""
+
+    try:
+        with open(layout_path, "w", encoding="utf-8") as fh:
+            fh.write(new_src)
+        actions.append("patched")
+        logger.info(
+            "post_generation_fixer: patched %s to mount EditModeListener",
+            os.path.relpath(layout_path, workspace_path),
+        )
+    except Exception as exc:
+        logger.warning(
+            "post_generation_fixer: cannot write patched %s: %s",
+            layout_path, exc,
+        )
+        return actions[0] if actions else ""
+
+    if len(actions) == 2:
+        return "both"
+    return actions[0] if actions else ""
+
+
+def _parse_listener_version(head: str) -> int | None:
+    """Pull the version integer out of a listener source's preamble.
+
+    The builder injects a line like ``/* LUCID_LISTENER_VERSION=2 */``
+    near the top of the file. Returns the parsed int, or None when no
+    marker is present (legacy listener, pre-versioning).
+    """
+    if not isinstance(head, str) or "LUCID_LISTENER_VERSION" not in head:
+        return None
+    import re
+    m = re.search(r"LUCID_LISTENER_VERSION\s*=\s*(\d+)", head)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def _find_root_layout(workspace_path: str) -> str:
+    """Return the absolute path to ``src/app/layout.{js,jsx,ts,tsx}``
+    if one exists, else an empty string. Picks the first match — App
+    Router only ever has one root layout.
+    """
+    base = os.path.join(workspace_path, "src", "app")
+    if not os.path.isdir(base):
+        return ""
+    for ext in ("js", "jsx", "tsx", "ts"):
+        candidate = os.path.join(base, f"layout.{ext}")
+        if os.path.isfile(candidate):
+            return candidate
+    return ""
+
+
+def _patch_layout_for_listener(source: str) -> str:
+    """Insert the EditModeListener import + render tag into a Next.js
+    App Router layout.
+
+    Returns the original source unchanged when we can't find a safe
+    insertion point (no ``</body>`` or recognizable shape). The caller
+    treats no-change as a soft failure.
+
+    The patch follows two rules to stay safe across hand-written
+    layouts:
+
+      • Imports are added after the last existing ``import`` line so
+        we don't break TypeScript / Next conventions that expect all
+        imports at the top of the file.
+
+      • The render tag is inserted immediately before ``</body>`` —
+        the universal terminator for any layout shape. We never try
+        to splice into the middle of a JSX tree.
+    """
+    if _EDIT_LISTENER_IMPORT_PATH in source and _EDIT_LISTENER_TAG in source:
+        return source
+
+    new_src = source
+
+    # ── Insert import after the last top-of-file import ─────────
+    if _EDIT_LISTENER_IMPORT_PATH not in new_src:
+        import re
+        import_lines = list(re.finditer(r"^import\s+.*?;\s*$", new_src, re.MULTILINE))
+        if not import_lines:
+            # No imports at all — paste at the top so the layout still parses.
+            insertion = (
+                'import EditModeListener from "'
+                + _EDIT_LISTENER_IMPORT_PATH
+                + '";\n'
+            )
+            new_src = insertion + new_src
+        else:
+            last = import_lines[-1]
+            insertion = (
+                '\nimport EditModeListener from "'
+                + _EDIT_LISTENER_IMPORT_PATH
+                + '";'
+            )
+            new_src = new_src[: last.end()] + insertion + new_src[last.end():]
+
+    # ── Insert <EditModeListener /> right before </body> ─────────
+    if _EDIT_LISTENER_TAG not in new_src:
+        idx = new_src.rfind("</body>")
+        if idx < 0:
+            # No </body> — abort to avoid producing a broken layout.
+            return source
+        # Match the indentation of the </body> line so the resulting
+        # JSX stays readable. We splice BEFORE the line's leading
+        # whitespace (insert at line_start, not at idx) so we don't
+        # double up on the existing indent that's already on disk.
+        line_start = new_src.rfind("\n", 0, idx) + 1
+        indent = new_src[line_start:idx]
+        # Pad two extra spaces so the tag sits one level deeper than
+        # </body> (i.e. lives among </body>'s children).
+        tag_indent = indent + "  "
+        new_src = (
+            new_src[:line_start]
+            + tag_indent
+            + "<EditModeListener />\n"
+            + new_src[line_start:]
+        )
+
+    return new_src

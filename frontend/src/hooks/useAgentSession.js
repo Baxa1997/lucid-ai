@@ -1476,6 +1476,12 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       const payload = { type: 'message', content: text };
       if (options.mode) payload.mode = options.mode;
       if (options.webSearch !== undefined) payload.web_search = options.webSearch;
+      // Click-to-edit (Base44) — element picked from the preview iframe.
+      // Backend reads ``editable_target`` to skip Step 3b's vocab build and
+      // synthesize a 100%-confidence EditIntent directly.
+      if (options.editableTarget && typeof options.editableTarget === 'object') {
+        payload.editable_target = options.editableTarget;
+      }
       if (images.length > 0) {
         payload.images = images.map((img) => ({
           name: img.name,

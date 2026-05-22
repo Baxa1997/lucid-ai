@@ -1,0 +1,183 @@
+{
+  "brand": {
+    "name": "North/Field Architecture",
+    "tagline": "Thoughtful design for cabins and homes in the Pacific Northwest.",
+    "domain": "creative_arts"
+  },
+  "pages": [
+    {
+      "route": "/",
+      "title": "North/Field Architecture",
+      "purpose": "The homepage introduces North/Field Architecture, showcasing their minimalist design philosophy and inviting visitors to explore their work.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "bento-mosaic"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "philosophy",
+          "layout_hint": "split-image-left"
+        },
+        {
+          "type": "press",
+          "layout_hint": "logo-strip"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/work",
+      "title": "Our Work",
+      "purpose": "This page showcases North/Field's completed projects, allowing visitors to browse their portfolio of cabins and small homes.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "asymmetric-split",
+          "archetype": "asymmetric-split"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "grid-3"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "projects"
+    },
+    {
+      "route": "/process",
+      "title": "Our Process",
+      "purpose": "This page outlines North/Field's design and build process, providing transparency and setting client expectations.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "process",
+          "layout_hint": "numbered-stepper",
+          "archetype": "numbered-stepper"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/services",
+      "title": "Services",
+      "purpose": "This page details the architectural services offered by North/Field, from initial consultation to construction oversight.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "asymmetric-split",
+          "archetype": "asymmetric-split"
+        },
+        {
+          "type": "features",
+          "layout_hint": "icon-grid-3",
+          "archetype": "icon-grid-3"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "services"
+    },
+    {
+      "route": "/about",
+      "title": "About Us",
+      "purpose": "This page tells the story of North/Field Architecture, highlighting their values, team, and commitment to minimalist design.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "oversized-watermark",
+          "archetype": "oversized-watermark"
+        },
+        {
+          "type": "story",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-2"
+        },
+        {
+          "type": "press",
+          "layout_hint": "logo-strip"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/contact",
+      "title": "Contact Us",
+      "purpose": "This page provides various ways for potential clients to get in touch with North/Field Architecture for inquiries or project discussions.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "quote_form",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "locations",
+          "layout_hint": "split-image-left"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        }
+      ],
+      "detail_template": false
+    }
+  ]
+}

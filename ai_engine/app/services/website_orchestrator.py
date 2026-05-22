@@ -20,9 +20,13 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Concurrency cap — Anthropic rate limits + provider backpressure. 8 is the
-# sweet spot for a 6-7 page site: all pages run in parallel without throttling.
-_DEFAULT_CONCURRENCY = 8
+# Concurrency cap — Anthropic rate limits + provider backpressure.
+# Lowered from 8 → 4 after observing empty-stream / "no tool_use input"
+# failures when 8 parallel Sonnet 4.6 calls with 64K max_tokens each
+# slammed Anthropic's TPM ceiling. 4 parallel × 64K = ~256K output budget
+# in-flight, well under tier-1 limits, and a 7-page site still completes
+# in roughly the same wall time because each page is far below the cap.
+_DEFAULT_CONCURRENCY = 4
 
 
 async def generate_website(
@@ -37,6 +41,13 @@ async def generate_website(
     purpose_data: dict | None = None,
     page_images: dict[str, dict] | None = None,
     data_model: Any = None,   # DataModel | None — Stage 4.5 output
+    # Per-section codegen context that landing computes from the brief.
+    # When omitted, per-section calls fall back to the same generic defaults
+    # they used before — caller (website_pipeline) is expected to populate.
+    section_voice_context: dict | None = None,
+    section_design_system: dict | None = None,
+    section_design_tokens: dict | None = None,
+    section_personality: dict | None = None,
 ) -> dict[str, Any]:
     """Run Stage 5 — parallel creative generation for the whole website.
 
@@ -61,9 +72,21 @@ async def generate_website(
         "page_results":  {"/": True, "/menu": True, "/about": False, ...},
       }
     """
-    from app.services.page_generator import generate_one_page
+    from app.services.page_generator import (
+        generate_one_page, generate_page_per_section, _per_section_codegen_enabled,
+    )
     from app.services.header_footer_generator import (
         generate_header, generate_footer,
+    )
+
+    # Per-section codegen mode (default ON) splits each page into one
+    # Claude call per section — matches landing-page quality. Flip OFF
+    # with WEBSITE_PER_SECTION_CODEGEN_ENABLED=0 to revert to one call
+    # per page (cheaper, lower quality).
+    per_section = _per_section_codegen_enabled()
+    logger.info(
+        "website_orchestrator: per-section codegen %s",
+        "ENABLED — landing-quality mode" if per_section else "disabled — page-level mode",
     )
 
     brand = plan.get("brand") or {}
@@ -92,6 +115,22 @@ async def generate_website(
         route = (page.get("route") or page.get("path") or "/").strip()
         images_for_page = page_images.get(route) or {}
         async with sem:
+            if per_section:
+                # Each page becomes N parallel Claude calls (one per section).
+                # The outer semaphore still limits OVERALL in-flight pages,
+                # but generate_page_per_section has its own internal sem for
+                # sections so a single page doesn't hog all of Anthropic.
+                return await generate_page_per_section(
+                    page=page, visual_dna=visual_dna,
+                    brand_name=brand_name, tagline=tagline, domain=domain,
+                    api_key=api_key, websocket=websocket,
+                    page_images=images_for_page,
+                    data_model=data_model,
+                    voice_context=section_voice_context,
+                    design_system=section_design_system,
+                    design_tokens=section_design_tokens,
+                    personality=section_personality,
+                )
             return await generate_one_page(
                 page=page, visual_dna=visual_dna,
                 brand_name=brand_name, tagline=tagline, domain=domain,

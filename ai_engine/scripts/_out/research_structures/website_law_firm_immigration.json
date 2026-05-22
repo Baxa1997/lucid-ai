@@ -1,0 +1,222 @@
+{
+  "brand": {
+    "name": "Carrillo Law",
+    "tagline": "Your trusted partner for immigration success in Houston.",
+    "domain": "services_local"
+  },
+  "pages": [
+    {
+      "route": "/",
+      "title": "Home",
+      "purpose": "Introduce Carrillo Law, establish trust, and guide visitors to key services and consultation.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "trust_bar",
+          "layout_hint": "logo-strip"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "icon-grid-3",
+          "archetype": "icon-grid-3"
+        },
+        {
+          "type": "how_it_works",
+          "layout_hint": "numbered-stepper",
+          "archetype": "numbered-stepper"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "marquee-row",
+          "archetype": "marquee-row"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/visa-types",
+      "title": "Visa Types",
+      "purpose": "Provide an overview of the various visa categories Carrillo Law specializes in, helping clients identify their needs.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "asymmetric-split",
+          "archetype": "asymmetric-split"
+        },
+        {
+          "type": "features",
+          "layout_hint": "grid-3",
+          "archetype": "icon-grid-3"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "visa_types"
+    },
+    {
+      "route": "/attorneys",
+      "title": "Our Attorneys",
+      "purpose": "Introduce the legal team, highlighting their expertise, experience, and commitment to clients.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-3"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "big-quote-portrait",
+          "archetype": "big-quote-portrait"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "attorneys"
+    },
+    {
+      "route": "/success-stories",
+      "title": "Success Stories",
+      "purpose": "Showcase past client successes to build confidence and demonstrate the firm's effectiveness.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "asymmetric-split",
+          "archetype": "asymmetric-split"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "glass-cards-bg",
+          "archetype": "glass-cards-bg"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "success_stories"
+    },
+    {
+      "route": "/free-consultation",
+      "title": "Free Consultation",
+      "purpose": "Provide a dedicated page for clients to request a free initial consultation, outlining the process and benefits.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "how_it_works",
+          "layout_hint": "numbered-stepper",
+          "archetype": "numbered-stepper"
+        },
+        {
+          "type": "lead_form",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/about",
+      "title": "About Us",
+      "purpose": "Share the firm's story, mission, and values, fostering a deeper connection with potential clients.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "oversized-watermark",
+          "archetype": "oversized-watermark"
+        },
+        {
+          "type": "story",
+          "layout_hint": "split-image-left"
+        },
+        {
+          "type": "philosophy",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "stats",
+          "layout_hint": "stat-band"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/contact",
+      "title": "Contact Us",
+      "purpose": "Provide all necessary contact information and a direct way for clients to reach out.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "asymmetric-split",
+          "archetype": "asymmetric-split"
+        },
+        {
+          "type": "contact_form",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "locations",
+          "layout_hint": "grid-2"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        }
+      ],
+      "detail_template": false
+    }
+  ]
+}

@@ -393,7 +393,10 @@ async def run_admin_pipeline(
 
     from app.services.landing_intent import analyze_intent
     try:
-        intent = await analyze_intent(clean_description, classification, timeout_s=60.0)
+        intent = await analyze_intent(
+            clean_description, classification,
+            websocket=websocket, timeout_s=60.0,
+        )
     except Exception as exc:
         logger.error(
             "[%s] Admin Stage 1 FAILED — %s", project_id, exc, exc_info=True,
@@ -954,10 +957,14 @@ async def run_admin_pipeline(
     # asyncio.gather, all (entity, page_type) pairs in flight under a
     # bounded concurrency. Lets users with N=4 entities finish in ~one
     # page's wall time instead of N×3.
+    # Default lowered 8→4 after the website pipeline hit the same Anthropic
+    # TPM ceiling at concurrency=8 (empty streams, no tool_use output).
+    # Admin runs 3 pages per entity × N entities → at 5+ entities the parallel
+    # count balloons fast, so cap the per-batch in-flight count at 4.
     try:
-        concurrency = int(os.environ.get("ADMIN_CODEGEN_CONCURRENCY", "8"))
+        concurrency = int(os.environ.get("ADMIN_CODEGEN_CONCURRENCY", "4"))
     except ValueError:
-        concurrency = 8
+        concurrency = 4
     sem = asyncio.Semaphore(max(1, concurrency))
 
     # Track per-entity remaining count so we can emit "<entity> pages

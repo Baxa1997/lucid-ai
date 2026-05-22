@@ -57,6 +57,171 @@ def _start_lock(conversation_id: str) -> asyncio.Lock:
 _NO_DEV_DIRS = frozenset({"node_modules", ".git", ".next", "dist", "build"})
 
 
+# ── Pre-flight fixers ────────────────────────────────────
+#
+# Each fixer walks the workspace independently and mutates files; none
+# read the others' output. Running them sequentially used to add ~30s
+# to cold preview start. Running them under ``asyncio.gather`` collapses
+# the wall time to roughly the slowest one (typically eslint at ~5-15s).
+
+async def _run_preflight_fixers(
+    workspace_path: str,
+    websocket,
+) -> None:
+    """Apply all pre-flight code fixers concurrently.
+
+    Each fixer is wrapped in its own try/except so a single failure
+    never blocks the rest. Result logging matches the previous
+    per-fixer messages 1:1 — operators reading server logs see no
+    change in shape, just in ordering (results land roughly together
+    rather than sequentially).
+    """
+    from app.services.post_generation_fixer import (
+        restore_template_ui_files,
+        fix_missing_tailwind_directives,
+        fix_html_entities_in_attributes,
+        fix_dynamic_route_conflicts,
+        fix_named_import_default_export_mismatch,
+        fix_missing_default_export,
+        fix_banned_icons,
+        ensure_edit_mode_listener,
+    )
+
+    async def _sync_fixer(label: str, fn, on_result) -> None:
+        """Run a synchronous fixer off the event loop + dispatch its log line."""
+        try:
+            result = await asyncio.to_thread(fn, workspace_path)
+        except Exception as exc:
+            logger.debug("local_preview: %s skipped: %s", label, exc)
+            return
+        try:
+            on_result(result)
+        except Exception as exc:
+            logger.debug(
+                "local_preview: %s logging callback failed: %s", label, exc,
+            )
+
+    async def _eslint_fix() -> None:
+        """Run ESLint --fix as a subprocess with a tight 30s ceiling.
+
+        Failures are swallowed; the dev server can render either way and
+        the build-validator catches anything substantive downstream.
+        """
+        try:
+            cmd = (
+                "npx eslint --fix 'src/**/*.{js,jsx,ts,tsx}' "
+                "--rule 'react/no-unescaped-entities: error' "
+                "--no-ignore 2>/dev/null || true"
+            )
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                cwd=workspace_path,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(proc.wait(), timeout=30)
+            logger.info("local_preview: eslint --fix completed")
+        except asyncio.TimeoutError:
+            logger.warning("local_preview: eslint --fix timed out after 30s")
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        except Exception as exc:
+            logger.debug("local_preview: eslint --fix skipped: %s", exc)
+
+    # Per-fixer logging callbacks — match the original messages so any
+    # tooling that scrapes server logs keeps working unchanged.
+    def _on_ui_restore(result):
+        if result:
+            logger.info("local_preview: restored src/components/ui/ from git HEAD")
+
+    def _on_tailwind(result):
+        if result:
+            logger.warning(
+                "local_preview: restored @tailwind directives in %d CSS file(s): %s",
+                len(result), result,
+            )
+
+    def _on_html_entities(result):
+        if result:
+            logger.warning(
+                "local_preview: unescaped HTML entities in attributes of %d file(s): %s",
+                len(result), result,
+            )
+
+    def _on_route_conflicts(result):
+        if result:
+            logger.info(
+                "local_preview: removed %d conflicting dynamic route dir(s): %s",
+                len(result), result,
+            )
+
+    def _on_named_import(result):
+        if result:
+            logger.info(
+                "local_preview: fixed %d named-import mismatch(es): %s",
+                len(result), result,
+            )
+
+    def _on_missing_default(result):
+        if result:
+            logger.info(
+                "local_preview: added missing default export in %d file(s): %s",
+                len(result), result,
+            )
+
+    def _on_banned_icons(result):
+        if result:
+            logger.info(
+                "local_preview: polyfilled banned lucide icons in %d file(s): %s",
+                len(result), result,
+            )
+
+    def _on_edit_listener(result):
+        # ``ensure_edit_mode_listener`` returns:
+        #   "" (already wired, no-op), "written", "patched", "both",
+        #   or "no_layout" (non-App-Router project — skip).
+        if result == "no_layout" or not result:
+            return
+        logger.info(
+            "local_preview: EditModeListener backfill — %s",
+            {
+                "written": "wrote listener component",
+                "patched":  "patched root layout to mount listener",
+                "both":     "wrote listener + patched layout",
+            }.get(result, result),
+        )
+
+    # All eight tasks fire together. asyncio.gather with return_exceptions
+    # is belt-and-braces — _sync_fixer / _eslint_fix already swallow their
+    # own errors, but a coroutine that raised before its try/except (e.g.
+    # import failure) would otherwise propagate.
+    await asyncio.gather(
+        _sync_fixer("restore_template_ui_files",
+                    restore_template_ui_files, _on_ui_restore),
+        _sync_fixer("fix_missing_tailwind_directives",
+                    fix_missing_tailwind_directives, _on_tailwind),
+        _sync_fixer("fix_html_entities_in_attributes",
+                    fix_html_entities_in_attributes, _on_html_entities),
+        _sync_fixer("fix_dynamic_route_conflicts",
+                    fix_dynamic_route_conflicts, _on_route_conflicts),
+        _sync_fixer("fix_named_import_default_export_mismatch",
+                    fix_named_import_default_export_mismatch, _on_named_import),
+        _sync_fixer("fix_missing_default_export",
+                    fix_missing_default_export, _on_missing_default),
+        _sync_fixer("fix_banned_icons",
+                    fix_banned_icons, _on_banned_icons),
+        # Backfill the click-to-edit listener for projects generated
+        # before it was added to the website_pipeline foundation builder.
+        # No-op when the listener is already wired into the layout.
+        _sync_fixer("ensure_edit_mode_listener",
+                    ensure_edit_mode_listener, _on_edit_listener),
+        _eslint_fix(),
+        return_exceptions=True,
+    )
+
+
 # ══════════════════════════════════════════════════════════
 #  Public API
 # ══════════════════════════════════════════════════════════
@@ -123,7 +288,29 @@ async def _start_local_preview_locked(
             if isinstance(stale_port, int):
                 await _wait_port_released(stale_port, timeout=5)
         elif existing.get("workspace_path") == workspace_path:
-            # Same workspace — reuse (HMR handles file changes)
+            # Same workspace — reuse (HMR handles file changes).
+            # We DO still run the click-to-edit listener backfill so an
+            # already-running dev server picks up listener version bumps
+            # without needing a full restart. The backfill is cheap (one
+            # file read + at most one rewrite) and HMR will reload the
+            # iframe when the listener.jsx file changes on disk.
+            try:
+                from app.services.post_generation_fixer import (
+                    ensure_edit_mode_listener,
+                )
+                _backfill_result = await asyncio.to_thread(
+                    ensure_edit_mode_listener, workspace_path,
+                )
+                if _backfill_result in ("written", "patched", "both"):
+                    logger.info(
+                        "local_preview: reuse-path listener backfill — %s",
+                        _backfill_result,
+                    )
+            except Exception as _bf_err:
+                logger.debug(
+                    "local_preview: reuse-path listener backfill skipped: %s",
+                    _bf_err,
+                )
             logger.info("local_preview: reusing server on port %d for %s",
                         existing["port"], conversation_id)
             await _emit(websocket, "preview_ready",
@@ -143,107 +330,13 @@ async def _start_local_preview_locked(
         await _kill_server(existing)
         _active_servers.pop(conversation_id, None)
 
-    # ── Pre-flight: restore template UI files from git (fixes corrupted ui/ files) ─
-    try:
-        from app.services.post_generation_fixer import restore_template_ui_files
-        if restore_template_ui_files(workspace_path):
-            logger.info("local_preview: restored src/components/ui/ from git HEAD")
-    except Exception as _ui_err:
-        logger.debug("local_preview: UI restore skipped: %s", _ui_err)
-
-    # ── Pre-flight: restore missing @tailwind directives in globals.css ─
-    # If Claude's rewrite of the theme CSS stripped the @tailwind base/
-    # components/utilities directives, every component renders unstyled.
-    # This fixer prepends them when absent.
-    try:
-        from app.services.post_generation_fixer import fix_missing_tailwind_directives
-        patched_css = fix_missing_tailwind_directives(workspace_path)
-        if patched_css:
-            logger.warning(
-                "local_preview: restored @tailwind directives in %d CSS file(s): %s",
-                len(patched_css), patched_css,
-            )
-    except Exception as _css_err:
-        logger.debug("local_preview: tailwind directive fixer skipped: %s", _css_err)
-
-    # ── Pre-flight: unescape HTML entities that leaked into JSX attributes ─
-    # Claude sometimes writes className=&quot;...&quot; instead of className="..."
-    # which the SWC parser rejects with "Expression expected". Unescape first.
-    try:
-        from app.services.post_generation_fixer import fix_html_entities_in_attributes
-        fixed_attrs = fix_html_entities_in_attributes(workspace_path)
-        if fixed_attrs:
-            logger.warning(
-                "local_preview: unescaped HTML entities in attributes of %d file(s): %s",
-                len(fixed_attrs), fixed_attrs,
-            )
-    except Exception as _attr_err:
-        logger.debug("local_preview: attribute-entity fixer skipped: %s", _attr_err)
-
-    # ── Pre-flight: fix dynamic route conflicts ───────────
-    try:
-        from app.services.post_generation_fixer import fix_dynamic_route_conflicts
-        removed = fix_dynamic_route_conflicts(workspace_path)
-        if removed:
-            logger.info("local_preview: removed %d conflicting dynamic route dir(s): %s",
-                        len(removed), removed)
-    except Exception as _fix_err:
-        logger.debug("local_preview: route conflict fixer skipped: %s", _fix_err)
-
-    # ── Pre-flight: fix named-import / default-export mismatches ─
-    # Case A: `import { X }` from a file that only has `export default function X`
-    try:
-        from app.services.post_generation_fixer import fix_named_import_default_export_mismatch
-        mismatches = fix_named_import_default_export_mismatch(workspace_path)
-        if mismatches:
-            logger.info("local_preview: fixed %d named-import mismatch(es): %s",
-                        len(mismatches), mismatches)
-    except Exception as _fix_err2:
-        logger.debug("local_preview: import mismatch fixer skipped: %s", _fix_err2)
-
-    # Case B: `import X from './X'` but X.jsx has no `export default` (only named export)
-    try:
-        from app.services.post_generation_fixer import fix_missing_default_export
-        missing = fix_missing_default_export(workspace_path)
-        if missing:
-            logger.info("local_preview: added missing default export in %d file(s): %s",
-                        len(missing), missing)
-    except Exception as _fix_err3:
-        logger.debug("local_preview: missing-default-export fixer skipped: %s", _fix_err3)
-
-    # ── Pre-flight: replace banned lucide-react icons with inline SVGs ──
-    # Safety net for files written AFTER landing_fixers ran (e.g. late
-    # post-write callbacks). Without this, MarketingFooter.jsx etc. can
-    # surface "Twitter is not exported from lucide-react" 500s on first
-    # render even though landing_fixers polyfilled the rest.
-    try:
-        from app.services.post_generation_fixer import fix_banned_icons
-        banned_fixed = fix_banned_icons(workspace_path)
-        if banned_fixed:
-            logger.info("local_preview: polyfilled banned lucide icons in %d file(s): %s",
-                        len(banned_fixed), banned_fixed)
-    except Exception as _fix_err4:
-        logger.debug("local_preview: banned-icons fixer skipped: %s", _fix_err4)
-
-    # ── Pre-flight: eslint --fix (auto-fixes unescaped entities, etc.) ──
-    # Runs after all code fixers so ESLint operates on the corrected files.
-    # Fixes are committed in Phase 7, so Vercel also receives clean code.
-    try:
-        _eslint_cmd = (
-            "npx eslint --fix 'src/**/*.{js,jsx,ts,tsx}' "
-            "--rule 'react/no-unescaped-entities: error' "
-            "--no-ignore 2>/dev/null || true"
-        )
-        _eslint_proc = await asyncio.create_subprocess_shell(
-            _eslint_cmd,
-            cwd=workspace_path,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        await asyncio.wait_for(_eslint_proc.wait(), timeout=30)
-        logger.info("local_preview: eslint --fix completed")
-    except Exception as _esl_err:
-        logger.debug("local_preview: eslint --fix skipped: %s", _esl_err)
+    # ── Pre-flight: code fixers (parallel) ────────────────
+    # Eight independent fixers — 7 file-walking code-quality passes
+    # and one eslint --fix subprocess — used to run sequentially and
+    # cost ~30s on every cold preview start. They have no inter-fixer
+    # dependencies, so we fan them out and gather. Wall time drops to
+    # roughly the slowest one (eslint, capped at 30s).
+    await _run_preflight_fixers(workspace_path, websocket)
 
     # ── Pre-flight: npm install if node_modules is missing ─────────────
     # Repos are cloned fresh (no node_modules in git). Without this step
@@ -682,17 +775,19 @@ async def _ensure_node_modules(workspace_path: str, websocket) -> None:
             stderr=asyncio.subprocess.STDOUT,
             env=env,
         )
-        # 10-min cap (was 300s). Cold installs of Next.js + Tailwind + shadcn
-        # routinely take 4-6 min on a fresh container; 5-min was too tight and
-        # consistently produced the "next: not found" downstream failure.
+        # 15-min cap (was 600s, originally 300s). Cold installs of Next.js +
+        # Tailwind + shadcn + lucide on a totally fresh container can hit the
+        # 600s ceiling — node_modules grows to 600MB+ with 731 .pnpm packages.
+        # First install in a session hits this; subsequent installs reuse
+        # the shared pnpm store at /tmp/pnpm_store and finish in seconds.
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=600)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=900)
         except asyncio.TimeoutError:
             try:
                 proc.kill()
             except Exception:
                 pass
-            logger.error("local_preview: dependency install timed out after 600s")
+            logger.error("local_preview: dependency install timed out after 900s")
             # Wipe the partially-installed node_modules so the next attempt
             # starts from a clean slate. Without this, a half-installed dir
             # poisons every subsequent cache check (looks "present" but is
@@ -1014,50 +1109,112 @@ def _summarize_dev_server_error(stderr: str) -> str:
 
 
 async def _wait_for_server(port: int, proc=None, timeout: int = 90) -> None:
-    """Poll until the dev server responds with a non-error HTTP status.
+    """Poll until the dev server responds with a non-5xx HTTP status.
 
-    Accepts 1xx–4xx — a 404 from an empty Next.js app is still a running
-    server. Rejects 5xx because a server that's bound but throwing 500s
-    on every request is broken; reporting `preview_ready` for it would
-    show the user a Next.js error overlay instead of their app.
+    Two-phase probe — both phases share a single asyncio event loop and
+    never spawn subprocesses, which cuts ~3-7s off the cold-start path
+    versus the previous ``4s sleep + curl every 3s`` loop:
 
-    If ``proc`` is provided, checks for early process exit on every loop
-    iteration and raises _ProcessExitedError immediately instead of
-    burning the full timeout on a dead port.
+      Phase 1 (port-not-open): retry a TCP connect every 200ms. As soon
+        as the dev server binds the port we move to phase 2 — no need
+        for a fixed grace sleep.
+
+      Phase 2 (port-open): issue a tiny HTTP/1.0 GET. 1xx-4xx → ready.
+        5xx → server's running but a compile error is in flight; we
+        remember the code and keep polling, slower (1s), until either
+        a non-5xx lands or the deadline passes (TimeoutError mentions
+        the last 5xx so the caller can surface a meaningful error).
+
+    Aborts immediately on early process exit so a crashed dev server
+    doesn't burn the full timeout.
     """
-    deadline = asyncio.get_event_loop().time() + timeout
-    await asyncio.sleep(4)  # Grace period for process startup
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
     last_5xx: Optional[int] = None
 
-    while asyncio.get_event_loop().time() < deadline:
-        # ── Process liveness check ────────────────────────
+    def _check_proc() -> None:
         if proc is not None and proc.returncode is not None:
             raise _ProcessExitedError(
                 f"Dev server process exited with code {proc.returncode}"
             )
 
-        curl = await asyncio.create_subprocess_shell(
-            f"curl -s -o /dev/null -w '%{{http_code}}' "
-            f"http://127.0.0.1:{port}/ 2>/dev/null || echo 000",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+    # ── Phase 1: TCP connect probe (200ms cadence, capped at 30s) ────
+    # Most dev servers bind the port within 1-3s of spawn; older
+    # Next.js + Tailwind cold compiles can take longer. We give phase 1
+    # a 30s ceiling. If the port never opens, fall through to phase 2
+    # (which will surface its own timeout). _check_proc fires the fast
+    # exit if the subprocess died meanwhile.
+    port_open = False
+    phase1_deadline = min(deadline, loop.time() + 30)
+    while loop.time() < phase1_deadline:
+        _check_proc()
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection("127.0.0.1", port),
+                timeout=0.5,
+            )
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            port_open = True
+            break
+        except (ConnectionRefusedError, asyncio.TimeoutError, OSError):
+            await asyncio.sleep(0.2)
+
+    if not port_open:
+        # Fall through to phase 2 anyway — sometimes (rarely) the dev
+        # server only accepts a real HTTP request, not a bare TCP probe.
+        # Phase 2's own timeout will surface a useful error.
+        logger.debug(
+            "local_preview: TCP probe never connected on port %d; trying HTTP anyway",
+            port,
         )
-        stdout, _ = await curl.communicate()
-        code = (stdout or b"").decode().strip()
-        if code.isdigit():
-            n = int(code)
-            if 100 <= n < 500:
-                logger.info("local_preview: server on port %d responded with HTTP %s", port, code)
-                return
-            if 500 <= n <= 599:
-                # Keep polling — the dev server may still be compiling. Surface
-                # the persistent 5xx via TimeoutError if it never recovers.
-                last_5xx = n
-        await asyncio.sleep(3)
+
+    # ── Phase 2: HTTP GET probe (200ms cadence until a response lands,
+    #             then 1s while we wait for 5xx → 2xx) ─────────────────
+    try:
+        import httpx  # already a runtime dependency (step5_direct uses it)
+    except Exception as exc:  # pragma: no cover — httpx is in requirements
+        raise asyncio.TimeoutError(
+            f"httpx unavailable, cannot probe dev server on port {port}: {exc}"
+        )
+
+    poll_interval = 0.2
+    url = f"http://127.0.0.1:{port}/"
+    async with httpx.AsyncClient(timeout=2.5, follow_redirects=False) as client:
+        while loop.time() < deadline:
+            _check_proc()
+            try:
+                resp = await client.get(url)
+                code = resp.status_code
+                if 100 <= code < 500:
+                    logger.info(
+                        "local_preview: server on port %d responded with HTTP %d",
+                        port, code,
+                    )
+                    return
+                if 500 <= code <= 599:
+                    last_5xx = code
+                    # Server is up but compiling — slow the poll rate so
+                    # we don't hammer it while it's working.
+                    poll_interval = 1.0
+            except (
+                httpx.ConnectError,
+                httpx.ConnectTimeout,
+                httpx.ReadTimeout,
+                httpx.RemoteProtocolError,
+                OSError,
+            ):
+                # Port still not accepting HTTP — keep probing fast.
+                poll_interval = 0.2
+            await asyncio.sleep(poll_interval)
 
     if last_5xx is not None:
         raise asyncio.TimeoutError(
-            f"Dev server on port {port} kept returning HTTP {last_5xx} — likely a compile error"
+            f"Dev server on port {port} kept returning HTTP {last_5xx} — "
+            "likely a compile error"
         )
     raise asyncio.TimeoutError(f"Dev server on port {port} never responded")
 

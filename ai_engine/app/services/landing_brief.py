@@ -204,6 +204,10 @@ _BRIEF_SCHEMA: dict[str, Any] = {
             "type": "ARRAY",
             "items": {"type": "STRING"},
         },
+        "page_features": {
+            "type": "ARRAY",
+            "items": {"type": "STRING"},
+        },
     },
 }
 
@@ -217,7 +221,11 @@ DOMAIN: {domain}
 
 YOUR JOB — research the structure of real, current, best-in-class sites in this domain:
 
-1. Search for 4-6 reference websites that match the prompt domain (e.g. for "Brooklyn restaurant" → search for award-winning Brooklyn restaurant sites; for "B2B logistics SaaS" → search for top logistics platforms).
+1. Search for 8-12 reference websites that match the prompt domain. Cast a WIDE net — don't stop at 4 sites. Include a mix:
+   • 4-6 from the user's exact domain (e.g. "Brooklyn restaurant" → award-winning Brooklyn restaurants)
+   • 2-3 from adjacent premium examples (e.g. Michelin-starred restaurants worldwide, not just Brooklyn)
+   • 2-3 cross-pollinated from sibling domains that share conversion mechanics (e.g. for "tour operator" → Airbnb Experiences, Viator, GetYourGuide for booking flows; for "boutique hotel" → Aman, Soho House, Six Senses for hospitality patterns).
+   A narrow set of 4 sites in the same sub-niche misses the conversion patterns that appear once you broaden the lens.
 
 2. For each reference, list:
    • URL + name
@@ -226,7 +234,24 @@ YOUR JOB — research the structure of real, current, best-in-class sites in thi
    • NOTABLE INTERACTIVE FEATURES (e.g. "menu items open a modal with photo + ingredients", "sticky reservation widget bottom-right", "lightbox gallery with keyboard nav", "animated stat counters on scroll", "filter pills for menu categories")
    • Why this site is a good reference (1 sentence)
 
-3. CONCLUSION: synthesize a recommended 7-section blueprint for THIS prompt by picking from the patterns common across references. List the section types in order, why each is included, and which interactive feature each section should have.
+3. CONCLUSION: synthesize a recommended section blueprint for THIS prompt by picking from the patterns common across references.
+   • Pick HOW MANY sections this landing needs — DO NOT cap at 7. Match what the references
+     actually do: a tour-operator or hotel landing often runs 9-12 (hero → trust bar →
+     curated grid → mid-page CTA → social proof → FAQ → lead form → sticky CTA), while a
+     minimalist agency portfolio can ship in 5. The minimum is 5; there is no maximum
+     beyond what the references support. List EVERY section in order, with a 1-line "why
+     this is here" and the interactive behavior it must have.
+   • Flag CONVERSION-COMPLETENESS gaps. If your reference set covers any of these
+     elements, the conclusion MUST include them:
+       - Sticky CTA bar / floating chat (page-level, follows scroll)
+       - Hero search/filter widget (tour type, dates, destination, role, plan…)
+       - Inline trust ticker ("12 yrs · 60+ destinations · 2,400+ travelers")
+       - Mid-page CTA banner (re-engagement halfway down)
+       - Full lead/quote form with name + email + intent fields (NOT just a newsletter input)
+       - FAQ accordion
+     Page-level chrome (sticky CTA, floating chat) goes under a NEW "===PAGE_FEATURES==="
+     block, not in the section list. Section-level items (trust ticker, mid CTA, lead
+     form, FAQ) go in the section list as their own section types.
 
 OUTPUT FORMAT — plain markdown, no JSON yet. Use these section headers:
 
@@ -234,15 +259,21 @@ OUTPUT FORMAT — plain markdown, no JSON yet. Use these section headers:
 1. <name> — <url>
    Sections: hero → ... → footer
    Pages: home, /menu (...), /reservations (...), /about (...)
+   Page chrome: <sticky_cta | floating_chat | exit_intent | back_to_top | whatsapp_button | none>
    Features: ...
    Why: ...
 2. ...
 
 ===CONCLUSION===
-Recommended sections (7 total, hero first, no footer — picked from patterns above):
-1. hero — <archetype hint based on what references do>
+Recommended sections (hero first, no footer — pick from references; choose your own count, no upper cap):
+1. hero — <archetype hint based on what references do> — <interactivity, e.g. "search filter for tour type + dates + travelers">
 2. <type> — <archetype hint> — <interactivity>
-... 7 total ...
+... however many sections the references support, minimum 5 ...
+
+===PAGE_FEATURES===
+- <sticky_cta | floating_chat | exit_intent | back_to_top | whatsapp_button>: <why this matters for this domain>
+(omit the section entirely if no reference uses any page-level chrome)
+
 Recommended header style: <transparent-pill | solid-bar | centered-logo | side-rail | mega-menu>
 Recommended footer style: <mega-columns | minimalist-row | cta-band-footer | centered-stack>
 """
@@ -261,7 +292,9 @@ DOMAIN: {domain}
 
 YOUR JOB — extract concrete design DNA from real best-in-class sites in this domain:
 
-1. Search for 4-6 reference sites in this domain (use awwwards / google for "<domain> website 2025" or specific brand names).
+1. Search for 8-12 reference sites in this domain (use awwwards / siteinspire / google for "<domain> website 2025" or specific brand names).
+   Include a mix: 4-6 best-in-class in the exact niche, 2-3 from one tier up (luxury / award-winners worldwide), and 2-3 from adjacent industries with sibling visual languages (e.g. for "boutique hotel" → Aesop, Apartamento, Ace Hotel for editorial premium feel).
+   Wide-lens design DNA produces more interesting palettes than narrow same-niche scraping.
 
 2. For each reference, record:
    • Color palette: 3-5 dominant HSL values (look at their actual brand colors). Use formula "H S% L%".
@@ -280,7 +313,7 @@ YOUR JOB — extract concrete design DNA from real best-in-class sites in this d
 
 OUTPUT FORMAT — plain markdown, no JSON. Headers:
 
-===REFERENCES===  (must contain ≥3 distinct REAL URLs from search results)
+===REFERENCES===  (must contain ≥8 distinct REAL URLs from search results)
 1. <name> — <url>
    Palette: primary <H S L>, accent <H S L>, ...
    Typography: heading "..." / body "..."
@@ -313,7 +346,50 @@ Personality:
 """
 
 
-_DISTILL_PROMPT = """You are briefing an engineer to build ONE landing page. You have TWO research dumps from real reference sites. Your job: distill them into a SINGLE structured Brief for this project.
+_CONVERSION_RESEARCH_PROMPT = """You are a senior CRO (conversion rate optimization) researcher. USE GOOGLE SEARCH — do NOT answer from training memory.
+
+PROMPT: "{description}"
+DOMAIN: {domain}
+
+YOUR JOB — identify which conversion-optimized landing-page patterns this project should adopt. Focus on REAL examples that BOOK / BUY / SIGN UP / GET A QUOTE — not editorial / portfolio sites.
+
+1. Search for 6-10 high-converting landing pages relevant to this domain. Run AT LEAST these searches:
+     a) "best [domain] landing pages 2025"
+     b) "[domain] high converting examples"
+     c) the top 2-3 brand names in the user's space (e.g. for tours → Viator, GetYourGuide, Intrepid Travel; for SaaS → Linear, Notion, Stripe; for hotels → Aman, Six Senses; for restaurants → Carbone, Atomix; for dental → Tend, Smile Direct Club). USE actual brand names from search results — never invent.
+   Bias toward sites whose PRIMARY CTA is a paid action.
+
+2. For each reference, produce a COVERAGE MATRIX — which of these conversion patterns the site uses (yes/no per element). Be honest; don't mark "yes" unless the element is visible on the homepage.
+
+   • Sticky CTA bar      — does a "Book / Buy / Get Quote / Try Free" CTA follow the user as they scroll (top, bottom, or floating)?
+   • Hero search/filter  — does the hero contain a search widget, date picker, plan toggle, or category filter (e.g. dates+travelers, monthly/yearly, role selector)?
+   • Inline trust bar    — slim strip near the top with "X yrs · Y customers · Z% rating" or press-logo row?
+   • Mid-page CTA banner — a re-engagement banner roughly halfway down the page (NOT the hero CTA, NOT the final cta)?
+   • Full lead/quote form — a multi-field form (name, email, intent, dates/role/etc.), NOT just newsletter email?
+   • FAQ accordion       — visible FAQ block addressing objections?
+   • Social proof block  — testimonials with names/photos, ratings, or media logos?
+   • Floating chat       — chat bubble bottom-right, or WhatsApp button?
+
+3. CONCLUSION — give a "minimum conversion set" for THIS project: the elements that 60%+ of the references use AND are necessary for the user's stated CTA. Mark each element as REQUIRED / RECOMMENDED / OPTIONAL based on reference frequency. Call out anything the references universally avoid (so we don't force it in).
+
+OUTPUT FORMAT — plain markdown. No JSON.
+
+===REFERENCES_COVERAGE===
+| Site | sticky_cta | hero_filter | trust_bar | mid_cta | lead_form | faq | social_proof | floating_chat |
+|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| Viator (viator.com) | yes | yes | yes | yes | no | yes | yes | yes |
+| ... ≥6 rows ...
+
+===CONCLUSION===
+Required (≥60% of references):  <comma-separated keys>
+Recommended (30-60%):           <comma-separated keys>
+Optional (<30%):                <comma-separated keys>
+
+Notes: <1-2 sentences on anything unusual — e.g. "luxury hotel references almost never use sticky CTAs because the brand demands restraint; recommended only if scroll depth is long.">
+"""
+
+
+_DISTILL_PROMPT = """You are briefing an engineer to build ONE landing page. You have THREE research dumps from real reference sites. Your job: distill them into a SINGLE structured Brief for this project.
 
 PROJECT: "{description}"
 DOMAIN: {domain}
@@ -323,6 +399,9 @@ DOMAIN: {domain}
 
 ===DESIGN_DNA_RESEARCH===
 {design_dna_research}
+
+===CONVERSION_RESEARCH===
+{conversion_research}
 
 NOW produce the Brief as a JSON object matching the response schema EXACTLY. No prose outside the JSON.
 
@@ -356,11 +435,61 @@ footer_archetype: pick ONE from [mega-columns, minimalist-row, cta-band-footer, 
 
 references: copy 3-5 entries from STRUCTURE_RESEARCH ===REFERENCES===. Each: {{url, name, why (≤120 chars), section_order (5-10 strings), notable_features (2-4 strings)}}.
 
-sections: ARRAY of 7 OBJECT items, FIRST type "hero", in order. Pick types from the STRUCTURE_RESEARCH conclusion. NO footer in this array (added downstream). Allowed types: features, how_it_works, pricing, testimonials, faq, stats, gallery, menu, integrations, comparison, team, contact, contact_form, reservation, booking_form, newsletter, cta, process, benefits, value_prop, locations, story, philosophy, press, hours.
+sections: ARRAY of OBJECT items, FIRST type "hero", in order. The COUNT is DYNAMIC —
+  match what STRUCTURE_RESEARCH recommended. Minimum 5, no hard maximum (real conversion-optimized
+  tour / hotel / SaaS landings often run 9-12 sections). Do NOT pad with filler if the references
+  only support 6; do NOT truncate to 7 if the references show 11. Pick types from the
+  STRUCTURE_RESEARCH conclusion. NO footer in this array (added downstream).
+  Allowed types: features, how_it_works, pricing, testimonials, faq, stats, gallery, menu,
+  integrations, comparison, team, contact, contact_form, reservation, booking_form,
+  newsletter, cta, mid_cta_banner, lead_form, quote_form, trust_bar, process, benefits,
+  value_prop, locations, story, philosophy, press, hours.
 
-  At most ONE form-style section (pick exactly one of contact_form, reservation, booking_form, newsletter).
+  ── CONVERSION-COMPLETENESS CHECKLIST ──
+  Read CONVERSION_RESEARCH ===CONCLUSION===. Anything marked REQUIRED there MUST appear in the
+  brief (either as a section or in page_features), regardless of whether STRUCTURE_RESEARCH
+  mentions it. RECOMMENDED elements should be included unless they'd genuinely hurt the brand
+  (e.g. luxury hospitality dropping sticky CTAs to preserve restraint — only justified if
+  CONVERSION_RESEARCH notes call that out). OPTIONAL elements are model's choice.
+
+  Apply the section-type mapping below to any required/recommended element pulled from
+  CONVERSION_RESEARCH (you decide whether it's a section or a page_feature):
+  For any landing whose primary intent is a paid conversion (book, buy, schedule, quote, signup),
+  the brief is INCOMPLETE without coverage of these blocks. Pull them in as their natural
+  section type — do NOT collapse them into a generic `cta` if the references treat them as
+  distinct sections:
+    • Hero CTA           → on the hero section (always).
+    • Hero search/filter → hero.interactivity must say "filter widget …" or "search bar …"
+                           when domain is bookable (tours, hotels, restaurants, rentals,
+                           events, services). Hero archetype "asymmetric-split" or
+                           "card-stack" plays well with this.
+    • Inline trust bar   → section type `trust_bar` with items like
+                           {{value:"12 yrs", label:"in business"}}, {{value:"60+", label:"destinations"}}.
+                           Place RIGHT below hero. Different from full `stats` section (which is
+                           a full-width band — trust_bar is a slim inline strip).
+    • Mid-page CTA       → section type `mid_cta_banner` placed roughly halfway down the page
+                           (NOT the same as the hero CTA, NOT the same as the final cta).
+                           Tied to the same primary action with a re-engagement angle.
+    • Full lead form     → section type `lead_form` or `quote_form` with items like
+                           {{title:"Full Name"}}, {{title:"Email"}}, {{title:"Trip Type"}},
+                           {{title:"Travel Dates"}}, {{title:"Group Size"}}, {{title:"Message"}}.
+                           Use INSTEAD OF `newsletter` when the primary CTA is "get a quote",
+                           "request a tour", "book a consultation". `newsletter` is for
+                           audience-building only (no commerce intent).
+    • FAQ accordion      → section type `faq`. Required for any landing whose primary CTA
+                           involves a paid action (people object before they convert).
+    • Social proof       → `testimonials` or `stats` (full).
   Restaurant/food MUST include `menu` + `gallery`.
-  At least one of: gallery, stats, testimonials.
+  At most ONE pure-audience-build form (`newsletter`) — and only if there's already a
+  `lead_form` or `quote_form` doing the conversion work. Otherwise pick `lead_form`/`quote_form`
+  alone.
+
+page_features: ARRAY of strings (0-4 items) — page-level chrome that lives outside the
+  flow of sections. Pull from STRUCTURE_RESEARCH ===PAGE_FEATURES=== block. Allowed values:
+  sticky_cta, floating_chat, whatsapp_button, exit_intent, back_to_top.
+  Include `sticky_cta` for ANY landing whose primary CTA is paid conversion (book / buy /
+  schedule / quote / signup) — references confirm it; this is the single largest conversion
+  uplift element missing from generic landings.
 
 For EVERY section, populate:
   id (≤24 chars, kebab-case, unique); type (≤24 chars, snake_case);
@@ -536,9 +665,10 @@ domain_keywords: 4-6 short Unsplash search strings.
 
 HARD CONSTRAINTS
 - Plain ASCII / natural unicode — no \\u escapes.
-- 7 sections (1 hero + 6 others, no footer).
+- Sections: minimum 5, no upper cap — pick to match STRUCTURE_RESEARCH conclusion. First MUST be hero, no footer.
 - Real specific copy in brand voice.
 - archetype + interactivity REQUIRED on every section that takes them.
+- page_features array MUST be present (empty [] is valid for portfolios/editorial landings, but required for any paid-conversion domain).
 """
 
 
@@ -585,33 +715,44 @@ async def build_landing_brief(
 
     design_seed = random.randint(1000, 9999)
 
-    # ── Stage 1+2: parallel grounded research ────────────────────────
+    # ── Stage 1+2+3: parallel grounded research ──────────────────────
+    # Three calls in parallel — each focused on a different axis:
+    #   • structure  → section blueprint from same-domain references
+    #   • design_dna → palette, typography, motif from premium examples
+    #   • conversion → coverage matrix of CRO patterns (sticky CTA,
+    #                  hero filter, trust bar, mid CTA, lead form, FAQ)
+    # The third call closes the gap that pure domain research leaves —
+    # references in narrow niches may all skip FAQ/sticky CTAs, but the
+    # broader landing-page CRO playbook still applies.
     if websocket is not None:
         try:
             await websocket.send_json({
                 "type": "progress",
-                "message": "🔎 Researching real reference sites + design DNA in parallel...",
+                "message": "🔎 Researching real reference sites + design DNA + conversion patterns in parallel...",
             })
         except Exception:
             pass
 
-    structure_prompt = _STRUCTURE_RESEARCH_PROMPT.format(description=description.strip(), domain=domain)
-    design_prompt = _DESIGN_DNA_RESEARCH_PROMPT.format(description=description.strip(), domain=domain)
+    structure_prompt   = _STRUCTURE_RESEARCH_PROMPT.format(description=description.strip(), domain=domain)
+    design_prompt      = _DESIGN_DNA_RESEARCH_PROMPT.format(description=description.strip(), domain=domain)
+    conversion_prompt  = _CONVERSION_RESEARCH_PROMPT.format(description=description.strip(), domain=domain)
 
-    structure_text, design_text = await asyncio.gather(
-        _grounded_research(structure_prompt, timeout_s, label="structure_research", websocket=websocket),
-        _grounded_research(design_prompt, timeout_s, label="design_dna_research", websocket=websocket),
+    structure_text, design_text, conversion_text = await asyncio.gather(
+        _grounded_research(structure_prompt,  timeout_s, label="structure_research",  websocket=websocket),
+        _grounded_research(design_prompt,     timeout_s, label="design_dna_research", websocket=websocket),
+        _grounded_research(conversion_prompt, timeout_s, label="conversion_research", websocket=websocket),
     )
 
-    # If both research calls failed completely we have nothing to distill;
+    # If ALL research calls failed completely we have nothing to distill;
     # fall through to the legacy ungrounded distill so the pipeline still
-    # produces a Brief.
-    if not structure_text and not design_text:
-        logger.warning("build_landing_brief: both research calls returned empty — distilling without research context")
-        structure_text = "(research unavailable)"
-        design_text = "(research unavailable)"
+    # produces a Brief. A partial failure (1-2 of 3 empty) still proceeds.
+    if not structure_text and not design_text and not conversion_text:
+        logger.warning("build_landing_brief: all research calls returned empty — distilling without research context")
+        structure_text  = "(research unavailable)"
+        design_text     = "(research unavailable)"
+        conversion_text = "(research unavailable)"
 
-    # ── Stage 3: distill into structured Brief ───────────────────────
+    # ── Stage 4: distill into structured Brief ───────────────────────
     if websocket is not None:
         try:
             await websocket.send_json({
@@ -626,6 +767,7 @@ async def build_landing_brief(
         domain=domain,
         structure_research=(structure_text or "(none)")[:8000],
         design_dna_research=(design_text or "(none)")[:8000],
+        conversion_research=(conversion_text or "(none)")[:6000],
         design_seed=design_seed,
     )
 
@@ -1276,13 +1418,23 @@ def _normalize_brief(brief: Any, description: str, domain: str) -> dict:
     if not any((s.get("type") or "").lower() == "footer" for s in sections):
         sections.append(_default_footer(out["brand"]["name"]))
 
-    # At most ONE form-style section.
-    _FORMS = {"contact", "contact_form", "reservation", "booking_form", "newsletter"}
+    # At most ONE form-style section. lead_form / quote_form are
+    # paid-conversion forms and take precedence over newsletter when
+    # both are present (newsletter is audience-build only).
+    _CONVERSION_FORMS = {"lead_form", "quote_form", "contact_form", "reservation", "booking_form", "contact"}
+    _AUDIENCE_FORMS = {"newsletter"}
+    _FORMS = _CONVERSION_FORMS | _AUDIENCE_FORMS
+    has_conversion_form = any(_as_str(s.get("type")).lower() in _CONVERSION_FORMS for s in sections)
     seen_form = False
     deduped: list[dict] = []
     for s in sections:
         t = _as_str(s.get("type")).lower()
         if t in _FORMS:
+            # If both a lead/quote/contact form AND a newsletter are present,
+            # the newsletter is the redundant one — drop it.
+            if t in _AUDIENCE_FORMS and has_conversion_form:
+                logger.info("normalize_brief: dropping newsletter %r — conversion form already present", s.get("id"))
+                continue
             if seen_form:
                 logger.info("normalize_brief: dropping duplicate form section %r", s.get("id"))
                 continue
@@ -1292,6 +1444,28 @@ def _normalize_brief(brief: Any, description: str, domain: str) -> dict:
 
     out["sections"] = sections
     out["design_tokens"] = _build_design_tokens(out["design_system"])
+
+    # ── Normalize page_features (page-level chrome) ────────────────
+    # Pull from brief output; whitelist-filter to the allowed values.
+    # Empty list is valid (portfolio / editorial landings rarely need
+    # sticky CTAs). Required surface — downstream codegen reads this
+    # to decide whether to mount <StickyCTA/>, <FloatingChat/>, etc.
+    _ALLOWED_PAGE_FEATURES = {
+        "sticky_cta", "floating_chat", "whatsapp_button", "exit_intent", "back_to_top",
+    }
+    raw_features = brief.get("page_features") or []
+    if isinstance(raw_features, list):
+        features = [
+            _as_str(f).strip().lower()
+            for f in raw_features
+            if _as_str(f).strip().lower() in _ALLOWED_PAGE_FEATURES
+        ]
+        # Dedup while preserving order.
+        seen: set[str] = set()
+        out["page_features"] = [f for f in features if not (f in seen or seen.add(f))]
+    else:
+        out["page_features"] = []
+
     return out
 
 
@@ -1315,6 +1489,7 @@ def _fallback_brief(description: str, domain: str) -> dict:
             "secondary": {"label": "Learn more", "href": "#features"},
         },
         "domain_keywords": [domain] if domain and domain != "general" else ["product", "modern", "clean"],
+        "page_features": [],
     }
 
 
@@ -1329,15 +1504,28 @@ def _default_brand(description: str, domain: str) -> dict:
 
 
 def _default_palette() -> dict:
+    """Fallback palette used when research is missing or partial.
+
+    Previously this was bright SaaS blue (220 90% 56%) on pure white
+    (0 0% 100%) — the worst possible fallback because it produced bland
+    generic output AND quietly overrode partial-research palettes
+    (the brief merges defaults-first, then brief.palette via dict-spread).
+
+    New defaults: a warm editorial neutral with a terracotta primary and
+    sage accent. Tinted background (not pure #fff), distinctive primary
+    (saturation 55% > the 45% floor we enforce in research), brand-distinctive
+    enough to look intentional even when research fails entirely. Still
+    overridden by anything research returns.
+    """
     return {
-        "primary":    "220 90% 56%",
-        "secondary":  "220 14% 96%",
-        "accent":     "262 83% 58%",
-        "background": "0 0% 100%",
-        "foreground": "222 47% 11%",
-        "muted":      "210 40% 96%",
-        "border":     "214 32% 91%",
-        "card":       "0 0% 100%",
+        "primary":    "15 55% 48%",   # warm terracotta
+        "secondary":  "180 18% 38%",  # muted sage-teal
+        "accent":     "40 75% 55%",   # warm mustard
+        "background": "35 22% 96%",   # tinted warm cream (not #fff)
+        "foreground": "20 28% 16%",   # warm near-black
+        "muted":      "30 18% 92%",
+        "border":     "28 18% 84%",
+        "card":       "40 28% 98%",
     }
 
 

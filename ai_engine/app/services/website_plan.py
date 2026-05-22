@@ -16,8 +16,10 @@ plan on any failure so the pipeline never blocks.
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -36,6 +38,14 @@ def _build_plan_schema(min_pages: int, max_pages: int) -> dict[str, Any]:
     `min_pages` / `max_pages` come from `_compute_page_range` — keyed off
     `intent.business_category` so a portfolio site doesn't get padded to
     12 pages and a marketplace doesn't get capped at 7.
+
+    NOTE: Gemini's constrained-decoding compiler rejects schemas with
+    "too many states for serving" when nested array×array×string-maxLength
+    multiplications get large. Keep this schema LEAN — drop optional text
+    fields, keep maxLength tight, and cap sections per page. The previous
+    schema (with `purpose: maxLength=200` on both pages AND sections, plus
+    sections maxItems=7) exploded the state machine and forced every plan
+    call to fall back to the generic 6-page agency template.
     """
     return {
         "type": "OBJECT",
@@ -45,9 +55,9 @@ def _build_plan_schema(min_pages: int, max_pages: int) -> dict[str, Any]:
                 "type": "OBJECT",
                 "required": ["name", "tagline", "domain"],
                 "properties": {
-                    "name":    {"type": "STRING", "maxLength": 60},
-                    "tagline": {"type": "STRING", "maxLength": 120},
-                    "domain":  {"type": "STRING", "maxLength": 50},
+                    "name":    {"type": "STRING", "maxLength": 50},
+                    "tagline": {"type": "STRING", "maxLength": 80},
+                    "domain":  {"type": "STRING", "maxLength": 30},
                 },
             },
             "pages": {
@@ -58,26 +68,35 @@ def _build_plan_schema(min_pages: int, max_pages: int) -> dict[str, Any]:
                     "type": "OBJECT",
                     "required": ["route", "title", "sections"],
                     "properties": {
-                        "route":   {"type": "STRING", "maxLength": 40},
-                        "title":   {"type": "STRING", "maxLength": 60},
-                        "purpose": {"type": "STRING", "maxLength": 200},
+                        "route":   {"type": "STRING", "maxLength": 30},
+                        "title":   {"type": "STRING", "maxLength": 40},
+                        # Keep `purpose` on PAGES (one string per page) — it gives
+                        # codegen real per-page context. Do NOT add purpose on
+                        # sections (multiplies pages×sections×chars and explodes
+                        # Gemini's state machine).
+                        "purpose": {"type": "STRING", "maxLength": 120},
                         # Detail-page pair. When true the codegen layer
                         # also emits <route>/[slug]/page.js, reading rows
                         # from `detail_source` (a data_model table name
                         # or a mock_db collection). False/omitted = the
                         # route is a singleton marketing page.
                         "detail_template": {"type": "BOOLEAN"},
-                        "detail_source":   {"type": "STRING", "maxLength": 60},
+                        "detail_source":   {"type": "STRING", "maxLength": 40},
                         "sections": {
                             "type": "ARRAY",
                             "minItems": 2,
-                            "maxItems": 7,
+                            "maxItems": 6,
                             "items": {
                                 "type": "OBJECT",
                                 "required": ["type"],
                                 "properties": {
-                                    "type":    {"type": "STRING", "maxLength": 30},
-                                    "purpose": {"type": "STRING", "maxLength": 200},
+                                    "type": {"type": "STRING", "maxLength": 24},
+                                    # Optional cohesion hints — give codegen the
+                                    # same layout/archetype signal landing has.
+                                    # Tight maxLength so we don't re-trigger
+                                    # Gemini's "too many states" explosion.
+                                    "layout_hint": {"type": "STRING", "maxLength": 24},
+                                    "archetype":   {"type": "STRING", "maxLength": 32},
                                 },
                             },
                         },
@@ -129,6 +148,61 @@ def _compute_page_range(
 
     # Default consumer_website
     return (6, 12)
+
+
+_WEBSITE_CONVERSION_RESEARCH_PROMPT = """You are a senior CRO researcher studying MULTI-PAGE websites (not single landing pages). USE GOOGLE SEARCH — do NOT answer from training memory.
+
+PROMPT: "{description}"
+CATEGORY: {category}
+SUBCATEGORY: {subcategory}
+
+YOUR JOB — identify which conversion-optimized patterns appear on REAL multi-page websites in this domain, and CRUCIALLY on which pages they appear (home vs transactional vs informational).
+
+1. Search for 6-10 real multi-page websites in this domain (not single-page landings). Use queries like:
+     a) "best [category] websites 2025"
+     b) the top 2-3 brand names in the user's space (e.g. tours → Intrepid, G Adventures, Viator; SaaS analytics → Mixpanel, Amplitude, Heap; luxury hotels → Aman, Six Senses, Belmond; immigration law → Fragomen, Berry Appleman). USE actual brand names from search results — never invent.
+   Bias toward brands whose business model involves multi-step browsing (browse → detail → convert).
+
+2. For each reference, list the SITEMAP (the visible top-nav routes — typically 5-12 pages) and which pages contain which conversion elements:
+
+   • sticky_cta            — does any page surface a persistent "Book / Buy / Quote / Sign Up" CTA in a sticky header or floating bar?
+   • hero_filter           — does the home or category page have a search/filter widget (dates, location, role, plan)?
+   • trust_bar             — slim inline strip on home or product/listing pages with "X yrs / Y customers / Z%"?
+   • mid_cta_banner        — re-engagement banner midway down home or transactional pages?
+   • full_lead_form        — multi-field form (NOT just newsletter) on the contact, consultation, or quote page?
+   • faq_section_on_pages  — which pages have an FAQ block?
+   • testimonials_pages    — which pages embed testimonials (home only? service detail? case studies?)?
+
+3. CONCLUSION — for THIS project, give:
+
+   • REQUIRED_PAGES — list the page routes that nearly every reference includes (e.g. for a law firm: `/, /services-or-practice-areas, /attorneys, /case-results, /consultation, /contact`).
+   • PER-PAGE CONVERSION ELEMENTS — for each REQUIRED_PAGE, which conversion elements should appear on it. Format:
+       /: [trust_bar, mid_cta_banner, lead_form, faq]
+       /attorneys: [team, testimonials, cta]
+       /consultation: [lead_form / booking_form / quote_form, faq]
+   • OMISSIONS — any conversion element that references universally avoid for this domain. Examples: "luxury hotels almost never use sticky CTAs", "architecture portfolios skip trust_bar — they let the work speak".
+
+OUTPUT FORMAT — plain markdown. No JSON.
+
+===REFERENCE_SITEMAPS===
+1. <name> — <url>
+   Sitemap: /, /<route>, /<route>, ...
+   Sticky CTA: yes/no (where: header/floating-bar/none)
+   Hero filter: yes/no (where: home/category/none)
+   Trust bar: yes/no (which pages)
+   Mid CTA banner: yes/no (which pages)
+   Lead form: yes/no (which page, what kind: quote/booking/consultation)
+   FAQ on pages: <comma-separated routes>
+2. ... ≥6 refs ...
+
+===CONCLUSION===
+REQUIRED_PAGES: <comma-separated routes>
+PER_PAGE_CONVERSION:
+  /: [...]
+  /<route>: [...]
+  ... (one row per REQUIRED_PAGE)
+OMISSIONS: <free-text notes on patterns to avoid>
+"""
 
 
 _PLAN_PROMPT = """You are designing the page structure for a brand-coherent website.
@@ -203,15 +277,68 @@ PAGE GUIDANCE BY DOMAIN (use these as a floor, not a ceiling — add more if the
 
 SECTION TYPES (pick from these — they map to known anatomies)
   hero, menu, gallery, story, philosophy, testimonials, value_prop,
-  features, process, how_it_works, press, team, pricing, faq, cta,
-  stats, locations, reservation, contact, newsletter
+  features, benefits, process, how_it_works, press, team, pricing, faq,
+  cta, mid_cta_banner, stats, trust_bar, locations, reservation, contact,
+  contact_form, lead_form, quote_form, booking_form, newsletter,
+  comparison, integrations
+
+PER-SECTION COHESION HINTS (optional but strongly recommended on EVERY section — they let codegen render sibling layouts that vary instead of stacking identical centered cards)
+  layout_hint — pick ONE: centered-stack | two-column | split-image-left | split-image-right | grid-3 | grid-4 | grid-2 | carousel | accordion | logo-strip | stat-band | timeline | comparison-table | media-quote
+  archetype — pick ONE from the per-type list (omit on types not listed):
+    hero: full-bleed-overlay | oversized-watermark | asymmetric-split | type-wrapping-product | video-mask | card-stack
+    menu: two-column-dotted | photo-card-grid | categorized-rows
+    gallery: asymmetric-12col | marquee-scroll | bento-mosaic
+    testimonials: glass-cards-bg | marquee-row | big-quote-portrait
+    features / value_prop / how_it_works / process: icon-grid-3 | numbered-stepper | split-image-bullets
+  Vary layout_hint across sections WITHIN a page so adjacent sections never share the same hint.
+
+══ CONVERSION-COMPLETENESS BY PAGE (apply when CONVERSION_RESEARCH supports it) ══
+Read CONVERSION_RESEARCH ===CONCLUSION=== below. Anything marked REQUIRED there should
+appear on the pages it belongs on — but APPLY IT PER-PAGE, not globally:
+
+  • HOME (/) and TRANSACTIONAL PAGES (/shop, /listings, /properties, /book, /tours,
+    /classes, /pricing, /reservations, /quote, /consultation, /apply, /trial) →
+    these are entry points and conversion surfaces. Include:
+      - trust_bar (slim inline strip with stats/logos, NOT a full stats band)
+      - mid_cta_banner (re-engagement halfway down the page)
+      - lead_form / quote_form / booking_form (whichever matches the CTA — see
+        form-mapping below)
+      - faq (when CONVERSION_RESEARCH marks it required for the domain)
+    Plus the usual hero, value_prop, features, testimonials.
+
+  • INFORMATIONAL PAGES (/about, /story, /team, /press, /sustainability) →
+    DO NOT force conversion stack. These are narrative pages — use story,
+    philosophy, team, press, stats (full), gallery. NO sticky_cta/mid_cta needed.
+    A single closing `cta` block at the bottom is fine.
+
+  • CONTACT-ADJACENT PAGES (/contact) → use a real conversion form
+    (contact_form / lead_form / quote_form / booking_form), locations, hours,
+    optionally faq for support questions.
+
+  • DETAIL/LIST PAGES (/agents, /trainers, /chefs, /attorneys) → team-centric
+    structure, NOT conversion-heavy. team + testimonials + cta is enough.
+
+Form-mapping (pick the form type that matches the page's CTA, NOT the generic word "contact"):
+  • Plumber / handyman / "free quote"          → quote_form
+  • Tour / hotel / clinic / spa appointment   → booking_form
+  • B2B SaaS demo / consultation / SDR funnel → lead_form
+  • Restaurant table reservations             → reservation (existing type)
+  • Bakery / florist / catering inquiry       → lead_form or quote_form
+  • General "drop us a line"                  → contact_form
+  • Newsletter only (pure audience build)     → newsletter (use ONLY when the
+    site has no transactional CTA elsewhere)
 
 QUALITY BAR
 - Each page reads as a distinct chapter of the brand, not a copy.
-- The home page tells the WHOLE brand story in 4-6 sections.
+- The home page tells the WHOLE brand story in 5-8 sections — include the
+  conversion stack above when applicable. (Bumped from 4-6 to give room for
+  trust_bar + mid_cta_banner without crowding the brand narrative.)
 - Inner pages drill into ONE topic (Menu page is about food; About is about story).
 
 Return ONLY the JSON. No markdown wrapper. No prose.
+
+═══ CONVERSION_RESEARCH (grounded reference dump — read before deciding which pages need conversion stack) ═══
+{conversion_research}
 """
 
 
@@ -240,29 +367,75 @@ def _summarize_anatomies(visual_dna: dict) -> str:
     return ", ".join(keys) if keys else "(none — using defaults)"
 
 
-async def build_website_plan(
+# ── Internal timing budget ─────────────────────────────────────────────
+# The plan call is the hard requirement; conversion research is best-effort
+# context. Cap research at this many seconds so a slow grounded call can't
+# eat the entire timeout budget and starve the plan call. (Repro: a 90s
+# global timeout was consumed by a 90s research timeout, leaving the plan
+# call to race retry latency and fall through to the generic fallback.)
+_CONVERSION_RESEARCH_MAX_TIMEOUT_S = 50.0
+_PLAN_MODEL = "gemini-2.5-flash"
+_PLAN_MAX_TOKENS = 2500
+
+# Free-form retry shape hint — used when the structured-schema call hits
+# Gemini's "too many states for serving" 400. We drop the schema but
+# remind the model of the section vocabulary so it doesn't regress to a
+# generic agency template.
+_FREE_FORM_SHAPE_HINT = (
+    "\n\nReturn ONLY a valid JSON object with this shape:\n"
+    '{"brand":{"name":"...","tagline":"...","domain":"..."},'
+    '"pages":[{"route":"/","title":"...","purpose":"...","sections":'
+    '[{"type":"hero","layout_hint":"...","archetype":"..."}, ...]}, ...]}\n'
+    "Stay faithful to the SECTION TYPES list above — use trust_bar, "
+    "mid_cta_banner, lead_form, quote_form, booking_form on transactional "
+    "pages when appropriate. Do NOT fall back to a generic "
+    "hero/value_prop/features/cta shape if the project's domain calls "
+    "for richer structure (SaaS → /product /pricing /customers /integrations; "
+    "e-com → /shop /collections; hospitality → /rooms /experiences)."
+)
+
+
+async def _run_conversion_research(
+    description: str,
+    intent: dict[str, Any],
+    overall_timeout_s: float,
+) -> str:
+    """Run the grounded conversion-research call with a bounded timeout.
+
+    Returns the research text (≤8000 chars after the caller truncates) or
+    "(research unavailable)" on any failure. Never raises — research is
+    best-effort context; the plan call is the hard requirement.
+    """
+    bounded = min(overall_timeout_s, _CONVERSION_RESEARCH_MAX_TIMEOUT_S)
+    try:
+        from app.services.landing_brief import _grounded_research
+        prompt = _WEBSITE_CONVERSION_RESEARCH_PROMPT.format(
+            description=(description or "").strip(),
+            category=(intent.get("business_category") or "general business").strip(),
+            subcategory=(intent.get("business_subcategory") or "general").strip(),
+        )
+        return await _grounded_research(
+            prompt, bounded, label="website_conversion_research", websocket=None,
+        ) or "(research unavailable)"
+    except Exception as exc:
+        logger.warning("website_plan: conversion research failed (%s) — proceeding without", exc)
+        return "(research unavailable)"
+
+
+def _build_plan_format(
     description: str,
     intent: dict[str, Any],
     visual_dna: dict[str, Any],
     *,
-    timeout_s: float = 60.0,
-    purpose_data: dict | None = None,
+    min_pages: int,
+    max_pages: int,
+    conversion_research: str,
 ) -> dict[str, Any]:
-    """Build the multi-page plan. Returns a plan dict — never raises."""
-    from app.services.landing_gemini import structured_distill
-
+    """Pack everything _PLAN_PROMPT.format() needs into a single dict."""
     audience = (intent.get("target_audience") or {}).get("primary") or "general consumers"
     personality = intent.get("brand_personality") or []
     pers_str = ", ".join(personality[:4]) if personality else "modern, clear"
-
-    min_pages, max_pages = _compute_page_range(intent, purpose_data)
-    logger.info(
-        "website_plan: page range %d-%d (category=%r subcategory=%r)",
-        min_pages, max_pages,
-        intent.get("business_category"), intent.get("business_subcategory"),
-    )
-
-    fmt = {
+    return {
         "description":   (description or "").strip(),
         "category":      (intent.get("business_category") or "general business").strip(),
         "subcategory":   (intent.get("business_subcategory") or "general").strip(),
@@ -270,29 +443,110 @@ async def build_website_plan(
         "audience":      audience,
         "personality":   pers_str,
         "tone":          (intent.get("tone") or "friendly").strip(),
-        "intensity":     (visual_dna or {}).get("cultural_intensity", "bold"),
-        "layout_signature": (visual_dna or {}).get("layout_signature", "modern responsive grid"),
-        "anatomies":     _summarize_anatomies(visual_dna),
-        "min_pages":     min_pages,
-        "max_pages":     max_pages,
+        "intensity":         (visual_dna or {}).get("cultural_intensity", "bold"),
+        "layout_signature":  (visual_dna or {}).get("layout_signature", "modern responsive grid"),
+        "anatomies":         _summarize_anatomies(visual_dna),
+        "min_pages":         min_pages,
+        "max_pages":         max_pages,
+        "conversion_research": (conversion_research or "(none)")[:8000],
     }
-    prompt = _PLAN_PROMPT.format(**fmt)
-    plan_schema = _build_plan_schema(min_pages, max_pages)
 
+
+async def _call_plan(
+    prompt: str,
+    *,
+    schema: dict | None,
+    timeout_s: float,
+    label: str,
+) -> dict | None:
+    """Single Gemini plan call. Returns parsed dict or None on any failure.
+
+    ``schema=None`` → free-form mode (we'll validate the shape ourselves).
+    ``schema=dict`` → structured-output mode (Gemini constraint decoding).
+    """
+    from app.services.landing_gemini import structured_distill
     try:
         raw = await structured_distill(
             prompt,
             timeout_s,
-            label="website_plan",
-            response_schema=plan_schema,
-            max_tokens=2500,
-            model="gemini-2.5-flash",
+            label=label,
+            response_schema=schema,
+            max_tokens=_PLAN_MAX_TOKENS,
+            model=_PLAN_MODEL,
         )
-        plan = json.loads(raw) if isinstance(raw, str) else raw
-        if not _looks_valid(plan):
-            logger.warning("website_plan: model returned invalid plan — using fallback")
-            return _fallback_with_brand(intent)
-        # Normalize home route as first page
+        return json.loads(raw) if isinstance(raw, str) else raw
+    except Exception as exc:
+        logger.warning("website_plan: %s call failed (%s)", label, exc)
+        return None
+
+
+async def _emit_fallback_warning(websocket: Any, reason: str) -> None:
+    """Surface a generic-plan fallback to the user via the workspace chat.
+
+    Without this, when both plan calls fail (Vertex unreachable, repeated
+    HTTP 400s, etc.) the user gets the generic 6-page agency template and
+    has no idea their actual prompt was discarded. Mirrors the
+    `_emit_fallback_warning` pattern used by landing_brief / landing_intent.
+    """
+    if websocket is None:
+        return
+    try:
+        await websocket.send_json({
+            "type": "warning",
+            "code": "FALLBACK_PLAN",
+            "message": (
+                f"⚠️ Website plan unavailable ({reason}). "
+                "Using a generic 6-page template — your prompt's domain wasn't applied. "
+                "Check ai_engine logs (usually Vertex ADC, quota, or a schema 'too many states' loop)."
+            ),
+        })
+    except Exception:
+        pass
+
+
+async def build_website_plan(
+    description: str,
+    intent: dict[str, Any],
+    visual_dna: dict[str, Any],
+    *,
+    timeout_s: float = 60.0,
+    purpose_data: dict | None = None,
+    websocket: Any = None,
+) -> dict[str, Any]:
+    """Build the multi-page plan. Returns a plan dict — never raises.
+
+    Pipeline:
+      1. ``_run_conversion_research`` — grounded CRO research, bounded at
+         50s so a slow research call can't starve the plan call.
+      2. ``_call_plan`` with structured schema — primary path.
+      3. ``_call_plan`` free-form retry on schema-400 ("too many states"),
+         keeping the same section-vocabulary guidance via _FREE_FORM_SHAPE_HINT.
+      4. Falls back to ``_fallback_with_brand`` only when BOTH plan calls
+         fail — and emits a ``FALLBACK_PLAN`` websocket warning so the user
+         knows their prompt was discarded.
+    """
+    min_pages, max_pages = _compute_page_range(intent, purpose_data)
+    logger.info(
+        "website_plan: page range %d-%d (category=%r subcategory=%r)",
+        min_pages, max_pages,
+        intent.get("business_category"), intent.get("business_subcategory"),
+    )
+
+    # ── Stage 1: grounded conversion research (bounded) ──────────────
+    conversion_research = await _run_conversion_research(description, intent, timeout_s)
+
+    # ── Stage 2: assemble plan prompt + schema ──────────────────────
+    fmt = _build_plan_format(
+        description, intent, visual_dna,
+        min_pages=min_pages, max_pages=max_pages,
+        conversion_research=conversion_research,
+    )
+    prompt = _PLAN_PROMPT.format(**fmt)
+    schema = _build_plan_schema(min_pages, max_pages)
+
+    # ── Stage 3: structured plan call ───────────────────────────────
+    plan = await _call_plan(prompt, schema=schema, timeout_s=timeout_s, label="website_plan")
+    if _looks_valid(plan):
         plan = _normalize(plan)
         logger.info(
             "website_plan: ok — brand=%r pages=%d (%s)",
@@ -300,9 +554,29 @@ async def build_website_plan(
             ", ".join(p["route"] for p in plan["pages"]),
         )
         return plan
-    except Exception as exc:
-        logger.warning("website_plan: build failed (%s) — using fallback", exc)
-        return _fallback_with_brand(intent)
+
+    # ── Stage 4: free-form retry (no schema) ────────────────────────
+    # Schema-constrained call usually fails with "too many states for
+    # serving". Re-prompt without the schema but with a stronger shape
+    # hint so the model doesn't regress to the generic agency template.
+    logger.warning("website_plan: structured plan invalid — retrying free-form")
+    plan = await _call_plan(
+        prompt + _FREE_FORM_SHAPE_HINT,
+        schema=None, timeout_s=timeout_s, label="website_plan_freeform",
+    )
+    if _looks_valid(plan):
+        plan = _normalize(plan)
+        logger.info(
+            "website_plan: free-form ok — brand=%r pages=%d (%s)",
+            plan["brand"]["name"], len(plan["pages"]),
+            ", ".join(p["route"] for p in plan["pages"]),
+        )
+        return plan
+
+    # ── Stage 5: fallback (both calls failed) ───────────────────────
+    logger.warning("website_plan: both plan calls failed — using fallback template")
+    await _emit_fallback_warning(websocket, "structured + free-form plan calls both failed")
+    return _fallback_with_brand(intent)
 
 
 def _looks_valid(plan: Any) -> bool:
@@ -459,11 +733,17 @@ def _normalize(plan: dict) -> dict:
         if route in seen:
             continue
         seen.add(route)
-        # Normalize section types to lowercase snake_case
+        # Normalize section types to lowercase snake_case.
+        # layout_hint/archetype are normalized to lowercase kebab-case so
+        # downstream lookups against the landing-style vocab match.
         secs = []
         for s in (p.get("sections") or []):
             if isinstance(s, dict) and s.get("type"):
                 s["type"] = s["type"].lower().strip()
+                if isinstance(s.get("layout_hint"), str):
+                    s["layout_hint"] = s["layout_hint"].lower().strip()
+                if isinstance(s.get("archetype"), str):
+                    s["archetype"] = s["archetype"].lower().strip()
                 secs.append(s)
         p["sections"] = secs
         # Normalize detail_template + detail_source. Three-stage logic:
@@ -506,8 +786,7 @@ def _normalize(plan: dict) -> dict:
             if not ds:
                 ds = route_key or "items"
             # Slugify: snake_case-safe characters only, no spaces/dots.
-            import re as _re_sluggy
-            ds = _re_sluggy.sub(r"[^a-z0-9_]+", "_", ds).strip("_") or "items"
+            ds = re.sub(r"[^a-z0-9_]+", "_", ds).strip("_") or "items"
             p["detail_source"] = ds
         else:
             p.pop("detail_source", None)
@@ -529,7 +808,7 @@ def _normalize(plan: dict) -> dict:
 
 def _fallback_with_brand(intent: dict) -> dict:
     """Build the minimal fallback plan but inject brand info from intent."""
-    plan = json.loads(json.dumps(_FALLBACK_PLAN))  # deep copy
+    plan = copy.deepcopy(_FALLBACK_PLAN)
     suggested = (intent.get("business_subcategory") or
                  intent.get("business_category") or "Brand").strip()
     plan["brand"]["name"] = suggested[:60] or "Brand"

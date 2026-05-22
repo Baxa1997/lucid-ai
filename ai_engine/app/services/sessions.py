@@ -61,6 +61,11 @@ class AgentSession:
         "pipeline_task",    # asyncio.Task | None — the currently running pipeline
         "ws_proxy",         # WebSocketProxy | None — detachable event publisher
         "sandbox_runner",   # SandboxRunner — swappable execution backend
+        # FIFO queue of {text, images, editable_target, queued_at} dicts.
+        # Mutated by _listen_for_stop when a new task arrives while one is
+        # running, then drained by execute_task's completion path so the
+        # user's follow-up edits never get silently dropped.
+        "pending_tasks",
     )
 
     def __init__(
@@ -107,6 +112,11 @@ class AgentSession:
 
         # Execution backend — set by create_session() via create_runner()
         self.sandbox_runner: Any = None  # SandboxRunner
+
+        # Pending tasks queued while a pipeline is running. Each entry is
+        # ``{text, images, editable_target, queued_at}``. Drained after
+        # the current pipeline completes — see AgentOrchestrator.execute_task.
+        self.pending_tasks: list = []
 
     def touch(self) -> None:
         """Update last_active timestamp."""

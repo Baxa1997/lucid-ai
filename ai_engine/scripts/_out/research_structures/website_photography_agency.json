@@ -1,0 +1,177 @@
+{
+  "brand": {
+    "name": "Field & Frame",
+    "tagline": "Representing the world's leading editorial photographers with vision and integrity.",
+    "domain": "creative_arts"
+  },
+  "pages": [
+    {
+      "route": "/",
+      "title": "Home",
+      "purpose": "The entry point to Field & Frame, showcasing our ethos, featured work, and the caliber of our represented artists.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "bento-mosaic"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-3"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "marquee-row",
+          "archetype": "marquee-row"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/work",
+      "title": "Our Work",
+      "purpose": "A curated showcase of the diverse and impactful projects undertaken by Field & Frame photographers.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "oversized-watermark",
+          "archetype": "oversized-watermark"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "asymmetric-12col"
+        },
+        {
+          "type": "process",
+          "layout_hint": "numbered-stepper",
+          "archetype": "numbered-stepper"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "projects"
+    },
+    {
+      "route": "/photographers",
+      "title": "Photographers",
+      "purpose": "Introducing the roster of 12 exceptional photographers represented by Field & Frame, with links to their individual portfolios.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "asymmetric-split",
+          "archetype": "asymmetric-split"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-4"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "photographers"
+    },
+    {
+      "route": "/agents",
+      "title": "Our Agents",
+      "purpose": "Meet the dedicated agents at Field & Frame who connect our photographers with leading clients and manage their careers.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "type-wrapping-product",
+          "archetype": "type-wrapping-product"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-2"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "big-quote-portrait",
+          "archetype": "big-quote-portrait"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "agents"
+    },
+    {
+      "route": "/about",
+      "title": "About Us",
+      "purpose": "Learn about the Field & Frame story, our philosophy, and our commitment to artistic excellence and client satisfaction.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "video-mask",
+          "archetype": "video-mask"
+        },
+        {
+          "type": "story",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "philosophy",
+          "layout_hint": "split-image-left"
+        },
+        {
+          "type": "stats",
+          "layout_hint": "stat-band"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/contact",
+      "title": "Contact Us",
+      "purpose": "Connect with Field & Frame for inquiries, project proposals, or to learn more about our photographers.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "contact_form",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "locations",
+          "layout_hint": "grid-2"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        }
+      ],
+      "detail_template": false
+    }
+  ]
+}

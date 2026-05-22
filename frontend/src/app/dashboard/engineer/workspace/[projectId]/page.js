@@ -577,6 +577,19 @@ function ConversationPageInner({params}) {
   const [exportBypassLimits, setExportBypassLimits] = useState(false);
   const [showExportUpgradeModal, setShowExportUpgradeModal] = useState(false);
 
+  // ── Click-to-edit (Base44-style) ──────────────────────────────────
+  // When the user clicks the "Edit" toggle in the preview toolbar and
+  // then clicks an element with a ``data-editable-path`` attribute,
+  // the preview iframe posts an ``editable_target`` here. The chat
+  // input renders it as a chip and the next outbound message attaches
+  // it to the WS payload so the backend pipeline can synthesize an
+  // EditIntent and route to the direct-edit fast path.
+  //
+  // Shape: { path: "hero.title", type: "text", file?: "src/...jsx", text?: "..." }
+  const [editSelection, setEditSelection] = useState(null);
+  const [editSelectMode, setEditSelectMode] = useState(false);
+  const clearEditSelection = useCallback(() => setEditSelection(null), []);
+
   useEffect(() => {
     let cancelled = false;
     const refresh = () =>
@@ -1122,6 +1135,12 @@ function ConversationPageInner({params}) {
     handleProjectDelete,
     router,
     vercelDeployUrl,
+    // Click-to-edit (Base44 flow)
+    editSelection,
+    setEditSelection,
+    editSelectMode,
+    setEditSelectMode,
+    clearEditSelection,
   };
 
   return (

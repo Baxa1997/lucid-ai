@@ -1,0 +1,399 @@
+{
+  "brand": {
+    "name": "Verdant",
+    "tagline": "Chef-Prepared Vegan Dining, Delivered to Your Door",
+    "description": "Experience Michelin-quality plant-based meals delivered fresh to NYC and LA. Weekly rotating menus with zero commitment.",
+    "domain": "verdant-meals.com",
+    "business_info": {
+      "address": "Serving Manhattan, Brooklyn, and Greater Los Angeles",
+      "email": "concierge@verdant-meals.com",
+      "hours": "Delivery: Mon & Thu 5am-10am\nSupport: Daily 9am-6pm EST"
+    },
+    "social": [
+      {
+        "label": "instagram",
+        "href": "https://instagram.com/verdant"
+      }
+    ]
+  },
+  "palette": {
+    "primary": "140 30% 20%",
+    "secondary": "15 45% 50%",
+    "accent": "90 40% 45%",
+    "background": "40 20% 96%",
+    "foreground": "0 0% 15%",
+    "muted": "120 10% 80%",
+    "border": "40 15% 85%",
+    "card": "0 0% 100%"
+  },
+  "typography": {
+    "heading_font": "Cormorant Garamond",
+    "body_font": "DM Sans",
+    "scale": "expressive"
+  },
+  "motif": "editorial",
+  "design_system": {
+    "motion": "subtle",
+    "accent_shape": "pill",
+    "surface": "flat",
+    "image_treatment": "natural",
+    "section_rhythm": "airy"
+  },
+  "personality": {
+    "tone": "luxurious",
+    "vibe_keywords": [
+      "curated",
+      "organic",
+      "effortless",
+      "vibrant",
+      "sophisticated"
+    ],
+    "energy": "medium"
+  },
+  "header_archetype": "transparent-pill",
+  "footer_archetype": "mega-columns",
+  "references": [
+    {
+      "url": "https://www.sakara.com",
+      "name": "Sakara Life",
+      "why": "Gold standard for ultra-premium lifestyle-driven vegan delivery focusing on food as medicine.",
+      "section_order": [
+        "hero",
+        "press",
+        "philosophy",
+        "menu",
+        "benefits"
+      ],
+      "notable_features": [
+        "Zip-code gated menu",
+        "Interactive 9-pillars grid"
+      ]
+    },
+    {
+      "url": "https://www.cookunity.com",
+      "name": "CookUnity",
+      "why": "Best-in-class for the chef-prepared angle, elevating creators to build trust.",
+      "section_order": [
+        "hero",
+        "trust_bar",
+        "team",
+        "how_it_works",
+        "menu"
+      ],
+      "notable_features": [
+        "Chef profile modals",
+        "Dietary preference toggles"
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "id": "hero-capture",
+      "type": "hero",
+      "role": "Aspirational lifestyle and zip code capture",
+      "headline": "The Art of Plant-Based Living, Delivered.",
+      "subheadline": "Chef-crafted vegan meals made from organic, seasonal ingredients. No prep, no commitment, just vibrant health.",
+      "layout_hint": "full-bleed-overlay",
+      "archetype": "video-mask",
+      "interactivity": "Zip-code validation input that unlocks the 'See This Week's Menu' CTA",
+      "cta": {
+        "label": "See This Week's Menu",
+        "href": "#menu"
+      },
+      "image_queries": [
+        "gourmet vegan salad bowl overhead warm lighting"
+      ],
+      "items": []
+    },
+    {
+      "id": "press-validation",
+      "type": "press",
+      "role": "Social proof and authority",
+      "headline": "As Seen In",
+      "subheadline": "Verdant is redefining the standard for premium meal delivery in NYC and LA.",
+      "layout_hint": "logo-strip",
+      "items": [
+        {
+          "title": "Vogue",
+          "description": "The most sophisticated meal delivery service we have ever tested.",
+          "label": "Vogue"
+        },
+        {
+          "title": "The New York Times",
+          "description": "Finally, a vegan service that prioritizes culinary technique over convenience.",
+          "label": "NYT"
+        },
+        {
+          "title": "Eater",
+          "description": "Verdant brings the Michelin-starred kitchen experience to your dining room.",
+          "label": "Eater"
+        }
+      ],
+      "image_queries": [],
+      "interactivity": ""
+    },
+    {
+      "id": "brand-philosophy",
+      "type": "philosophy",
+      "nav_label": "Story",
+      "role": "The brand 'Why'",
+      "headline": "Food as High-Performance Fuel",
+      "subheadline": "We believe in the power of plants to transform how you feel, think, and live.",
+      "layout_hint": "grid-3",
+      "items": [
+        {
+          "title": "Chef-Prepared",
+          "description": "Every meal is designed and executed by chefs from the world's top kitchens."
+        },
+        {
+          "title": "100% Organic",
+          "description": "We source exclusively from local regenerative farms in New York and California."
+        },
+        {
+          "title": "Zero Commitment",
+          "description": "Pause, skip, or cancel your weekly delivery with a single click."
+        }
+      ],
+      "image_queries": [],
+      "interactivity": ""
+    },
+    {
+      "id": "chef-roster",
+      "type": "team",
+      "nav_label": "Chefs",
+      "role": "Authority building",
+      "headline": "Meet Your Personal Kitchen",
+      "subheadline": "Our collective of chefs brings experience from Michelin-starred institutions to your weekly menu.",
+      "layout_hint": "carousel",
+      "items": [
+        {
+          "title": "Chef Julian Vance",
+          "description": "Former Sous Chef at Eleven Madison Park, specializing in seasonal fermentation.",
+          "label": "Executive Chef",
+          "image_query": "professional chef portrait kitchen"
+        },
+        {
+          "title": "Chef Elena Rossi",
+          "description": "Plant-based nutritionist and pastry expert focused on refined-sugar-free desserts.",
+          "label": "Pastry Lead",
+          "image_query": "female chef portrait smiling"
+        }
+      ],
+      "image_queries": [
+        "professional chef portrait kitchen",
+        "female chef portrait smiling"
+      ],
+      "interactivity": ""
+    },
+    {
+      "id": "weekly-menu",
+      "type": "menu",
+      "nav_label": "Menu",
+      "role": "Product showcase",
+      "headline": "On The Menu This Week",
+      "subheadline": "A curated selection of vibrant, nutrient-dense dishes arriving fresh this Monday.",
+      "layout_hint": "grid-3",
+      "archetype": "photo-card-grid",
+      "interactivity": "Meal cards flip on hover to show full macro-nutrient profiles and ingredient lists",
+      "items": [
+        {
+          "title": "Truffle Miso Soba",
+          "description": "Buckwheat noodles with wild foraged mushrooms, shaved black truffle, and organic snap peas.",
+          "value": "High Protein",
+          "image_query": "soba noodles bowl gourmet"
+        },
+        {
+          "title": "Heirloom Harvest Bowl",
+          "description": "Roasted tri-color carrots, sprouted quinoa, and a lemon-tahini drizzle with micro-greens.",
+          "value": "Gluten-Free",
+          "image_query": "roasted vegetable grain bowl"
+        },
+        {
+          "title": "Saffron Cauliflower Steak",
+          "description": "Pan-seared cauliflower over a bed of beluga lentils and herb-infused salsa verde.",
+          "value": "Under 500 Cal",
+          "image_query": "cauliflower steak plated"
+        }
+      ],
+      "image_queries": [
+        "soba noodles bowl gourmet",
+        "roasted vegetable grain bowl",
+        "cauliflower steak plated"
+      ]
+    },
+    {
+      "id": "how-it-works",
+      "type": "how_it_works",
+      "nav_label": "Process",
+      "role": "Logistics and ease of use",
+      "headline": "Effortless Fine Dining",
+      "subheadline": "We handle the sourcing, prep, and cooking. You simply enjoy.",
+      "layout_hint": "two-column",
+      "archetype": "numbered-stepper",
+      "interactivity": "Animated progress bar that fills as the user scrolls through the steps",
+      "items": [
+        {
+          "title": "Select Your Meals",
+          "description": "Choose from 12 rotating chef-prepared dishes every week.",
+          "value": "01"
+        },
+        {
+          "title": "Fresh Delivery",
+          "description": "We deliver in chilled, reusable bento boxes to your door in NYC or LA.",
+          "value": "02"
+        },
+        {
+          "title": "Heat & Serve",
+          "description": "Enjoy a world-class meal in under 3 minutes. No cleanup required.",
+          "value": "03"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "packaging-sustainability",
+      "type": "benefits",
+      "nav_label": "Sustainability",
+      "role": "Premium differentiator",
+      "headline": "Kind to Your Body, Kind to the Earth",
+      "subheadline": "Our circular packaging system ensures zero waste in your weekly routine.",
+      "layout_hint": "split-image-bullets",
+      "archetype": "icon-grid-3",
+      "interactivity": "Hover over icons to see the environmental impact metrics",
+      "items": [
+        {
+          "title": "Reusable Bento Boxes",
+          "description": "We collect your empty containers each week to be sanitized and reused.",
+          "icon": "RefreshCw"
+        },
+        {
+          "title": "Compostable Liners",
+          "description": "All secondary packaging is made from cornstarch and is fully home-compostable.",
+          "icon": "Leaf"
+        }
+      ],
+      "image_queries": [
+        "premium reusable food container minimalist"
+      ]
+    },
+    {
+      "id": "customer-reviews",
+      "type": "testimonials",
+      "nav_label": "Reviews",
+      "role": "Community trust",
+      "headline": "The Verdant Experience",
+      "subheadline": "Join thousands of health-conscious diners in NYC and LA.",
+      "layout_hint": "carousel",
+      "archetype": "glass-cards-bg",
+      "interactivity": "Auto-playing testimonial slider with manual navigation arrows",
+      "items": [
+        {
+          "title": "Sarah Jenkins",
+          "description": "The quality of the ingredients is unmatched. It feels like having a private chef in my West Village apartment.",
+          "label": "NYC Member",
+          "value": "5.0"
+        },
+        {
+          "title": "Marcus Chen",
+          "description": "I've tried every vegan delivery service. Verdant is the only one that actually tastes like a high-end restaurant.",
+          "label": "LA Member",
+          "value": "5.0"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "common-questions",
+      "type": "faq",
+      "nav_label": "FAQ",
+      "role": "Objection handling",
+      "headline": "Your Questions, Answered",
+      "subheadline": "Everything you need to know about your new plant-based lifestyle.",
+      "layout_hint": "accordion",
+      "interactivity": "Smooth-opening accordion panels with plus/minus icons",
+      "items": [
+        {
+          "title": "Where do you deliver?",
+          "description": "We currently serve all five boroughs of NYC and the greater Los Angeles area, including Santa Monica and West Hollywood."
+        },
+        {
+          "title": "Is there a commitment?",
+          "description": "No. You can skip a week or cancel your subscription at any time before your weekly cutoff."
+        },
+        {
+          "title": "How do I heat the meals?",
+          "description": "Most meals are best enjoyed after 2-3 minutes in a pan or oven, though microwave instructions are also provided."
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "final-conversion",
+      "type": "lead_form",
+      "role": "Final conversion",
+      "headline": "Start Your Verdant Journey",
+      "subheadline": "Enter your email and zip code to receive $25 off your first chef-crafted box.",
+      "layout_hint": "centered-stack",
+      "items": [
+        {
+          "title": "Email Address"
+        },
+        {
+          "title": "Zip Code"
+        }
+      ],
+      "cta": {
+        "label": "Claim My Offer",
+        "href": "#"
+      },
+      "image_queries": [],
+      "interactivity": ""
+    },
+    {
+      "id": "footer",
+      "type": "footer",
+      "role": "site-wide nav",
+      "headline": "Verdant",
+      "subheadline": "",
+      "layout_hint": "footer-columns",
+      "items": [],
+      "image_queries": []
+    }
+  ],
+  "page_features": [
+    "sticky_cta",
+    "exit_intent",
+    "floating_chat"
+  ],
+  "ctas": {
+    "primary": {
+      "label": "Build Your Box",
+      "href": "#hero-capture"
+    },
+    "secondary": {
+      "label": "Learn more",
+      "href": "#features"
+    }
+  },
+  "domain_keywords": [
+    "gourmet vegan food",
+    "chef plating vegetables",
+    "luxury kitchen interior",
+    "organic farm produce",
+    "minimalist bento box"
+  ],
+  "design_seed": 4090,
+  "design_tokens": {
+    "card_class": "bg-card rounded-2xl",
+    "button_radius_class": "rounded-full",
+    "image_radius_class": "rounded-2xl",
+    "section_padding_class": "py-24 sm:py-32 lg:py-40",
+    "transition_class": "transition-all duration-300",
+    "hover_lift_class": "hover:-translate-y-0.5 hover:shadow-md",
+    "_resolved_accent_shape": "pill",
+    "_resolved_surface": "flat",
+    "_resolved_motion": "subtle",
+    "_resolved_section_rhythm": "airy",
+    "_resolved_image_treatment": "natural"
+  }
+}

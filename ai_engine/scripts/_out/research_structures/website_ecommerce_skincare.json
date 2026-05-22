@@ -1,0 +1,251 @@
+{
+  "brand": {
+    "name": "Lumen",
+    "tagline": "Illuminate Your Skin: Clean Beauty, Radiant Results.",
+    "domain": "retail_fashion"
+  },
+  "pages": [
+    {
+      "route": "/",
+      "title": "Lumen Skincare",
+      "purpose": "The homepage introduces the Lumen brand, highlights key product categories, and establishes trust and brand values.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "trust_bar",
+          "layout_hint": "logo-strip"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "icon-grid-3",
+          "archetype": "icon-grid-3"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "grid-3"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "marquee-row",
+          "archetype": "marquee-row"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/shop",
+      "title": "Shop All Skincare",
+      "purpose": "This page displays all available Lumen skincare products, allowing users to browse and discover items.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "centered-stack",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "grid-4"
+        },
+        {
+          "type": "trust_bar",
+          "layout_hint": "logo-strip"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "products"
+    },
+    {
+      "route": "/ingredients",
+      "title": "Our Clean Ingredients",
+      "purpose": "This page educates users about the natural and clean ingredients used in Lumen products, emphasizing transparency and efficacy.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "split-image-left",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "philosophy",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "how_it_works",
+          "layout_hint": "numbered-stepper",
+          "archetype": "numbered-stepper"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/quiz",
+      "title": "Skincare Routine Quiz",
+      "purpose": "A guided quiz to help users identify their skin type and recommend personalized Lumen product routines.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "centered-stack",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "how_it_works",
+          "layout_hint": "numbered-stepper",
+          "archetype": "numbered-stepper"
+        },
+        {
+          "type": "lead_form",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "big-quote-portrait",
+          "archetype": "big-quote-portrait"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/sustainability",
+      "title": "Our Sustainability Journey",
+      "purpose": "Details Lumen's commitment to environmental responsibility, ethical sourcing, and sustainable practices.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "split-image-right",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "story",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "stats",
+          "layout_hint": "stat-band"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "bento-mosaic"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/stores",
+      "title": "Find a Lumen Store",
+      "purpose": "Provides information on physical retail locations where Lumen products can be purchased.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "centered-stack",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "locations",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/about",
+      "title": "About Lumen",
+      "purpose": "Shares the brand's story, mission, and values, building a deeper connection with the audience.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "asymmetric-split",
+          "archetype": "asymmetric-split"
+        },
+        {
+          "type": "story",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "philosophy",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-3"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/contact",
+      "title": "Contact Us",
+      "purpose": "Provides various methods for customers to get in touch with Lumen for support or inquiries.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "centered-stack",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "contact_form",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "locations",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        }
+      ],
+      "detail_template": false
+    }
+  ]
+}

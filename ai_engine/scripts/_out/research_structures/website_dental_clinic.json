@@ -1,0 +1,226 @@
+{
+  "brand": {
+    "name": "Bloom Dental Austin",
+    "tagline": "Modern dentistry with a warm touch, right here in Austin.",
+    "domain": "healthcare"
+  },
+  "pages": [
+    {
+      "route": "/",
+      "title": "Bloom Dental Austin - Modern Dentistry",
+      "purpose": "The homepage introduces Bloom Dental, highlights key services, showcases the modern and warm brand personality, and provides clear calls to action for booking appointments.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "trust_bar",
+          "layout_hint": "logo-strip"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "icon-grid-3",
+          "archetype": "icon-grid-3"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "carousel",
+          "archetype": "glass-cards-bg"
+        },
+        {
+          "type": "locations",
+          "layout_hint": "grid-2"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/services",
+      "title": "Our Dental Services - Bloom Dental",
+      "purpose": "This page details the range of dental services offered by Bloom Dental, helping patients understand their options and find the care they need.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "asymmetric-split",
+          "archetype": "asymmetric-split"
+        },
+        {
+          "type": "features",
+          "layout_hint": "split-image-bullets",
+          "archetype": "split-image-bullets"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "bento-mosaic",
+          "archetype": "bento-mosaic"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "services"
+    },
+    {
+      "route": "/team",
+      "title": "Meet Our Team - Bloom Dental",
+      "purpose": "Introduces the skilled and compassionate dental professionals at Bloom Dental, building trust and showcasing the human element of the practice.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "oversized-watermark",
+          "archetype": "oversized-watermark"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-3"
+        },
+        {
+          "type": "story",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "marquee-row",
+          "archetype": "marquee-row"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "team_members"
+    },
+    {
+      "route": "/gallery",
+      "title": "Smile Gallery - Bloom Dental Before & After",
+      "purpose": "Showcases before-and-after photos of successful treatments, demonstrating the quality and transformative results of Bloom Dental's work.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "type-wrapping-product",
+          "archetype": "type-wrapping-product"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "asymmetric-12col",
+          "archetype": "asymmetric-12col"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "big-quote-portrait",
+          "archetype": "big-quote-portrait"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/patient-info",
+      "title": "Patient Information & Resources - Bloom Dental",
+      "purpose": "Provides essential information for patients, including details on insurance, financing options, and frequently asked questions to streamline their experience.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "asymmetric-split",
+          "archetype": "asymmetric-split"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "split-image-bullets",
+          "archetype": "split-image-bullets"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/locations",
+      "title": "Our Austin Locations - Bloom Dental",
+      "purpose": "Lists all Bloom Dental practice locations in Austin, providing addresses, contact details, and maps for easy patient access.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "locations",
+          "layout_hint": "grid-2"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/contact",
+      "title": "Contact Us - Bloom Dental Austin",
+      "purpose": "Offers various ways for patients to get in touch with Bloom Dental, including a booking form, phone numbers, and location details.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "asymmetric-split",
+          "archetype": "asymmetric-split"
+        },
+        {
+          "type": "booking_form",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "locations",
+          "layout_hint": "grid-2"
+        },
+        {
+          "type": "contact",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    }
+  ]
+}

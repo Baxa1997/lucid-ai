@@ -1,0 +1,345 @@
+{
+  "brand": {
+    "name": "Pelagia Suites",
+    "tagline": "A Sanctuary Above the Aegean",
+    "description": "Experience the pinnacle of Oia luxury with private infinity pools, bespoke concierge service, and unobstructed caldera views.",
+    "domain": "pelagiasuites.com",
+    "business_info": {
+      "address": "Oia, Santorini 84702, Greece",
+      "phone": "+30 22860 71234",
+      "email": "stay@pelagiasuites.com",
+      "hours": "Reception: 24/7\nCheck-in: 15:00\nCheck-out: 11:00"
+    },
+    "social": [
+      {
+        "label": "instagram",
+        "href": "https://instagram.com/pelagiasuites"
+      },
+      {
+        "label": "facebook",
+        "href": "https://facebook.com/pelagiasuites"
+      }
+    ]
+  },
+  "palette": {
+    "primary": "40 20% 95%",
+    "secondary": "210 40% 30%",
+    "accent": "25 60% 50%",
+    "background": "0 0% 98%",
+    "foreground": "210 20% 15%",
+    "muted": "40 15% 85%",
+    "border": "40 10% 80%",
+    "card": "0 0% 100%"
+  },
+  "typography": {
+    "heading_font": "Cormorant Garamond",
+    "body_font": "DM Sans",
+    "scale": "expressive"
+  },
+  "motif": "editorial",
+  "design_system": {
+    "motion": "organic",
+    "accent_shape": "rounded",
+    "surface": "flat",
+    "image_treatment": "natural",
+    "section_rhythm": "balanced"
+  },
+  "personality": {
+    "tone": "luxurious",
+    "vibe_keywords": [
+      "intimate",
+      "serene",
+      "elegant",
+      "timeless"
+    ],
+    "energy": "low"
+  },
+  "header_archetype": "transparent-pill",
+  "footer_archetype": "minimalist-row",
+  "page_features": [
+    "sticky_cta",
+    "floating_chat"
+  ],
+  "references": [
+    {
+      "url": "https://www.katikies.com",
+      "name": "Katikies",
+      "why": "Mastery of the Santorini luxury aesthetic with immersive video and elegant scroll reveals.",
+      "section_order": [
+        "hero",
+        "booking_bar",
+        "philosophy",
+        "suites",
+        "experiences",
+        "offers"
+      ],
+      "notable_features": [
+        "Full-screen video hero",
+        "Sticky horizontal booking widget"
+      ]
+    },
+    {
+      "url": "https://canaves.com",
+      "name": "Canaves Oia",
+      "why": "Direct competitor demonstrating high-ticket conversion funnels and trust signals.",
+      "section_order": [
+        "hero",
+        "intro",
+        "suites_grid",
+        "dining",
+        "offers"
+      ],
+      "notable_features": [
+        "Parallax scrolling",
+        "Hover-to-reveal suite details"
+      ]
+    },
+    {
+      "url": "https://www.aman.com",
+      "name": "Aman Resorts",
+      "why": "The gold standard for ultra-luxury minimalism and massive edge-to-edge photography.",
+      "section_order": [
+        "hero",
+        "philosophy",
+        "destinations",
+        "journal"
+      ],
+      "notable_features": [
+        "Ultra-minimalist UI",
+        "Slow fade-in animations"
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "id": "hero-caldera",
+      "type": "hero",
+      "role": "Immersive first impression with direct booking capability",
+      "headline": "Where the Horizon Meets the Soul",
+      "subheadline": "Boutique luxury suites carved into the Oia cliffs, offering the most iconic sunset views in Santorini.",
+      "layout_hint": "full-bleed-overlay",
+      "archetype": "video-mask",
+      "interactivity": "filter widget for dates and guests with instant availability check",
+      "cta": {
+        "label": "Check Availability",
+        "href": "#booking"
+      },
+      "image_queries": [
+        "santorini oia caldera sunset infinity pool"
+      ],
+      "items": []
+    },
+    {
+      "id": "trust-ticker",
+      "type": "trust_bar",
+      "role": "Establish immediate luxury authority",
+      "headline": "Recognized Excellence",
+      "layout_hint": "logo-strip",
+      "interactivity": "subtle auto-scroll of prestige logos",
+      "items": [
+        {
+          "title": "Cond\u00e9 Nast Traveler",
+          "label": "Readers' Choice 2023"
+        },
+        {
+          "title": "Small Luxury Hotels",
+          "label": "Member Property"
+        },
+        {
+          "title": "Travel + Leisure",
+          "label": "World's Best Awards"
+        },
+        {
+          "title": "Michelin Guide",
+          "label": "Selected Hotel"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "our-philosophy",
+      "type": "philosophy",
+      "nav_label": "Story",
+      "role": "Emotional hook and brand narrative",
+      "headline": "The Art of Cycladic Living",
+      "subheadline": "Pelagia Suites is more than a stay; it is a curated experience of silence, light, and the deep blue of the Aegean.",
+      "layout_hint": "split-image-right",
+      "archetype": "type-wrapping-product",
+      "interactivity": "parallax image movement on scroll",
+      "image_queries": [
+        "white cycladic architecture detail blue sky"
+      ],
+      "items": []
+    },
+    {
+      "id": "suite-collection",
+      "type": "features",
+      "nav_label": "Suites",
+      "role": "Showcase accommodation types and luxury amenities",
+      "headline": "Sanctuaries of Serenity",
+      "subheadline": "Each suite features a private heated infinity pool and a terrace overlooking the volcanic caldera.",
+      "layout_hint": "grid-3",
+      "archetype": "icon-grid-3",
+      "interactivity": "hover cards reveal square footage and specific pool dimensions",
+      "items": [
+        {
+          "title": "Infinity Pool Suite",
+          "description": "A 45sqm retreat featuring a king-size bed, open-plan living area, and a private cliffside pool.",
+          "image_query": "luxury hotel suite santorini private pool"
+        },
+        {
+          "title": "Honeymoon Cave Suite",
+          "description": "Carved into the rock for ultimate privacy, featuring a spa-inspired bathroom and sunset terrace.",
+          "image_query": "santorini cave suite interior luxury"
+        },
+        {
+          "title": "The Pelagia Villa",
+          "description": "Our flagship two-bedroom residence with an expansive deck and 270-degree Aegean views.",
+          "image_query": "luxury villa santorini terrace sunset"
+        }
+      ],
+      "image_queries": [
+        "luxury hotel suite santorini private pool",
+        "santorini cave suite interior luxury",
+        "luxury villa santorini terrace sunset"
+      ]
+    },
+    {
+      "id": "direct-booking-perks",
+      "type": "mid_cta_banner",
+      "role": "Incentivize direct conversion over OTAs",
+      "headline": "Book Direct for Exclusive Privileges",
+      "subheadline": "Enjoy a complimentary airport transfer and a bottle of local Assyrtiko wine upon arrival.",
+      "layout_hint": "stat-band",
+      "interactivity": "smooth-scroll to hero booking widget",
+      "cta": {
+        "label": "Reserve Your Stay",
+        "href": "#hero-caldera"
+      },
+      "items": [],
+      "image_queries": []
+    },
+    {
+      "id": "curated-experiences",
+      "type": "process",
+      "nav_label": "Experiences",
+      "role": "Lifestyle and upsell services",
+      "headline": "Tailored Moments",
+      "subheadline": "From private yacht charters to cliffside wine tastings, we curate your perfect Santorini journey.",
+      "layout_hint": "carousel",
+      "archetype": "numbered-stepper",
+      "interactivity": "horizontal drag carousel with snap-to-item",
+      "items": [
+        {
+          "title": "Private Yachting",
+          "description": "Sail the caldera at sunset on our private catamaran with a personal chef.",
+          "value": "01",
+          "image_query": "luxury catamaran santorini sailing"
+        },
+        {
+          "title": "Cave Spa Rituals",
+          "description": "Holistic treatments using local volcanic minerals and organic Mediterranean oils.",
+          "value": "02",
+          "image_query": "luxury spa cave santorini"
+        },
+        {
+          "title": "Candlelit Dining",
+          "description": "A private six-course degustation menu served on your suite's terrace.",
+          "value": "03",
+          "image_query": "romantic dinner santorini terrace sunset"
+        }
+      ],
+      "image_queries": [
+        "luxury catamaran santorini sailing",
+        "luxury spa cave santorini",
+        "romantic dinner santorini terrace sunset"
+      ]
+    },
+    {
+      "id": "visual-gallery",
+      "type": "gallery",
+      "nav_label": "Gallery",
+      "role": "Visual validation and social proof",
+      "headline": "A Glimpse of Paradise",
+      "layout_hint": "grid-4",
+      "archetype": "bento-mosaic",
+      "interactivity": "lightbox gallery with prev/next keyboard nav",
+      "image_queries": [
+        "santorini white church blue dome",
+        "luxury breakfast santorini balcony",
+        "oia santorini night lights",
+        "infinity pool edge aegean sea",
+        "greek salad gourmet plating",
+        "boutique hotel reception luxury"
+      ],
+      "items": []
+    },
+    {
+      "id": "guest-questions",
+      "type": "faq",
+      "nav_label": "FAQ",
+      "role": "Remove booking friction",
+      "headline": "Essential Information",
+      "layout_hint": "accordion",
+      "interactivity": "FAQ accordion with smooth open/close",
+      "items": [
+        {
+          "title": "Is the hotel adults-only?",
+          "description": "To maintain a serene atmosphere, Pelagia Suites welcomes guests aged 16 and older."
+        },
+        {
+          "title": "How do I arrange an airport transfer?",
+          "description": "Simply provide your flight details 48 hours in advance, and our private chauffeur will meet you at JTR Airport."
+        },
+        {
+          "title": "Are the pools heated?",
+          "description": "Yes, all private suite pools are maintained at a comfortable 28\u00b0C year-round."
+        },
+        {
+          "title": "What is the cancellation policy?",
+          "description": "We offer flexible cancellation up to 21 days before arrival for most seasonal bookings."
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "footer",
+      "type": "footer",
+      "role": "site-wide nav",
+      "headline": "Pelagia Suites",
+      "subheadline": "",
+      "layout_hint": "footer-columns",
+      "items": [],
+      "image_queries": []
+    }
+  ],
+  "ctas": {
+    "primary": {
+      "label": "Book Now",
+      "href": "#hero-caldera"
+    },
+    "secondary": {
+      "label": "Learn more",
+      "href": "#features"
+    }
+  },
+  "domain_keywords": [
+    "luxury santorini hotel",
+    "oia boutique suites",
+    "caldera view infinity pool",
+    "greek island luxury travel"
+  ],
+  "design_tokens": {
+    "card_class": "bg-card rounded-xl",
+    "button_radius_class": "rounded-md",
+    "image_radius_class": "rounded-xl",
+    "section_padding_class": "py-16 sm:py-20 lg:py-24",
+    "transition_class": "transition-all duration-700 ease-out",
+    "hover_lift_class": "hover:-translate-y-1 hover:shadow-md",
+    "_resolved_accent_shape": "rounded",
+    "_resolved_surface": "flat",
+    "_resolved_motion": "organic",
+    "_resolved_section_rhythm": "balanced",
+    "_resolved_image_treatment": "natural"
+  }
+}

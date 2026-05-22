@@ -1,0 +1,263 @@
+{
+  "brand": {
+    "name": "Quanta Analytics",
+    "tagline": "Unlock the power of your data with intelligent analytics and actionable insights.",
+    "domain": "saas"
+  },
+  "pages": [
+    {
+      "route": "/",
+      "title": "Home",
+      "purpose": "The main landing page, introducing Quanta's core value proposition and guiding users to key areas of the website.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "icon-grid-3",
+          "archetype": "icon-grid-3"
+        },
+        {
+          "type": "features",
+          "layout_hint": "split-image-bullets",
+          "archetype": "split-image-bullets"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "marquee-row",
+          "archetype": "marquee-row"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/product",
+      "title": "Product",
+      "purpose": "Showcases the core features and capabilities of the Quanta analytics platform.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "asymmetric-split",
+          "archetype": "asymmetric-split"
+        },
+        {
+          "type": "features",
+          "layout_hint": "numbered-stepper",
+          "archetype": "numbered-stepper"
+        },
+        {
+          "type": "how_it_works",
+          "layout_hint": "split-image-bullets",
+          "archetype": "split-image-bullets"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "bento-mosaic"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "two-column"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "products"
+    },
+    {
+      "route": "/pricing",
+      "title": "Pricing",
+      "purpose": "Details the different pricing plans available for Quanta, outlining features and costs.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "centered-stack",
+          "archetype": "type-wrapping-product"
+        },
+        {
+          "type": "pricing",
+          "layout_hint": "comparison-table"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/customers",
+      "title": "Customers",
+      "purpose": "Highlights successful customer stories and showcases logos of companies using Quanta.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "oversized-watermark"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "big-quote-portrait",
+          "archetype": "big-quote-portrait"
+        },
+        {
+          "type": "logo-strip",
+          "layout_hint": "carousel"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "two-column"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "customers"
+    },
+    {
+      "route": "/integrations",
+      "title": "Integrations",
+      "purpose": "Lists and describes the various third-party applications and services that integrate with Quanta.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "centered-stack",
+          "archetype": "type-wrapping-product"
+        },
+        {
+          "type": "features",
+          "layout_hint": "grid-3",
+          "archetype": "icon-grid-3"
+        },
+        {
+          "type": "how_it_works",
+          "layout_hint": "split-image-left",
+          "archetype": "split-image-bullets"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/security",
+      "title": "Security",
+      "purpose": "Outlines Quanta's commitment to data security, privacy, and compliance.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "video-mask"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "numbered-stepper",
+          "archetype": "numbered-stepper"
+        },
+        {
+          "type": "features",
+          "layout_hint": "split-image-right",
+          "archetype": "split-image-bullets"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/careers",
+      "title": "Careers",
+      "purpose": "Showcases career opportunities at Quanta, highlighting company culture and benefits.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "asymmetric-split",
+          "archetype": "asymmetric-split"
+        },
+        {
+          "type": "story",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-3"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "icon-grid-3",
+          "archetype": "icon-grid-3"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/about",
+      "title": "About Us",
+      "purpose": "Tells the story of Quanta, its mission, vision, and the team behind the product.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "oversized-watermark"
+        },
+        {
+          "type": "story",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "philosophy",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-4"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "two-column"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/contact",
+      "title": "Contact Us",
+      "purpose": "Provides various methods for users to get in touch with the Quanta team.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "centered-stack",
+          "archetype": "type-wrapping-product"
+        },
+        {
+          "type": "contact",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        }
+      ],
+      "detail_template": false
+    }
+  ]
+}

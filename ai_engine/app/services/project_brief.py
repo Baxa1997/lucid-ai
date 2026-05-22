@@ -277,6 +277,29 @@ OUTPUT: just the JSON object. No prose, no markdown fences.
 
 # ── Public entry point ───────────────────────────────────────────────
 
+async def _emit_fallback_warning(websocket: Any, reason: str) -> None:
+    """Surface a project-brief fallback to the user via the workspace chat.
+
+    Without this, when Gemini fails the pipeline silently uses the canned
+    `_FALLBACK_PAGES_BY_PURPOSE["lead_generation"]` template — the user
+    sees a generic 4-page brochure regardless of their actual prompt.
+    """
+    if websocket is None:
+        return
+    try:
+        await websocket.send_json({
+            "type": "warning",
+            "code": "FALLBACK_PROJECT_BRIEF",
+            "message": (
+                f"⚠️ Project brief unavailable ({reason}). "
+                "Using a generic lead-generation template — your prompt's domain wasn't applied. "
+                "Check ai_engine logs (usually Vertex ADC, quota, or token truncation)."
+            ),
+        })
+    except Exception:
+        pass
+
+
 async def build_project_brief(
     *,
     description: str,
@@ -322,6 +345,7 @@ async def build_project_brief(
     raw = await _structured_call(prompt, timeout_s)
     if not raw:
         logger.warning("project_brief: Gemini returned empty — fallback")
+        await _emit_fallback_warning(websocket, "Gemini brief call returned empty")
         return _fallback_brief(description, domain, primary_purpose)
 
     try:
@@ -329,6 +353,7 @@ async def build_project_brief(
     except json.JSONDecodeError as exc:
         logger.warning("project_brief: JSON parse failed (%s) — fallback. Head: %s",
                        exc, raw[:200])
+        await _emit_fallback_warning(websocket, f"Brief JSON parse failed: {str(exc)[:80]}")
         return _fallback_brief(description, domain, primary_purpose)
 
     brief = _normalize_brief(parsed, description, domain, primary_purpose)

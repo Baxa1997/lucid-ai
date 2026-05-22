@@ -1,0 +1,355 @@
+{
+  "brand": {
+    "name": "Ana Reyes Photography",
+    "tagline": "Documentary Wedding & Portrait Photography in Brooklyn",
+    "description": "Capturing honest, cinematic, and unposed love stories for non-traditional couples across Brooklyn and beyond.",
+    "domain": "anareyesphoto.com",
+    "business_info": {
+      "address": "DUMBO, Brooklyn, NY 11201",
+      "phone": "718-555-0192",
+      "email": "hello@anareyesphoto.com",
+      "hours": "Monday - Friday: 10am - 6pm\nSaturday - Sunday: Event Bookings Only"
+    },
+    "social": [
+      {
+        "label": "instagram",
+        "href": "https://instagram.com/anareyesphoto"
+      }
+    ]
+  },
+  "palette": {
+    "primary": "25 20% 20%",
+    "secondary": "30 15% 40%",
+    "accent": "15 40% 60%",
+    "background": "40 20% 96%",
+    "foreground": "25 25% 15%",
+    "muted": "35 15% 85%",
+    "border": "30 10% 80%",
+    "card": "40 25% 98%"
+  },
+  "typography": {
+    "heading_font": "Cormorant Garamond",
+    "body_font": "Inter",
+    "scale": "expressive"
+  },
+  "motif": "editorial",
+  "design_system": {
+    "motion": "subtle",
+    "accent_shape": "hairline",
+    "surface": "flat",
+    "image_treatment": "natural",
+    "section_rhythm": "airy"
+  },
+  "personality": {
+    "tone": "confident",
+    "vibe_keywords": [
+      "authentic",
+      "editorial",
+      "intimate",
+      "nostalgic",
+      "refined"
+    ],
+    "energy": "medium"
+  },
+  "header_archetype": "centered-logo",
+  "footer_archetype": "minimalist-row",
+  "references": [
+    {
+      "url": "https://baileyqphoto.com",
+      "name": "Bailey Q Photo",
+      "why": "Perfect Brooklyn archetype focusing on values-driven couples and personality-driven differentiation.",
+      "section_order": [
+        "hero",
+        "value_prop",
+        "gallery",
+        "testimonials",
+        "story",
+        "footer"
+      ],
+      "notable_features": [
+        "Values-driven messaging",
+        "Dynamic testimonial slider",
+        "Sticky CTA"
+      ]
+    },
+    {
+      "url": "https://josemelgarejo.com",
+      "name": "Jose Melgarejo",
+      "why": "Showcases high-end documentary positioning using a clean, uncluttered editorial UX.",
+      "section_order": [
+        "hero",
+        "philosophy",
+        "gallery",
+        "story",
+        "footer"
+      ],
+      "notable_features": [
+        "Minimalist layout",
+        "High-end documentary feel",
+        "Integrated blog"
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "id": "hero-cinematic",
+      "type": "hero",
+      "role": "Establish location and documentary style immediately.",
+      "headline": "Honest imagery for the unposed and deeply in love.",
+      "subheadline": "Documentary wedding and portrait photography for couples who value presence over perfection in Brooklyn and beyond.",
+      "layout_hint": "full-bleed-overlay",
+      "archetype": "full-bleed-overlay",
+      "interactivity": "slow parallax scroll on background image",
+      "cta": {
+        "label": "Inquire for 2025",
+        "href": "#contact"
+      },
+      "image_queries": [
+        "brooklyn wedding couple candid street"
+      ],
+      "items": []
+    },
+    {
+      "id": "authority-bar",
+      "type": "trust_bar",
+      "role": "Build immediate industry credibility.",
+      "nav_label": "Press",
+      "headline": "As seen in leading publications",
+      "layout_hint": "logo-strip",
+      "interactivity": "subtle fade-in on scroll",
+      "items": [
+        {
+          "title": "Vogue Weddings",
+          "label": "Vogue",
+          "description": "Recognized for editorial excellence in documentary storytelling."
+        },
+        {
+          "title": "The Knot",
+          "label": "The Knot",
+          "description": "Named Best of Weddings for three consecutive years."
+        },
+        {
+          "title": "Carats & Cake",
+          "label": "Carats & Cake",
+          "description": "Featured for premier Brooklyn venue expertise."
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "philosophy-approach",
+      "type": "philosophy",
+      "role": "Address the 'anti-awkward' guarantee.",
+      "nav_label": "Approach",
+      "headline": "The Anti-Awkward Guarantee",
+      "subheadline": "I won't make you pose like a mannequin. I capture the quiet, messy, and electric moments in between.",
+      "layout_hint": "split-image-right",
+      "archetype": "split-image-bullets",
+      "interactivity": "text reveals on scroll with a soft blur-in effect",
+      "items": [
+        {
+          "title": "Documentary Focus",
+          "description": "I prioritize real emotions over stiff poses, ensuring your gallery feels like you."
+        },
+        {
+          "title": "Calming Presence",
+          "description": "My goal is to be the most grounding person in the room on your wedding day."
+        }
+      ],
+      "image_queries": [
+        "candid wedding laughter"
+      ]
+    },
+    {
+      "id": "service-paths",
+      "type": "value_prop",
+      "role": "Segment users into Weddings or Portraits.",
+      "nav_label": "Services",
+      "headline": "Ways to work together",
+      "layout_hint": "grid-2",
+      "archetype": "icon-grid-3",
+      "interactivity": "hovering over a card zooms the background image slightly",
+      "items": [
+        {
+          "title": "Weddings & Elopements",
+          "description": "Full-day coverage and intimate elopements for the modern couple.",
+          "image_query": "brooklyn elopement city hall"
+        },
+        {
+          "title": "Portraits & Branding",
+          "description": "Elevated lifestyle sessions for creatives and couples in the city.",
+          "image_query": "brooklyn rooftop portrait woman"
+        }
+      ],
+      "image_queries": [
+        "brooklyn elopement city hall",
+        "brooklyn rooftop portrait woman"
+      ]
+    },
+    {
+      "id": "portfolio-grid",
+      "type": "gallery",
+      "role": "Visual proof of work quality.",
+      "nav_label": "Portfolio",
+      "headline": "Recent Love Stories",
+      "layout_hint": "grid-3",
+      "archetype": "bento-mosaic",
+      "interactivity": "lightbox gallery with prev/next keyboard navigation",
+      "image_queries": [
+        "wedding couple kissing brooklyn bridge",
+        "bride getting ready candid",
+        "wedding reception dancing motion blur",
+        "groom portrait urban",
+        "wedding rings on vintage tray",
+        "couple walking in dumbo brooklyn"
+      ],
+      "items": []
+    },
+    {
+      "id": "mid-page-cta",
+      "type": "mid_cta_banner",
+      "role": "Re-engage users halfway down.",
+      "headline": "Limited 2025 Dates Available",
+      "subheadline": "I only take a select number of weddings each year to ensure every couple gets my full creative energy.",
+      "layout_hint": "centered-stack",
+      "interactivity": "smooth-scroll to contact form",
+      "cta": {
+        "label": "Check Availability",
+        "href": "#contact"
+      },
+      "items": [],
+      "image_queries": []
+    },
+    {
+      "id": "about-ana",
+      "type": "story",
+      "role": "Humanize the brand and build trust.",
+      "nav_label": "About",
+      "headline": "Hey, I'm Ana",
+      "subheadline": "A Brooklyn-based photographer with a love for 35mm film, strong coffee, and the way light hits the brownstones at 4 PM.",
+      "layout_hint": "split-image-left",
+      "interactivity": "image has a subtle film grain overlay effect",
+      "image_queries": [
+        "female photographer portrait brooklyn"
+      ],
+      "items": []
+    },
+    {
+      "id": "client-praise",
+      "type": "testimonials",
+      "role": "Social proof and emotional validation.",
+      "nav_label": "Reviews",
+      "headline": "What they're saying",
+      "layout_hint": "carousel",
+      "archetype": "big-quote-portrait",
+      "interactivity": "testimonials carousel with manual arrows and autoplay",
+      "items": [
+        {
+          "title": "Sarah & James",
+          "description": "Ana made us feel so comfortable. We forgot she was even there, and the photos are more beautiful than we imagined.",
+          "label": "Brooklyn Winery Wedding",
+          "value": "5.0"
+        },
+        {
+          "title": "Marcus T.",
+          "description": "The best investment we made for our wedding. Ana's eye for candid moments is truly unmatched in NYC.",
+          "label": "Prospect Park Elopement",
+          "value": "5.0"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "booking-faq",
+      "type": "faq",
+      "role": "Address common objections before inquiry.",
+      "nav_label": "FAQ",
+      "headline": "Common Questions",
+      "layout_hint": "accordion",
+      "interactivity": "FAQ accordion with smooth open/close",
+      "items": [
+        {
+          "title": "When will we receive our photos?",
+          "description": "You'll receive a sneak peek within 48 hours, and your full high-resolution gallery within 6-8 weeks."
+        },
+        {
+          "title": "Do you travel outside of Brooklyn?",
+          "description": "Absolutely. While I'm based in NYC, I frequently travel for weddings across the Hudson Valley and beyond."
+        },
+        {
+          "title": "Do you offer film photography?",
+          "description": "Yes! I love shooting 35mm film and offer it as an add-on to any wedding or portrait package."
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "contact",
+      "type": "contact_form",
+      "role": "Primary conversion point.",
+      "nav_label": "Contact",
+      "headline": "Let's tell your story",
+      "subheadline": "Fill out the form below and I'll get back to you within 24 hours to schedule a coffee chat.",
+      "layout_hint": "two-column",
+      "interactivity": "form validation with success message",
+      "items": [
+        {
+          "title": "Full Name"
+        },
+        {
+          "title": "Email Address"
+        },
+        {
+          "title": "Event Date"
+        },
+        {
+          "title": "Tell me about your vision"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "footer",
+      "type": "footer",
+      "role": "site-wide nav",
+      "headline": "Ana Reyes Photography",
+      "subheadline": "",
+      "layout_hint": "footer-columns",
+      "items": [],
+      "image_queries": []
+    }
+  ],
+  "page_features": [
+    "sticky_cta"
+  ],
+  "ctas": {
+    "primary": {
+      "label": "Inquire Now",
+      "href": "#contact"
+    },
+    "secondary": {
+      "label": "Learn more",
+      "href": "#features"
+    }
+  },
+  "domain_keywords": [
+    "brooklyn wedding photography",
+    "documentary wedding photographer nyc",
+    "editorial portrait brooklyn",
+    "35mm film wedding photography"
+  ],
+  "design_seed": 7330,
+  "design_tokens": {
+    "card_class": "bg-card rounded-lg",
+    "button_radius_class": "rounded-md",
+    "image_radius_class": "rounded-md",
+    "section_padding_class": "py-24 sm:py-32 lg:py-40",
+    "transition_class": "transition-all duration-300",
+    "hover_lift_class": "hover:-translate-y-0.5 hover:shadow-md",
+    "_resolved_accent_shape": "hairline",
+    "_resolved_surface": "flat",
+    "_resolved_motion": "subtle",
+    "_resolved_section_rhythm": "airy",
+    "_resolved_image_treatment": "natural"
+  }
+}

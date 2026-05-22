@@ -26,6 +26,9 @@ import {
   MousePointer2,
   ChevronDown,
   Maximize,
+  Minimize2,
+  Tablet,
+  Smartphone,
   Loader2,
   Check,
   ArrowRight,
@@ -39,6 +42,7 @@ import TaskProgress from "@/components/TaskProgress";
 import BuildingScreen from "@/components/workspace/BuildingScreen";
 import ProjectDashboard from "@/components/ProjectDashboard";
 import DiffViewer from "@/components/DiffViewer";
+import PreviewEditOverlay from "@/components/workspace/PreviewEditOverlay";
 
 // ── PlanReviewPanel — full right-panel plan review UI ────────
 function PlanReviewPanel({planData, onConfirm, onReject}) {
@@ -460,11 +464,246 @@ export default function RightPanel() {
     // ── Per-file content + metrics (powers DiffViewer in the Code tab) ──
     fileContents,
     fileMetrics,
+    // Click-to-edit (Base44 flow)
+    editSelection,
+    setEditSelection,
+    editSelectMode,
+    setEditSelectMode,
+    clearEditSelection,
   } = useWorkspace();
 
   // ── Code-tab view mode toggle: 'diff' (live agent edits) vs 'source' (raw)
   // Defaults to diff when the agent has touched a file, source otherwise.
   const [codeViewMode, setCodeViewMode] = useState("diff");
+
+  // ── Transient hover overlay for the Base44-style inline editor.
+  // The iframe streams hover events; we render a thin outline that
+  // tracks the cursor inside the preview while select mode is on.
+  const [editHover, setEditHover] = useState(null);
+
+  // ── Preview viewport size + fullscreen ─────────────────────────
+  // The toolbar exposes two display controls:
+  //   • Sizes dropdown — Desktop (fill) / Tablet (768×1024) / Mobile (375×667).
+  //     Constrains the iframe so the user can sanity-check responsive layouts
+  //     without resizing the whole workspace.
+  //   • Fullscreen toggle — promotes the right panel to a viewport-filling
+  //     overlay so the preview gets the whole screen; Esc / the toolbar's
+  //     "Exit Preview" button restore the normal split layout.
+  const [previewSize, setPreviewSize] = useState("desktop");
+  const [previewFullscreen, setPreviewFullscreen] = useState(false);
+  const [sizeMenuOpen, setSizeMenuOpen] = useState(false);
+  const sizeMenuRef = useRef(null);
+
+  // Esc exits fullscreen. Skipped when the user is mid-edit (the
+  // PreviewEditOverlay also listens for Esc to clear its selection —
+  // we only swallow Esc here when fullscreen is the only active mode).
+  useEffect(() => {
+    if (!previewFullscreen) return undefined;
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      if (editSelection || editSelectMode) return;
+      setPreviewFullscreen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [previewFullscreen, editSelection, editSelectMode]);
+
+  // Close the sizes dropdown on outside click.
+  useEffect(() => {
+    if (!sizeMenuOpen) return undefined;
+    const onPointer = (e) => {
+      if (sizeMenuRef.current && !sizeMenuRef.current.contains(e.target)) {
+        setSizeMenuOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onPointer);
+    return () => window.removeEventListener("mousedown", onPointer);
+  }, [sizeMenuOpen]);
+
+  // Switching away from the Preview tab leaves fullscreen — otherwise
+  // the Code/Terminal panes would inherit the viewport-filling overlay.
+  useEffect(() => {
+    if (rightPanel !== "preview" && previewFullscreen) {
+      setPreviewFullscreen(false);
+    }
+  }, [rightPanel, previewFullscreen]);
+
+  // Preset viewport dimensions for the iframe device frame.
+  const PREVIEW_VIEWPORTS = {
+    desktop: { label: "Desktop", icon: Monitor, width: null, height: null },
+    tablet:  { label: "Tablet",  icon: Tablet,  width: 768,  height: 1024 },
+    mobile:  { label: "Mobile",  icon: Smartphone, width: 375, height: 667 },
+  };
+  const activeViewport = PREVIEW_VIEWPORTS[previewSize] || PREVIEW_VIEWPORTS.desktop;
+  const ActiveViewportIcon = activeViewport.icon;
+
+  // ── Click-to-edit (Base44 flow) ────────────────────────────────
+  // The "Edit" button in the preview toolbar enters a selection mode.
+  // We postMessage the iframe so the generated site's listener can
+  // intercept clicks; the site posts back the editable target which
+  // we surface as a chip above the chat input.
+  //
+  // Toggling the mode also posts immediately so the iframe enables/
+  // disables its click handlers in real time.
+  const toggleEditSelectMode = useCallback(() => {
+    setEditSelectMode((prev) => {
+      const next = !prev;
+      try {
+        const win = iframeRef?.current?.contentWindow;
+        if (win) {
+          win.postMessage(
+            { type: "lucid_set_edit_select_mode", enabled: next },
+            "*",
+          );
+        }
+      } catch {
+        /* cross-origin postMessage can never throw under this signature, but be safe */
+      }
+      return next;
+    });
+  }, [iframeRef, setEditSelectMode]);
+
+  // Re-post the mode after the iframe (re)loads so a refresh / nav
+  // doesn't leave the toolbar out of sync with the page's listener.
+  useEffect(() => {
+    const iframe = iframeRef?.current;
+    if (!iframe) return undefined;
+    const sync = () => {
+      try {
+        iframe.contentWindow?.postMessage(
+          { type: "lucid_set_edit_select_mode", enabled: editSelectMode },
+          "*",
+        );
+      } catch {
+        /* no-op */
+      }
+    };
+    iframe.addEventListener("load", sync);
+    return () => iframe.removeEventListener("load", sync);
+  }, [iframeRef, editSelectMode]);
+
+  // ── Base44-style overlay handlers ───────────────────────────
+  // Close = clear the selection on both sides AND leave select mode.
+  // The iframe-side listener tears down its hover handlers and the
+  // selected outline when it receives the matching messages.
+  const closeEditOverlay = useCallback(() => {
+    setEditSelection(null);
+    setEditHover(null);
+    setEditSelectMode(false);
+    try {
+      const win = iframeRef?.current?.contentWindow;
+      if (win) {
+        win.postMessage({ type: "lucid_clear_selection" }, "*");
+        win.postMessage(
+          { type: "lucid_set_edit_select_mode", enabled: false },
+          "*",
+        );
+      }
+    } catch {
+      /* no-op */
+    }
+  }, [iframeRef, setEditSelection, setEditSelectMode]);
+
+  // Submit from the overlay's inline "What to change?" input. Forwards
+  // the text into the main chat with the current selection attached as
+  // editable_target so the backend pipeline edits exactly that element.
+  // After firing we clear the overlay — the chat panel takes over.
+  const submitInlineEdit = useCallback(
+    (text) => {
+      if (!text || !editSelection) return;
+      sendMessage?.(text, [], {
+        mode: "edit",
+        editableTarget: editSelection,
+      });
+      closeEditOverlay();
+    },
+    [editSelection, sendMessage, closeEditOverlay],
+  );
+
+  // Listen for selection events from the generated site. Keyed by a
+  // ``lucid_`` prefix so we never collide with messages from unrelated
+  // origins (Vercel preview banners, Stripe iframes, etc.).
+  useEffect(() => {
+    const onMessage = (e) => {
+      const data = e?.data;
+      if (!data || typeof data !== "object") return;
+
+      // ── Persistent selection (click) ──────────────────────
+      if (data.type === "lucid_element_selected") {
+        const path = typeof data.path === "string" ? data.path.trim() : "";
+        if (!path) return;
+        // Two payload shapes coexist:
+        //   • Editable-wrapped element → {path, editableType, text, rect}
+        //   • Fuzzy fallback           → +{fuzzy, tag, className, src}
+        // Backend decodes both via _intent_from_editable_target.
+        setEditSelection({
+          path,
+          type: typeof data.editableType === "string" ? data.editableType : "text",
+          file: typeof data.file === "string" ? data.file : "",
+          text: typeof data.text === "string" ? data.text.slice(0, 200) : "",
+          fuzzy: Boolean(data.fuzzy),
+          tag: typeof data.tag === "string" ? data.tag : "",
+          className: typeof data.className === "string" ? data.className : "",
+          src: typeof data.src === "string" ? data.src : "",
+          rect: (data.rect && typeof data.rect === "object") ? {
+            x: Number(data.rect.x) || 0,
+            y: Number(data.rect.y) || 0,
+            width: Number(data.rect.width) || 0,
+            height: Number(data.rect.height) || 0,
+          } : null,
+        });
+        // Hover state is moot once the user has clicked.
+        setEditHover(null);
+        // Stay in select mode — the overlay's X button is the explicit
+        // way to leave (matches Base44 behaviour).
+        return;
+      }
+
+      // ── Hover preview outline (live) ──────────────────────
+      if (data.type === "lucid_element_hover") {
+        if (!data.rect) return;
+        setEditHover({
+          rect: {
+            x: Number(data.rect.x) || 0,
+            y: Number(data.rect.y) || 0,
+            width: Number(data.rect.width) || 0,
+            height: Number(data.rect.height) || 0,
+          },
+          tag: typeof data.tag === "string" ? data.tag : "",
+          hasEditablePath: Boolean(data.hasEditablePath),
+        });
+        return;
+      }
+      if (data.type === "lucid_element_hover_clear") {
+        setEditHover(null);
+        return;
+      }
+
+      // ── Selection moved (iframe scroll/resize) ─────────────
+      if (data.type === "lucid_selection_rect_update") {
+        if (!data.rect) return;
+        setEditSelection((prev) => (prev ? {
+          ...prev,
+          rect: {
+            x: Number(data.rect.x) || 0,
+            y: Number(data.rect.y) || 0,
+            width: Number(data.rect.width) || 0,
+            height: Number(data.rect.height) || 0,
+          },
+        } : prev));
+        return;
+      }
+
+      // ── User pressed Esc inside the iframe ─────────────────
+      if (data.type === "lucid_element_deselected") {
+        setEditSelection(null);
+        setEditHover(null);
+        return;
+      }
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [iframeRef, setEditSelection, setEditSelectMode]);
 
   // ── Latched live-preview URL ─────────────────────────────────────
   // The iframe must NOT unmount on every transient null (auto-restart, WS
@@ -576,12 +815,31 @@ export default function RightPanel() {
 
   // ── Render ──────────────────────────────────────────────
   return (
-    <div className="flex-1 flex flex-col min-w-0 bg-[#f1f2f6] dark:bg-[#0d1117] m-[12px] border border-[#e3e5eb] dark:border-[#1c2128] rounded-xl overflow-hidden">
+    <div
+      className={cn(
+        "flex flex-col min-w-0 bg-[#f1f2f6] dark:bg-[#0d1117] overflow-hidden",
+        previewFullscreen
+          ? "fixed inset-0 z-[200] m-0 border-0 rounded-none"
+          : "flex-1 m-[12px] border border-[#e3e5eb] dark:border-[#1c2128] rounded-xl",
+      )}>
       {/* Preview toolbar — only shown when Preview tab is active */}
       {rightPanel === "preview" && (
         <div className="shrink-0 h-[42px] flex items-center justify-between px-3 bg-[#fff] dark:bg-[#161b22] border-b border-[#e3e5eb] dark:border-[#2d333b]">
           <div className="flex items-center gap-0.5 flex-1">
-            <button className="flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[13px] font-medium text-[#374151] dark:text-slate-200 hover:bg-black/5 dark:hover:bg-white/[0.06] transition-colors">
+            <button
+              type="button"
+              onClick={toggleEditSelectMode}
+              title={
+                editSelectMode
+                  ? "Click an element in the preview to edit it"
+                  : "Pick an element to edit"
+              }
+              className={cn(
+                "flex items-center gap-1.5 h-7 px-2.5 rounded-md text-[13px] font-medium transition-colors",
+                editSelectMode
+                  ? "bg-blue-600 text-white hover:bg-blue-700"
+                  : "text-[#374151] dark:text-slate-200 hover:bg-black/5 dark:hover:bg-white/[0.06]",
+              )}>
               <MousePointer2 className="w-3.5 h-3.5" />
               Edit
             </button>
@@ -668,13 +926,84 @@ export default function RightPanel() {
                 <div className="h-4 w-px bg-[#d1d5db] dark:bg-[#2d333b] mx-0.5" />
               </>
             )}
-            <button className="flex items-center gap-1 h-7 px-2 rounded-md text-[#6b7280] dark:text-slate-400 hover:bg-black/5 dark:hover:bg-white/[0.06] transition-colors">
-              <Monitor className="w-3.5 h-3.5" />
-              <ChevronDown className="w-3 h-3" />
-            </button>
+            {/* Viewport size dropdown — Desktop / Tablet / Mobile.
+                Constrains the iframe to common device widths so the
+                user can verify the preview's responsive behaviour
+                without resizing the whole workspace. */}
+            <div className="relative" ref={sizeMenuRef}>
+              <button
+                type="button"
+                onClick={() => setSizeMenuOpen((v) => !v)}
+                title={`Viewport: ${activeViewport.label}`}
+                className={cn(
+                  "flex items-center gap-1 h-7 px-2 rounded-md text-[12px] font-medium transition-colors",
+                  sizeMenuOpen || previewSize !== "desktop"
+                    ? "bg-black/5 dark:bg-white/[0.06] text-slate-800 dark:text-slate-100"
+                    : "text-[#6b7280] dark:text-slate-400 hover:bg-black/5 dark:hover:bg-white/[0.06]",
+                )}>
+                <ActiveViewportIcon className="w-3.5 h-3.5" />
+                <ChevronDown className="w-3 h-3" />
+              </button>
+              {sizeMenuOpen && (
+                <div className="absolute right-0 top-[calc(100%+4px)] w-40 bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-[#2d333b] rounded-lg shadow-[0_8px_24px_rgba(15,23,42,0.12)] z-30 py-1">
+                  {Object.entries(PREVIEW_VIEWPORTS).map(([key, vp]) => {
+                    const Icon = vp.icon;
+                    const active = previewSize === key;
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => {
+                          setPreviewSize(key);
+                          setSizeMenuOpen(false);
+                        }}
+                        className={cn(
+                          "w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-left transition-colors",
+                          active
+                            ? "bg-blue-50 dark:bg-blue-500/15 text-blue-600 dark:text-blue-300 font-semibold"
+                            : "text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-[#21262d]",
+                        )}>
+                        <Icon className="w-3.5 h-3.5" />
+                        <span className="flex-1">{vp.label}</span>
+                        {vp.width && (
+                          <span className="text-[10px] font-mono text-slate-400 dark:text-slate-500">
+                            {vp.width}
+                          </span>
+                        )}
+                        {active && <Check className="w-3 h-3 shrink-0" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
             <div className="h-4 w-px bg-[#d1d5db] dark:bg-[#2d333b] mx-0.5" />
-            <button className="h-7 w-7 flex items-center justify-center rounded-md text-[#6b7280] dark:text-slate-400 hover:bg-black/5 dark:hover:bg-white/[0.06] transition-colors">
-              <Maximize className="w-3.5 h-3.5" />
+            {/* Fullscreen toggle — promotes the right panel to a viewport
+                overlay. In fullscreen mode the button expands with a
+                visible "Exit Preview" label to telegraph the affordance
+                (Esc also works, but the label is the discoverable one). */}
+            <button
+              type="button"
+              onClick={() => setPreviewFullscreen((v) => !v)}
+              title={
+                previewFullscreen
+                  ? "Exit fullscreen preview (Esc)"
+                  : "Full width preview"
+              }
+              className={cn(
+                "flex items-center h-7 rounded-md transition-colors",
+                previewFullscreen
+                  ? "gap-1.5 px-2.5 bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:bg-slate-700 dark:hover:bg-slate-100 text-[12px] font-semibold"
+                  : "w-7 justify-center text-[#6b7280] dark:text-slate-400 hover:bg-black/5 dark:hover:bg-white/[0.06]",
+              )}>
+              {previewFullscreen ? (
+                <>
+                  <Minimize2 className="w-3.5 h-3.5" />
+                  Exit Preview
+                </>
+              ) : (
+                <Maximize className="w-3.5 h-3.5" />
+              )}
             </button>
           </div>
         </div>
@@ -759,13 +1088,45 @@ export default function RightPanel() {
                         <div className="absolute inset-y-0 w-1/2 bg-gradient-to-r from-transparent via-orange-400 to-transparent animate-hmr-slide" />
                       </div>
                     )}
-                    <div className="relative flex-1 flex flex-col overflow-hidden">
+                    <div
+                      className={cn(
+                        "relative flex-1",
+                        previewSize === "desktop"
+                          ? "flex flex-col overflow-hidden"
+                          : "flex items-start justify-center overflow-auto bg-[#e5e7eb] dark:bg-[#0d1117] p-6",
+                      )}>
                       <iframe
                         ref={iframeRef}
                         src={latchedPreviewUrl}
                         title="Live Preview"
-                        className="flex-1 w-full border-0 bg-white"
+                        className={cn(
+                          "border-0 bg-white",
+                          previewSize === "desktop"
+                            ? "flex-1 w-full"
+                            : "shrink-0 rounded-lg border border-slate-300 dark:border-slate-700 shadow-xl",
+                        )}
+                        style={
+                          previewSize === "desktop"
+                            ? undefined
+                            : {
+                                width: activeViewport.width,
+                                height: activeViewport.height,
+                                maxWidth: "100%",
+                              }
+                        }
                         sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+                      />
+                      {/* Base44-style inline editor — selection box,
+                          tag badge, action toolbar, and inline AI
+                          input. Position-fixed so it floats over the
+                          iframe wherever it ends up on screen. */}
+                      <PreviewEditOverlay
+                        iframeRef={iframeRef}
+                        selection={editSelection}
+                        hover={editHover}
+                        active={editSelectMode}
+                        onClose={closeEditOverlay}
+                        onSubmit={submitInlineEdit}
                       />
                       {previewPhase === "live-with-restart-overlay" && (
                         <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/85 dark:bg-[#0d1117]/85 backdrop-blur-sm z-30">

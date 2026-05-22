@@ -1,0 +1,185 @@
+{
+  "brand": {
+    "name": "Shutter",
+    "tagline": "Capture timeless moments. Your peer-to-peer marketplace for vintage analog cameras.",
+    "domain": "retail_fashion"
+  },
+  "pages": [
+    {
+      "route": "/",
+      "title": "Shutter | Vintage Analog Cameras",
+      "purpose": "The homepage introduces Shutter as the premier marketplace for vintage analog cameras, highlighting its unique offerings and inviting users to explore or sell.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "icon-grid-3",
+          "archetype": "icon-grid-3"
+        },
+        {
+          "type": "how_it_works",
+          "layout_hint": "numbered-stepper",
+          "archetype": "numbered-stepper"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "bento-mosaic"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "marquee-row",
+          "archetype": "marquee-row"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/browse",
+      "title": "Browse Cameras by Format",
+      "purpose": "This page allows buyers to browse available vintage analog cameras, categorized by film format, making it easy to find specific types of gear.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "features",
+          "layout_hint": "grid-3"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "two-column"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "listings"
+    },
+    {
+      "route": "/sell",
+      "title": "Sell Your Vintage Camera",
+      "purpose": "This page guides sellers through the process of listing their vintage analog cameras on Shutter, emphasizing ease of use and reach to a passionate audience.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "split-image-right"
+        },
+        {
+          "type": "process",
+          "layout_hint": "numbered-stepper",
+          "archetype": "numbered-stepper"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/about",
+      "title": "About Shutter",
+      "purpose": "The about page tells the story of Shutter, its mission to connect vintage camera enthusiasts, and the values that drive the marketplace.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "story",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "philosophy",
+          "layout_hint": "icon-grid-3"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-3"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/community",
+      "title": "Shutter Community",
+      "purpose": "This page highlights the vibrant community around Shutter, showcasing user stories, featured collections, and ways to connect with other enthusiasts.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "asymmetric-split",
+          "archetype": "asymmetric-split"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "asymmetric-12col"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "big-quote-portrait",
+          "archetype": "big-quote-portrait"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "split-image-left"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/resources",
+      "title": "Vintage Camera Resources",
+      "purpose": "This page provides helpful resources for vintage camera owners and enthusiasts, including guides, tips, and maintenance advice.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "features",
+          "layout_hint": "grid-2"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        },
+        {
+          "type": "newsletter",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/contact",
+      "title": "Contact Shutter Support",
+      "purpose": "This page provides various methods for users to contact Shutter support for inquiries, assistance, or feedback.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "contact",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        }
+      ],
+      "detail_template": false
+    }
+  ]
+}

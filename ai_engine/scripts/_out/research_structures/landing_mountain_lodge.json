@@ -1,0 +1,402 @@
+{
+  "brand": {
+    "name": "Timber & Pine",
+    "tagline": "Refined Wilderness in the Heart of the Colorado Rockies",
+    "description": "An eco-luxury retreat offering private chalets, guided alpine adventures, and Michelin-caliber farm-to-table dining in a wild landscape.",
+    "domain": "timberandpine.com",
+    "business_info": {
+      "address": "14000 San Juan Skyway, Telluride, CO 81435",
+      "phone": "+1 (970) 555-0192",
+      "email": "concierge@timberandpine.com",
+      "hours": "Lodge: 24/7\nDining: 7:00 AM - 10:00 PM\nGuided Tours: 6:00 AM - 8:00 PM"
+    },
+    "social": [
+      {
+        "label": "instagram",
+        "href": "https://instagram.com/timberandpine"
+      },
+      {
+        "label": "facebook",
+        "href": "https://facebook.com/timberandpine"
+      }
+    ]
+  },
+  "palette": {
+    "primary": "150 15% 25%",
+    "secondary": "30 25% 40%",
+    "accent": "40 40% 60%",
+    "background": "40 10% 96%",
+    "foreground": "150 20% 15%",
+    "muted": "150 10% 85%",
+    "border": "40 15% 85%",
+    "card": "40 10% 98%"
+  },
+  "typography": {
+    "heading_font": "Cormorant Garamond",
+    "body_font": "Inter",
+    "scale": "expressive"
+  },
+  "motif": "organic",
+  "design_system": {
+    "motion": "organic",
+    "accent_shape": "rounded",
+    "surface": "flat",
+    "image_treatment": "natural",
+    "section_rhythm": "airy"
+  },
+  "personality": {
+    "tone": "luxurious",
+    "vibe_keywords": [
+      "grounded",
+      "serene",
+      "tactile",
+      "refined",
+      "wild"
+    ],
+    "energy": "low"
+  },
+  "header_archetype": "transparent-pill",
+  "footer_archetype": "mega-columns",
+  "page_features": [
+    "sticky_cta",
+    "floating_chat",
+    "back_to_top"
+  ],
+  "references": [
+    {
+      "url": "https://duntondestinations.com/hot-springs/",
+      "name": "Dunton Hot Springs",
+      "why": "Perfectly matches the rustic-luxury vibe and demonstrates effective use of ambient video and cabin-specific details.",
+      "section_order": [
+        "hero",
+        "philosophy",
+        "accommodations",
+        "experiences",
+        "dining",
+        "press",
+        "footer"
+      ],
+      "notable_features": [
+        "Ambient background video",
+        "Interactive cabin map",
+        "Sticky booking widget"
+      ]
+    },
+    {
+      "url": "https://aman.com/resorts/amangiri",
+      "name": "Amangiri",
+      "why": "The gold standard for selling the landscape as much as the lodge with ultra-minimalist UI and elegant typography.",
+      "section_order": [
+        "hero",
+        "philosophy",
+        "accommodations",
+        "wellness",
+        "dining",
+        "adventures",
+        "footer"
+      ],
+      "notable_features": [
+        "Slow-fade image transitions",
+        "Minimalist booking flow",
+        "High-contrast negative space"
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "id": "hero-wilderness",
+      "type": "hero",
+      "role": "Immersive entry with booking capability",
+      "headline": "Where the Wild Meets the Refined",
+      "subheadline": "Experience the untamed beauty of the Colorado Rockies from the comfort of your private eco-luxury chalet.",
+      "layout_hint": "full-bleed-overlay",
+      "archetype": "video-mask",
+      "interactivity": "date and guest filter widget with availability check",
+      "image_queries": [
+        "colorado mountain lodge sunset snow"
+      ],
+      "cta": {
+        "label": "Check Availability",
+        "href": "#booking"
+      },
+      "items": []
+    },
+    {
+      "id": "trust-strip",
+      "type": "trust_bar",
+      "role": "Immediate credibility establishment",
+      "nav_label": "Trust",
+      "headline": "Recognized Excellence",
+      "layout_hint": "logo-strip",
+      "interactivity": "auto-scrolling horizontal ticker",
+      "items": [
+        {
+          "title": "Eco-Certified",
+          "description": "LEED Platinum Certified Lodge"
+        },
+        {
+          "title": "Michelin Guide",
+          "description": "Recommended Dining 2023"
+        },
+        {
+          "title": "Relais & Ch\u00e2teaux",
+          "description": "Member since 2021"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "our-philosophy",
+      "type": "philosophy",
+      "role": "Brand ethos and sustainability story",
+      "nav_label": "Story",
+      "headline": "Grounded in Nature, Elevated by Design",
+      "subheadline": "Timber & Pine was built on the belief that true luxury is found in the silence of the forest and the purity of the elements.",
+      "layout_hint": "split-image-right",
+      "archetype": "split-image-bullets",
+      "interactivity": "parallax scroll effect on background textures",
+      "image_queries": [
+        "modern sustainable architecture wood glass forest"
+      ],
+      "items": [
+        {
+          "title": "Sustainable Soul",
+          "description": "Powered by 100% geothermal energy and built with reclaimed local timber."
+        },
+        {
+          "title": "Wilderness First",
+          "description": "Over 5,000 acres of protected land dedicated to local wildlife conservation."
+        }
+      ]
+    },
+    {
+      "id": "chalet-collection",
+      "type": "features",
+      "role": "Showcase of accommodations",
+      "nav_label": "Stays",
+      "headline": "Your Private Mountain Sanctuary",
+      "subheadline": "Each chalet is a masterpiece of alpine design, featuring floor-to-ceiling views and wood-burning fireplaces.",
+      "layout_hint": "grid-3",
+      "archetype": "icon-grid-3",
+      "interactivity": "hover-reveal interior photos with detail modal",
+      "items": [
+        {
+          "title": "The Aspen Suite",
+          "description": "A secluded one-bedroom retreat with a private cedar hot tub.",
+          "image_query": "luxury cabin interior fireplace mountain view"
+        },
+        {
+          "title": "Summit Chalet",
+          "description": "Three-story family residence with a professional chef's kitchen.",
+          "image_query": "modern mountain chalet exterior snow"
+        },
+        {
+          "title": "Pine Lookout",
+          "description": "Elevated studio perched above the treeline for ultimate privacy.",
+          "image_query": "boutique hotel room forest view"
+        }
+      ],
+      "image_queries": [
+        "luxury cabin interior fireplace mountain view",
+        "modern mountain chalet exterior snow",
+        "boutique hotel room forest view"
+      ]
+    },
+    {
+      "id": "seasonal-cta",
+      "type": "mid_cta_banner",
+      "role": "Re-engagement for seasonal bookings",
+      "headline": "Winter Solstice Packages Now Open",
+      "subheadline": "Book your four-night winter escape and receive a complimentary guided snowshoe tour and wine pairing dinner.",
+      "layout_hint": "centered-stack",
+      "interactivity": "smooth-scroll to lead form",
+      "cta": {
+        "label": "Explore Packages",
+        "href": "#inquiry"
+      },
+      "image_queries": [
+        "cozy fireplace wine glasses winter"
+      ],
+      "items": []
+    },
+    {
+      "id": "alpine-adventures",
+      "type": "how_it_works",
+      "role": "Guided activity showcase",
+      "nav_label": "Experiences",
+      "headline": "The Mountain is Your Playground",
+      "subheadline": "From sunrise summits to hidden fly-fishing creeks, our expert guides lead the way.",
+      "layout_hint": "carousel",
+      "archetype": "numbered-stepper",
+      "interactivity": "tabbed seasonal switch between Summer and Winter activities",
+      "items": [
+        {
+          "title": "Guided Alpine Hikes",
+          "description": "Traverse wildflower meadows and high-altitude ridges with local naturalists.",
+          "value": "01"
+        },
+        {
+          "title": "Fly Fishing",
+          "description": "Private access to gold-medal trout waters on the Taylor River.",
+          "value": "02"
+        },
+        {
+          "title": "Backcountry Skiing",
+          "description": "Untouched powder runs accessible only by our private snowcats.",
+          "value": "03"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "culinary-program",
+      "type": "menu",
+      "role": "Dining and farm-to-table highlights",
+      "nav_label": "Dining",
+      "headline": "Foraged, Found, and Farmed",
+      "subheadline": "Our culinary team works with local ranchers and our own greenhouse to bring the taste of the Rockies to your plate.",
+      "layout_hint": "grid-2",
+      "archetype": "photo-card-grid",
+      "interactivity": "menu items open a modal with full ingredient sourcing details",
+      "items": [
+        {
+          "title": "Elk Tenderloin",
+          "description": "Juniper-crusted elk with roasted root vegetables and huckleberry reduction.",
+          "value": "$52",
+          "image_query": "gourmet elk steak plated"
+        },
+        {
+          "title": "Wild Mushroom Risotto",
+          "description": "Foraged porcini and chanterelles with aged gruy\u00e8re and truffle oil.",
+          "value": "$38",
+          "image_query": "mushroom risotto gourmet"
+        }
+      ],
+      "image_queries": [
+        "gourmet elk steak plated",
+        "mushroom risotto gourmet"
+      ]
+    },
+    {
+      "id": "guest-voices",
+      "type": "testimonials",
+      "role": "Social proof and credibility",
+      "nav_label": "Reviews",
+      "headline": "Stories from the Summit",
+      "subheadline": "Hear from those who have found their peace among the pines.",
+      "layout_hint": "carousel",
+      "archetype": "glass-cards-bg",
+      "interactivity": "testimonials carousel with autoplay and manual arrows",
+      "items": [
+        {
+          "title": "Eleanor Vance",
+          "description": "A transformative experience. The silence of the mountains combined with the impeccable service made this the best retreat of my life.",
+          "label": "Guest, October 2023",
+          "value": "5.0"
+        },
+        {
+          "title": "Marcus Thorne",
+          "description": "The guided fly fishing was world-class, and coming back to a Michelin-level meal in a log cabin is something I'll never forget.",
+          "label": "Guest, July 2023",
+          "value": "5.0"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "common-questions",
+      "type": "faq",
+      "role": "Overcoming booking objections",
+      "nav_label": "FAQ",
+      "headline": "Planning Your Escape",
+      "subheadline": "Everything you need to know about your stay at Timber & Pine.",
+      "layout_hint": "accordion",
+      "interactivity": "FAQ accordion with smooth open/close transitions",
+      "items": [
+        {
+          "title": "What is the best time of year to visit?",
+          "description": "We offer unique experiences year-round. June through September is ideal for hiking, while December through March offers premier skiing."
+        },
+        {
+          "title": "How do you handle altitude adjustment?",
+          "description": "Our chalets are equipped with oxygen enrichment systems, and our concierge provides hydration kits upon arrival."
+        },
+        {
+          "title": "Are all activities included in the stay?",
+          "description": "Most guided group hikes are included. Private excursions and specialized gear rentals are available for an additional fee."
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "inquiry",
+      "type": "lead_form",
+      "role": "High-ticket conversion capture",
+      "headline": "Begin Your Journey",
+      "subheadline": "Request a bespoke itinerary or check availability for your preferred dates.",
+      "layout_hint": "two-column",
+      "interactivity": "conditional logic for event types and group sizes",
+      "items": [
+        {
+          "title": "Full Name"
+        },
+        {
+          "title": "Email Address"
+        },
+        {
+          "title": "Preferred Dates"
+        },
+        {
+          "title": "Number of Guests"
+        },
+        {
+          "title": "Special Interests (Hiking, Dining, Wellness)"
+        }
+      ],
+      "cta": {
+        "label": "Request Itinerary",
+        "href": "#submit"
+      },
+      "image_queries": []
+    },
+    {
+      "id": "footer",
+      "type": "footer",
+      "role": "site-wide nav",
+      "headline": "Timber & Pine",
+      "subheadline": "",
+      "layout_hint": "footer-columns",
+      "items": [],
+      "image_queries": []
+    }
+  ],
+  "ctas": {
+    "primary": {
+      "label": "Book Your Stay",
+      "href": "#booking"
+    },
+    "secondary": {
+      "label": "Learn more",
+      "href": "#features"
+    }
+  },
+  "domain_keywords": [
+    "luxury mountain lodge colorado",
+    "eco-friendly resort rockies",
+    "farm to table dining mountains",
+    "guided alpine hiking tours"
+  ],
+  "design_tokens": {
+    "card_class": "bg-card rounded-xl",
+    "button_radius_class": "rounded-md",
+    "image_radius_class": "rounded-xl",
+    "section_padding_class": "py-24 sm:py-32 lg:py-40",
+    "transition_class": "transition-all duration-700 ease-out",
+    "hover_lift_class": "hover:-translate-y-1 hover:shadow-md",
+    "_resolved_accent_shape": "rounded",
+    "_resolved_surface": "flat",
+    "_resolved_motion": "organic",
+    "_resolved_section_rhythm": "airy",
+    "_resolved_image_treatment": "natural"
+  }
+}

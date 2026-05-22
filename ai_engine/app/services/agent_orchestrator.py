@@ -40,7 +40,9 @@ Usage
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -288,6 +290,75 @@ async def build_conversation_context(
         return ""
 
 
+# ── In-flight status question detection + answering ─────────────────
+#
+# When a user types a follow-up while the pipeline is still running we
+# default to queuing — safe for edits ("make the hero red"). But pure
+# status questions ("what stage are you at?") deserve an answer NOW,
+# not 4 minutes from now when the build finishes.
+#
+# The detector is intentionally conservative: only EXPLICIT status
+# phrasings count as a question. Any ambiguity falls through to the
+# queue so we never accidentally swallow an edit. False negatives (real
+# question → queued) degrade to current behaviour, which is fine. False
+# positives (real edit → answered + discarded) would silently lose user
+# work, which is not.
+
+_STATUS_QUESTION_PREFIXES = (
+    "status", "where are you", "where you at",
+    "what stage", "what step", "what phase",
+    "what's happening", "what is happening", "what are you doing",
+    "what're you doing",
+    "are you done", "are you finished", "are you ready", "are you almost",
+    "is it done", "is it ready", "is it finished", "is it almost",
+    "how long", "how much longer", "how is it going", "how's it going",
+    "any progress", "progress update", "give me an update",
+)
+
+
+def _is_status_question(text: str) -> bool:
+    """Return True when ``text`` is an EXPLICIT status check.
+
+    Conservative on purpose — only matches phrasings that are almost
+    impossible to read as an edit instruction. See the module-level
+    note above for the reasoning.
+    """
+    s = (text or "").strip().lower()
+    if not s:
+        return False
+    # Long messages are nearly always edits with detailed instructions,
+    # not status checks. The cap is generous (covers "what stage are you
+    # at — i want to ask before changing the headline" which is still
+    # primarily a question, but the question prefix wins early).
+    if len(s) > 200:
+        return False
+    return s.startswith(_STATUS_QUESTION_PREFIXES)
+
+
+def _inflight_status_enabled() -> bool:
+    """Default OFF until verified end-to-end.
+
+    When on, status questions during a running pipeline get answered in
+    parallel by a Gemini Flash call. Until we've verified the detector
+    doesn't false-positive on real user prompts in production, opt-in
+    only — set ``INFLIGHT_STATUS_ANSWER_ENABLED=1`` to enable. The safer
+    fall-through (queue + ack) still runs in the off state.
+    """
+    raw = os.environ.get("INFLIGHT_STATUS_ANSWER_ENABLED", "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+# Strong-references for fire-and-forget asyncio Tasks (status-question
+# answers) so the event loop doesn't GC them while they're still running.
+# add_done_callback discards each one when it completes — no leak.
+_INFLIGHT_QA_TASKS: set[asyncio.Task] = set()
+
+
+def _track_qa_task(task: asyncio.Task) -> None:
+    _INFLIGHT_QA_TASKS.add(task)
+    task.add_done_callback(_INFLIGHT_QA_TASKS.discard)
+
+
 # ── Orchestrator class ────────────────────────────────────────
 
 
@@ -310,6 +381,8 @@ class AgentOrchestrator:
         user_jwt: str | None,
         task: str = "",
         images: list | None = None,
+        editable_target: dict | None = None,
+        _is_drain_call: bool = False,
     ) -> TaskResult:
         """Run the pipeline for one task and return the result.
 
@@ -324,6 +397,16 @@ class AgentOrchestrator:
             user_jwt:         Raw JWT for Supabase calls, or None for admin.
             task:             Raw (un-enriched) task text used for DB summaries.
             images:           Optional list of image attachments.
+            editable_target:  Optional ``{path, type, file}`` payload from the
+                              preview iframe's click-to-edit handler. When
+                              present, the pipeline synthesizes an EditIntent
+                              directly from this target and skips Step 3b's
+                              vocab build — the user has already pointed at
+                              the exact element they want changed.
+            _is_drain_call:   Internal flag — when True, this call is being
+                              made by the outer drain loop, so we skip the
+                              drain block at the end. Prevents nested drain
+                              recursion when many items are queued.
 
         Returns:
             TaskResult with stopped=True if the user pressed Stop,
@@ -345,6 +428,7 @@ class AgentOrchestrator:
                 chat_session_id=chat_session_id or "",
                 images=images or [],
                 session=session,
+                editable_target=editable_target,
             )
         )
 
@@ -358,6 +442,19 @@ class AgentOrchestrator:
 
         # ── 5. Stopped path ────────────────────────────────────────
         if stopped:
+            # Stop nukes any tasks the user queued during this run. Two
+            # reasons: (a) "Stop" should feel like "halt everything", not
+            # "halt the current item and then plough into more work";
+            # (b) we have no way to know whether the user still wants
+            # those queued edits applied to a potentially half-done
+            # workspace. Cheap to re-type when they do.
+            if session.pending_tasks:
+                logger.info(
+                    "[%s] Stop received — discarding %d queued task(s)",
+                    getattr(session, "session_id", "?"),
+                    len(session.pending_tasks),
+                )
+                session.pending_tasks.clear()
             await ws_transition(
                 session, websocket, WorkspaceState.READY,
                 "Task stopped. Ready for next instruction.",
@@ -397,6 +494,16 @@ class AgentOrchestrator:
         # earlier successful steps, not from the failed codegen, and showing
         # both is confusing ("Why does it say completed if it errored?").
         if pipeline_error is not None:
+            # Pipeline blew up — clear the queue so we don't apply edits to
+            # a half-done workspace. The user can resend after they see the
+            # error in chat.
+            if session.pending_tasks and not _is_drain_call:
+                logger.info(
+                    "[%s] Pipeline error — discarding %d queued task(s)",
+                    getattr(session, "session_id", "?"),
+                    len(session.pending_tasks),
+                )
+                session.pending_tasks.clear()
             await ws_transition(
                 session, websocket, WorkspaceState.READY,
                 "Ready for next instruction.",
@@ -418,6 +525,83 @@ class AgentOrchestrator:
             chat_session_id=chat_session_id,
             user_jwt=user_jwt,
         )
+
+        # ── 7. Drain queued follow-ups ─────────────────────────────
+        # Any messages the user sent while this pipeline was running
+        # were appended to session.pending_tasks by _listen_for_stop.
+        # Apply them now in FIFO order, each as its own pipeline run.
+        # We pop one at a time so a NEW message arriving DURING a drained
+        # turn lands at the tail and runs after current draining items.
+        # Failures inside drained turns are logged but don't abort the
+        # rest of the queue — the user explicitly asked for each one.
+        #
+        # Only the OUTERMOST execute_task runs this drain — recursive
+        # calls from inside the drain loop pass ``_is_drain_call=True``
+        # so we don't open nested drain loops as queue depth grows.
+        if _is_drain_call:
+            return TaskResult(stopped=False, summary=summary, workspace_path=workspace_path)
+
+        while session.pending_tasks:
+            try:
+                entry = session.pending_tasks.pop(0)
+            except IndexError:
+                break
+            queued_text = (entry.get("text") or "").strip()
+            if not queued_text:
+                continue
+            try:
+                await websocket.send_json({
+                    "type": "progress",
+                    "message": f"▶️  Applying queued change: {queued_text[:80]}",
+                })
+            except Exception:
+                pass
+            logger.info(
+                "[%s] Draining queued task (%d left after this): %.60s",
+                getattr(session, "session_id", "?"),
+                len(session.pending_tasks), queued_text,
+            )
+            try:
+                _drained_result = await self.execute_task(
+                    enriched_task=queued_text,
+                    session=session,
+                    websocket=websocket,
+                    pipeline_user=pipeline_user,
+                    chat_session_id=chat_session_id,
+                    conversation_id=conversation_id,
+                    user_jwt=user_jwt,
+                    task=queued_text,
+                    images=entry.get("images") or [],
+                    editable_target=entry.get("editable_target"),
+                    _is_drain_call=True,
+                )
+            except Exception as _drain_err:
+                logger.error(
+                    "[%s] Queued task failed (continuing with rest): %s",
+                    getattr(session, "session_id", "?"), _drain_err,
+                    exc_info=True,
+                )
+                try:
+                    await websocket.send_json({
+                        "type": "warning",
+                        "message": "A queued change failed — moving on to the next one.",
+                    })
+                except Exception:
+                    pass
+                continue
+
+            # User clicked Stop during this queued task → halt the whole
+            # drain (the inner execute_task already cleared pending_tasks
+            # on its stop path, but we re-check defensively so we exit
+            # the loop cleanly without surprise behaviour on re-entry).
+            if _drained_result.stopped:
+                logger.info(
+                    "[%s] Stop received during drain — halting remaining queue",
+                    getattr(session, "session_id", "?"),
+                )
+                session.pending_tasks.clear()
+                break
+
         return TaskResult(stopped=False, summary=summary, workspace_path=workspace_path)
 
     # ── Private helpers ───────────────────────────────────────
@@ -567,6 +751,85 @@ class AgentOrchestrator:
                                 "Failed to handle %s in _listen_for_stop: %s",
                                 msg_type, _plan_err, exc_info=True,
                             )
+                    elif msg_type in ("message", "task", "chat_message", "user_message"):
+                        # User sent a new prompt while the pipeline is still
+                        # running. ``"message"`` is the type the existing
+                        # frontend sends (see useAgentSession.js); the other
+                        # aliases cover future / alternate clients. Two paths:
+                        #   • Status question → answer NOW, in parallel, do
+                        #     NOT touch the running pipeline.
+                        #   • Anything else → queue + ack so execute_task's
+                        #     completion path drains it after the current
+                        #     build finishes.
+                        # The detector is conservative — only EXPLICIT
+                        # status phrasings go to the answer path. Ambiguous
+                        # input always falls through to the safe queue so a
+                        # mis-classified edit never gets silently discarded.
+                        try:
+                            text = (
+                                data.get("task")
+                                or data.get("content")
+                                or data.get("message")
+                                or ""
+                            ).strip()
+                            images = data.get("images") or []
+                            editable_tgt = data.get("editable_target")
+                            # Empty text AND no images AND no editable_target
+                            # → genuinely empty message; drop silently.
+                            if not text and not images and not editable_tgt:
+                                continue
+
+                            if (
+                                text
+                                and _inflight_status_enabled()
+                                and _is_status_question(text)
+                            ):
+                                logger.info(
+                                    "[%s] In-flight status question — answering "
+                                    "in parallel: %.60s",
+                                    getattr(session, "session_id", "?"),
+                                    text,
+                                )
+                                # Save a strong reference so the event loop
+                                # doesn't GC the fire-and-forget task while
+                                # Gemini is still answering. _track_qa_task
+                                # removes it on completion.
+                                _qa_task = asyncio.create_task(
+                                    self._answer_in_flight_question(
+                                        session, websocket, text,
+                                    )
+                                )
+                                _track_qa_task(_qa_task)
+                                continue
+
+                            queued_entry = {
+                                "text": text,
+                                "images": images,
+                                "editable_target": editable_tgt,
+                                "queued_at": time.time(),
+                            }
+                            session.pending_tasks.append(queued_entry)
+                            queued_count = len(session.pending_tasks)
+                            logger.info(
+                                "[%s] Queued in-flight message (#%d) — %.60s",
+                                getattr(session, "session_id", "?"),
+                                queued_count, text or "(images only)",
+                            )
+                            try:
+                                await websocket.send_json({
+                                    "type": "progress",
+                                    "message": (
+                                        f"📥 Queued — I'll apply that right after the current "
+                                        f"build finishes ({queued_count} pending)."
+                                    ),
+                                })
+                            except Exception:
+                                pass
+                        except Exception as _enq_err:
+                            logger.warning(
+                                "[%s] Failed to enqueue in-flight task: %s",
+                                getattr(session, "session_id", "?"), _enq_err,
+                            )
                     elif msg_type in ("stop", "stop_task"):
                         # P0 #1 — always ACK the stop message on receipt
                         try:
@@ -638,6 +901,110 @@ class AgentOrchestrator:
                     except (asyncio.CancelledError, Exception):
                         pass
         return False
+
+    async def _answer_in_flight_question(
+        self,
+        session: AgentSession,
+        websocket: Any,
+        question_text: str,
+    ) -> None:
+        """Reply to a status question without touching the running pipeline.
+
+        Fire-and-forget — the caller spawns this via ``asyncio.create_task``
+        so the listen loop keeps consuming messages while the reply lands.
+        Reads lightweight state from the session (workspace_state, current
+        task, files-written-so-far) and asks Gemini Flash to phrase a
+        1-2 sentence answer. Failures are logged + swallowed; the worst
+        case is the user doesn't get an answer (better than crashing the
+        listen loop).
+        """
+        try:
+            # Gather what we know about the in-flight task. None of this
+            # blocks — pure local reads.
+            state = str(getattr(session, "workspace_state", "") or "")
+            current_task = (getattr(session, "task", "") or "")[:240]
+            ws_dir = getattr(session, "workspace_dir", "") or ""
+
+            files_so_far: list[str] = []
+            if ws_dir and os.path.isdir(ws_dir):
+                _skip = {"node_modules", ".git", ".next", "dist", "build", "__pycache__"}
+                try:
+                    for root, dirs, files in os.walk(ws_dir):
+                        dirs[:] = [d for d in dirs if d not in _skip]
+                        for f in files:
+                            rel = os.path.relpath(os.path.join(root, f), ws_dir)
+                            files_so_far.append(rel)
+                            if len(files_so_far) >= 40:
+                                break
+                        if len(files_so_far) >= 40:
+                            break
+                except Exception:
+                    files_so_far = []
+
+            files_summary = (
+                f"{len(files_so_far)} files written so far"
+                + (f" (e.g. {', '.join(files_so_far[:5])})" if files_so_far else "")
+            )
+
+            prompt = (
+                "The user has asked a status question while an agent task is "
+                "still running. Answer in 1-2 short sentences, conversational, "
+                "no markdown. Do NOT promise to do anything — the user knows "
+                "you're already working on something else. Only state what's "
+                "true right now.\n\n"
+                f"User question: {question_text}\n\n"
+                f"Current state:\n"
+                f"- Active task: {current_task or '(unknown)'}\n"
+                f"- Workspace state: {state or '(starting)'}\n"
+                f"- Progress: {files_summary}\n"
+            )
+
+            reply: str = ""
+            try:
+                from app.services.landing_gemini import structured_distill
+                raw = await structured_distill(
+                    prompt, 12.0, label="inflight_status",
+                    response_schema=None, max_tokens=180,
+                    temperature=0.3, model="gemini-2.5-flash",
+                )
+                reply = (raw or "").strip()
+                # structured_distill returns JSON-mode text — strip wrapping
+                # quotes / braces if Gemini stuffed the reply into a value.
+                if reply.startswith('"') and reply.endswith('"'):
+                    reply = reply[1:-1]
+                elif reply.startswith("{") and reply.endswith("}"):
+                    # Tiny attempt to pull a "reply"/"answer" field out.
+                    import json as _json
+                    try:
+                        obj = _json.loads(reply)
+                        if isinstance(obj, dict):
+                            for k in ("reply", "answer", "message", "text"):
+                                if isinstance(obj.get(k), str):
+                                    reply = obj[k].strip()
+                                    break
+                    except Exception:
+                        pass
+            except Exception as exc:
+                logger.warning("inflight Q&A: Gemini failed (%s) — using fallback", exc)
+
+            if not reply:
+                # Deterministic fallback — never leave the user hanging.
+                reply = (
+                    f"Still working — currently at: {state or 'preparing workspace'}. "
+                    f"{files_summary}. I'll send the result when it's done."
+                )
+
+            try:
+                await websocket.send_json({
+                    "type": "chat_message",
+                    "role": "agent",
+                    "content": reply,
+                    "messageType": "status_reply",
+                })
+            except Exception as exc:
+                logger.warning("inflight Q&A: send failed: %s", exc)
+        except Exception as exc:
+            logger.warning("inflight Q&A: unexpected error: %s", exc)
 
     async def _send_completion(
         self,

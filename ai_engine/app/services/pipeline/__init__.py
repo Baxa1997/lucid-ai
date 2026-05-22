@@ -55,6 +55,9 @@ from .step2_clone import clone_with_openhands
 # ── Step 3: Classify ─────────────────────────────────────────────────────────
 from .step3_classify import classify_task
 
+# ── Step 3b: Structured edit-intent extraction (additive; gated by env) ──────
+from .step3b_edit_intent import extract_edit_intent, EditIntent
+
 # ── Step 4: Explore / Research / Plan ────────────────────────────────────────
 from .step4_explore import (
     explore_with_gemini,
@@ -105,6 +108,7 @@ __all__ = [
     "validate_inputs",
     "clone_with_openhands",
     "classify_task",
+    "extract_edit_intent", "EditIntent",
     "explore_with_gemini", "gemini_research", "gemini_create_plan",
     "blueprint_to_file_plan", "_get_fallback_sections", "_build_dynamic_fallback",
     "analyze_images",

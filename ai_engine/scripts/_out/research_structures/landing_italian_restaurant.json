@@ -1,0 +1,346 @@
+{
+  "brand": {
+    "name": "Da Marco",
+    "tagline": "Northern Italian Soul in the Heart of the West Village",
+    "description": "A neighborhood trattoria dedicated to the handmade pasta traditions of Emilia-Romagna and the rustic elegance of Northern Italian hospitality.",
+    "domain": "damarconyc.com",
+    "business_info": {
+      "address": "142 West 10th Street, New York, NY 10014",
+      "phone": "(212) 555-0198",
+      "email": "ciao@damarconyc.com",
+      "hours": "Mon-Thu: 5:00 PM - 10:00 PM\nFri-Sat: 5:00 PM - 11:00 PM\nSun: 4:00 PM - 9:00 PM"
+    },
+    "social": [
+      {
+        "label": "instagram",
+        "href": "https://instagram.com/damarconyc"
+      }
+    ]
+  },
+  "palette": {
+    "primary": "25 20% 15%",
+    "secondary": "85 15% 40%",
+    "accent": "15 60% 45%",
+    "background": "40 25% 95%",
+    "foreground": "30 10% 15%",
+    "muted": "35 15% 80%",
+    "border": "40 20% 85%",
+    "card": "40 30% 98%"
+  },
+  "typography": {
+    "heading_font": "Cormorant Garamond",
+    "body_font": "DM Sans",
+    "scale": "balanced"
+  },
+  "motif": "editorial",
+  "design_system": {
+    "motion": "subtle",
+    "accent_shape": "rounded",
+    "surface": "flat",
+    "image_treatment": "natural",
+    "section_rhythm": "airy"
+  },
+  "personality": {
+    "tone": "inviting",
+    "vibe_keywords": [
+      "warm",
+      "authentic",
+      "sophisticated",
+      "rustic",
+      "timeless"
+    ],
+    "energy": "low"
+  },
+  "header_archetype": "transparent-pill",
+  "footer_archetype": "minimalist-row",
+  "references": [
+    {
+      "url": "https://lartusi.com",
+      "name": "L'Artusi",
+      "why": "West Village competitor balancing neighborhood charm with high-volume booking mechanics.",
+      "section_order": [
+        "hero",
+        "story",
+        "menu",
+        "private_dining",
+        "team",
+        "footer"
+      ],
+      "notable_features": [
+        "Resy widget integration",
+        "sticky_cta",
+        "PDF menu links"
+      ]
+    },
+    {
+      "url": "https://viacarota.com",
+      "name": "Via Carota",
+      "why": "The gold standard for West Village minimalism and exclusive, text-heavy aesthetic.",
+      "section_order": [
+        "hero",
+        "philosophy",
+        "links",
+        "newsletter",
+        "footer"
+      ],
+      "notable_features": [
+        "anti-design minimalism",
+        "plain-text menu toggle"
+      ]
+    },
+    {
+      "url": "https://rezdora.nyc",
+      "name": "Rezd\u00f4ra",
+      "why": "Masterclass in positioning regional Northern Italian cuisine with high-end credibility.",
+      "section_order": [
+        "hero",
+        "trust_bar",
+        "menu",
+        "private_events",
+        "press",
+        "footer"
+      ],
+      "notable_features": [
+        "video background",
+        "Michelin star badges",
+        "Tock integration"
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "id": "hero-booking",
+      "type": "hero",
+      "role": "Immediate conversion and atmospheric immersion",
+      "headline": "Tradition in Evolution",
+      "subheadline": "Handmade pasta and Northern Italian heritage served nightly in the West Village.",
+      "layout_hint": "full-bleed-overlay",
+      "archetype": "video-mask",
+      "interactivity": "hero search widget for date, time, and party size linking to Resy",
+      "image_queries": [
+        "italian pasta handmade flour kitchen"
+      ],
+      "cta": {
+        "label": "Find a Table",
+        "href": "#reservations"
+      },
+      "items": []
+    },
+    {
+      "id": "authority-strip",
+      "type": "trust_bar",
+      "role": "Establish immediate neighborhood authority",
+      "headline": "A West Village Staple",
+      "layout_hint": "logo-strip",
+      "interactivity": "subtle fade-in on scroll",
+      "items": [
+        {
+          "value": "Est. 2014",
+          "label": "Neighborhood Roots"
+        },
+        {
+          "value": "3 Stars",
+          "label": "NYT Critic's Pick"
+        },
+        {
+          "value": "10k+",
+          "label": "Negronis Poured"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "our-story",
+      "type": "philosophy",
+      "role": "Build emotional resonance through founder narrative",
+      "nav_label": "Story",
+      "headline": "From Emilia-Romagna to 10th Street",
+      "subheadline": "Chef Marco's journey from his grandmother's kitchen in Modena to the cobblestones of New York.",
+      "layout_hint": "split-image-right",
+      "interactivity": "parallax scroll effect on the portrait image",
+      "image_queries": [
+        "italian chef portrait kitchen"
+      ],
+      "cta": {
+        "label": "Read More",
+        "href": "#about"
+      },
+      "items": []
+    },
+    {
+      "id": "seasonal-menu",
+      "type": "menu",
+      "role": "Showcase culinary excellence and regional focus",
+      "nav_label": "Menu",
+      "headline": "The Evening Menu",
+      "subheadline": "A curated selection of Northern Italian classics, updated for the New York palate.",
+      "layout_hint": "grid-2",
+      "archetype": "photo-card-grid",
+      "interactivity": "menu items open a modal with full description and wine pairing",
+      "items": [
+        {
+          "title": "Tagliatelle al Ragu",
+          "description": "Hand-cut egg pasta with a 12-hour slow-cooked Bolognese ragu and 24-month Parmigiano Reggiano.",
+          "value": "$28",
+          "image_query": "tagliatelle bolognese pasta plate"
+        },
+        {
+          "title": "Gnocco Fritto",
+          "description": "Traditional puffed bread from Modena served with thinly sliced Prosciutto di Parma and stracchino cheese.",
+          "value": "$19",
+          "image_query": "gnocco fritto prosciutto plate"
+        },
+        {
+          "title": "Tortellini in Brodo",
+          "description": "Micro-tortellini stuffed with pork loin and mortadella, served in a clear capon broth.",
+          "value": "$26",
+          "image_query": "tortellini soup broth bowl"
+        },
+        {
+          "title": "Costoletta alla Milanese",
+          "description": "Bone-in veal chop, breaded and pan-fried in clarified butter, served with arugula and cherry tomatoes.",
+          "value": "$48",
+          "image_query": "veal milanese breaded cutlet"
+        }
+      ],
+      "image_queries": [
+        "tagliatelle bolognese pasta plate",
+        "gnocco fritto prosciutto plate",
+        "tortellini soup broth bowl",
+        "veal milanese breaded cutlet"
+      ]
+    },
+    {
+      "id": "private-events",
+      "type": "mid_cta_banner",
+      "role": "Capture high-ticket event leads",
+      "nav_label": "Events",
+      "headline": "Host an Intimate Gathering",
+      "subheadline": "Our private wine cellar accommodates up to 20 guests for bespoke Northern Italian feasts.",
+      "layout_hint": "centered-stack",
+      "interactivity": "smooth-scroll to lead form",
+      "cta": {
+        "label": "Inquire Now",
+        "href": "#event-form"
+      },
+      "items": [],
+      "image_queries": []
+    },
+    {
+      "id": "accolades",
+      "type": "press",
+      "role": "Social proof through editorial validation",
+      "nav_label": "Press",
+      "headline": "In the News",
+      "subheadline": "What the critics are saying about our corner of the West Village.",
+      "layout_hint": "media-quote",
+      "items": [
+        {
+          "title": "The New York Times",
+          "description": "A masterclass in the Northern Italian canon, served with effortless neighborhood grace.",
+          "label": "Pete Wells"
+        },
+        {
+          "title": "Eater NY",
+          "description": "The most authentic ragu you will find south of 14th Street.",
+          "label": "Robert Sietsema"
+        },
+        {
+          "title": "The Infatuation",
+          "description": "The perfect spot for a date night that feels both special and lived-in.",
+          "label": "Hannah Albertine"
+        }
+      ],
+      "image_queries": [],
+      "interactivity": ""
+    },
+    {
+      "id": "guest-info",
+      "type": "faq",
+      "role": "Reduce friction for potential diners",
+      "nav_label": "FAQ",
+      "headline": "Planning Your Visit",
+      "subheadline": "Everything you need to know before joining us for dinner.",
+      "layout_hint": "accordion",
+      "interactivity": "FAQ accordion with smooth open/close",
+      "items": [
+        {
+          "title": "Do you accept walk-ins?",
+          "description": "We hold our bar seats and a portion of the dining room for walk-in guests every evening."
+        },
+        {
+          "title": "What is the dress code?",
+          "description": "We suggest smart casual attire. We want you to feel comfortable and at home."
+        },
+        {
+          "title": "Can you accommodate gluten-free diets?",
+          "description": "Yes, we offer house-made gluten-free pasta and can adapt most dishes to your needs."
+        },
+        {
+          "title": "Is there a corkage fee?",
+          "description": "We allow up to two 750ml bottles per table with a $45 corkage fee per bottle."
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "location-map",
+      "type": "locations",
+      "role": "Final logistical conversion",
+      "nav_label": "Location",
+      "headline": "Find Us in the Village",
+      "subheadline": "Located on the corner of West 10th and Waverly Place.",
+      "layout_hint": "two-column",
+      "interactivity": "direct Google Maps integration for directions",
+      "image_queries": [
+        "west village street corner nyc"
+      ],
+      "items": []
+    },
+    {
+      "id": "footer",
+      "type": "footer",
+      "role": "site-wide nav",
+      "headline": "Da Marco",
+      "subheadline": "",
+      "layout_hint": "footer-columns",
+      "items": [],
+      "image_queries": []
+    }
+  ],
+  "page_features": [
+    "sticky_cta",
+    "back_to_top"
+  ],
+  "ctas": {
+    "primary": {
+      "label": "Book a Table",
+      "href": "https://resy.com/cities/ny/da-marco"
+    },
+    "secondary": {
+      "label": "Learn more",
+      "href": "#features"
+    }
+  },
+  "domain_keywords": [
+    "italian restaurant west village",
+    "handmade pasta nyc",
+    "northern italian cuisine",
+    "trattoria dining room",
+    "emilia romagna food"
+  ],
+  "design_seed": 2480,
+  "design_tokens": {
+    "card_class": "bg-card rounded-xl",
+    "button_radius_class": "rounded-md",
+    "image_radius_class": "rounded-xl",
+    "section_padding_class": "py-24 sm:py-32 lg:py-40",
+    "transition_class": "transition-all duration-300",
+    "hover_lift_class": "hover:-translate-y-0.5 hover:shadow-md",
+    "_resolved_accent_shape": "rounded",
+    "_resolved_surface": "flat",
+    "_resolved_motion": "subtle",
+    "_resolved_section_rhythm": "airy",
+    "_resolved_image_treatment": "natural"
+  }
+}

@@ -34,11 +34,11 @@ logger = logging.getLogger(__name__)
 # Per-page output budget. A page with 6-8 sections of moderate complexity
 # fits in 24-28K tokens of JSX. 32K leaves headroom for thorough copy and
 # the route file. Sonnet 4.6 native cap is 64K — never approach it.
-_PAGE_MAX_TOKENS = 32000
+_PAGE_MAX_TOKENS = 64000
 
 # Hard timeout per page call. If exceeded, the orchestrator falls back to
 # a template skeleton for this page only — other pages keep going.
-_PAGE_TIMEOUT_SECONDS = 180.0
+_PAGE_TIMEOUT_SECONDS = 600.0  # 10 min — see page_generator.py for rationale
 
 
 # ── helpers ─────────────────────────────────────────────────────────
@@ -182,6 +182,19 @@ NON-NEGOTIABLE RULES:
      these are auto-fixed downstream.
   8. Sections must take a single `content` prop. The page route file imports the JSON once
      and threads it: `<HeroSection content={{content.sections.hero}} />`.
+  9. CARD GRIDS MUST WRAP — never compress cards into a single non-wrapping row.
+     Cards squeezed below natural content width get clipped letters (e.g. "V T" instead of
+     "Walking Tours"). Required patterns:
+       • PREFER responsive grid: `grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6`.
+       • OR auto-fit fluid grid: `grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-6`.
+       • IF you use flex for a card collection, you MUST add `flex-wrap` AND `min-w-[200px]`
+         on each card. Never `flex` without `flex-wrap` for cards.
+       • NEVER apply `overflow-hidden` to the card TEXT container (title + description div).
+         `overflow-hidden` is only for image containers and decorative blobs.
+       • NEVER apply `whitespace-nowrap` to card titles or descriptions — let titles wrap to 2 lines.
+       • NEVER fix card widths with `w-24` / `w-32` / `w-40` / `w-48` for content cards. Use
+         `w-full` inside a grid cell, or `min-w-[200px]` inside a flex row.
+       • Use `line-clamp-2` / `line-clamp-3` only on long DESCRIPTIONS, never on titles.
 
 OUTPUT CONTRACT:
   • Call write_project_files exactly once.

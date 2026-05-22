@@ -1,0 +1,364 @@
+{
+  "brand": {
+    "name": "Levin",
+    "tagline": "Invoicing for freelancers who'd rather be creating.",
+    "description": "Connect your bank, automate your invoicing, and get paid via Stripe. The effortless financial stack built for the modern independent.",
+    "domain": "levin.io",
+    "business_info": {
+      "email": "hello@levin.io",
+      "hours": "Support available Mon-Fri, 9am-6pm EST"
+    }
+  },
+  "palette": {
+    "primary": "240 60% 30%",
+    "secondary": "40 20% 90%",
+    "accent": "15 80% 60%",
+    "background": "40 30% 97%",
+    "foreground": "240 20% 10%",
+    "muted": "240 10% 50%",
+    "border": "40 15% 85%",
+    "card": "0 0% 100%"
+  },
+  "typography": {
+    "heading_font": "Cormorant Garamond",
+    "body_font": "Inter",
+    "scale": "expressive"
+  },
+  "motif": "editorial",
+  "design_system": {
+    "motion": "subtle",
+    "accent_shape": "pill",
+    "surface": "elevated",
+    "image_treatment": "natural",
+    "section_rhythm": "balanced"
+  },
+  "personality": {
+    "tone": "confident",
+    "vibe_keywords": [
+      "premium",
+      "trustworthy",
+      "warm",
+      "effortless"
+    ],
+    "energy": "medium"
+  },
+  "header_archetype": "solid-bar",
+  "footer_archetype": "mega-columns",
+  "references": [
+    {
+      "url": "https://mercury.com",
+      "name": "Mercury",
+      "why": "Demonstrates premium fintech positioning with high-end 3D UI mockups and editorial typography.",
+      "section_order": [
+        "hero",
+        "trust_bar",
+        "features",
+        "testimonials",
+        "cta"
+      ],
+      "notable_features": [
+        "3D UI mockups",
+        "Dark mode aesthetic",
+        "Smooth scroll animations"
+      ]
+    },
+    {
+      "url": "https://stripe.com/invoicing",
+      "name": "Stripe Invoicing",
+      "why": "The gold standard for making technical invoicing feel like cutting-edge infrastructure.",
+      "section_order": [
+        "hero",
+        "trust_bar",
+        "features",
+        "integrations",
+        "cta"
+      ],
+      "notable_features": [
+        "Interactive code toggle",
+        "Animated globe",
+        "High-density feature grid"
+      ]
+    },
+    {
+      "url": "https://hellobonsai.com",
+      "name": "Bonsai",
+      "why": "Perfectly balances feature density with a freelancer-first approach to workflow.",
+      "section_order": [
+        "hero",
+        "trust_bar",
+        "how_it_works",
+        "pricing",
+        "faq"
+      ],
+      "notable_features": [
+        "Tabbed product suite",
+        "Workflow visualization",
+        "Floating chat"
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "id": "hero-main",
+      "type": "hero",
+      "role": "Establish value proposition and drive immediate signup",
+      "headline": "The elegant way to get paid for your craft.",
+      "subheadline": "Levin bridges the gap between your bank account and your clients. Send professional invoices and accept Stripe payments in seconds.",
+      "layout_hint": "asymmetric-split",
+      "archetype": "type-wrapping-product",
+      "interactivity": "Email capture field with instant validation and 'Sign up with Google' SSO button.",
+      "cta": {
+        "label": "Start Invoicing Free",
+        "href": "#signup"
+      },
+      "image_queries": [
+        "minimalist software dashboard invoice"
+      ],
+      "items": []
+    },
+    {
+      "id": "trust-ticker",
+      "type": "trust_bar",
+      "role": "Establish fintech credibility and scale",
+      "headline": "Trusted by freelancers worldwide",
+      "layout_hint": "logo-strip",
+      "interactivity": "Auto-scrolling marquee of partner logos and bank icons.",
+      "items": [
+        {
+          "title": "Stripe Partner",
+          "description": "Official payment integration"
+        },
+        {
+          "title": "Plaid Verified",
+          "description": "Secure bank connections"
+        },
+        {
+          "title": "$50M+",
+          "description": "Invoiced through Levin"
+        },
+        {
+          "title": "12,000+",
+          "description": "Active freelancers"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "workflow",
+      "type": "how_it_works",
+      "nav_label": "Process",
+      "role": "Explain the 3-step setup process visually",
+      "headline": "From work to wallet in three steps.",
+      "subheadline": "We've removed the friction from freelance finances so you can focus on the work that matters.",
+      "layout_hint": "split-image-bullets",
+      "archetype": "numbered-stepper",
+      "interactivity": "Scroll-triggered micro-animations that highlight each step as the user scrolls.",
+      "items": [
+        {
+          "title": "Connect your bank",
+          "description": "Securely link your business account via Plaid to track income and expenses automatically.",
+          "value": "01"
+        },
+        {
+          "title": "Send beautiful invoices",
+          "description": "Generate professional, brand-aligned invoices in seconds using our editorial templates.",
+          "value": "02"
+        },
+        {
+          "title": "Get paid via Stripe",
+          "description": "Clients pay instantly via credit card or ACH. Funds land directly in your connected account.",
+          "value": "03"
+        }
+      ],
+      "image_queries": [
+        "clean banking app interface"
+      ]
+    },
+    {
+      "id": "features-deep-dive",
+      "type": "features",
+      "nav_label": "Features",
+      "role": "Showcase core product capabilities",
+      "headline": "Everything you need, nothing you don't.",
+      "subheadline": "Levin is designed to be powerful enough for your business, but simple enough for your Saturday morning.",
+      "layout_hint": "grid-3",
+      "archetype": "icon-grid-3",
+      "interactivity": "Hover effects on cards revealing deeper feature descriptions.",
+      "items": [
+        {
+          "title": "Smart Reminders",
+          "description": "Automated, polite follow-ups for overdue payments so you never have to play debt collector.",
+          "icon": "Bell"
+        },
+        {
+          "title": "Global Payments",
+          "description": "Accept 135+ currencies with localized payment methods powered by Stripe's global infrastructure.",
+          "icon": "Globe"
+        },
+        {
+          "title": "Tax Readiness",
+          "description": "Categorize every transaction automatically. Export clean reports for your accountant in one click.",
+          "icon": "FileText"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "roi-banner",
+      "type": "mid_cta_banner",
+      "role": "Re-engage users with a strong ROI claim",
+      "headline": "Stop chasing PDFs. Get paid 3x faster.",
+      "subheadline": "Freelancers using Levin reduce their time-to-payment from 14 days to 48 hours.",
+      "layout_hint": "stat-band",
+      "cta": {
+        "label": "Create Your First Invoice",
+        "href": "#signup"
+      },
+      "items": [],
+      "image_queries": [],
+      "interactivity": ""
+    },
+    {
+      "id": "integrations",
+      "type": "integrations",
+      "nav_label": "Ecosystem",
+      "role": "Show compatibility with existing tools",
+      "headline": "Plays well with your existing stack.",
+      "subheadline": "Levin connects seamlessly with the tools you already use to run your freelance business.",
+      "layout_hint": "grid-4",
+      "interactivity": "Tooltips on integration icons explaining the specific sync behavior.",
+      "items": [
+        {
+          "title": "Stripe",
+          "description": "Payment processing and payouts"
+        },
+        {
+          "title": "Plaid",
+          "description": "Real-time bank synchronization"
+        },
+        {
+          "title": "Slack",
+          "description": "Get notified when an invoice is paid"
+        },
+        {
+          "title": "Gmail",
+          "description": "Send invoices from your own domain"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "reviews",
+      "type": "testimonials",
+      "nav_label": "Reviews",
+      "role": "Social proof from specific freelancer archetypes",
+      "headline": "Built for the independent spirit.",
+      "layout_hint": "carousel",
+      "archetype": "glass-cards-bg",
+      "interactivity": "Testimonials carousel with autoplay and manual navigation arrows.",
+      "items": [
+        {
+          "title": "Sarah Jenkins",
+          "description": "Levin turned my monthly billing nightmare into a five-minute task. The Stripe integration is flawless.",
+          "label": "Brand Designer",
+          "value": "5.0"
+        },
+        {
+          "title": "Marcus Chen",
+          "description": "The bank sync is a game changer for tax season. I finally feel like I have a handle on my business finances.",
+          "label": "Full-stack Developer",
+          "value": "5.0"
+        },
+        {
+          "title": "Elena Rodriguez",
+          "description": "Beautiful, minimal, and effective. My clients often comment on how professional the invoices look.",
+          "label": "Content Strategist",
+          "value": "5.0"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "faq-section",
+      "type": "faq",
+      "nav_label": "FAQ",
+      "role": "Address security and technical objections",
+      "headline": "Common Questions",
+      "layout_hint": "accordion",
+      "interactivity": "FAQ accordion with smooth height transitions and auto-close on other items.",
+      "items": [
+        {
+          "title": "Is my banking data secure?",
+          "description": "Yes. We use Plaid for bank connections, meaning we never see or store your login credentials. Your data is encrypted with AES-256."
+        },
+        {
+          "title": "What are the transaction fees?",
+          "description": "Levin doesn't take a cut of your payments. You only pay the standard Stripe processing fees (typically 2.9% + 30c)."
+        },
+        {
+          "title": "Can I use my own branding?",
+          "description": "Absolutely. You can upload your logo, choose your brand colors, and customize the email templates sent to your clients."
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "final-conversion",
+      "type": "cta",
+      "role": "Final push for account creation",
+      "headline": "Ready to simplify your business?",
+      "subheadline": "Join 12,000+ freelancers who trust Levin for their invoicing and payments. No credit card required.",
+      "layout_hint": "centered-stack",
+      "cta": {
+        "label": "Get Started for Free",
+        "href": "#signup"
+      },
+      "items": [],
+      "image_queries": [],
+      "interactivity": ""
+    },
+    {
+      "id": "footer",
+      "type": "footer",
+      "role": "site-wide nav",
+      "headline": "Levin",
+      "subheadline": "",
+      "layout_hint": "footer-columns",
+      "items": [],
+      "image_queries": []
+    }
+  ],
+  "page_features": [
+    "sticky_cta",
+    "floating_chat"
+  ],
+  "ctas": {
+    "primary": {
+      "label": "Sign Up Free",
+      "href": "/signup"
+    },
+    "secondary": {
+      "label": "Learn more",
+      "href": "#features"
+    }
+  },
+  "domain_keywords": [
+    "minimalist fintech dashboard",
+    "freelancer working laptop coffee",
+    "clean banking interface",
+    "professional invoice template"
+  ],
+  "design_tokens": {
+    "card_class": "bg-card shadow-md hover:shadow-xl rounded-2xl",
+    "button_radius_class": "rounded-full",
+    "image_radius_class": "rounded-2xl",
+    "section_padding_class": "py-16 sm:py-20 lg:py-24",
+    "transition_class": "transition-all duration-300",
+    "hover_lift_class": "hover:-translate-y-0.5 hover:shadow-md",
+    "_resolved_accent_shape": "pill",
+    "_resolved_surface": "elevated",
+    "_resolved_motion": "subtle",
+    "_resolved_section_rhythm": "balanced",
+    "_resolved_image_treatment": "natural"
+  }
+}

@@ -1,0 +1,205 @@
+{
+  "brand": {
+    "name": "Hartline",
+    "tagline": "Modern menswear, sustainably crafted for the confident man.",
+    "domain": "retail_fashion"
+  },
+  "pages": [
+    {
+      "route": "/",
+      "title": "Hartline | Modern Sustainable Menswear",
+      "purpose": "The homepage introduces Hartline's brand, showcasing its commitment to modern style and sustainability, and guiding visitors to explore collections and learn more.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "icon-grid-3",
+          "archetype": "icon-grid-3"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "bento-mosaic"
+        },
+        {
+          "type": "story",
+          "layout_hint": "split-image-left"
+        },
+        {
+          "type": "testimonials",
+          "layout_hint": "marquee-row",
+          "archetype": "marquee-row"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/shop",
+      "title": "Shop All | Hartline Menswear",
+      "purpose": "This page displays all available products, allowing users to browse and filter items to find what they're looking for.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "products"
+    },
+    {
+      "route": "/collections",
+      "title": "Collections | Hartline Menswear",
+      "purpose": "This page showcases Hartline's curated collections, allowing customers to explore specific themes or seasonal offerings.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "grid-3"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "two-column"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "collections"
+    },
+    {
+      "route": "/lookbook",
+      "title": "Lookbook | Hartline Menswear",
+      "purpose": "The lookbook page presents Hartline's clothing in styled photography, inspiring customers with outfit ideas and showcasing the brand's aesthetic.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "oversized-watermark"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "asymmetric-12col"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/story",
+      "title": "Our Story | Hartline Menswear",
+      "purpose": "This page tells the narrative of Hartline, detailing its origins, mission, and the passion behind the brand.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "story",
+          "layout_hint": "split-image-right"
+        },
+        {
+          "type": "philosophy",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-3"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/sustainability",
+      "title": "Sustainability | Hartline Menswear",
+      "purpose": "This page outlines Hartline's commitment to sustainable practices, detailing its ethical sourcing, production methods, and environmental initiatives.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "how_it_works",
+          "layout_hint": "numbered-stepper",
+          "archetype": "numbered-stepper"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "split-image-bullets",
+          "archetype": "split-image-bullets"
+        },
+        {
+          "type": "stats",
+          "layout_hint": "stat-band"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "two-column"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/stores",
+      "title": "Retail Stores | Hartline Menswear",
+      "purpose": "This page provides information about Hartline's physical retail locations, including addresses, hours, and contact details.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "locations",
+          "layout_hint": "grid-2"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "marquee-scroll"
+        },
+        {
+          "type": "contact",
+          "layout_hint": "two-column"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/contact",
+      "title": "Contact Us | Hartline Menswear",
+      "purpose": "This page provides various methods for customers to get in touch with Hartline, including a contact form and direct contact information.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "contact",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        },
+        {
+          "type": "newsletter",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    }
+  ]
+}

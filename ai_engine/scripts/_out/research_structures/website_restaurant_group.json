@@ -1,0 +1,235 @@
+{
+  "brand": {
+    "name": "Salvio",
+    "tagline": "Modern Italian Cuisine Across Three Distinct Locations",
+    "domain": "food_and_beverage"
+  },
+  "pages": [
+    {
+      "route": "/",
+      "title": "Salvio | Modern Italian Restaurant",
+      "purpose": "The homepage introduces Salvio's brand, culinary philosophy, and highlights key offerings like menus, locations, and private events to entice visitors.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "menu",
+          "layout_hint": "photo-card-grid",
+          "archetype": "photo-card-grid"
+        },
+        {
+          "type": "locations",
+          "layout_hint": "grid-3"
+        },
+        {
+          "type": "press",
+          "layout_hint": "logo-strip"
+        },
+        {
+          "type": "newsletter",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/menu",
+      "title": "Our Menus | Salvio",
+      "purpose": "This page showcases the diverse culinary offerings across Salvio's locations, allowing guests to browse dishes and plan their dining experience.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "asymmetric-split",
+          "archetype": "asymmetric-split"
+        },
+        {
+          "type": "menu",
+          "layout_hint": "categorized-rows",
+          "archetype": "categorized-rows"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "reservation",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "menu_items"
+    },
+    {
+      "route": "/locations",
+      "title": "Locations | Salvio",
+      "purpose": "Provides detailed information for each of Salvio's three restaurant locations, including addresses, hours, and direct reservation links.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "locations",
+          "layout_hint": "grid-3"
+        },
+        {
+          "type": "mid_cta_banner",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "reservation",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/private-events",
+      "title": "Private Events | Salvio",
+      "purpose": "Details Salvio's private dining and event hosting capabilities, showcasing spaces and services for special occasions.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "oversized-watermark",
+          "archetype": "oversized-watermark"
+        },
+        {
+          "type": "value_prop",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "asymmetric-12col",
+          "archetype": "asymmetric-12col"
+        },
+        {
+          "type": "lead_form",
+          "layout_hint": "split-image-left"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/chefs",
+      "title": "Our Chefs | Salvio",
+      "purpose": "Introduces the talented culinary team behind Salvio, highlighting their experience, philosophy, and contributions to the restaurant's success.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "asymmetric-split",
+          "archetype": "asymmetric-split"
+        },
+        {
+          "type": "team",
+          "layout_hint": "grid-3"
+        },
+        {
+          "type": "philosophy",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": true,
+      "detail_source": "chefs"
+    },
+    {
+      "route": "/press",
+      "title": "Press & Accolades | Salvio",
+      "purpose": "Showcases media mentions, reviews, and awards received by Salvio, building credibility and reinforcing its reputation.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "full-bleed-overlay",
+          "archetype": "full-bleed-overlay"
+        },
+        {
+          "type": "press",
+          "layout_hint": "two-column"
+        },
+        {
+          "type": "gallery",
+          "layout_hint": "bento-mosaic",
+          "archetype": "bento-mosaic"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/reservations",
+      "title": "Reservations | Salvio",
+      "purpose": "Provides a direct portal for guests to make table reservations at any Salvio location, along with important dining information.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "oversized-watermark",
+          "archetype": "oversized-watermark"
+        },
+        {
+          "type": "reservation",
+          "layout_hint": "centered-stack"
+        },
+        {
+          "type": "faq",
+          "layout_hint": "accordion"
+        },
+        {
+          "type": "locations",
+          "layout_hint": "grid-3"
+        }
+      ],
+      "detail_template": false
+    },
+    {
+      "route": "/contact",
+      "title": "Contact Us | Salvio",
+      "purpose": "Offers various methods for guests to get in touch with Salvio, including a contact form and location-specific details.",
+      "sections": [
+        {
+          "type": "hero",
+          "layout_hint": "asymmetric-split",
+          "archetype": "asymmetric-split"
+        },
+        {
+          "type": "contact_form",
+          "layout_hint": "split-image-right"
+        },
+        {
+          "type": "locations",
+          "layout_hint": "grid-3"
+        },
+        {
+          "type": "cta",
+          "layout_hint": "centered-stack"
+        }
+      ],
+      "detail_template": false
+    }
+  ]
+}

@@ -1,0 +1,410 @@
+{
+  "brand": {
+    "name": "Nomad & Nest",
+    "tagline": "The World, Curated for the Curious",
+    "description": "Bespoke small-group expeditions and tailor-made journeys designed for deep cultural immersion and sustainable impact across seven continents.",
+    "domain": "nomadandnest.travel",
+    "business_info": {
+      "address": "124 Savile Row, London, W1S 3PR",
+      "phone": "+44 20 7946 0123",
+      "email": "concierge@nomadandnest.travel",
+      "hours": "Mon-Fri: 09:00 - 18:00\nSat: 10:00 - 14:00"
+    },
+    "social": [
+      {
+        "label": "instagram",
+        "href": "https://instagram.com/nomadnest"
+      },
+      {
+        "label": "youtube",
+        "href": "https://youtube.com/nomadnest"
+      }
+    ]
+  },
+  "palette": {
+    "primary": "25 30% 20%",
+    "secondary": "210 20% 15%",
+    "accent": "35 40% 50%",
+    "background": "40 15% 96%",
+    "foreground": "0 0% 10%",
+    "muted": "30 10% 85%",
+    "border": "30 15% 80%",
+    "card": "0 0% 100%"
+  },
+  "typography": {
+    "heading_font": "Cormorant Garamond",
+    "body_font": "Inter",
+    "scale": "expressive"
+  },
+  "motif": "editorial",
+  "design_system": {
+    "motion": "organic",
+    "accent_shape": "rounded",
+    "surface": "elevated",
+    "image_treatment": "natural",
+    "section_rhythm": "balanced"
+  },
+  "personality": {
+    "tone": "luxurious",
+    "vibe_keywords": [
+      "immersive",
+      "curated",
+      "sophisticated",
+      "warm",
+      "expansive"
+    ],
+    "energy": "medium"
+  },
+  "header_archetype": "transparent-pill",
+  "footer_archetype": "mega-columns",
+  "page_features": [
+    "sticky_cta",
+    "floating_chat",
+    "whatsapp_button",
+    "exit_intent"
+  ],
+  "references": [
+    {
+      "url": "https://www.intrepidtravel.com",
+      "name": "Intrepid Travel",
+      "why": "Gold standard for small-group travel with excellent bento-box categorization and sustainability messaging.",
+      "section_order": [
+        "hero",
+        "trust_bar",
+        "travel_styles",
+        "top_trips",
+        "why_us",
+        "impact"
+      ],
+      "notable_features": [
+        "Bento-box category grid",
+        "Interactive trip cards",
+        "Sticky search bar"
+      ]
+    },
+    {
+      "url": "https://www.blacktomato.com",
+      "name": "Black Tomato",
+      "why": "Pinnacle of bespoke luxury travel showing how to sell high-ticket custom itineraries with cinematic visuals.",
+      "section_order": [
+        "hero",
+        "philosophy",
+        "destinations",
+        "testimonials",
+        "inspiration"
+      ],
+      "notable_features": [
+        "Cinematic background video",
+        "Bespoke inquiry form",
+        "Visual mega-menu"
+      ]
+    },
+    {
+      "url": "https://www.viator.com",
+      "name": "Viator",
+      "why": "Ultimate conversion engine for high-velocity booking and location-based search optimization.",
+      "section_order": [
+        "hero",
+        "top_destinations",
+        "experiences_grid",
+        "value_prop"
+      ],
+      "notable_features": [
+        "Location detection search",
+        "Wishlist heart icon",
+        "Dynamic pricing"
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "id": "hero-discovery",
+      "type": "hero",
+      "role": "The Dream & The Filter",
+      "headline": "Collect Moments, Not Just Destinations",
+      "subheadline": "Expertly crafted small-group tours and bespoke itineraries designed to take you deeper into the heart of the world.",
+      "layout_hint": "full-bleed-overlay",
+      "archetype": "video-mask",
+      "interactivity": "multi-step search widget with destination, date, and style filters",
+      "image_queries": [
+        "luxury travel landscape mountains sunset"
+      ],
+      "cta": {
+        "label": "Explore Journeys",
+        "href": "#tours"
+      },
+      "items": []
+    },
+    {
+      "id": "authority-bar",
+      "type": "trust_bar",
+      "role": "The Authority",
+      "headline": "Trusted by Global Explorers",
+      "layout_hint": "logo-strip",
+      "interactivity": "logos grayscale until hover with tooltip showing award year",
+      "items": [
+        {
+          "label": "Conde Nast",
+          "value": "2023 Winner",
+          "description": "Voted Best Specialist Tour Operator"
+        },
+        {
+          "label": "Trustpilot",
+          "value": "4.9/5",
+          "description": "Based on over 2,500 verified traveler reviews"
+        },
+        {
+          "label": "B-Corp",
+          "value": "Certified",
+          "description": "Meeting the highest standards of social and environmental impact"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "travel-styles",
+      "type": "features",
+      "nav_label": "Styles",
+      "role": "The Segmentation",
+      "headline": "How Do You Want to See the World?",
+      "subheadline": "Choose a travel style that matches your pace, from rugged adventures to refined luxury.",
+      "layout_hint": "grid-3",
+      "archetype": "icon-grid-3",
+      "interactivity": "cards expand on hover to reveal sample itineraries",
+      "items": [
+        {
+          "title": "Small Group Expeditions",
+          "description": "Maximum 12 travelers led by local experts for an intimate, authentic connection to culture.",
+          "icon": "Users"
+        },
+        {
+          "title": "Tailor-Made Luxury",
+          "description": "Completely bespoke itineraries built from scratch to your exact specifications and interests.",
+          "icon": "Sparkles"
+        },
+        {
+          "title": "Active & Wellness",
+          "description": "Rejuvenate with curated hiking, cycling, and yoga retreats in the world's most serene locales.",
+          "icon": "Mountain"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "featured-tours",
+      "type": "gallery",
+      "nav_label": "Journeys",
+      "role": "The Merchandise",
+      "headline": "Our Most Coveted Journeys",
+      "subheadline": "Hand-picked expeditions departing in the next six months.",
+      "layout_hint": "carousel",
+      "archetype": "bento-mosaic",
+      "interactivity": "horizontal scroll with drag-to-slide and itinerary preview modals",
+      "items": [
+        {
+          "title": "Patagonian Peaks",
+          "description": "12 Days \u00b7 From $4,200",
+          "image_query": "patagonia mountains hiking"
+        },
+        {
+          "title": "Kyoto Zen Retreat",
+          "description": "8 Days \u00b7 From $3,800",
+          "image_query": "kyoto temple autumn"
+        },
+        {
+          "title": "Serengeti Safari",
+          "description": "10 Days \u00b7 From $6,500",
+          "image_query": "serengeti safari lion"
+        },
+        {
+          "title": "Amalfi Coast Privateer",
+          "description": "7 Days \u00b7 From $5,100",
+          "image_query": "amalfi coast boat sunset"
+        }
+      ],
+      "image_queries": [
+        "patagonia mountains hiking",
+        "kyoto temple autumn",
+        "serengeti safari lion",
+        "amalfi coast boat sunset"
+      ]
+    },
+    {
+      "id": "bespoke-pivot",
+      "type": "mid_cta_banner",
+      "role": "The Bespoke Pivot",
+      "headline": "Your Vision, Our Expertise",
+      "subheadline": "Can't find the perfect trip? Let our travel designers craft a one-of-a-kind itinerary just for you.",
+      "layout_hint": "split-image-right",
+      "interactivity": "smooth-scroll to lead form",
+      "image_queries": [
+        "luxury travel planner desk map"
+      ],
+      "cta": {
+        "label": "Request Bespoke Plan",
+        "href": "#inquiry"
+      },
+      "items": []
+    },
+    {
+      "id": "value-props",
+      "type": "value_prop",
+      "nav_label": "Why Us",
+      "role": "The Differentiator",
+      "headline": "The Nomad & Nest Difference",
+      "subheadline": "We go beyond the guidebook to provide seamless, meaningful travel experiences.",
+      "layout_hint": "grid-3",
+      "archetype": "split-image-bullets",
+      "interactivity": "scroll-triggered fade-in for each value pillar",
+      "items": [
+        {
+          "title": "Local Expert Guides",
+          "description": "Every journey is led by residents who share secret spots and stories you won't find online.",
+          "icon": "MapPin"
+        },
+        {
+          "title": "Total Financial Protection",
+          "description": "Book with confidence knowing your investment is 100% protected through our ATOL bonding.",
+          "icon": "ShieldCheck"
+        },
+        {
+          "title": "Carbon Neutral Travel",
+          "description": "We offset the footprint of every trip and support local conservation projects in every destination.",
+          "icon": "Leaf"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "social-proof",
+      "type": "testimonials",
+      "nav_label": "Reviews",
+      "role": "The Reassurance",
+      "headline": "Stories from the Road",
+      "layout_hint": "carousel",
+      "archetype": "glass-cards-bg",
+      "interactivity": "auto-playing marquee with pause on hover",
+      "items": [
+        {
+          "title": "Sarah Jenkins",
+          "description": "The attention to detail on our Japan trip was staggering. We felt like guests, not tourists, at every ryokan.",
+          "label": "Kyoto Explorer",
+          "value": "5.0"
+        },
+        {
+          "title": "Marcus Thorne",
+          "description": "Nomad & Nest managed to find a side of the Serengeti I didn't know existed. Truly life-changing perspective.",
+          "label": "Safari Enthusiast",
+          "value": "5.0"
+        },
+        {
+          "title": "Elena Rossi",
+          "description": "Bespoke planning at its finest. They understood our family's needs perfectly and delivered a seamless Italian holiday.",
+          "label": "Family Traveler",
+          "value": "5.0"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "common-questions",
+      "type": "faq",
+      "nav_label": "FAQ",
+      "role": "The Objection Killer",
+      "headline": "Travel Essentials",
+      "layout_hint": "accordion",
+      "interactivity": "smooth-toggle accordion with one-at-a-time opening",
+      "items": [
+        {
+          "title": "What is the average group size?",
+          "description": "Our small-group expeditions are capped at 12 travelers to ensure intimacy and access to boutique accommodations."
+        },
+        {
+          "title": "Are flights included in the price?",
+          "description": "Prices typically cover all land arrangements, internal flights, and activities. International airfare can be added by our concierge."
+        },
+        {
+          "title": "What is your cancellation policy?",
+          "description": "We offer flexible booking with full refunds up to 60 days before departure, or lifetime deposits for future trips."
+        },
+        {
+          "title": "Do you cater to specific dietary needs?",
+          "description": "Absolutely. Our local guides and partners are briefed on all dietary requirements well in advance of your arrival."
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "inquiry",
+      "type": "lead_form",
+      "nav_label": "Book",
+      "role": "The Capture",
+      "headline": "Start Your Journey",
+      "subheadline": "Tell us where you want to go, and our experts will handle the rest.",
+      "layout_hint": "two-column",
+      "interactivity": "form validation with success animation and downloadable guide offer",
+      "items": [
+        {
+          "title": "Full Name"
+        },
+        {
+          "title": "Email Address"
+        },
+        {
+          "title": "Desired Destination"
+        },
+        {
+          "title": "Travel Month/Year"
+        },
+        {
+          "title": "Group Size"
+        },
+        {
+          "title": "Tell us about your dream trip"
+        }
+      ],
+      "image_queries": []
+    },
+    {
+      "id": "footer",
+      "type": "footer",
+      "role": "site-wide nav",
+      "headline": "Nomad & Nest",
+      "subheadline": "",
+      "layout_hint": "footer-columns",
+      "items": [],
+      "image_queries": []
+    }
+  ],
+  "ctas": {
+    "primary": {
+      "label": "Plan Your Trip",
+      "href": "#inquiry"
+    },
+    "secondary": {
+      "label": "Learn more",
+      "href": "#features"
+    }
+  },
+  "domain_keywords": [
+    "luxury travel photography",
+    "boutique hotel interior",
+    "cultural immersion people",
+    "scenic mountain landscape",
+    "local market food"
+  ],
+  "design_seed": 6140,
+  "design_tokens": {
+    "card_class": "bg-card shadow-md hover:shadow-xl rounded-xl",
+    "button_radius_class": "rounded-md",
+    "image_radius_class": "rounded-xl",
+    "section_padding_class": "py-16 sm:py-20 lg:py-24",
+    "transition_class": "transition-all duration-700 ease-out",
+    "hover_lift_class": "hover:-translate-y-1 hover:shadow-md",
+    "_resolved_accent_shape": "rounded",
+    "_resolved_surface": "elevated",
+    "_resolved_motion": "organic",
+    "_resolved_section_rhythm": "balanced",
+    "_resolved_image_treatment": "natural"
+  }
+}
