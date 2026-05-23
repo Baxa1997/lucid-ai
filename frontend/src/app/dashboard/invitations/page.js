@@ -1,7 +1,7 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────
-//  /dashboard/engineer/invitations
+//  /dashboard/invitations
 //  Pending-invitations page.
 //
 //  Lists invites for the signed-in user (project name, sender info

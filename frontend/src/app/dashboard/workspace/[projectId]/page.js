@@ -670,7 +670,7 @@ function ConversationPageInner({params}) {
       const data = await res.json().catch(() => ({}));
       throw new Error(data.error || 'Delete failed');
     }
-    router.replace('/dashboard/engineer');
+    router.replace('/dashboard');
   };
 
   // A "real" deployment URL — used by the Publish modal to show status and
@@ -1198,7 +1198,7 @@ function ConversationPageInner({params}) {
                 ))}
               </div>
               <a
-                href="/dashboard/engineer/billing"
+                href="/dashboard/billing"
                 className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 bg-gradient-to-r from-[#dc5426] to-orange-500 text-white hover:opacity-90 shadow-sm shadow-orange-600/20 transition-all active:scale-[0.98]">
                 <CreditCard className="w-4 h-4" /> Upgrade to Pro — from $59/mo
               </a>
@@ -1490,7 +1490,7 @@ function ConversationPageInner({params}) {
                   <button
                     onClick={() => {
                       setShowProfileDropdown(false);
-                      window.location.href = "/dashboard/engineer";
+                      window.location.href = "/dashboard";
                     }}
                     className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-white/[0.04] border-b border-[#f0f0f0] dark:border-[#2d333b] transition-colors">
                     <ChevronLeft className="w-3.5 h-3.5 text-slate-400 shrink-0" />
@@ -1561,7 +1561,7 @@ function ConversationPageInner({params}) {
                         {/* CTA */}
                         <div className="px-4 pt-3 pb-4 border-t border-slate-100 dark:border-[#2d333b]">
                           <a
-                            href="/dashboard/engineer/billing"
+                            href="/dashboard/billing"
                             className="text-[13px] font-semibold text-[#dc5426] hover:text-[#b8421e] transition-colors block">
                             {subscription?.isPaid ? "Manage plan" : "Upgrade your plan"}
                           </a>
@@ -1576,12 +1576,12 @@ function ConversationPageInner({params}) {
                       {
                         icon: Settings,
                         label: "Settings",
-                        href: "/dashboard/engineer/settings",
+                        href: "/dashboard/settings",
                       },
                       {
                         icon: CreditCard,
                         label: "Pricing plans",
-                        href: "/dashboard/engineer/billing",
+                        href: "/dashboard/billing",
                       },
                       {icon: Gift, label: "Win free credits", href: null},
                       {icon: BookOpen, label: "Documentation", href: null},
@@ -1639,13 +1639,13 @@ function ConversationPageInner({params}) {
               {showAppDropdown && (
                 <div className="absolute top-full left-0 mt-1.5 w-52 bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-xl shadow-xl z-50 py-1.5 overflow-hidden">
                   <button
-                    onClick={() => { setShowAppDropdown(false); window.location.href = "/dashboard/engineer"; }}
+                    onClick={() => { setShowAppDropdown(false); window.location.href = "/dashboard"; }}
                     className="w-full flex items-center gap-3 px-4 py-2.5 text-[14px] text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors text-left">
                     <LayoutGrid className="w-4 h-4 text-slate-500 dark:text-slate-400 shrink-0" />
                     All Projects
                   </button>
                   <button
-                    onClick={() => { setShowAppDropdown(false); window.location.href = "/dashboard/engineer/settings"; }}
+                    onClick={() => { setShowAppDropdown(false); window.location.href = "/dashboard/settings"; }}
                     className="w-full flex items-center gap-3 px-4 py-2.5 text-[14px] text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.06] transition-colors text-left">
                     <SlidersHorizontal className="w-4 h-4 text-slate-500 dark:text-slate-400 shrink-0" />
                     Settings
@@ -1749,7 +1749,7 @@ function ConversationPageInner({params}) {
             {/* Upgrade — only show when user is on a non-paid plan */}
             {!subscription?.isPaid && (
               <a
-                href="/dashboard/engineer/billing"
+                href="/dashboard/billing"
                 className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-[13px] font-semibold transition-all ml-1"
                 style={{
                   background:
@@ -1830,7 +1830,7 @@ function ConversationPageInner({params}) {
                 The owner of <span className="font-medium text-slate-700 dark:text-slate-200">{conversation?.title || "this project"}</span> removed you from the project. Your chat is disabled and you can&rsquo;t open it from your dashboard anymore.
               </p>
               <button
-                onClick={() => router.push("/dashboard/engineer")}
+                onClick={() => router.push("/dashboard")}
                 className="w-full px-4 py-2.5 rounded-lg bg-[#dc5426] hover:bg-[#c4471f] text-white text-sm font-semibold transition-colors">
                 Back to dashboard
               </button>

@@ -3,9 +3,12 @@
 import Navbar from '@/components/Navbar';
 import HeroSection from '@/components/HeroSection';
 import FeaturesSection from '@/components/FeaturesSection';
-import IntegrationsSection from '@/components/IntegrationsSection';
+import HowItWorksSection from '@/components/HowItWorksSection';
 import TemplatesSection from '@/components/TemplatesSection';
 import UseCasesSection from '@/components/UseCasesSection';
+import TrustIsolationSection from '@/components/TrustIsolationSection';
+import IntegrationsSection from '@/components/IntegrationsSection';
+import CtaComposerSection from '@/components/CtaComposerSection';
 import Footer from '@/components/Footer';
 
 export default function LandingPage() {
@@ -21,12 +24,18 @@ export default function LandingPage() {
       <main className="flex-1 w-full">
         {/* Hero owns its own gradient + min-h-screen so the banner fills the
             viewport and its gradient terminates in #FDFDFD — the same color
-            as the sections below, so the join is invisible. */}
+            as the sections below, so the join is invisible.
+
+            Order: Features → How it works → Trust (now together) → Stack
+            (categorized integrations) → Templates → Use cases → CTA. */}
         <HeroSection />
         <FeaturesSection />
+        <HowItWorksSection />
+        <TrustIsolationSection />
         <IntegrationsSection />
         <TemplatesSection />
         <UseCasesSection />
+        <CtaComposerSection />
       </main>
 
       <Footer />

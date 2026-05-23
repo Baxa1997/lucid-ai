@@ -1065,7 +1065,7 @@ export default function RightPanel() {
                   const u = vercelDeployUrl || repoInfo?.deployedUrl;
                   if (u) window.open(u, '_blank');
                 }}
-                onUpgradeClick={() => router?.push('/dashboard/engineer/billing')}
+                onUpgradeClick={() => router?.push('/dashboard/billing')}
               />
             )}
 

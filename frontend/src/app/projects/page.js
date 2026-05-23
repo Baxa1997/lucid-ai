@@ -58,7 +58,7 @@ export default function ProjectsPage() {
 
   const handleRepoSelect = (repo) => {
     setSelectedRepo(repo);
-    setTimeout(() => router.push('/dashboard/engineer'), 400);
+    setTimeout(() => router.push('/dashboard'), 400);
   };
 
   const providers = [
@@ -76,7 +76,7 @@ export default function ProjectsPage() {
       {/* ── Top Bar ── */}
       <header className="relative z-20 h-18 py-4 px-8 flex items-center justify-between">
         <div className="flex items-center gap-6">
-          <button onClick={() => router.push('/dashboard/engineer')} className="flex items-center gap-2 group px-3 py-1.5 rounded-lg hover:bg-white/50 transition-all">
+          <button onClick={() => router.push('/dashboard')} className="flex items-center gap-2 group px-3 py-1.5 rounded-lg hover:bg-white/50 transition-all">
             <ArrowLeft className="w-4 h-4 text-slate-500 group-hover:-translate-x-0.5 transition-transform" />
             <span className="text-sm font-semibold text-slate-600">Back</span>
           </button>

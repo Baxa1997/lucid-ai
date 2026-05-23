@@ -76,7 +76,7 @@ export default function AdminDashboard() {
       <div className="sticky top-0 z-10 bg-white/80 dark:bg-[#0d1117]/80 backdrop-blur border-b border-slate-200 dark:border-[#2d333b] px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <button
-            onClick={() => router.push('/dashboard/engineer')}
+            onClick={() => router.push('/dashboard')}
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06]"
           >
             <ArrowLeft className="w-4 h-4" />

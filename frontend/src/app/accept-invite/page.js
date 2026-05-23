@@ -41,7 +41,7 @@ function AcceptInviteInner() {
           // back to project_id only for older API responses that didn't
           // surface the slug — old links would have linked to a 404 anyway.
           const dest = data.project_slug || data.project_id;
-          router.replace(`/dashboard/engineer/workspace/${encodeURIComponent(dest)}`);
+          router.replace(`/dashboard/workspace/${encodeURIComponent(dest)}`);
           return;
         }
 
@@ -126,7 +126,7 @@ function AcceptInviteInner() {
             </h1>
             <p className="text-sm text-slate-500 mb-5">{errorMsg}</p>
             <button
-              onClick={() => router.push("/dashboard/engineer")}
+              onClick={() => router.push("/dashboard")}
               className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md">
               Go to dashboard
             </button>

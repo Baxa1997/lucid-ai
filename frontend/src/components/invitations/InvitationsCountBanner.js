@@ -8,7 +8,7 @@
 //  One invite  → "You've been invited to {project} — View invitation"
 //  N invites   → "You have N pending invitations — View invitations"
 //
-//  Clicking anywhere on the banner routes to /dashboard/engineer/invitations.
+//  Clicking anywhere on the banner routes to /dashboard/invitations.
 //  Powered by the same useInvitations hook used by the sidebar badge, so
 //  it picks up new invites via Supabase Realtime without extra wiring.
 // ─────────────────────────────────────────────────────────
@@ -34,7 +34,7 @@ export default function InvitationsCountBanner() {
   return (
     <div className="max-w-[800px] mx-auto px-8 pt-6">
       <Link
-        href="/dashboard/engineer/invitations"
+        href="/dashboard/invitations"
         className="group flex items-center justify-between gap-3 px-4 py-3 rounded-xl bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/30 hover:bg-blue-100/60 dark:hover:bg-blue-500/15 transition-colors">
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-9 h-9 rounded-full bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300 grid place-items-center shrink-0 relative">

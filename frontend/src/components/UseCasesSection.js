@@ -1,13 +1,13 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Map, ListChecks, FileText } from 'lucide-react';
+import { GitPullRequest, MessageSquare, ShieldCheck, Activity } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils';
 
-/* ── Mockup Components ── */
+/* ── Shared chrome — same chat-style look across all three mockups ── */
 
-function DocsMockup() {
+function ChatChrome({ title, children }) {
   return (
     <div className="bg-white rounded-xl shadow-2xl overflow-hidden w-full max-w-md border border-white/20">
       <div className="bg-slate-50 border-b border-slate-100 flex items-center px-4 py-2.5 gap-2">
@@ -16,226 +16,183 @@ function DocsMockup() {
           <div className="w-2.5 h-2.5 rounded-full bg-[#febc2e]" />
           <div className="w-2.5 h-2.5 rounded-full bg-[#28c840]" />
         </div>
-        <div className="text-[9px] text-slate-400 font-mono ml-3">lucid-ai / docs-generator</div>
-        <div className="ml-auto text-slate-300 text-xs">...</div>
-      </div>
-      <div className="flex h-[280px] text-[10px] font-mono">
-        <div className="flex-[1.2] bg-slate-50 p-3 border-r border-slate-100 flex flex-col gap-2 text-left">
-          <div className="text-slate-400 text-[9px]">Lucid AI · 9:15 AM</div>
-          <div className="text-slate-700 leading-relaxed text-[10px]">
-            Scanning repository structure and generating comprehensive documentation...
-          </div>
-          <div className="mt-1 text-[#dc5426]">$ lucid docs generate --source ./src</div>
-          <div className="text-[#dc5426] text-[9px] mt-1 leading-relaxed">
-            ✓ Parsed 147 files<br />
-            ✓ Extracted 23 API endpoints<br />
-            ✓ Generated 12 doc pages
-          </div>
-          <div className="text-[#dc5426] mt-1">$ lucid docs publish</div>
-          <div className="text-[#dc5426]">Published to docs.yourapp.com</div>
-        </div>
-        <div className="flex-1 bg-white p-2.5 flex flex-col">
-          <div className="text-[9px] font-bold text-slate-700 mb-2">Generated Docs Preview</div>
-          <div className="flex-1 bg-slate-50 rounded-lg p-2 flex flex-col gap-1.5 text-[9px] border border-slate-100">
-            <div className="font-bold text-slate-800 text-[10px]"># API Reference</div>
-            <div className="text-slate-500 text-[9px]">## Authentication</div>
-            <div className="bg-slate-900 text-orange-400 p-1.5 rounded text-[8px]">POST /api/auth/login</div>
-            <div className="text-slate-500 text-[9px]">## Users</div>
-            <div className="bg-slate-900 text-orange-300 p-1.5 rounded text-[8px]">GET /api/users/:id</div>
-          </div>
+        <div className="text-[9px] text-slate-400 font-mono ml-3">{title}</div>
+        <div className="ml-auto inline-flex items-center gap-1.5 text-[9px] text-emerald-500 font-medium">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+          live
         </div>
       </div>
+      <div className="h-[280px] p-3 text-left text-slate-700">{children}</div>
     </div>
   );
 }
 
-function AnalyticsMockup() {
+function ShipFromPromptMockup() {
   return (
-    <div className="bg-white rounded-xl shadow-2xl overflow-hidden w-full max-w-md border border-white/20">
-      <div className="bg-slate-50 border-b border-slate-100 flex items-center px-4 py-2.5 gap-2">
-        <div className="flex gap-1.5">
-          <div className="w-2.5 h-2.5 rounded-full bg-[#ff5f57]" />
-          <div className="w-2.5 h-2.5 rounded-full bg-[#febc2e]" />
-          <div className="w-2.5 h-2.5 rounded-full bg-[#28c840]" />
+    <ChatChrome title="lucid-ai · acme/marketing-site">
+      <div className="space-y-2">
+        <div className="ml-auto inline-block max-w-[80%] px-3 py-1.5 rounded-md bg-violet-50 border border-violet-100 text-[10px] text-slate-700">
+          Add Stripe checkout to /pricing.
         </div>
-        <div className="text-[9px] text-slate-400 font-mono ml-3">lucid-ai / analytics</div>
-        <div className="ml-auto text-slate-300 text-xs">...</div>
-      </div>
-      <div className="flex h-[280px] text-[10px] font-mono">
-        <div className="flex-[1.2] bg-slate-50 p-3 border-r border-slate-100 flex flex-col gap-2 text-left">
-          <div className="text-slate-400 text-[9px]">Lucid AI · 7:02 AM</div>
-          <div className="text-slate-700 text-[10px]">I have completed the requested visualizations:</div>
-          <div className="mt-1 border border-slate-200 rounded-lg p-2 bg-white">
-            <div className="h-1 w-full bg-orange-200 rounded mb-1" />
-            <div className="h-1 w-3/4 bg-orange-100 rounded mb-1" />
-            <div className="h-1 w-1/2 bg-orange-300 rounded mb-1" />
-            <div className="h-1 w-2/3 bg-orange-200 rounded" />
-            <div className="text-[8px] text-slate-400 mt-1">Price Trend Analysis</div>
-          </div>
-          <div className="text-slate-400 text-[9px] mt-1 flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-slate-300" /> Session Ended
-          </div>
+        <div className="text-[9.5px] text-blue-600 font-semibold">Plan · 4 steps</div>
+        <div className="text-[9.5px] font-mono text-slate-600 space-y-0.5">
+          <div><span className="text-emerald-500">▸</span> read  app/pricing/page.tsx</div>
+          <div><span className="text-emerald-500">▸</span> edit  app/pricing/page.tsx</div>
+          <div><span className="text-emerald-500">▸</span> add   app/api/checkout/route.ts</div>
+          <div><span className="text-emerald-500">▸</span> shell npm test --silent</div>
         </div>
-        <div className="flex-1 bg-[#1e293b] p-2.5 flex flex-col text-[9px] text-slate-300">
-          <div className="flex gap-2 mb-2 text-[8px]">
-            <span className="text-orange-400 border-b border-orange-400 pb-0.5">Shell</span>
-            <span className="text-slate-500">Browser</span>
-            <span className="text-slate-500">Editor</span>
-            <span className="text-slate-500">Planner</span>
-          </div>
-          <div className="text-orange-400">$ python3 analyze_data.py</div>
-          <div className="text-slate-400 mt-1 text-[8px] leading-relaxed">
-            Summary Statistics:<br />
-            year: resale_price<br />
-            mean: 443860.53<br />
-            std: 119141.32
-          </div>
+        <div className="text-[9.5px] text-emerald-500 font-medium">✓ 18 tests passing</div>
+        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 border border-blue-100 text-[9.5px] font-semibold text-blue-700">
+          <GitPullRequest className="w-3 h-3" />
+          PR #312 · feat/stripe-checkout
         </div>
       </div>
-    </div>
+    </ChatChrome>
   );
 }
 
-function AppDevMockup() {
+function BacklogMockup() {
   return (
-    <div className="bg-white rounded-xl shadow-2xl overflow-hidden w-full max-w-md border border-white/20">
-      <div className="bg-slate-50 border-b border-slate-100 flex items-center px-4 py-2.5 gap-2">
-        <div className="flex gap-1.5">
-          <div className="w-2.5 h-2.5 rounded-full bg-[#ff5f57]" />
-          <div className="w-2.5 h-2.5 rounded-full bg-[#febc2e]" />
-          <div className="w-2.5 h-2.5 rounded-full bg-[#28c840]" />
+    <ChatChrome title="lucid-ai · acme/api">
+      <div className="space-y-2">
+        <div className="ml-auto inline-block max-w-[85%] px-3 py-1.5 rounded-md bg-violet-50 border border-violet-100 text-[10px] text-slate-700">
+          Fix #847 — pagination cursor returns duplicates on the last page.
         </div>
-        <div className="text-[9px] text-slate-400 font-mono ml-3">lucid-ai / app-builder</div>
-      </div>
-      <div className="flex h-[280px] text-[10px] font-mono">
-        <div className="flex-[1.2] bg-slate-50 p-3 border-r border-slate-100 flex flex-col gap-2 text-left">
-          <div className="text-slate-400 text-[9px]">Lucid AI · 3:15 PM</div>
-          <div className="text-slate-700 text-[10px]">Fixed 3 critical bugs and added test coverage.</div>
-          <div className="text-[#dc5426] mt-1">$ npm run test -- --coverage</div>
-          <div className="text-[#dc5426] text-[9px] mt-1 leading-relaxed">
-            PASS src/UserDashboard.test.tsx<br />
-            ✓ renders user profile (12ms)<br />
-            ✓ handles loading state (8ms)<br />
-            ✓ fetches data on mount (15ms)
-          </div>
-          <div className="text-[#dc5426] mt-1">Tests: 3 passed, 3 total</div>
+        <div className="text-[9.5px] text-blue-600 font-semibold">Reproducing · cursor=eyJpZCI6...</div>
+        <div className="text-[9.5px] font-mono text-slate-600 space-y-0.5">
+          <div><span className="text-emerald-500">▸</span> read  src/pagination/cursor.ts</div>
+          <div><span className="text-emerald-500">▸</span> diff  off-by-one in tail-window</div>
+          <div><span className="text-emerald-500">▸</span> shell pytest tests/pagination</div>
         </div>
-        <div className="flex-1 bg-white p-2.5 flex flex-col">
-          <div className="border border-slate-100 rounded p-1 flex items-center gap-1.5 mb-2 text-[9px]">
-            <span className="text-slate-300">@</span>
-            <span className="text-slate-400">localhost:3000</span>
-          </div>
-          <div className="flex-1 bg-slate-50 rounded-lg p-2 flex flex-col gap-1.5 text-[9px] border border-slate-100">
-            <div className="h-4 w-full bg-orange-100 rounded" />
-            <div className="flex gap-1.5 flex-1">
-              <div className="flex-1 bg-white rounded border border-slate-100 p-1">
-                <div className="h-1.5 w-8 bg-slate-200 rounded mb-1" />
-                <div className="h-1 w-full bg-slate-100 rounded" />
-              </div>
-              <div className="flex-1 bg-white rounded border border-slate-100 p-1">
-                <div className="h-1.5 w-8 bg-slate-200 rounded mb-1" />
-                <div className="h-1 w-full bg-slate-100 rounded" />
-              </div>
-            </div>
-          </div>
+        <div className="text-[9.5px] text-emerald-500 font-medium">✓ Bug reproduced + fixed · regression test added</div>
+        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 border border-blue-100 text-[9.5px] font-semibold text-blue-700">
+          <GitPullRequest className="w-3 h-3" />
+          PR #913 · fix/pagination-tail
         </div>
       </div>
-    </div>
+    </ChatChrome>
   );
 }
 
-/* ── Feature Data ── */
+function FromTemplateMockup() {
+  return (
+    <ChatChrome title="lucid-ai · new project from template">
+      <div className="space-y-2">
+        <div className="ml-auto inline-block max-w-[85%] px-3 py-1.5 rounded-md bg-violet-50 border border-violet-100 text-[10px] text-slate-700">
+          Start from CRM Dashboard. Make leads stage Kanban-style.
+        </div>
+        <div className="text-[9.5px] text-blue-600 font-semibold">Scaffolding · CRM Dashboard</div>
+        <div className="text-[9.5px] font-mono text-slate-600 space-y-0.5">
+          <div><span className="text-emerald-500">▸</span> clone template · 47 files</div>
+          <div><span className="text-emerald-500">▸</span> add   components/KanbanBoard.tsx</div>
+          <div><span className="text-emerald-500">▸</span> edit  app/leads/page.tsx</div>
+          <div><span className="text-emerald-500">▸</span> shell pnpm dev</div>
+        </div>
+        <div className="text-[9.5px] text-emerald-500 font-medium">✓ Preview ready · http://localhost:3000</div>
+        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 border border-blue-100 text-[9.5px] font-semibold text-blue-700">
+          <GitPullRequest className="w-3 h-3" />
+          Initial commit pushed
+        </div>
+      </div>
+    </ChatChrome>
+  );
+}
+
+/* ── Use case data — real ways people use Lucid AI ── */
 
 const features = [
   {
-    title: "Documentation",
+    title: "Ship features from a prompt",
     color: "from-[#dc5426] to-orange-400",
-    bullets: ["Auto-generate docs from code or URL", "API reference & SDK documentation", "Compete with enterprise doc platforms"],
-    mockup: <DocsMockup />
+    bullets: [
+      "Describe the change in plain English",
+      "Agent reads your codebase, plans, edits",
+      "Tests run before the PR opens",
+      "Branch and PR appear in your repo",
+    ],
+    mockup: <ShipFromPromptMockup />,
   },
   {
-    title: "Data Engineering + Analysis",
+    title: "Clear your backlog",
     color: "from-orange-600 to-[#dc5426]",
-    bullets: ["Data warehouse migrations", "ETL development", "Data cleaning and preprocessing"],
-    mockup: <AnalyticsMockup />
+    bullets: [
+      "Paste an issue or link a GitHub/GitLab ticket",
+      "Agent reproduces the bug in its sandbox",
+      "Adds a regression test along with the fix",
+      "Ready-for-review PR — you stay the reviewer",
+    ],
+    mockup: <BacklogMockup />,
   },
   {
-    title: "Application Development",
+    title: "Build from a template",
     color: "from-orange-400 to-[#dc5426]",
-    bullets: ["Bug fixes & edge case resolution", "Unit and E2E testing", "Building SaaS integrations", "Frontend & backend debugging"],
-    mockup: <AppDevMockup />
-  }
+    bullets: [
+      "Start from a curated, working template",
+      "Iterate in chat — components, routes, copy",
+      "Live preview from the Docker sandbox",
+      "Push to a new GitHub or GitLab repo",
+    ],
+    mockup: <FromTemplateMockup />,
+  },
 ];
 
-/* ── Bottom Cards Data ── */
+/* ── Three honest capability cards (replaces the old generic ones) ── */
 
 const bottomCards = [
   {
-    title: "Planning",
-    icon: <Map className="w-5 h-5 text-[#dc5426]" />,
+    title: "Repo-aware agent",
+    icon: <MessageSquare className="w-5 h-5 text-[#dc5426]" />,
     iconBg: "bg-orange-100",
-    items: ["Roadmap generation", "Sprint & milestone planning", "Architecture decisions"]
+    items: [
+      "Reads your codebase before acting",
+      "Honors existing conventions & lint rules",
+      "Tool-call diffs you can review in chat",
+    ],
   },
   {
-    title: "Bug & Issue Triage",
-    icon: <ListChecks className="w-5 h-5 text-[#dc5426]" />,
+    title: "Sandboxed execution",
+    icon: <ShieldCheck className="w-5 h-5 text-[#dc5426]" />,
     iconBg: "bg-orange-100",
-    items: ["Automated on-call response", "Ticket resolution", "CI/CD autotriage"]
+    items: [
+      "Per-session Docker workspace",
+      "Resource limits + orphan cleanup",
+      "Code runs nowhere near your prod",
+    ],
   },
   {
-    title: "Documentation",
-    icon: <FileText className="w-5 h-5 text-[#dc5426]" />,
+    title: "Streaming events",
+    icon: <Activity className="w-5 h-5 text-[#dc5426]" />,
     iconBg: "bg-orange-100",
-    items: ["Enterprise-grade docs", "API reference generation", "Maintaining documentation"]
-  }
+    items: [
+      "WebSocket from the agent runtime",
+      "Plan, tool calls, test output — all live",
+      "Stop or redirect the agent mid-task",
+    ],
+  },
 ];
 
-/* ── Accordion Panel Styles (CSS-driven for GPU acceleration) ── */
-
+/* ── Accordion styling ── */
 const COLLAPSED_WIDTH = '80px';
 const TRANSITION_DURATION = '600ms';
 const TRANSITION_EASING = 'cubic-bezier(0.4, 0, 0.2, 1)';
 
-/* ── Stagger variants for Framer Motion content ── */
-
 const contentVariants = {
   hidden: { opacity: 0 },
-  visible: {
-    opacity: 1,
-    transition: {
-      staggerChildren: 0.06,
-      delayChildren: 0.2,
-    }
-  },
-  exit: {
-    opacity: 0,
-    transition: { duration: 0.15 }
-  }
+  visible: { opacity: 1, transition: { staggerChildren: 0.06, delayChildren: 0.2 } },
+  exit:    { opacity: 0, transition: { duration: 0.15 } },
 };
 
 const itemVariants = {
-  hidden: { opacity: 0, x: -16, filter: 'blur(4px)' },
-  visible: { 
-    opacity: 1, 
-    x: 0, 
-    filter: 'blur(0px)',
-    transition: { duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] }
-  },
-  exit: { opacity: 0, x: -8, transition: { duration: 0.12 } }
+  hidden:  { opacity: 0, x: -16, filter: 'blur(4px)' },
+  visible: { opacity: 1, x: 0,  filter: 'blur(0px)', transition: { duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] } },
+  exit:    { opacity: 0, x: -8, transition: { duration: 0.12 } },
 };
 
 const mockupVariants = {
-  hidden: { opacity: 0, scale: 0.92, y: 20 },
-  visible: { 
-    opacity: 1, 
-    scale: 1, 
-    y: 0,
-    transition: { duration: 0.5, delay: 0.25, ease: [0.25, 0.46, 0.45, 0.94] }
-  },
-  exit: { opacity: 0, scale: 0.95, transition: { duration: 0.15 } }
+  hidden:  { opacity: 0, scale: 0.92, y: 20 },
+  visible: { opacity: 1, scale: 1, y: 0, transition: { duration: 0.5, delay: 0.25, ease: [0.25, 0.46, 0.45, 0.94] } },
+  exit:    { opacity: 0, scale: 0.95, transition: { duration: 0.15 } },
 };
-
-/* ── Main Section Component ── */
 
 export default function UseCasesSection() {
   const [activeFeature, setActiveFeature] = useState(0);
@@ -248,7 +205,7 @@ export default function UseCasesSection() {
   }, []);
 
   const handleFeatureSelect = useCallback((index) => {
-    if (index === activeFeature) return; // No-op if already active
+    if (index === activeFeature) return;
     setActiveFeature(index);
     setProgressKey(k => k + 1);
     if (timerRef.current) clearInterval(timerRef.current);
@@ -261,19 +218,19 @@ export default function UseCasesSection() {
   }, [goToNextFeature]);
 
   return (
-    <section className="px-6 sm:px-10 pb-24 max-w-[1400px] mx-auto w-full">
-      <div className="mb-16">
-        <h2 className="text-4xl sm:text-5xl font-bold text-slate-900 dark:text-slate-100 mb-6">
-          Use <span className="text-[#dc5426] dark:text-orange-400">cases</span>
+    <section id="use-cases" className="px-6 sm:px-10 pb-24 max-w-[1400px] mx-auto w-full">
+      <div className="text-center mb-14 max-w-2xl mx-auto">
+        <span className="inline-block text-[11px] uppercase tracking-[0.18em] font-semibold text-[#dc5426] mb-3">
+          Use cases
+        </span>
+        <h2 className="text-[36px] sm:text-[44px] lg:text-[52px] font-normal text-slate-900 dark:text-slate-100 tracking-[-0.04em] leading-[1.1] mb-4">
+          What people actually do with it
         </h2>
-        <p className="text-lg text-slate-500 dark:text-slate-400 max-w-2xl leading-relaxed">
-          From implementing new features to fixing thousands of lint errors, 
-          Lucid AI can clear your backlog, modernize your codebase, and 
-          help you build more.
+        <p className="text-[16px] text-slate-500 dark:text-slate-400 leading-relaxed font-medium">
+          From shipping a feature in one chat turn to clearing a stale backlog — Lucid hands you a branch and a PR, not a code editor to babysit.
         </p>
       </div>
 
-      {/* ── HORIZONTAL ACCORDION ── */}
       <div className="relative flex flex-col lg:flex-row gap-3 h-auto lg:h-[480px] mb-10">
         {features.map((feature, index) => {
           const isActive = activeFeature === index;
@@ -291,16 +248,12 @@ export default function UseCasesSection() {
                 willChange: 'flex-grow, flex-shrink, flex-basis',
               }}
             >
-              {/* Gradient Background */}
               <div className={cn("absolute inset-0 bg-gradient-to-br", feature.color)} />
-
-              {/* Subtle inner glow overlay on hover for collapsed panels */}
-              <div 
+              <div
                 className="absolute inset-0 bg-white/0 hover:bg-white/5 transition-colors duration-300 z-[5]"
                 style={{ pointerEvents: isActive ? 'none' : 'auto' }}
               />
 
-              {/* Expanded Content — AnimatePresence for mount/unmount */}
               <AnimatePresence mode="wait">
                 {isActive && (
                   <motion.div
@@ -311,9 +264,8 @@ export default function UseCasesSection() {
                     exit="exit"
                     className="relative z-10 h-full flex flex-col lg:flex-row p-6 md:p-10 pb-16"
                   >
-                    {/* LEFT: Text Content */}
                     <div className="lg:flex-1 flex flex-col justify-center lg:pr-8">
-                      <motion.h3 
+                      <motion.h3
                         variants={itemVariants}
                         className="text-2xl sm:text-3xl font-bold text-white mb-6"
                       >
@@ -321,8 +273,8 @@ export default function UseCasesSection() {
                       </motion.h3>
                       <ul className="space-y-3">
                         {feature.bullets.map((b, i) => (
-                          <motion.li 
-                            key={i} 
+                          <motion.li
+                            key={i}
                             variants={itemVariants}
                             className="flex items-center gap-3 text-white/90 text-base font-medium"
                           >
@@ -333,8 +285,7 @@ export default function UseCasesSection() {
                       </ul>
                     </div>
 
-                    {/* RIGHT: Mockup */}
-                    <motion.div 
+                    <motion.div
                       variants={mockupVariants}
                       className="lg:flex-[1.3] flex items-center justify-center mt-6 lg:mt-0"
                     >
@@ -344,10 +295,9 @@ export default function UseCasesSection() {
                 )}
               </AnimatePresence>
 
-              {/* Progress bars — ONLY inside the active/opened panel */}
               <AnimatePresence>
                 {isActive && (
-                  <motion.div 
+                  <motion.div
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: 6 }}
@@ -370,9 +320,7 @@ export default function UseCasesSection() {
                           <div
                             key={progressKey}
                             className="absolute inset-y-0 left-0 bg-white rounded-full"
-                            style={{
-                              animation: 'progressFill 5s linear forwards'
-                            }}
+                            style={{ animation: 'progressFill 5s linear forwards' }}
                           />
                         )}
                       </div>
@@ -385,7 +333,6 @@ export default function UseCasesSection() {
         })}
       </div>
 
-      {/* ── BOTTOM 3 CARDS ── */}
       <div className="grid md:grid-cols-3 gap-4">
         {bottomCards.map((card, i) => (
           <div key={i} className="bg-slate-100/80 dark:bg-slate-800/60 rounded-2xl p-6 md:p-8 hover:bg-white dark:hover:bg-slate-800 hover:shadow-lg dark:hover:shadow-black/20 transition-all duration-300 cursor-default border border-slate-200/60 dark:border-slate-700/60 hover:border-slate-300 dark:hover:border-slate-600">

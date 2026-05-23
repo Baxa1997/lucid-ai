@@ -70,14 +70,14 @@ export default function WorkspacePage() {
     return <WorkspaceErrorScreen
       title="Project not found"
       message="This project doesn't exist or has been deleted."
-      onBack={() => router.push("/dashboard/engineer")}
+      onBack={() => router.push("/dashboard")}
     />;
   }
   if (projectError === "403") {
     return <WorkspaceErrorScreen
       title="Access denied"
       message="You don't have access to this project. Ask the owner to invite you."
-      onBack={() => router.push("/dashboard/engineer")}
+      onBack={() => router.push("/dashboard")}
     />;
   }
   if (projectError === "5xx" || projectError === "network") {
@@ -111,7 +111,7 @@ export default function WorkspacePage() {
         {/* Navigation */}
         <div className="p-3 space-y-1">
           <button
-            onClick={() => router.push("/dashboard/engineer")}
+            onClick={() => router.push("/dashboard")}
             className="w-full flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium shadow-sm shadow-blue-600/20 hover:bg-blue-700 transition-all">
             <Plus className="w-4 h-4" />
             New Project
@@ -123,22 +123,22 @@ export default function WorkspacePage() {
             icon={MessageSquare}
             label="Conversations"
             active
-            onClick={() => router.push("/dashboard/engineer/conversations")}
+            onClick={() => router.push("/dashboard/conversations")}
           />
           <SidebarItem
             icon={LayoutList}
             label="Integrations"
-            onClick={() => router.push("/dashboard/engineer/integrations")}
+            onClick={() => router.push("/dashboard/integrations")}
           />
           <SidebarItem
             icon={FileText}
             label="Documentation"
-            onClick={() => router.push("/dashboard/engineer/docs")}
+            onClick={() => router.push("/dashboard/doc-setup")}
           />
           <SidebarItem
             icon={MoreVertical}
             label="Settings"
-            onClick={() => router.push("/dashboard/engineer/settings")}
+            onClick={() => router.push("/dashboard/settings")}
           />
         </nav>
 

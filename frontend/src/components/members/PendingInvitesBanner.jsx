@@ -119,7 +119,7 @@ export default function PendingInvitesBanner() {
         // prefer the slug. Falling back to project_id only saves us when
         // talking to an older backend that didn't return a slug yet.
         const dest = data.project_slug || data.project_id;
-        router.push(`/dashboard/engineer/workspace/${encodeURIComponent(dest)}`);
+        router.push(`/dashboard/workspace/${encodeURIComponent(dest)}`);
       } else if (res.status === 410) {
         setError("This invitation expired or was revoked.");
         await fetchInvites();

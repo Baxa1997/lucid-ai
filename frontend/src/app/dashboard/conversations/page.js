@@ -295,7 +295,7 @@ export default function ConversationsPage() {
             </div>
           </div>
           <button
-            onClick={() => router.push("/dashboard/engineer")}
+            onClick={() => router.push("/dashboard")}
             className="flex items-center gap-2 px-4 py-2 text-[13px] font-medium text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-white dark:hover:bg-slate-800 transition-all">
             ← Back
           </button>
@@ -389,7 +389,7 @@ export default function ConversationsPage() {
                 </p>
                 {conversations.length === 0 && (
                   <button
-                    onClick={() => router.push("/dashboard/engineer")}
+                    onClick={() => router.push("/dashboard")}
                     className="px-5 py-2.5 bg-blue-600 text-white rounded-xl text-[13px] font-bold hover:bg-blue-700 transition-all">
                     Start First Conversation
                   </button>
@@ -403,7 +403,7 @@ export default function ConversationsPage() {
                   selected={selected.has(conv.id)}
                   onSelect={toggleSelect}
                   onClick={() =>
-                    router.push(`/dashboard/engineer/workspace/${conv.id}`)
+                    router.push(`/dashboard/workspace/${conv.id}`)
                   }
                   onDelete={handleDelete}
                 />

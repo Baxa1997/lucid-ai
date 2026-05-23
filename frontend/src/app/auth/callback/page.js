@@ -40,7 +40,7 @@ export default function AuthCallbackPage() {
       }
 
       sessionStorage.setItem('lucid-just-signed-in', 'true');
-      router.replace('/dashboard/engineer');
+      router.replace('/dashboard');
     };
 
     // ── PKCE Code Exchange ──

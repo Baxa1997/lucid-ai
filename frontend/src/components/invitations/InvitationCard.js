@@ -2,7 +2,7 @@
 
 // ─────────────────────────────────────────────────────────
 //  InvitationCard — single pending-invite row on the
-//  /dashboard/engineer/invitations page.
+//  /dashboard/invitations page.
 //
 //  Accept calls POST /api/invites/{token}/accept (delegated to the
 //  parent's `onAccept`), which on success routes the user into the

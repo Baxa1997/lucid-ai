@@ -3,9 +3,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { motion, useInView, AnimatePresence } from 'framer-motion';
 import {
-  GitBranch, Globe, FileText, Code2, Bug, Rocket,
-  Terminal, Sparkles, ArrowRight, Check, Zap, BookOpen,
-  ChevronRight
+  GitBranch, MessageSquare, Code2, Bug, Rocket,
+  Terminal, Sparkles, Check, Activity, Layers, GitPullRequest
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -17,7 +16,7 @@ const features = [
     badge: 'AI Software Engineer',
     badgeColor: 'text-violet-600 dark:text-violet-400 bg-violet-50 dark:bg-violet-500/10 border-violet-100 dark:border-violet-500/20',
     title: 'Ship production code,\nautonomously.',
-    description: 'Connect your GitHub or GitLab repository. Lucid AI reads your codebase, plans changes, writes code, creates branches, and pushes commits — all without leaving the platform.',
+    description: 'Connect your GitHub or GitLab repo. Lucid AI reads the codebase, plans the change, writes the code, runs the tests, and opens a PR — all from a single chat turn.',
     icon: Code2,
     iconGradient: 'from-violet-600 to-indigo-600',
     capabilities: [
@@ -29,20 +28,20 @@ const features = [
     mockup: 'engineer',
   },
   {
-    id: 'docs',
-    badge: 'Documentation Engine',
+    id: 'chat',
+    badge: 'Chat-driven workspace',
     badgeColor: 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10 border-blue-100 dark:border-blue-500/20',
-    title: 'Beautiful docs,\ngenerated instantly.',
-    description: 'Generate comprehensive documentation from your GitHub repo, GitLab project, or any public web URL. Always in sync, always professional.',
-    icon: BookOpen,
+    title: 'Every step\nstreamed to you.',
+    description: 'No editor pane. Just chat. Plans, tool calls, diffs, test runs, and the final PR link arrive as a live event stream — you stay in control and can redirect at any step.',
+    icon: MessageSquare,
     iconGradient: 'from-blue-600 to-cyan-500',
     capabilities: [
-      { text: 'From GitHub & GitLab repos', icon: GitBranch },
-      { text: 'From any public web URL', icon: Globe },
-      { text: 'API reference auto-generation', icon: FileText },
-      { text: 'Always synced & up-to-date', icon: Check },
+      { text: 'Live agent events, no polling', icon: Activity },
+      { text: 'Plan-then-execute mode', icon: Layers },
+      { text: 'Diff view of every change', icon: Code2 },
+      { text: 'One-click PR when ready', icon: GitPullRequest },
     ],
-    mockup: 'docs',
+    mockup: 'chat',
   },
 ];
 
@@ -107,78 +106,71 @@ function EngineerMockup({ isVisible }) {
   );
 }
 
-function DocsMockup({ isVisible }) {
-  const docItems = [
-    { title: '# Getting Started', type: 'h1' },
-    { title: '## Installation', type: 'h2' },
-    { title: 'npm install @lucid-ai/sdk', type: 'code' },
-    { title: '## Authentication', type: 'h2' },
-    { title: 'POST /api/auth/login', type: 'endpoint' },
-    { title: 'GET /api/users/:id', type: 'endpoint' },
-    { title: '## Webhooks', type: 'h2' },
+function ChatMockup({ isVisible }) {
+  const events = [
+    { kind: 'user',  text: 'Add Stripe checkout to the pricing page.' },
+    { kind: 'plan',  text: 'Planning · 4 steps' },
+    { kind: 'tool',  text: 'read  app/pricing/page.tsx' },
+    { kind: 'tool',  text: 'edit  app/api/checkout/route.ts' },
+    { kind: 'tool',  text: 'shell npm test --silent' },
+    { kind: 'pass',  text: '12 tests passed · 0 failing' },
+    { kind: 'pr',    text: 'PR #312  feat/stripe-checkout' },
   ];
 
   return (
     <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden shadow-2xl">
-      {/* Title bar */}
       <div className="bg-slate-50 dark:bg-slate-800 border-b border-slate-100 dark:border-slate-700 px-4 py-2.5 flex items-center gap-3">
         <div className="flex gap-1.5">
           <div className="w-2.5 h-2.5 rounded-full bg-[#ff5f57]" />
           <div className="w-2.5 h-2.5 rounded-full bg-[#febc2e]" />
           <div className="w-2.5 h-2.5 rounded-full bg-[#28c840]" />
         </div>
-        <div className="text-[10px] text-slate-400 font-mono ml-2">docs.yourapp.com</div>
+        <div className="text-[10px] text-slate-400 font-mono ml-2">lucid-ai · chat · session 8e2f</div>
+        <div className="ml-auto inline-flex items-center gap-1.5 text-[10px] text-emerald-500 font-medium">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+          live
+        </div>
       </div>
 
-      <div className="flex">
-        {/* Sidebar */}
-        <div className="w-[120px] border-r border-slate-100 dark:border-slate-800 p-3 flex flex-col gap-1.5">
-          {['Overview', 'Auth', 'Users', 'Webhooks', 'SDKs'].map((item, i) => (
-            <motion.div
-              key={i}
-              initial={{ opacity: 0, x: -10 }}
-              animate={isVisible ? { opacity: 1, x: 0 } : {}}
-              transition={{ delay: 0.2 + i * 0.08 }}
-              className={cn(
-                "text-[10px] font-medium px-2 py-1.5 rounded-md",
-                i === 0
-                  ? "bg-violet-50 dark:bg-violet-500/10 text-violet-600 dark:text-violet-400"
-                  : "text-slate-400 dark:text-slate-500"
-              )}
-            >
-              {item}
-            </motion.div>
-          ))}
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 p-4 space-y-2">
-          {docItems.map((item, i) => (
-            <motion.div
-              key={i}
-              initial={{ opacity: 0, y: 8 }}
-              animate={isVisible ? { opacity: 1, y: 0 } : {}}
-              transition={{ delay: 0.4 + i * 0.1, duration: 0.35 }}
-            >
-              {item.type === 'h1' && (
-                <div className="text-[13px] font-bold text-slate-800 dark:text-slate-100 mb-1">{item.title}</div>
-              )}
-              {item.type === 'h2' && (
-                <div className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 mt-2">{item.title}</div>
-              )}
-              {item.type === 'code' && (
-                <div className="bg-slate-900 dark:bg-slate-800 text-orange-400 text-[10px] px-2.5 py-1.5 rounded-md font-mono">
-                  $ {item.title}
-                </div>
-              )}
-              {item.type === 'endpoint' && (
-                <div className="bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-slate-700 text-[10px] px-2.5 py-1.5 rounded-md font-mono text-blue-600 dark:text-blue-400">
-                  {item.title}
-                </div>
-              )}
-            </motion.div>
-          ))}
-        </div>
+      <div className="p-4 space-y-2">
+        {events.map((ev, i) => (
+          <motion.div
+            key={i}
+            initial={{ opacity: 0, y: 6 }}
+            animate={isVisible ? { opacity: 1, y: 0 } : {}}
+            transition={{ delay: 0.25 + i * 0.18, duration: 0.35 }}
+          >
+            {ev.kind === 'user' && (
+              <div className="ml-auto inline-block max-w-[85%] px-3 py-2 rounded-lg bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 text-[11.5px] text-slate-700 dark:text-slate-200">
+                {ev.text}
+              </div>
+            )}
+            {ev.kind === 'plan' && (
+              <div className="inline-flex items-center gap-2 text-[10.5px] font-semibold text-blue-600 dark:text-blue-400">
+                <Layers className="w-3 h-3" />
+                {ev.text}
+              </div>
+            )}
+            {ev.kind === 'tool' && (
+              <div className="flex items-center gap-2 text-[10.5px] font-mono text-slate-500 dark:text-slate-400">
+                <span className="text-emerald-500">▸</span>
+                <span className="text-slate-700 dark:text-slate-200">{ev.text}</span>
+              </div>
+            )}
+            {ev.kind === 'pass' && (
+              <div className="flex items-center gap-2 text-[10.5px] text-emerald-500 font-medium">
+                <Check className="w-3 h-3" />
+                {ev.text}
+              </div>
+            )}
+            {ev.kind === 'pr' && (
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md bg-blue-50 dark:bg-blue-500/10 border border-blue-100 dark:border-blue-500/20 text-[11px] font-semibold text-blue-700 dark:text-blue-300">
+                <GitPullRequest className="w-3.5 h-3.5" />
+                {ev.text}
+              </div>
+            )}
+          </motion.div>
+        ))}
       </div>
     </div>
   );
@@ -190,41 +182,32 @@ export default function FeaturesSection() {
   const [activeFeature, setActiveFeature] = useState(0);
 
   return (
-    <section className="px-6 sm:px-10 py-24 lg:py-32 max-w-[1400px] mx-auto w-full">
-      {/* Section Header */}
-      <div className="text-center mb-20">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
+    <section id="features" className="px-6 sm:px-10 py-24 lg:py-32 max-w-[1400px] mx-auto w-full">
+      {/* Section Header — matches Templates style */}
+      <div className="text-center mb-16 max-w-2xl mx-auto">
+        <motion.span
+          initial={{ opacity: 0, y: 10 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.5 }}
-          className="inline-flex items-center gap-2 bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-500/20 px-4 py-1.5 rounded-full mb-6"
-        >
-          <Sparkles className="w-3.5 h-3.5 text-violet-600 dark:text-violet-400" />
-          <span className="text-[12px] font-semibold text-violet-600 dark:text-violet-400">Core Features</span>
-        </motion.div>
-
+          className="inline-block text-[11px] uppercase tracking-[0.18em] font-semibold text-[#dc5426] mb-3">
+          Core features
+        </motion.span>
         <motion.h2
-          initial={{ opacity: 0, y: 20 }}
+          initial={{ opacity: 0, y: 10 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
-          transition={{ duration: 0.5, delay: 0.1 }}
-          className="text-4xl sm:text-5xl font-bold text-slate-900 dark:text-slate-100 mb-5"
-        >
-          Everything you need to{' '}
-          <span className="text-transparent bg-clip-text bg-gradient-to-r from-violet-600 to-indigo-600 dark:from-violet-400 dark:to-indigo-400">
-            build faster
-          </span>
+          transition={{ duration: 0.5, delay: 0.08 }}
+          className="text-[36px] sm:text-[44px] lg:text-[52px] font-normal text-slate-900 dark:text-slate-100 tracking-[-0.04em] leading-[1.1] mb-4">
+          Everything you need to build faster
         </motion.h2>
-
         <motion.p
-          initial={{ opacity: 0, y: 20 }}
+          initial={{ opacity: 0, y: 10 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
-          transition={{ duration: 0.5, delay: 0.2 }}
-          className="text-lg text-slate-500 dark:text-slate-400 max-w-2xl mx-auto leading-relaxed"
-        >
-          From writing production code to generating beautiful documentation — Lucid AI handles the heavy lifting so your team can focus on what matters.
+          transition={{ duration: 0.5, delay: 0.15 }}
+          className="text-[16px] text-slate-500 dark:text-slate-400 leading-relaxed font-medium">
+          A chat-first agent that reads your repo, writes the code, runs the tests, and opens the PR — all streamed back to you live.
         </motion.p>
       </div>
 
@@ -297,7 +280,7 @@ export default function FeaturesSection() {
               {/* Right: Mockup */}
               <div>
                 {feature.mockup === 'engineer' && <EngineerMockup isVisible={activeFeature === 0} />}
-                {feature.mockup === 'docs' && <DocsMockup isVisible={activeFeature === 1} />}
+                {feature.mockup === 'chat' && <ChatMockup isVisible={activeFeature === 1} />}
               </div>
             </motion.div>
           );

@@ -280,7 +280,7 @@ export default function TemplatesPage() {
     if (typeof window !== 'undefined') {
       sessionStorage.setItem('lucid_template_prompt', template.prompt);
     }
-    router.push('/dashboard/engineer');
+    router.push('/dashboard');
   };
 
   const filtered = TEMPLATES.filter(t => {

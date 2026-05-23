@@ -4,7 +4,7 @@
 //  InvitationsListener — global side-effect component.
 //  Mounts once at the dashboard layout. Listens for new invite
 //  events (dispatched by useInvitations Realtime hook) and:
-//    • shows an in-app toast linking to /dashboard/engineer/invitations
+//    • shows an in-app toast linking to /dashboard/invitations
 //    • fires a browser Notification when permission has been granted
 //    • prompts for browser notification permission once on first mount
 //
@@ -77,7 +77,7 @@ export default function InvitationsListener() {
           });
           n.onclick = () => {
             window.focus();
-            router.push("/dashboard/engineer/invitations");
+            router.push("/dashboard/invitations");
             n.close();
           };
         } catch (_) {}
@@ -106,7 +106,7 @@ export default function InvitationsListener() {
 
   const handleToastView = () => {
     setToast(null);
-    router.push("/dashboard/engineer/invitations");
+    router.push("/dashboard/invitations");
   };
 
   const handleToastClose = () => {

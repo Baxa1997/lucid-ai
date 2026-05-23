@@ -213,7 +213,7 @@ export default function ProjectsPage() {
   const handleLaunchProject = (pr) => {
     if (!pr.projectId) return;
     setIsLaunching(true);
-    router.push(`/dashboard/engineer/workspace/${pr.projectId}`);
+    router.push(`/dashboard/workspace/${pr.projectId}`);
   };
 
   const handleDeleteConfirm = async () => {
@@ -322,7 +322,7 @@ export default function ProjectsPage() {
               {search ? `No apps match "${search}".` : 'Create your first AI-powered application to get started.'}
             </p>
             {!search && (
-              <button onClick={() => router.push('/dashboard/engineer')}
+              <button onClick={() => router.push('/dashboard')}
                 className="flex items-center gap-2 px-5 py-2.5 text-[13px] font-semibold text-white bg-slate-900 dark:bg-white dark:text-slate-900 rounded-xl hover:bg-slate-800 dark:hover:bg-slate-100 shadow-sm transition-all">
                 <Plus className="w-4 h-4" /> Create App
               </button>

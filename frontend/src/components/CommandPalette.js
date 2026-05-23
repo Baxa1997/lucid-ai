@@ -16,12 +16,12 @@ import { cn } from '@/lib/utils';
 
 // ── Static navigation items ──────────────────
 const NAV_ACTIONS = [
-  { id: 'home', label: 'Go to Home', icon: Home, href: '/dashboard/engineer', section: 'Navigation' },
-  { id: 'conversations', label: 'Go to Conversations', icon: MessageSquare, href: '/dashboard/engineer/conversations', section: 'Navigation' },
-  { id: 'integrations', label: 'Go to Integrations', icon: Grid2X2, href: '/dashboard/engineer/integrations', section: 'Navigation' },
-  { id: 'settings', label: 'Go to Settings', icon: Settings, href: '/dashboard/engineer/settings', section: 'Navigation' },
-  { id: 'usage-guide', label: 'Go to Usage Guide', icon: BookOpen, href: '/dashboard/engineer/usage-docs', section: 'Navigation' },
-  { id: 'docs', label: 'Go to Documentation', icon: FileText, href: '/dashboard/engineer/docs', section: 'Navigation' },
+  { id: 'home', label: 'Go to Home', icon: Home, href: '/dashboard', section: 'Navigation' },
+  { id: 'conversations', label: 'Go to Conversations', icon: MessageSquare, href: '/dashboard/conversations', section: 'Navigation' },
+  { id: 'integrations', label: 'Go to Integrations', icon: Grid2X2, href: '/dashboard/integrations', section: 'Navigation' },
+  { id: 'settings', label: 'Go to Settings', icon: Settings, href: '/dashboard/settings', section: 'Navigation' },
+  { id: 'usage-guide', label: 'Go to Usage Guide', icon: BookOpen, href: '/dashboard/usage-docs', section: 'Navigation' },
+  { id: 'docs', label: 'Go to Documentation', icon: FileText, href: '/dashboard/doc-setup', section: 'Navigation' },
 ];
 
 const QUICK_ACTIONS = [
@@ -66,7 +66,7 @@ export default function CommandPalette({ isOpen, onClose, projects = [], convers
         label: p.projectName || p.repoName,
         sublabel: p.repoName,
         icon: Layers,
-        href: `/dashboard/engineer/workspace/${p.projectId}`,
+        href: `/dashboard/workspace/${p.projectId}`,
         section: 'Projects',
       });
     });
@@ -82,7 +82,7 @@ export default function CommandPalette({ isOpen, onClose, projects = [], convers
         label: c.title || c.repo_name || 'Conversation',
         sublabel: c.repo_name,
         icon: MessageSquare,
-        href: `/dashboard/engineer/workspace/${c.id}`,
+        href: `/dashboard/workspace/${c.id}`,
         section: 'Conversations',
       });
     });

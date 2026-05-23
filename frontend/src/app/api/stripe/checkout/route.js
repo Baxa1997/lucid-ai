@@ -108,8 +108,8 @@ export async function POST(req) {
       customer: stripeCustomerId,
       mode: 'payment',
       line_items: [{ price: priceId, quantity: 1 }],
-      success_url: `${appUrl}/dashboard/engineer/billing?credit_success=1`,
-      cancel_url:  `${appUrl}/dashboard/engineer/billing?canceled=1`,
+      success_url: `${appUrl}/dashboard/billing?credit_success=1`,
+      cancel_url:  `${appUrl}/dashboard/billing?canceled=1`,
       payment_intent_data: {
         metadata: {
           supabase_user_id: ctx.userId,
@@ -147,8 +147,8 @@ export async function POST(req) {
     customer: stripeCustomerId,
     mode: 'subscription',
     line_items: [{ price: priceId, quantity: 1 }],
-    success_url: `${appUrl}/dashboard/engineer/billing?success=1`,
-    cancel_url:  `${appUrl}/dashboard/engineer/billing?canceled=1`,
+    success_url: `${appUrl}/dashboard/billing?success=1`,
+    cancel_url:  `${appUrl}/dashboard/billing?canceled=1`,
     allow_promotion_codes: true,
     subscription_data: {
       metadata: { supabase_user_id: ctx.userId },

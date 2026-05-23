@@ -101,11 +101,11 @@ export default function TemplatesSection() {
       sessionStorage.setItem("lucid_template_prompt", prompt);
       sessionStorage.setItem("lucid_hero_autostart", "1");
     } catch {}
-    router.push("/dashboard/engineer");
+    router.push("/dashboard");
   };
 
   return (
-    <section className="relative w-full py-20 lg:py-28 px-6 sm:px-8">
+    <section id="templates" className="relative w-full py-20 lg:py-28 px-6 sm:px-8">
       <div className="max-w-[1200px] mx-auto">
         {/* Header */}
         <div className="text-center mb-14 max-w-2xl mx-auto">

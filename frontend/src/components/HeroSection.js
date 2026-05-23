@@ -125,7 +125,7 @@ export default function HeroSection() {
       // backend handoff can read it. Dashboard doesn't consume this yet.
       sessionStorage.setItem("lucid_plan_mode", planOn ? "1" : "0");
     } catch {}
-    router.push(isLoggedIn ? "/dashboard/engineer" : "/login");
+    router.push(isLoggedIn ? "/dashboard" : "/login");
   };
 
   const handleTemplate = (label) => {
@@ -437,7 +437,7 @@ export default function HeroSection() {
       {/* ── Floating account bubble (only when signed in) ── */}
       {isLoggedIn && (
         <Link
-          href="/dashboard/engineer"
+          href="/dashboard"
           aria-label="Your account"
           className="fixed bottom-6 left-6 z-30 grid h-11 w-11 place-items-center rounded-full border-2 border-white/70 bg-[#15171C] text-[16px] font-semibold text-[#FBFAF7] shadow-[0_10px_28px_-10px_rgba(21,23,28,.55)] dark:border-white/20 dark:bg-white dark:text-[#15171C] dark:shadow-[0_10px_28px_-10px_rgba(0,0,0,.7)]"
           style={{fontFamily: GEIST_FAMILY}}>

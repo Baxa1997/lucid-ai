@@ -28,18 +28,6 @@ const nextConfig = {
     ];
   },
 
-  // Server-side redirect: /dashboard → /dashboard/engineer
-  // Avoids loading a full client page just to router.replace()
-  async redirects() {
-    return [
-      {
-        source: '/dashboard',
-        destination: '/dashboard/engineer',
-        permanent: false,
-      },
-    ];
-  },
-
 };
 
 module.exports = nextConfig;

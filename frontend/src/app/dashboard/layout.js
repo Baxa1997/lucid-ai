@@ -58,26 +58,26 @@ export function useWizard() {
 }
 
 const navItems = [
-  {label: "Home", icon: Home, href: "/dashboard/engineer"},
-  {label: "All apps", icon: FolderGit2, href: "/dashboard/engineer/projects"},
+  {label: "Home", icon: Home, href: "/dashboard"},
+  {label: "All apps", icon: FolderGit2, href: "/dashboard/projects"},
   {
     label: "Templates",
     icon: LayoutTemplate,
-    href: "/dashboard/engineer/templates",
+    href: "/dashboard/templates",
   },
   {
     label: "Integrations",
     icon: Grid2X2,
-    href: "/dashboard/engineer/integrations",
+    href: "/dashboard/integrations",
   },
   {
     label: "Invitations",
     icon: Mail,
-    href: "/dashboard/engineer/invitations",
+    href: "/dashboard/invitations",
     badgeKey: "invitations",
   },
-  {label: "Settings", icon: Settings, href: "/dashboard/engineer/settings"},
-  {label: "Billing", icon: CreditCard, href: "/dashboard/engineer/billing"},
+  {label: "Settings", icon: Settings, href: "/dashboard/settings"},
+  {label: "Billing", icon: CreditCard, href: "/dashboard/billing"},
 ];
 
 function Tooltip({children, label, show}) {
@@ -411,7 +411,7 @@ export default function EngineerLayout({children}) {
         } catch (_) {}
       }
 
-      router.replace(`/dashboard/engineer/workspace/${conversationId}`);
+      router.replace(`/dashboard/workspace/${conversationId}`);
     },
     [router],
   );
@@ -513,12 +513,12 @@ export default function EngineerLayout({children}) {
               ) : (
                 <>
                   <Link
-                    href="/dashboard/engineer"
+                    href="/dashboard"
                     prefetch={true}
                     onClick={(e) => {
                       if (wizardIsActive) {
                         e.preventDefault();
-                        setPendingNavHref("/dashboard/engineer");
+                        setPendingNavHref("/dashboard");
                       }
                     }}
                     className="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
@@ -542,12 +542,12 @@ export default function EngineerLayout({children}) {
             <div className={cn("pt-3 pb-2", collapsed ? "px-2" : "px-4")}>
               <Tooltip label="New Project" show={collapsed}>
                 <Link
-                  href="/dashboard/engineer"
+                  href="/dashboard"
                   prefetch={true}
                   onClick={(e) => {
                     if (wizardIsActive) {
                       e.preventDefault();
-                      setPendingNavHref("/dashboard/engineer");
+                      setPendingNavHref("/dashboard");
                     }
                   }}
                   className={cn(
@@ -676,7 +676,7 @@ export default function EngineerLayout({children}) {
                         <button
                           onClick={() => {
                             setShowProfileMenu(false);
-                            router.push("/dashboard/engineer/settings");
+                            router.push("/dashboard/settings");
                           }}
                           className="w-full flex items-center gap-3.5 px-5 py-3 text-[14px] font-normal text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04] transition-colors text-left">
                           <User
@@ -689,9 +689,9 @@ export default function EngineerLayout({children}) {
                           onClick={() => {
                             setShowProfileMenu(false);
                             if (wizardIsActive) {
-                              setPendingNavHref("/dashboard/engineer/settings");
+                              setPendingNavHref("/dashboard/settings");
                             } else {
-                              router.push("/dashboard/engineer/settings");
+                              router.push("/dashboard/settings");
                             }
                           }}
                           className="w-full flex items-center gap-3.5 px-5 py-3 text-[14px] font-normal text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04] transition-colors text-left">

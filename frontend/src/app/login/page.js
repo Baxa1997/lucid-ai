@@ -19,7 +19,7 @@ export default function LoginPage() {
     const supabase = getSupabaseBrowserClient();
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
-        router.replace('/dashboard/engineer');
+        router.replace('/dashboard');
       }
     });
   }, [router]);
