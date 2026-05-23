@@ -1,444 +1,449 @@
 "use client";
 
 import {useState, useEffect, useRef} from "react";
-import {ChevronRight, Terminal, Zap} from "lucide-react";
 import Link from "next/link";
+import {useRouter} from "next/navigation";
 import {getSupabaseBrowserClient} from "@/lib/supabase/client";
+import StatusRail from "@/components/StatusRail";
 
-// ── Timing constants ──────────────────────────────────────────────
-const LINE_DELAY = 190; // ms between each line appearing
-const CHAT_DELAY = 700; // ms pause after last line before AI reacts
-const THINKING_DUR = 1100; // ms of thinking dots
-const BUTTON_DELAY = 650; // ms between message → button appear
-const PAUSE_DUR = 3800; // ms at final state before reset
-const FADE_DUR = 550; // ms fade-out before hard reset
+/* ───────────────────────────────────────────────────────────────────────
+   Lucid AI Hero — port of Claude Design "Lucid AI Hero.html" (v2).
+   Editorial layout · §/Workspace markers · serif-italic ember "ideas"
+   in headline · glass composer (22px radius) · template chips · user FAB.
+   The body gradient lives on the landing page wrapper.
+   ─────────────────────────────────────────────────────────────────────── */
 
-// ── Code data ─────────────────────────────────────────────────────
-const CODE_LINES = [
-  {
-    parts: [
-      {t: "async function ", c: "text-violet-400"},
-      {t: "validateSession", c: "text-blue-400"},
-      {t: "(id: ", c: "text-slate-300"},
-      {t: "string", c: "text-orange-400"},
-      {t: ") {", c: "text-slate-300"},
-    ],
-  },
-  {
-    pad: 16,
-    parts: [
-      {t: "const ", c: "text-violet-400"},
-      {t: "user ", c: "text-slate-200"},
-      {t: "= ", c: "text-slate-400"},
-      {t: "await ", c: "text-violet-400"},
-      {t: "db.find", c: "text-slate-200"},
-      {t: "(id);", c: "text-slate-400"},
-    ],
-  },
-  {parts: []},
-  {
-    pad: 16,
-    parts: [
-      {t: "// Lucid AI is refactoring this block", c: "text-slate-500 italic"},
-    ],
-  },
-  {
-    pad: 16,
-    hl: true,
-    parts: [
-      {t: "if ", c: "text-violet-400"},
-      {t: "(!user.isActive)", c: "text-indigo-300"},
-      {t: " {", c: "text-slate-300"},
-    ],
-  },
-  {
-    pad: 32,
-    hl: true,
-    parts: [
-      {t: "throw new ", c: "text-violet-400"},
-      {t: "AuthError", c: "text-amber-400"},
-      {t: "(", c: "text-slate-400"},
-      {t: "'Account locked'", c: "text-orange-400"},
-      {t: ");", c: "text-slate-400"},
-    ],
-  },
-  {
-    pad: 16,
-    hl: true,
-    parts: [{t: "}", c: "text-slate-300"}],
-  },
-  {
-    pad: 16,
-    parts: [
-      {t: "return ", c: "text-violet-400"},
-      {t: "user.token;", c: "text-slate-200"},
-    ],
-  },
-  {parts: [{t: "}", c: "text-slate-300"}]},
+const TEMPLATES = [
+  "Reporting Dashboard",
+  "E-commerce Store",
+  "SaaS Landing",
+  "CRM Dashboard",
+  "Admin Panel",
+  "Room Visualizer",
+  "Networking App",
 ];
 
-// ── Blinking cursor ───────────────────────────────────────────────
-function useCursor() {
-  const [on, setOn] = useState(true);
-  useEffect(() => {
-    const id = setInterval(() => setOn((v) => !v), 530);
-    return () => clearInterval(id);
-  }, []);
-  return on;
-}
+const TEMPLATE_PROMPTS = {
+  "Reporting Dashboard":
+    "A modern reporting dashboard with KPI tiles, time-series charts, a filterable data table, and a slide-over filter panel. Clean sidebar navigation, dark mode support.",
+  "E-commerce Store":
+    "A modern e-commerce storefront with product catalog, search and filters, product detail pages, shopping cart, checkout flow, and user account area.",
+  "SaaS Landing":
+    "A SaaS landing page with hero section, feature grid, pricing table, social proof, FAQ accordion, and footer. Gradient hero, clear CTAs.",
+  "CRM Dashboard":
+    "A CRM dashboard with contact management, deal pipeline view (kanban), activity timeline, and analytics charts.",
+  "Admin Panel":
+    "A full-featured admin panel with users table, role-based access control, audit log, CRUD forms, analytics charts, and settings page.",
+  "Room Visualizer":
+    "A room visualizer where users upload a photo of their room and try out different furniture, paint colors, and decor styles with AI.",
+  "Networking App":
+    "A professional networking app with profiles, mutual-connection introductions, event-based matchmaking, and a chat thread for each connection.",
+};
 
-// ── Animated IDE mockup ───────────────────────────────────────────
-function AnimatedIDE() {
-  const [count, setCount] = useState(0);
-  // phase: 'coding' | 'thinking' | 'message' | 'button'
-  const [phase, setPhase] = useState("coding");
-  const [fading, setFading] = useState(false);
-  const cursorOn = useCursor();
-  const t = useRef(null);
-  const clear = () => clearTimeout(t.current);
+const GEIST_FAMILY =
+  "var(--font-geist), ui-sans-serif, system-ui, -apple-system, sans-serif";
+const GEIST_MONO_FAMILY = "var(--font-geist-mono), ui-monospace, monospace";
+// Modern, serious geometric sans for the headline — matches Base44's
+// editorial feel. Falls back through Inter / system sans for parity.
+const HEADLINE_FAMILY =
+  'var(--font-geist), "Inter", -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Segoe UI", sans-serif';
+const FUTURA_FAMILY =
+  '"Futura", "Futura PT", "Trebuchet MS", "Century Gothic", ui-sans-serif, sans-serif';
 
-  useEffect(() => {
-    clear();
-    if (fading) return; // fade-out timer runs independently
+// Trigger prompts cycled in the composer placeholder via a typewriter effect.
+// Kept short so the line never wraps and feels like a suggestion, not noise.
+const PLACEHOLDER_PROMPTS = [
+  "Describe what you want, we'll turn it into an app",
+  "Build a budget tracker with charts",
+  "Make a CRM with a kanban pipeline",
+  "Create a SaaS landing page",
+  "Design an admin dashboard with auth",
+];
 
-    if (phase === "coding") {
-      if (count < CODE_LINES.length) {
-        t.current = setTimeout(() => setCount((n) => n + 1), LINE_DELAY);
-      } else {
-        t.current = setTimeout(() => setPhase("thinking"), CHAT_DELAY);
-      }
-    } else if (phase === "thinking") {
-      t.current = setTimeout(() => setPhase("message"), THINKING_DUR);
-    } else if (phase === "message") {
-      t.current = setTimeout(() => setPhase("button"), BUTTON_DELAY);
-    } else if (phase === "button") {
-      t.current = setTimeout(() => {
-        setFading(true);
-        // After fade-out completes, hard-reset state
-        setTimeout(() => {
-          setCount(0);
-          setPhase("coding");
-          setFading(false);
-        }, FADE_DUR);
-      }, PAUSE_DUR);
-    }
-    return clear;
-  }, [phase, count, fading]);
-
-  const coding = phase === "coding";
-  const showBubble =
-    phase === "thinking" || phase === "message" || phase === "button";
-  const showMsg = phase === "message" || phase === "button";
-  const showBtn = phase === "button";
-
-  return (
-    <div className="bg-[#1a1b26] rounded-xl shadow-[0_30px_60px_-12px_rgba(0,0,0,0.3)] border border-slate-800/50 overflow-hidden ring-1 ring-white/10 relative group select-none">
-      {/* hover sheen */}
-      <div className="absolute inset-0 bg-gradient-to-tr from-white/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
-
-      {/* title bar */}
-      <div className="bg-[#16161e] border-b border-[#0d0d12] px-4 py-3 flex items-center gap-4">
-        <div className="flex gap-1.5 shrink-0">
-          <div className="w-3 h-3 rounded-full bg-[#ff5f57]" />
-          <div className="w-3 h-3 rounded-full bg-[#febc2e]" />
-          <div className="w-3 h-3 rounded-full bg-[#28c840]" />
-        </div>
-        <div className="flex-1 flex justify-center">
-          <div className="bg-[#1a1b26] border border-white/5 rounded px-3 py-1 text-[11px] text-slate-500 font-medium max-w-[240px] w-full text-center">
-            app.lucid.ai/projects/auth-handler
-          </div>
-        </div>
-        <div className="w-[52px] shrink-0" />
-      </div>
-
-      {/* content — fade-out wrapper */}
-      <div
-        className="flex h-[450px]"
-        style={{
-          opacity: fading ? 0 : 1,
-          transition: fading
-            ? `opacity ${FADE_DUR}ms cubic-bezier(0.4,0,0.2,1)`
-            : "none",
-        }}>
-        {/* ── Code pane ── */}
-        <div className="flex-1 p-6 font-mono text-[13px] overflow-hidden border-r border-white/5 bg-[#1a1b26]">
-          <div className="flex items-center gap-2 mb-6">
-            <Terminal className="w-3.5 h-3.5 text-violet-400" />
-            <span className="text-xs text-slate-300 font-medium">
-              AuthMiddleware.ts
-            </span>
-          </div>
-
-          <div className="space-y-[7px] leading-[1.55]">
-            {CODE_LINES.slice(0, count).map((line, idx) => {
-              const isActive = idx === count - 1 && coding;
-              const inner = (
-                <>
-                  <span className="text-slate-600 w-6 select-none text-right pr-4 text-[11px]">
-                    {idx + 1}
-                  </span>
-                  <div style={{paddingLeft: line.pad || 0}}>
-                    {line.parts.map((p, i) => (
-                      <span key={i} className={p.c}>
-                        {p.t}
-                      </span>
-                    ))}
-                    {/* blinking cursor on active line */}
-                    {isActive && (
-                      <span
-                        className="inline-block w-[2px] h-[13px] bg-slate-300 ml-px align-middle"
-                        style={{
-                          opacity: cursorOn ? 1 : 0,
-                          transition: "opacity 0.1s",
-                        }}
-                      />
-                    )}
-                  </div>
-                </>
-              );
-
-              return line.hl ? (
-                <div
-                  key={idx}
-                  className="relative"
-                  style={{
-                    animation: "lineIn 0.28s cubic-bezier(0.4,0,0.2,1) both",
-                  }}>
-                  <div className="absolute inset-0 bg-violet-500/10 -ml-12 w-[calc(100%+3rem)] border-l-2 border-violet-500/70" />
-                  <div className="relative flex z-10">{inner}</div>
-                </div>
-              ) : (
-                <div
-                  key={idx}
-                  className="flex"
-                  style={{
-                    animation: "lineIn 0.28s cubic-bezier(0.4,0,0.2,1) both",
-                  }}>
-                  {inner}
-                </div>
-              );
-            })}
-
-            {/* idle cursor after all lines typed */}
-            {!coding && (
-              <div
-                className="flex"
-                style={{animation: "lineIn 0.2s ease both"}}>
-                <span className="text-slate-600 w-6 select-none text-right pr-4 text-[11px]">
-                  {CODE_LINES.length + 1}
-                </span>
-                <span
-                  className="inline-block w-[2px] h-[13px] bg-slate-300 align-middle"
-                  style={{
-                    opacity: cursorOn ? 1 : 0,
-                    transition: "opacity 0.1s",
-                  }}
-                />
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* ── AI pane ── */}
-        <div className="w-[40%] bg-[#16161e] flex flex-col border-l border-white/5">
-          {/* header */}
-          <div className="h-10 border-b border-white/5 flex items-center px-4 gap-2 text-[10px] font-bold text-slate-400 bg-[#1a1b26] uppercase tracking-wider">
-            <div className="w-4 h-4 bg-[#dc5426] rounded-[3px] flex items-center justify-center text-white">
-              <Zap className="w-2.5 h-2.5 fill-current" />
-            </div>
-            AI Assistant
-          </div>
-
-          {/* chat */}
-          <div className="flex-1 p-4 space-y-4 overflow-hidden">
-            {/* AI bubble */}
-            {showBubble && (
-              <div
-                key="bubble"
-                className="bg-[#232433] p-3 rounded-lg border border-white/5 shadow-sm relative"
-                style={{
-                  animation: "fadeUp 0.35s cubic-bezier(0.4,0,0.2,1) both",
-                }}>
-                <div className="absolute -left-1.5 top-3 w-3 h-3 bg-[#232433] border-l border-b border-white/5 rotate-45" />
-
-                {/* dots layer */}
-                <div
-                  style={{
-                    opacity: showMsg ? 0 : 1,
-                    transition: "opacity 0.25s ease",
-                    position: showMsg ? "absolute" : "relative",
-                    pointerEvents: "none",
-                  }}>
-                  <div className="flex gap-1.5 items-center py-0.5">
-                    {[0, 160, 320].map((d) => (
-                      <div
-                        key={d}
-                        className="w-1.5 h-1.5 rounded-full bg-slate-500"
-                        style={{
-                          animation: `dotBounce 0.9s ${d}ms ease-in-out infinite`,
-                        }}
-                      />
-                    ))}
-                  </div>
-                </div>
-
-                {/* message layer */}
-                <div
-                  style={{
-                    opacity: showMsg ? 1 : 0,
-                    transition: "opacity 0.35s ease",
-                    transitionDelay: showMsg ? "0.1s" : "0s",
-                  }}>
-                  <p className="text-[12px] text-slate-300 leading-relaxed font-medium">
-                    I&apos;ve identified a potential security flaw in the
-                    session handler. Should I implement the fix?
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* confirm button */}
-            {showBtn && (
-              <div
-                key="btn"
-                className="flex justify-end"
-                style={{
-                  animation: "fadeUp 0.35s cubic-bezier(0.4,0,0.2,1) both",
-                }}>
-                <button className="bg-gradient-to-r from-[#dc5426] to-orange-500 text-white text-[12px] font-bold px-4 py-2 rounded-md shadow-lg shadow-orange-900/20">
-                  Yes, proceed.
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* input */}
-          <div className="p-4 pt-2">
-            <div className="bg-[#1a1b26] border border-white/10 rounded-lg p-2.5 flex items-center">
-              <span className="text-[12px] text-slate-600 font-medium px-1 select-none">
-                Type a command...
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <style>{`
-        @keyframes lineIn {
-          from { opacity: 0; transform: translateY(5px); }
-          to   { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes fadeUp {
-          from { opacity: 0; transform: translateY(8px); }
-          to   { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes dotBounce {
-          0%, 80%, 100% { transform: translateY(0); }
-          40%           { transform: translateY(-5px); }
-        }
-      `}</style>
-    </div>
-  );
-}
-
-// ── Page hero ─────────────────────────────────────────────────────
 export default function HeroSection() {
+  const router = useRouter();
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [user, setUser] = useState(null);
+  const [promptText, setPromptText] = useState("");
+  const [planOn, setPlanOn] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [phIdx, setPhIdx] = useState(0);
+  const [phText, setPhText] = useState("");
+  const [phPhase, setPhPhase] = useState("typing"); // typing | holding | erasing
+  const [inputFocused, setInputFocused] = useState(false);
+  const textareaRef = useRef(null);
+  const sendBtnRef = useRef(null);
 
   useEffect(() => {
     const sb = getSupabaseBrowserClient();
-    sb.auth.getSession().then(({data: {session}}) => setIsLoggedIn(!!session));
+    sb.auth.getSession().then(({data: {session}}) => {
+      setIsLoggedIn(!!session);
+      setUser(session?.user || null);
+    });
   }, []);
 
+  // Typewriter for the empty-input placeholder. Pauses while the input is
+  // focused or the user has typed anything.
+  useEffect(() => {
+    if (promptText || inputFocused) return;
+    const current = PLACEHOLDER_PROMPTS[phIdx];
+
+    if (phPhase === "typing") {
+      if (phText.length < current.length) {
+        const t = setTimeout(
+          () => setPhText(current.slice(0, phText.length + 1)),
+          38 + Math.random() * 32,
+        );
+        return () => clearTimeout(t);
+      }
+      const t = setTimeout(() => setPhPhase("holding"), 0);
+      return () => clearTimeout(t);
+    }
+
+    if (phPhase === "holding") {
+      const t = setTimeout(() => setPhPhase("erasing"), 1600);
+      return () => clearTimeout(t);
+    }
+
+    // erasing
+    if (phText.length > 0) {
+      const t = setTimeout(() => setPhText(phText.slice(0, -1)), 22);
+      return () => clearTimeout(t);
+    }
+    setPhIdx((i) => (i + 1) % PLACEHOLDER_PROMPTS.length);
+    setPhPhase("typing");
+  }, [phText, phPhase, phIdx, promptText]);
+
+  const handleSubmit = () => {
+    const text = promptText.trim();
+    if (!text || submitting) return;
+    setSubmitting(true);
+    try {
+      sessionStorage.setItem("lucid_template_prompt", text);
+      sessionStorage.setItem("lucid_hero_autostart", "1");
+      // Carry the Plan-first preference into the workspace flow so a future
+      // backend handoff can read it. Dashboard doesn't consume this yet.
+      sessionStorage.setItem("lucid_plan_mode", planOn ? "1" : "0");
+    } catch {}
+    router.push(isLoggedIn ? "/dashboard/engineer" : "/login");
+  };
+
+  const handleTemplate = (label) => {
+    setPromptText(TEMPLATE_PROMPTS[label] || label);
+    textareaRef.current?.focus();
+  };
+
+  const handleKeyDown = (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      e.preventDefault();
+      sendBtnRef.current?.animate(
+        [
+          {transform: "scale(1)"},
+          {transform: "scale(0.92)"},
+          {transform: "scale(1)"},
+        ],
+        {duration: 260, easing: "cubic-bezier(.3,1.3,.4,1)"},
+      );
+      handleSubmit();
+    } else if (e.key === "Enter" && !e.shiftKey && promptText.trim()) {
+      e.preventDefault();
+      handleSubmit();
+    }
+  };
+
+  const userInitial = (
+    user?.user_metadata?.full_name ||
+    user?.user_metadata?.name ||
+    user?.email ||
+    "U"
+  )
+    .trim()
+    .charAt(0)
+    .toUpperCase();
+
+  const sendIdle = !promptText.trim();
+
   return (
-    <section className="flex flex-col lg:flex-row items-center justify-center gap-12 lg:gap-20 px-6 sm:px-10 pt-24 pb-12 lg:pt-32 lg:pb-24 max-w-[1400px] mx-auto w-full">
-      {/* LEFT */}
-      <div className="flex-1 max-w-xl self-center">
-        {/* badge */}
-        <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-[#1e293b] text-slate-300 text-[11px] font-medium mb-6 -mt-8 cursor-pointer hover:bg-[#334155] transition-colors shadow-sm w-fit border border-slate-700/50">
-          <span className="bg-[#0f172a] text-orange-400 px-1.5 py-0.5 rounded text-[10px] font-bold tracking-wide border border-slate-700">
-            New
+    <section
+      style={{fontFamily: GEIST_FAMILY}}
+      className="lucid-hero-bg relative w-full min-h-screen overflow-hidden text-[#15171C] dark:text-slate-100">
+      {/* Gradient lives on this section (lucid-hero-bg) and terminates at
+          #FDFDFD / #020617 so the next section continues seamlessly. */}
+      {/* Atmosphere layer (radial highlights + noise). Masked to fade out
+          by ~50% so it never colors the bottom of the banner, which would
+          otherwise create a visible band where the gradient hits white. */}
+      <div
+        aria-hidden
+        className="absolute inset-0 pointer-events-none overflow-hidden"
+        style={{
+          maskImage:
+            "linear-gradient(to bottom, #000 0%, #000 45%, transparent 75%)",
+          WebkitMaskImage:
+            "linear-gradient(to bottom, #000 0%, #000 45%, transparent 75%)",
+        }}>
+        <div
+          className="absolute -inset-[10%]"
+          style={{
+            background:
+              "radial-gradient(60% 40% at 50% 14%, rgba(255,255,255,.20), transparent 65%), radial-gradient(55% 45% at 86% 18%, rgba(120,170,180,.18), transparent 70%), radial-gradient(55% 45% at 14% 18%, rgba(100,160,175,.16), transparent 70%)",
+          }}
+        />
+        <div
+          className="absolute inset-0 opacity-[0.16] mix-blend-multiply"
+          style={{
+            backgroundImage:
+              "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='1.4' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.09  0 0 0 0 0.08  0 0 0 0 0.07  0 0 0 0.5 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>\")",
+          }}
+        />
+      </div>
+
+      {/* pt-[104px] clears the fixed navbar (which now sits at top-4).
+          StatusRail sits at the top of the banner (in flow) so it shares the
+          gradient and scrolls naturally. */}
+      <div className="relative pb-14 pt-[104px]">
+        {/* <StatusRail /> */}
+        {/* ── Hero text ── */}
+        <section className="relative mx-auto flex max-w-[1180px] flex-col items-center px-8 pt-14 text-center">
+          {/* §/Workspace markers (desktop only) */}
+          {/* <span
+            aria-hidden
+            className="absolute left-8 top-6 hidden md:block text-[10.5px] uppercase text-[#8B909B] dark:text-slate-400"
+            style={{
+              fontFamily: GEIST_MONO_FAMILY,
+              letterSpacing: "0.14em",
+            }}>
+            § 01 / Studio
           </span>
-          <span className="text-white">Introducing Lucid Review</span>
-          <ChevronRight className="w-3 h-3 text-slate-500" />
-        </div>
-
-        <h1 className="text-4xl sm:text-5xl lg:text-[3rem] font-bold tracking-tight text-slate-900 dark:text-slate-100 leading-[1.1] mb-6">
-          {/* <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#dc5426] to-orange-500 dark:from-[#dc5426] dark:to-orange-400">
-            LucidAI
+          <span
+            aria-hidden
+            className="absolute right-8 top-6 hidden md:block text-[10.5px] uppercase text-[#8B909B] dark:text-slate-400"
+            style={{
+              fontFamily: GEIST_MONO_FAMILY,
+              letterSpacing: "0.14em",
+            }}>
+            Workspace · revision 2.5
           </span> */}
-          The AI Software engineer
-        </h1>
 
-        <p className="text-lg text-slate-500 dark:text-slate-400 leading-relaxed mb-8 max-w-lg font-medium">
-          An autonomous engineering partner that understands your codebase,
-          builds features, and fixes bugs.
-        </p>
-
-        <div className="flex items-center gap-4 mb-10">
           <Link
-            href={isLoggedIn ? "/dashboard/engineer" : "/login"}
-            className="bg-gradient-to-r from-[#dc5426] to-orange-500 text-white text-[15px] font-semibold px-8 py-3.5 rounded-lg shadow-lg shadow-orange-500/25 hover:shadow-orange-600/40 hover:-translate-y-0.5 transition-all duration-200 inline-block text-center">
-            {isLoggedIn ? "Go to Dashboard" : "Get Started"}
+            href="/pricing"
+            className="group inline-flex items-center gap-3 rounded-full border border-white/70 bg-white/55 py-[5px] pr-4 pl-[5px] text-[13.5px] font-medium text-[#15171C] shadow-[0_1px_0_rgba(255,255,255,.7)_inset,0_6px_16px_-10px_rgba(21,23,28,.20)] backdrop-blur-[14px] backdrop-saturate-150 transition-transform hover:-translate-y-px dark:border-white/10 dark:bg-white/[0.06] dark:text-slate-100 dark:shadow-[0_1px_0_rgba(255,255,255,.08)_inset,0_6px_16px_-10px_rgba(0,0,0,.5)]"
+            style={{letterSpacing: "-0.005em"}}>
+            <span
+              className="rounded-full px-[11px] py-[5px] text-[10.5px] font-bold uppercase tracking-[0.12em] text-white shadow-[0_1px_0_rgba(255,255,255,.3)_inset]"
+              style={{
+                background: "linear-gradient(180deg, #FF8456, #E85A2C)",
+                fontFamily: GEIST_MONO_FAMILY,
+              }}>
+              New
+            </span>
+            Say hello to Lycid Review
+            <svg
+              className="opacity-55 transition-all group-hover:translate-x-[3px] group-hover:opacity-100"
+              width="14"
+              height="14"
+              viewBox="0 0 14 14"
+              fill="none"
+              aria-hidden>
+              <path
+                d="M3 7h7m0 0L7 4m3 3l-3 3"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
           </Link>
-          <button className="bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-[15px] font-bold px-8 py-3.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all shadow-sm">
-            Book a Demo
-          </button>
-        </div>
 
-        {/* steps */}
-        <div className="flex flex-col gap-2 w-full max-w-lg">
-          <div className="flex items-center gap-4 p-4 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-md transform hover:-translate-y-0.5 transition-all cursor-pointer relative overflow-hidden group">
-            <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#dc5426]" />
-            <div className="w-6 h-6 rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 flex items-center justify-center text-sm font-bold shadow-sm shrink-0">
-              1
+          <h1
+            className="mb-[22px] mt-8 font-[400] text-[#15171C] dark:text-slate-50 whitespace-normal md:whitespace-nowrap"
+            style={{
+              fontFamily: HEADLINE_FAMILY,
+              fontSize: "clamp(54px, 7.8vw, 64px)",
+              lineHeight: "1.02",
+              letterSpacing: "-0.04em",
+              textWrap: "balance",
+            }}>
+            Where ideas come to life
+          </h1>
+
+          <p
+            className="m-0 max-w-[68ch] text-[18px] leading-[1.5] font-normal text-[#2A2D34]/85 dark:text-slate-300/90"
+            style={{letterSpacing: "-0.01em", textWrap: "pretty"}}>
+            LucidAI lets you build fully-functional apps in minutes with just
+            your words.
+            <br />
+            <span className="block mt-1 font-medium text-[#15171C] dark:text-white">
+              No coding necessary.
+            </span>
+          </p>
+        </section>
+
+        {/* ── Composer ── */}
+        <div className="relative mx-auto mt-11 w-full max-w-[660px] px-6">
+          <div className="overflow-hidden rounded-[22px] border border-white/80 bg-white/[0.78] shadow-[0_1px_0_rgba(255,255,255,.85)_inset,0_30px_60px_-28px_rgba(21,23,28,.30),0_12px_28px_-12px_rgba(21,23,28,.10)] backdrop-blur-[22px] backdrop-saturate-150 transition-[border-color,box-shadow] focus-within:border-[#E85A2C]/45 focus-within:shadow-[0_1px_0_rgba(255,255,255,.85)_inset,0_30px_60px_-28px_rgba(21,23,28,.30),0_12px_28px_-12px_rgba(21,23,28,.10),0_0_0_4px_rgba(232,90,44,.12)] dark:border-white/40 dark:bg-white dark:shadow-[0_1px_0_rgba(255,255,255,.85)_inset,0_30px_60px_-28px_rgba(0,0,0,.8),0_12px_28px_-12px_rgba(0,0,0,.6)]">
+            <div className="relative px-[22px] pb-1 pt-[18px]">
+              <label htmlFor="prompt" className="sr-only">
+                Describe what to build
+              </label>
+              <textarea
+                id="prompt"
+                ref={textareaRef}
+                value={promptText}
+                onChange={(e) => setPromptText(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onFocus={() => setInputFocused(true)}
+                onBlur={() => setInputFocused(false)}
+                aria-label="Describe what you want to build"
+                placeholder=" "
+                className="relative z-[1] m-0 min-h-[56px] w-full resize-none border-0 bg-transparent p-0 text-[16px] font-normal leading-[1.5] text-[#15171C] outline-none"
+                style={{
+                  fontFamily: GEIST_FAMILY,
+                  letterSpacing: "-0.005em",
+                }}
+              />
+              {!promptText && !inputFocused && (
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute left-[22px] top-[18px] z-0 text-[16px] leading-[1.5] text-[#ADB1BB]"
+                  style={{
+                    fontFamily: GEIST_FAMILY,
+                    letterSpacing: "-0.005em",
+                  }}>
+                  {phText}
+                  <span className="ml-[1px] inline-block w-[1px] h-[1.15em] align-[-0.18em] bg-[#ADB1BB] animate-typewriter-caret" />
+                </div>
+              )}
             </div>
-            <div className="flex flex-col">
-              <span className="text-slate-900 dark:text-slate-100 font-bold text-[15px]">
-                Planning
-              </span>
-              <span className="text-slate-500 dark:text-slate-400 text-[13px]">
-                Plan your roadmap and architecture
-              </span>
+
+            <div className="mt-2 flex items-center justify-between gap-[10px] border-t border-[rgba(21,23,28,0.06)] px-[10px] pb-[10px] pt-2">
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  aria-label="Attach (sign in to add files)"
+                  title="Sign in to attach files"
+                  onClick={() => textareaRef.current?.focus()}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-[9px] border border-transparent bg-transparent text-[#2A2D34] transition-[background,border-color] hover:border-[#E5EAF0] hover:bg-[rgba(21,23,28,0.04)]">
+                  <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                    <path
+                      d="M9 4v10M4 9h10"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={planOn}
+                  onClick={() => setPlanOn((v) => !v)}
+                  className="inline-flex cursor-pointer items-center gap-[10px] rounded-full border border-[rgba(21,23,28,0.08)] bg-white/55 py-[6px] pl-[6px] pr-[14px] text-[14px] font-medium text-[#2A2D34] transition-[background,border-color] hover:border-[rgba(21,23,28,0.14)] hover:bg-white/85"
+                  style={{fontFamily: "inherit"}}>
+                  <span
+                    aria-hidden
+                    className="relative h-[18px] w-[30px] rounded-full transition-colors"
+                    style={{background: planOn ? "#E85A2C" : "#D0D6DE"}}>
+                    <span
+                      className="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-white shadow-[0_1px_2px_rgba(0,0,0,.18)] transition-[left]"
+                      style={{left: planOn ? "14px" : "2px"}}
+                    />
+                  </span>
+                  Plan
+                  <span
+                    aria-hidden
+                    className="grid h-4 w-4 place-items-center rounded-full border-[1.2px] border-[#8B909B] text-[10px] font-semibold text-[#8B909B]"
+                    style={{fontFamily: GEIST_FAMILY}}>
+                    i
+                  </span>
+                </button>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  aria-label="Voice input (coming soon)"
+                  title="Voice input — coming soon"
+                  onClick={() => textareaRef.current?.focus()}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-[9px] border border-transparent bg-transparent text-[#2A2D34] transition-[background,border-color] hover:border-[#E5EAF0] hover:bg-[rgba(21,23,28,0.04)]">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                    <rect
+                      x="6"
+                      y="2"
+                      width="4"
+                      height="8"
+                      rx="2"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                    />
+                    <path
+                      d="M3.5 7.5a4.5 4.5 0 009 0M8 12v2.2M5.8 14.2h4.4"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </button>
+                <button
+                  ref={sendBtnRef}
+                  type="button"
+                  onClick={handleSubmit}
+                  aria-label="Send prompt"
+                  className="grid h-[42px] w-[42px] place-items-center rounded-full border-0 bg-[#E85A2C] text-white shadow-[0_1px_0_rgba(255,255,255,.3)_inset,0_10px_22px_-8px_rgba(232,90,44,.6)] transition-[background,transform,opacity] hover:bg-[#d8501f] active:translate-y-px"
+                  style={{opacity: sendIdle ? 0.8 : 1}}>
+                  <svg width="18" height="18" viewBox="0 0 16 16" fill="none">
+                    <path
+                      d="M8 13V3m0 0L4 7m4-4l4 4"
+                      stroke="currentColor"
+                      strokeWidth="1.9"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+              </div>
             </div>
-            <ChevronRight className="w-4 h-4 text-slate-300 dark:text-slate-600 ml-auto" />
           </div>
-
-          {[
-            {
-              n: 2,
-              title: "Professional Documentation",
-              sub: "Generate enterprise-grade docs",
-            },
-            {
-              n: 3,
-              title: "Integrations",
-              sub: "Connect with GitHub, Linear & Slack",
-            },
-          ].map(({n, title, sub}) => (
-            <div
-              key={n}
-              className="flex items-center gap-4 p-4 rounded-xl border border-transparent hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-all cursor-pointer group">
-              <div className="w-6 h-6 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 flex items-center justify-center text-sm font-bold shrink-0 group-hover:bg-white dark:group-hover:bg-slate-700 group-hover:shadow-sm transition-all border border-transparent group-hover:border-slate-200 dark:group-hover:border-slate-600">
-                {n}
-              </div>
-              <div className="flex flex-col">
-                <span className="text-slate-600 dark:text-slate-300 font-bold text-[15px] group-hover:text-slate-900 dark:group-hover:text-white transition-colors">
-                  {title}
-                </span>
-                <span className="text-slate-400 dark:text-slate-500 text-[13px] group-hover:text-slate-500 dark:group-hover:text-slate-400 transition-colors">
-                  {sub}
-                </span>
-              </div>
-            </div>
-          ))}
         </div>
+
+        {/* ── Templates ── */}
+        <section
+          className="mx-auto mt-12 max-w-[880px] px-8 text-center"
+          aria-label="Starter templates">
+          <div
+            className="mb-[18px] text-[11px] uppercase text-[#5C616C] dark:text-slate-400"
+            style={{
+              fontFamily: GEIST_MONO_FAMILY,
+              letterSpacing: "0.2em",
+            }}>
+            Not sure where to start? Try one of these:
+          </div>
+          <div className="mx-auto flex max-w-[760px] flex-wrap justify-center gap-[10px]">
+            {TEMPLATES.map((label) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => handleTemplate(label)}
+                className="cursor-pointer rounded-full border border-[rgba(21,23,28,0.08)] bg-white/70 px-[22px] py-[11px] text-[14.5px] font-medium leading-none text-[#2A2D34] shadow-[0_1px_0_rgba(255,255,255,.7)_inset,0_4px_12px_-8px_rgba(21,23,28,.16)] backdrop-blur-[12px] backdrop-saturate-150 transition-[border-color,background,color,transform] hover:-translate-y-px hover:border-[rgba(232,90,44,0.4)] hover:bg-white/95 hover:text-[#6B2810] active:translate-y-0 dark:border-white/10 dark:bg-white/[0.05] dark:text-slate-200 dark:shadow-[0_1px_0_rgba(255,255,255,.04)_inset,0_4px_12px_-8px_rgba(0,0,0,.5)] dark:hover:border-[#FF7A4E]/40 dark:hover:bg-white/[0.1] dark:hover:text-[#FFA88C]"
+                style={{
+                  fontFamily: GEIST_FAMILY,
+                  letterSpacing: "-0.005em",
+                }}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </section>
       </div>
 
-      {/* RIGHT — animated IDE */}
-      <div className="flex-1 w-full max-w-2xl">
-        <AnimatedIDE />
-      </div>
+      {/* ── Floating account bubble (only when signed in) ── */}
+      {isLoggedIn && (
+        <Link
+          href="/dashboard/engineer"
+          aria-label="Your account"
+          className="fixed bottom-6 left-6 z-30 grid h-11 w-11 place-items-center rounded-full border-2 border-white/70 bg-[#15171C] text-[16px] font-semibold text-[#FBFAF7] shadow-[0_10px_28px_-10px_rgba(21,23,28,.55)] dark:border-white/20 dark:bg-white dark:text-[#15171C] dark:shadow-[0_10px_28px_-10px_rgba(0,0,0,.7)]"
+          style={{fontFamily: GEIST_FAMILY}}>
+          {userInitial}
+        </Link>
+      )}
     </section>
   );
 }

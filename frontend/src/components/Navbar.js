@@ -5,12 +5,17 @@ import {
   Box, Menu, X, ChevronDown,
   Zap, LayoutGrid, Rocket, GitBranch, Globe,
   PanelTop, ShoppingCart, Building2, Code2,
-  FileText, Map, RefreshCw, Users, HelpCircle
+  FileText, Map, RefreshCw, Users, HelpCircle,
+  Sun, Moon, Monitor
 } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import ThemeModeSelector from '@/components/ThemeModeSelector';
+import { useTheme } from '@/context/ThemeContext';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
+
+const THEME_CYCLE = ['light', 'dark', 'system'];
+const THEME_ICON = { light: Sun, dark: Moon, system: Monitor };
 
 /* ── Dropdown Data ── */
 const productItems = [
@@ -65,7 +70,7 @@ function DropdownPanel({ items, columns = 2 }) {
 }
 
 /* ── NavDropdown trigger + panel ── */
-function NavDropdown({ label, items, columns }) {
+function NavDropdown({ label, items, columns, number }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const timeout = useRef(null);
@@ -85,14 +90,25 @@ function NavDropdown({ label, items, columns }) {
       <button
         onClick={() => setOpen(!open)}
         className={cn(
-          "flex items-center gap-1 text-[15px] font-medium transition-colors",
+          "inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-[14px] py-2 text-[17px] font-medium transition-colors",
           open
-            ? "text-slate-900 dark:text-white"
-            : "text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+            ? "bg-black/[0.06] text-[#15171C] dark:bg-white/[0.06] dark:text-white"
+            : "text-[#2A2D34] hover:bg-black/[0.06] hover:text-[#15171C] dark:text-slate-200 dark:hover:bg-white/[0.06] dark:hover:text-white"
         )}
+        style={{letterSpacing: "-0.005em"}}
       >
+        {number && (
+          <span
+            className="font-normal text-[10.5px] text-[#8B909B]"
+            style={{
+              fontFamily: "var(--font-geist-mono), ui-monospace, monospace",
+              letterSpacing: "0.06em",
+            }}>
+            {number}
+          </span>
+        )}
         {label}
-        <ChevronDown className={cn("w-3.5 h-3.5 transition-transform duration-200", open && "rotate-180")} />
+        <ChevronDown className={cn("w-[11px] h-[11px] opacity-55 transition-transform duration-200", open && "rotate-180")} />
       </button>
 
       {/* Panel */}
@@ -111,6 +127,12 @@ export default function Navbar() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const { theme, setTheme } = useTheme();
+  const ThemeIcon = THEME_ICON[theme] || Sun;
+  const cycleTheme = () => {
+    const idx = THEME_CYCLE.indexOf(theme);
+    setTheme(THEME_CYCLE[(idx + 1) % THEME_CYCLE.length]);
+  };
 
   useEffect(() => {
     const handleScroll = () => setIsScrolled(window.scrollY > 20);
@@ -131,54 +153,97 @@ export default function Navbar() {
 
   return (
     <>
-      <div className={cn("fixed top-0 left-0 right-0 z-50 flex justify-center transition-all duration-700 ease-[cubic-bezier(0.25,0.1,0.25,1.0)]", isScrolled ? "pt-4" : "pt-0")}>
-        <header className={cn(
-          "flex items-center justify-between transition-all duration-700 ease-[cubic-bezier(0.25,0.1,0.25,1.0)] px-6 md:px-8",
-          isScrolled 
-            ? "w-full max-w-[95%] bg-white/70 dark:bg-slate-900/70 backdrop-blur-xl border border-slate-200/50 dark:border-slate-700/50 shadow-lg shadow-slate-200/20 dark:shadow-black/20 rounded-full py-3" 
-            : "w-full bg-white/90 dark:bg-slate-950/90 backdrop-blur-md border-b border-slate-100 dark:border-slate-800/50 py-4"
-        )}>
-          {/* Logo */}
-          <Link href="/" className="flex items-center gap-2.5">
-            <div className="w-8 h-8 bg-gradient-to-br from-[#dc5426] to-orange-500 rounded-lg flex items-center justify-center text-white shadow-md shadow-orange-200 dark:shadow-orange-900/30">
-              <Box className="w-5 h-5 stroke-[2.5]" />
-            </div>
-            <span className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">Lucid AI</span>
+      {/* Base44-style island nav: always white pill, floating over gradient.
+          Positioned by its fixed wrapper in page.js — header itself is in flow. */}
+      <header
+        className="relative z-40 px-3 sm:px-6 pt-1"
+        style={{
+          fontFamily:
+            "var(--font-geist), ui-sans-serif, system-ui, -apple-system, sans-serif",
+        }}>
+        <div
+          className="mx-auto grid max-w-[1320px] grid-cols-[1fr_auto_1fr] items-center gap-4 rounded-full border border-white/70 bg-white px-6 sm:px-8 py-2.5 shadow-none backdrop-blur-[16px] backdrop-saturate-150 dark:border-white/15 dark:bg-slate-900/95">
+          {/* Brand stack */}
+          <Link href="/" className="inline-flex items-center gap-3 no-underline">
+            <span
+              aria-hidden
+              className="grid h-[38px] w-[38px] place-items-center rounded-[9px]"
+              style={{
+                background:
+                  "radial-gradient(120% 120% at 25% 18%, #FF8456 0%, #E85A2C 55%, #C8451B 100%)",
+                boxShadow:
+                  "0 1px 0 rgba(255,255,255,.45) inset, 0 4px 12px -4px rgba(232,90,44,.55)",
+              }}>
+              <svg width="18" height="18" viewBox="0 0 16 16" fill="none">
+                <path
+                  d="M3 4.5L8 2l5 2.5v7L8 14 3 11.5v-7z"
+                  stroke="rgba(255,255,255,.95)"
+                  strokeWidth="1.3"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M3 4.5L8 7l5-2.5M8 7v7"
+                  stroke="rgba(255,255,255,.95)"
+                  strokeWidth="1.3"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </span>
+            <span
+              className="text-[20px] font-bold text-[#15171C] dark:text-white"
+              style={{letterSpacing: "-0.025em"}}>
+              Lucid AI
+            </span>
           </Link>
 
-          {/* Desktop Nav */}
-          <nav className="hidden md:flex items-center gap-7">
+          {/* Center nav links — plain text, Base44-style */}
+          <nav
+            className="hidden md:inline-flex items-center justify-center gap-1"
+            aria-label="Primary">
             <NavDropdown label="Product"   items={productItems}  columns={2} />
             <NavDropdown label="Use Cases" items={useCaseItems}  columns={2} />
             <NavDropdown label="Resources" items={resourceItems} columns={2} />
-            <Link href="/pricing" className="text-[15px] font-medium text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors">
+            <Link
+              href="/pricing"
+              className="inline-flex items-center whitespace-nowrap rounded-lg px-[14px] py-2 text-[17px] font-medium text-[#2A2D34] no-underline transition-colors hover:bg-black/[0.06] hover:text-[#15171C] dark:text-slate-200 dark:hover:bg-white/[0.06] dark:hover:text-white"
+              style={{letterSpacing: "-0.005em"}}>
               Pricing
+            </Link>
+            <Link
+              href="/pricing#enterprise"
+              className="inline-flex items-center whitespace-nowrap rounded-lg px-[14px] py-2 text-[17px] font-medium text-[#2A2D34] no-underline transition-colors hover:bg-black/[0.06] hover:text-[#15171C] dark:text-slate-200 dark:hover:bg-white/[0.06] dark:hover:text-white"
+              style={{letterSpacing: "-0.005em"}}>
+              Enterprise
             </Link>
           </nav>
 
-          {/* Right Actions */}
-          <div className="hidden md:flex items-center gap-4">
-            <ThemeModeSelector />
-            {isLoggedIn ? (
-              <Link href="/dashboard/engineer" className="bg-gradient-to-r from-[#dc5426] to-orange-500 text-white text-[15px] font-semibold px-5 py-2.5 rounded-lg hover:shadow-lg hover:shadow-orange-500/30 transition-all duration-200 transform hover:-translate-y-0.5">
-                Go to Dashboard
-              </Link>
-            ) : (
-              <>
-                <Link href="/login" className="text-[15px] font-bold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors">Login</Link>
-                <Link href="/login" className="bg-gradient-to-r from-[#dc5426] to-orange-500 text-white text-[15px] font-semibold px-5 py-2.5 rounded-lg hover:shadow-lg hover:shadow-orange-500/30 transition-all duration-200 transform hover:-translate-y-0.5">
-                  Start Building
-                </Link>
-              </>
-            )}
+          {/* Right cluster — Base44 style: bare theme icon + lime-green CTA */}
+          <div className="hidden md:flex items-center justify-end gap-3">
+            <button
+              type="button"
+              onClick={cycleTheme}
+              aria-label={`Theme: ${theme}. Click to switch.`}
+              title={`Theme: ${theme}`}
+              className="grid h-9 w-9 place-items-center rounded-full text-[#2A2D34] transition-colors hover:bg-black/[0.05] dark:text-slate-300 dark:hover:bg-white/[0.06]">
+              <ThemeIcon className="w-[18px] h-[18px]" />
+            </button>
+            <Link
+              href={isLoggedIn ? "/dashboard/engineer" : "/login"}
+              className="inline-flex items-center rounded-full border border-[#0D1B2E] bg-[#15243F] px-[22px] py-[10px] text-[15px] font-semibold text-white no-underline shadow-[0_1px_0_rgba(255,255,255,.12)_inset,0_4px_12px_-4px_rgba(13,27,46,.45)] transition-[background,transform] hover:bg-[#1E3457] active:translate-y-px"
+              style={{letterSpacing: "-0.005em"}}>
+              {isLoggedIn ? "Go to Dashboard" : "Start Building"}
+            </Link>
           </div>
 
-          {/* Mobile Toggle */}
-          <button className="md:hidden text-slate-600 dark:text-slate-300" onClick={() => setIsMenuOpen(!isMenuOpen)}>
+          {/* Mobile toggle */}
+          <button
+            className="md:hidden col-start-2 justify-self-end text-[#2A2D34] dark:text-slate-200"
+            onClick={() => setIsMenuOpen(!isMenuOpen)}
+            aria-label={isMenuOpen ? "Close menu" : "Open menu"}>
             {isMenuOpen ? <X /> : <Menu />}
           </button>
-        </header>
-      </div>
+        </div>
+      </header>
 
       {/* Mobile Menu */}
       {isMenuOpen && (

@@ -417,13 +417,36 @@ export default function EngineerDashboardPage() {
     // Check for pre-filled template prompt
     try {
       const templatePrompt = sessionStorage.getItem("lucid_template_prompt");
+      const autoStart = sessionStorage.getItem("lucid_hero_autostart");
+      if (templatePrompt && autoStart) {
+        // Hero submit → straight to workspace, skip the dashboard composer.
+        sessionStorage.removeItem("lucid_template_prompt");
+        sessionStorage.removeItem("lucid_hero_autostart");
+        const cid = crypto.randomUUID();
+        try {
+          sessionStorage.setItem(`wizard_prompt_${cid}`, templatePrompt);
+          sessionStorage.setItem(
+            `wizard_meta_${cid}`,
+            JSON.stringify({
+              stack: "nextjs",
+              projectType: null,
+              backend: "none",
+              deployment: "hosted",
+              figmaUrl: "",
+            }),
+          );
+          sessionStorage.setItem(`wizard_desc_${cid}`, templatePrompt);
+        } catch {}
+        router.replace(`/dashboard/engineer/workspace/${cid}`);
+        return;
+      }
       if (templatePrompt) {
         setPromptText(templatePrompt);
         sessionStorage.removeItem("lucid_template_prompt");
         setTimeout(() => promptRef.current?.focus(), 100);
       }
     } catch {}
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     if (homeMode !== "import") return;
@@ -707,7 +730,19 @@ export default function EngineerDashboardPage() {
         <InvitationsCountBanner />
 
         {/* ── HOME HERO ── */}
-        <div className="max-w-[800px] mx-auto px-8 pt-[52px] pb-10 text-center">
+        <div
+          className={cn(
+            "relative w-full overflow-hidden",
+            // Light: deep premium blue → mid blue → soft → page bg (matches landing hero)
+            "bg-[linear-gradient(to_bottom,#3d6993_0%,#5e87ad_22%,#88a8c5_45%,#bccfdc_70%,#e9e4dc_88%,#fefcfa_100%)]",
+            // Dark: deep navy → midnight → page bg
+            "dark:bg-[linear-gradient(to_bottom,#0a1a30_0%,#0d2138_30%,#0b1620_60%,#0d1117_100%)]",
+          )}>
+          <div className="pointer-events-none absolute inset-0 overflow-hidden">
+            <div className="absolute -top-32 left-[15%] w-[420px] h-[420px] rounded-full bg-sky-200/25 dark:bg-sky-500/[0.07] blur-3xl" />
+            <div className="absolute top-32 right-[10%] w-[360px] h-[360px] rounded-full bg-blue-300/20 dark:bg-blue-500/[0.05] blur-3xl" />
+          </div>
+        <div className="relative max-w-[800px] mx-auto px-8 pt-[52px] pb-10 text-center">
           {/* Mode Toggle — TOP */}
           <div className="flex justify-center mb-7">
             <div className="flex gap-1 bg-[#fefcfa] dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] p-[3px] rounded-[14px]">
@@ -737,11 +772,11 @@ export default function EngineerDashboardPage() {
           {homeMode === "build" ? (
             <>
               {/* Title */}
-              <h1 className="text-[38px] font-[800] text-slate-900 dark:text-white tracking-[-0.04em] leading-[1.12]">
-                What will you <span className="text-[#dc5426]">build next</span>
+              <h1 className="text-[38px] font-normal text-slate-950 dark:text-white tracking-[-0.035em] leading-[1.12]">
+                What will you <span className="text-[#166534]">build next</span>
                 ?
               </h1>
-              <p className="text-[14.5px] text-slate-500 dark:text-slate-400 mt-[10px] leading-[1.6]">
+              <p className="text-[14.5px] text-slate-800 dark:text-slate-300 mt-[10px] leading-[1.6]">
                 Describe your app idea and Lucid AI will generate a complete,
                 working application.
               </p>
@@ -750,9 +785,9 @@ export default function EngineerDashboardPage() {
               <div
                 className={cn(
                   "mt-7 text-left bg-white dark:bg-[#161b22] rounded-[20px] border overflow-hidden transition-all duration-150",
-                  "shadow-[0_1px_3px_rgba(0,0,0,0.07),0_1px_2px_rgba(0,0,0,0.04)]",
+                  "shadow-[0_8px_24px_-6px_rgba(15,23,42,0.18),0_2px_6px_rgba(15,23,42,0.06)]",
                   promptText.trim()
-                    ? "border-[#dc5426]/50"
+                    ? "border-[#166534]/50"
                     : "border-slate-200 dark:border-[#2d333b]",
                 )}>
                 <textarea
@@ -846,7 +881,7 @@ export default function EngineerDashboardPage() {
                     className={cn(
                       "flex items-center gap-[6px] px-[18px] py-2 rounded-[10px] text-[13px] font-semibold transition-all duration-150 active:scale-[0.97]",
                       promptText.trim() && !isLaunching
-                        ? "bg-[#dc5426] hover:bg-[#b8421e] text-white"
+                        ? "bg-[#166534] hover:bg-[#14532d] text-white"
                         : "bg-[oklch(40%_0.01_265)] dark:bg-[#21262d] text-white dark:text-slate-400 opacity-80",
                     )}>
                     {isLaunching ? (
@@ -1271,6 +1306,7 @@ export default function EngineerDashboardPage() {
               )}
             </>
           )}
+        </div>
         </div>
 
         {/* ── PROJECTS SECTION ── */}

@@ -250,6 +250,15 @@ html.dark body {
   50%       { opacity: 0; }
 }
 
+/* Hero composer placeholder caret */
+@keyframes typewriter-caret {
+  0%, 49%   { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.animate-typewriter-caret {
+  animation: typewriter-caret 1s steps(1, end) infinite;
+}
+
 /* ── Wizard step transitions ── */
 @keyframes wizard-slide-in {
   from { opacity: 0; }
@@ -406,4 +415,67 @@ html.dark body {
 .backdrop-command {
   backdrop-filter: blur(12px) saturate(180%);
   -webkit-backdrop-filter: blur(12px) saturate(180%);
+}
+
+/* ─── Lucid AI Hero (landing) — theme-aware background + tokens ─── */
+:root {
+  --hero-ink:        #15171C;
+  --hero-ink-2:      #2A2D34;
+  --hero-muted:      #5C616C;
+  --hero-muted-2:    #8B909B;
+  --hero-hint:       #ADB1BB;
+  --hero-card:       255, 255, 255;   /* rgba R,G,B parts */
+  --hero-border:     255, 255, 255;
+  --hero-divider:    21, 23, 28;
+  --hero-ember:      #E85A2C;
+  --hero-ember-soft: #F8DCC8;
+}
+.dark {
+  --hero-ink:        #F1F3F8;
+  --hero-ink-2:      #C8CCD6;
+  --hero-muted:      #9298A4;
+  --hero-muted-2:    #6B7280;
+  --hero-hint:       #4B5563;
+  --hero-card:       30, 34, 46;
+  --hero-border:     255, 255, 255;
+  --hero-divider:    255, 255, 255;
+  --hero-ember:      #FF7A4E;
+  --hero-ember-soft: #4A2515;
+}
+/* Hero gradient lives on the hero section itself (min-h-screen) and
+   terminates at the exact background color of the sections below —
+   #FDFDFD light / #020617 dark — so the join between hero and the rest
+   of the page is invisible. No background-attachment: fixed, which was
+   causing the gradient to slide under the white block and create a seam. */
+.lucid-hero-bg {
+  background: linear-gradient(180deg,
+    #A4CFD6 0%,
+    #A4CFD6 8%,
+    #A8D2D8 18%,
+    #AED5DB 28%,
+    #B6D8DD 38%,
+    #C2DDE0 48%,
+    #D2E2E2 58%,
+    #E2E9E6 66%,
+    #EFEEEA 72%,
+    #F7F6F2 77%,
+    #FBFBF8 81%,
+    #FDFDFD 84%,
+    #FDFDFD 100%);
+}
+.dark .lucid-hero-bg {
+  background: linear-gradient(180deg,
+    #103138 0%,
+    #103138 8%,
+    #0f2E36 18%,
+    #0e2B32 28%,
+    #0c272E 38%,
+    #0a212a 48%,
+    #081a22 58%,
+    #06141c 66%,
+    #050e16 72%,
+    #040912 77%,
+    #03070e 81%,
+    #020617 84%,
+    #020617 100%);
 }
