@@ -1595,7 +1595,8 @@ async def websocket_agent(websocket: WebSocket):
             # question when key context is missing (location, project type,
             # audience). Falls back to the keyword-based conflict detector
             # for known archetype conflicts (landing vs ecommerce, etc.).
-            # Max 3 clarification rounds; after that we proceed regardless.
+            # Max 5 clarification rounds (richer per-type intake); after that we
+            # proceed regardless. Kept in sync with clarity_agent._MAX_ROUNDS.
             #
             # When ``settings.USE_CLASSIFIER_AGENT`` is True, the new
             # ``project_classifier_agent.resolve_classification`` is used
@@ -1617,7 +1618,7 @@ async def websocket_agent(websocket: WebSocket):
             _existing_clarify, _ = extract_clarify_context(task)
             _clarify_question: dict | None = None
 
-            if _settings.USE_CLASSIFIER_AGENT and len(_existing_clarify) < 3:
+            if _settings.USE_CLASSIFIER_AGENT and len(_existing_clarify) < 5:
                 # New path — let the resolver return either a clarification
                 # question or a fully-resolved archetype. On any exception
                 # we fall through to the legacy check_prompt_clarity path
@@ -1661,7 +1662,7 @@ async def websocket_agent(websocket: WebSocket):
             # Only run AI clarity check for new/initial prompts (not follow-ups)
             # and only when fewer than 3 rounds have been used and the new
             # flow hasn't already produced a question.
-            if _clarify_question is None and not _settings.USE_CLASSIFIER_AGENT and len(_existing_clarify) < 3:
+            if _clarify_question is None and not _settings.USE_CLASSIFIER_AGENT and len(_existing_clarify) < 5:
                 _clarify_question = await check_prompt_clarity(
                     task=task,
                     already_clarified=_existing_clarify,
