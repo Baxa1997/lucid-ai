@@ -26,7 +26,7 @@ function GitLabIcon({ className }) {
    ════════════════════════════════════════════════ */
 function LucidLogo() {
   return (
-    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-400 to-teal-600 flex items-center justify-center shadow-sm">
+    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-400 to-indigo-600 flex items-center justify-center shadow-sm">
       <Sparkles className="w-4 h-4 text-white" />
     </div>
   );
@@ -67,8 +67,8 @@ function StepIndicator({ currentStep }) {
             <div className="flex flex-col items-center gap-2">
               <div className={cn(
                 "w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold transition-all duration-500",
-                status === 'completed' && "bg-gradient-to-br from-emerald-400 to-teal-500 text-white shadow-md shadow-teal-400/25",
-                status === 'active' && "bg-gradient-to-br from-emerald-400 to-teal-500 text-white shadow-md shadow-teal-400/25",
+                status === 'completed' && "bg-gradient-to-br from-blue-400 to-indigo-500 text-white shadow-md shadow-indigo-400/25",
+                status === 'active' && "bg-gradient-to-br from-blue-400 to-indigo-500 text-white shadow-md shadow-indigo-400/25",
                 status === 'upcoming' && "bg-slate-100 text-slate-400 border border-slate-200"
               )}>
                 {status === 'completed' ? (
@@ -79,8 +79,8 @@ function StepIndicator({ currentStep }) {
               </div>
               <span className={cn(
                 "text-xs font-semibold whitespace-nowrap transition-colors",
-                status === 'completed' && "text-teal-600",
-                status === 'active' && "text-teal-600",
+                status === 'completed' && "text-indigo-600",
+                status === 'active' && "text-indigo-600",
                 status === 'upcoming' && "text-slate-400"
               )}>
                 {step.label}
@@ -89,7 +89,7 @@ function StepIndicator({ currentStep }) {
             {idx < steps.length - 1 && (
               <div className={cn(
                 "w-24 h-[2px] mx-3 mb-6 transition-colors duration-500",
-                getStepStatus(step.id) === 'completed' ? "bg-teal-400" : "bg-slate-200"
+                getStepStatus(step.id) === 'completed' ? "bg-indigo-400" : "bg-slate-200"
               )} />
             )}
           </div>
@@ -216,7 +216,7 @@ export default function DocsPage() {
     <div className="h-full flex flex-col bg-white dark:bg-[#0d1117] relative overflow-hidden transition-colors duration-200">
 
       {/* ── Gradient accent line at top ── */}
-      <div className="h-[3px] bg-gradient-to-r from-emerald-400 via-teal-500 to-emerald-600 shrink-0" />
+      <div className="h-[3px] bg-gradient-to-r from-blue-400 via-indigo-500 to-blue-600 shrink-0" />
 
       {/* ── Top Navigation Bar ── */}
       <div className="h-14 border-b border-slate-100 dark:border-slate-800 flex items-center px-6 justify-between shrink-0 bg-white dark:bg-[#0d1117] z-20 transition-colors duration-200">
@@ -258,9 +258,9 @@ export default function DocsPage() {
         {step === 'choose-source' && (
           <div className="relative flex flex-col items-center justify-center min-h-full px-6 py-16 animate-fade-in">
             {/* Badge */}
-            <div className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-500/10 dark:to-teal-500/10 border border-emerald-200 dark:border-emerald-500/20 rounded-full mb-6">
-              <Sparkles className="w-4 h-4 text-teal-500 dark:text-teal-400" />
-              <span className="text-xs font-bold text-teal-700 dark:text-teal-400 uppercase tracking-wider">Choose Your Source</span>
+            <div className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-500/10 dark:to-indigo-500/10 border border-blue-200 dark:border-blue-500/20 rounded-full mb-6">
+              <Sparkles className="w-4 h-4 text-indigo-500 dark:text-indigo-400" />
+              <span className="text-xs font-bold text-indigo-700 dark:text-indigo-400 uppercase tracking-wider">Choose Your Source</span>
             </div>
 
             <h1 className="text-4xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight text-center mb-3">
@@ -279,30 +279,30 @@ export default function DocsPage() {
                   label: 'Frontend',
                   desc: 'Repository code, components & UI',
                   icon: Monitor,
-                  gradient: 'from-teal-500 to-emerald-500',
-                  bg: 'bg-teal-50',
-                  border: 'border-teal-200',
-                  text: 'text-teal-600',
+                  gradient: 'from-indigo-500 to-blue-500',
+                  bg: 'bg-indigo-50',
+                  border: 'border-indigo-200',
+                  text: 'text-indigo-600',
                 },
                 {
                   id: 'backend',
                   label: 'Backend',
                   desc: 'API services, DB schemas & logic',
                   icon: Server,
-                  gradient: 'from-emerald-500 to-teal-600',
-                  bg: 'bg-emerald-50',
-                  border: 'border-emerald-200',
-                  text: 'text-emerald-600',
+                  gradient: 'from-blue-500 to-indigo-600',
+                  bg: 'bg-blue-50',
+                  border: 'border-blue-200',
+                  text: 'text-blue-600',
                 },
                 {
                   id: 'weburl',
                   label: 'Web URL',
                   desc: 'Crawl any live website URL',
                   icon: Globe,
-                  gradient: 'from-emerald-500 to-teal-500',
-                  bg: 'bg-emerald-50',
-                  border: 'border-emerald-200',
-                  text: 'text-emerald-600',
+                  gradient: 'from-blue-500 to-indigo-500',
+                  bg: 'bg-blue-50',
+                  border: 'border-blue-200',
+                  text: 'text-blue-600',
                 },
               ].map((opt) => {
                 const Icon = opt.icon;
@@ -342,16 +342,16 @@ export default function DocsPage() {
             <div className={cn(
               "flex items-center gap-2 px-4 py-2 rounded-full mb-6 border",
               selectedSource === 'frontend'
-                ? "bg-teal-50 border-teal-200"
-                : "bg-emerald-50 border-emerald-200"
+                ? "bg-indigo-50 border-indigo-200"
+                : "bg-blue-50 border-blue-200"
             )}>
               {selectedSource === 'frontend'
-                ? <Monitor className="w-4 h-4 text-teal-500" />
-                : <Server className="w-4 h-4 text-emerald-500" />
+                ? <Monitor className="w-4 h-4 text-indigo-500" />
+                : <Server className="w-4 h-4 text-blue-500" />
               }
               <span className={cn(
                 "text-xs font-bold uppercase tracking-wider",
-                selectedSource === 'frontend' ? "text-teal-700" : "text-emerald-700"
+                selectedSource === 'frontend' ? "text-indigo-700" : "text-blue-700"
               )}>
                 {selectedSource === 'frontend' ? 'Frontend' : 'Backend'} Documentation
               </span>
@@ -377,8 +377,8 @@ export default function DocsPage() {
                 <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-1">GitHub</h3>
                 <p className="text-xs text-slate-400 dark:text-slate-500 leading-relaxed mb-4">Connect to your GitHub repos</p>
                 <div className="flex items-center justify-center gap-1.5">
-                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  <span className="text-xs font-medium text-emerald-600">Connected</span>
+                  <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+                  <span className="text-xs font-medium text-blue-600">Connected</span>
                 </div>
               </button>
 
@@ -387,15 +387,15 @@ export default function DocsPage() {
                 onClick={() => handleProviderSelect('gitlab')}
                 className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-8 text-center transition-all duration-300 group hover:shadow-card hover:-translate-y-1 relative overflow-hidden"
               >
-                <div className="absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r from-emerald-400 to-teal-600 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-                <div className="w-16 h-16 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center mx-auto mb-4 group-hover:scale-110 group-hover:shadow-lg transition-all duration-300">
+                <div className="absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r from-blue-400 to-indigo-600 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                <div className="w-16 h-16 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center mx-auto mb-4 group-hover:scale-110 group-hover:shadow-lg transition-all duration-300">
                   <GitLabIcon className="w-9 h-9 text-blue-500" />
                 </div>
                 <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 mb-1">GitLab</h3>
                 <p className="text-xs text-slate-400 dark:text-slate-500 leading-relaxed mb-4">Connect to your GitLab repos</p>
                 <div className="flex items-center justify-center gap-1.5">
-                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  <span className="text-xs font-medium text-emerald-600">Connected</span>
+                  <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+                  <span className="text-xs font-medium text-blue-600">Connected</span>
                 </div>
               </button>
             </div>
@@ -447,21 +447,21 @@ export default function DocsPage() {
                   <button
                     key={repo.name}
                     onClick={() => handleRepoSelect(repo)}
-                    className="w-full flex items-center gap-4 px-5 py-3.5 text-left hover:bg-emerald-50/40 dark:hover:bg-emerald-500/5 transition-all duration-200 group"
+                    className="w-full flex items-center gap-4 px-5 py-3.5 text-left hover:bg-blue-50/40 dark:hover:bg-blue-500/5 transition-all duration-200 group"
                   >
-                    <div className="w-9 h-9 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center shrink-0 group-hover:bg-white dark:group-hover:bg-slate-700 group-hover:border-emerald-200 dark:group-hover:border-emerald-500/30 transition-all">
-                      <Code2 className="w-4 h-4 text-slate-400 group-hover:text-emerald-500 transition-colors" />
+                    <div className="w-9 h-9 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center shrink-0 group-hover:bg-white dark:group-hover:bg-slate-700 group-hover:border-blue-200 dark:group-hover:border-blue-500/30 transition-all">
+                      <Code2 className="w-4 h-4 text-slate-400 group-hover:text-blue-500 transition-colors" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors truncate">{repo.name}</h4>
+                        <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors truncate">{repo.name}</h4>
                         {repo.isDemo && (
                           <span className="px-1.5 py-0.5 bg-amber-50 border border-amber-200 rounded text-[9px] font-bold text-amber-600 uppercase">Demo</span>
                         )}
                       </div>
                       <div className="flex items-center gap-3 mt-0.5">
                         <span className="text-[11px] text-slate-400 flex items-center gap-1">
-                          <div className="w-2 h-2 rounded-full bg-emerald-400" />
+                          <div className="w-2 h-2 rounded-full bg-blue-400" />
                           {repo.lang}
                         </span>
                         <span className="text-[11px] text-slate-400 flex items-center gap-1">
@@ -473,8 +473,8 @@ export default function DocsPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <span className="text-xs font-semibold text-emerald-600">Generate</span>
-                      <ArrowRight className="w-3.5 h-3.5 text-emerald-400" />
+                      <span className="text-xs font-semibold text-blue-600">Generate</span>
+                      <ArrowRight className="w-3.5 h-3.5 text-blue-400" />
                     </div>
                   </button>
                 ))}
@@ -497,9 +497,9 @@ export default function DocsPage() {
         {step === 'enter-url' && (
           <div className="relative flex flex-col items-center justify-center min-h-full px-6 py-16 animate-fade-in">
             {/* Badge */}
-            <div className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-500/10 dark:to-teal-500/10 border border-emerald-200 dark:border-emerald-500/20 rounded-full mb-6">
-              <Globe className="w-4 h-4 text-teal-500 dark:text-teal-400" />
-              <span className="text-xs font-bold text-teal-700 dark:text-teal-400 uppercase tracking-wider">Website to Documentation</span>
+            <div className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-500/10 dark:to-indigo-500/10 border border-blue-200 dark:border-blue-500/20 rounded-full mb-6">
+              <Globe className="w-4 h-4 text-indigo-500 dark:text-indigo-400" />
+              <span className="text-xs font-bold text-indigo-700 dark:text-indigo-400 uppercase tracking-wider">Website to Documentation</span>
             </div>
 
             <h1 className="text-4xl font-extrabold text-slate-900 dark:text-slate-100 tracking-tight text-center mb-3">
@@ -522,7 +522,7 @@ export default function DocsPage() {
                   onChange={(e) => setWebUrl(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleWebUrlGenerate()}
                   placeholder="https://docs.your-project.com"
-                  className="w-full pl-14 pr-5 py-4.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-full text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-emerald-400 dark:focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 outline-none transition-all shadow-sm hover:shadow-md"
+                  className="w-full pl-14 pr-5 py-4.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-full text-sm text-slate-700 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:border-blue-400 dark:focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 outline-none transition-all shadow-sm hover:shadow-md"
                   style={{ paddingTop: '18px', paddingBottom: '18px' }}
                   autoFocus
                 />
@@ -550,7 +550,7 @@ export default function DocsPage() {
               className={cn(
                 "flex items-center justify-center gap-2.5 px-10 py-4 rounded-full text-sm font-bold transition-all duration-300 mb-5",
                 webUrl.trim()
-                  ? "bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-lg shadow-emerald-500/25 hover:shadow-xl hover:shadow-emerald-500/30 hover:-translate-y-0.5 active:scale-[0.98]"
+                  ? "bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-lg shadow-blue-500/25 hover:shadow-xl hover:shadow-blue-500/30 hover:-translate-y-0.5 active:scale-[0.98]"
                   : "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed"
               )}
             >
@@ -575,14 +575,14 @@ export default function DocsPage() {
             <div className="relative w-28 h-28 mx-auto mb-8">
               <div className="absolute inset-0 rounded-full border-4 border-slate-100 dark:border-slate-800" />
               <div
-                className="absolute inset-0 rounded-full border-4 border-transparent border-t-emerald-500 border-r-teal-500 animate-spin"
+                className="absolute inset-0 rounded-full border-4 border-transparent border-t-blue-500 border-r-indigo-500 animate-spin"
                 style={{ animationDuration: '1.2s' }}
               />
               <div className="absolute inset-3 rounded-full bg-white dark:bg-slate-900 shadow-soft flex items-center justify-center">
                 {generationProgress >= 100 ? (
-                  <CheckCircle2 className="w-9 h-9 text-teal-500 animate-fade-in" />
+                  <CheckCircle2 className="w-9 h-9 text-indigo-500 animate-fade-in" />
                 ) : (
-                  <Sparkles className="w-8 h-8 text-emerald-500" />
+                  <Sparkles className="w-8 h-8 text-blue-500" />
                 )}
               </div>
             </div>
@@ -596,7 +596,7 @@ export default function DocsPage() {
             <div className="w-full max-w-md">
               <div className="w-full bg-slate-100 dark:bg-slate-800 rounded-full h-2 overflow-hidden mb-2">
                 <div
-                  className="h-full bg-gradient-to-r from-emerald-500 to-teal-600 rounded-full transition-all duration-500 ease-out"
+                  className="h-full bg-gradient-to-r from-blue-500 to-indigo-600 rounded-full transition-all duration-500 ease-out"
                   style={{ width: `${generationProgress}%` }}
                 />
               </div>

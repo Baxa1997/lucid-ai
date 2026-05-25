@@ -104,22 +104,26 @@ export default function BuildingScreen({
   } else if (status === "connecting") {
     buildLabel = "Connecting...";
     buildSubtext = "Opening secure connection to AI Engine";
-  } else if (status === "preparing" && resolvingProgress?.message) {
-    buildLabel = resolvingProgress.message;
-    buildSubtext =
-      resolvingInfo?.detail || "Analyzing your workspace requirements...";
-  } else if (status === "preparing" && resolvingInfo) {
-    buildLabel = resolvingInfo.message || "Preparing workspace...";
-    buildSubtext = resolvingInfo.detail || "";
+  } else if (status === "preparing") {
+    // Backend sends labels like "Preparing Next.js workspace..." +
+    // "Template: Next.js · Stack: nextjs" in resolvingInfo/resolvingProgress,
+    // but we don't want to expose the template/stack as a separate phase
+    // to the user — it's an implementation detail rolled into the overall
+    // "Building your app…" flow.
+    buildLabel = "Building your app...";
+    buildSubtext = "Setting up the project foundation";
   } else if (status === "cloning" && resolvingInfo?.path === "existing_repo") {
+    // For imported repos we still surface the repo name — the user
+    // explicitly chose one, so showing which one is cloning is useful.
     buildLabel = `Cloning ${resolvingInfo.repoDisplay || "repository"}...`;
     buildSubtext = `Fetching files · Branch: ${resolvingInfo.branch || "main"}`;
-  } else if (status === "cloning" && resolvingInfo?.path === "new_project") {
-    buildLabel = `Downloading ${resolvingInfo.templateName || "template"}...`;
-    buildSubtext = "Cloning starter template";
   } else if (status === "cloning") {
-    buildLabel = "Cloning repository...";
-    buildSubtext = "Fetching your repository files";
+    // For new projects (template clones) the template name is an
+    // implementation detail. Roll it into the generic "building" label
+    // so the flow reads as one continuous step instead of a separate
+    // "Downloading Next.js template" surprise.
+    buildLabel = "Building your app...";
+    buildSubtext = "Setting up the project foundation";
   } else if (status === "installing") {
     buildLabel = "Installing dependencies...";
     buildSubtext = "Running npm install — this takes up to 60 seconds";
@@ -142,9 +146,10 @@ export default function BuildingScreen({
     currentPhaseNum === 2 &&
     activePhase?.title?.toLowerCase().includes("clone")
   ) {
-    buildLabel = "Cloning template...";
+    // Hide the template-clone sub-step; users perceive it as still "building".
+    buildLabel = "Building your app...";
     buildSubtext =
-      activePhase?.description || "Copying starter files into workspace";
+      activePhase?.description || "Setting up the project foundation";
   } else if (currentPhaseNum === 2) {
     buildLabel = "Preparing workspace...";
     buildSubtext =
@@ -211,7 +216,7 @@ export default function BuildingScreen({
   if (previewLoading && previewStatusMsg && status !== "running") {
     const msg = previewStatusMsg.toLowerCase();
     if (msg.includes("cloning") || msg.includes("clone")) {
-      buildLabel = "Cloning your project...";
+      buildLabel = "Building your app...";
     } else if (msg.includes("install")) {
       buildLabel = "Installing dependencies...";
     } else if (msg.includes("starting") || msg.includes("cached")) {

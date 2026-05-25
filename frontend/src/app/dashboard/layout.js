@@ -48,6 +48,7 @@ import {
 import {listConversations} from "@/lib/conversations";
 import {useInvitations} from "@/hooks/useInvitations";
 import InvitationsListener from "@/components/notifications/InvitationsListener";
+import {isTokenBypassActive} from "@/lib/devQuotaBypass";
 
 const WizardContext = createContext({
   showWizard: false,
@@ -285,6 +286,43 @@ export default function EngineerLayout({children}) {
   const isLoggingOutRef = useRef(false);
 
   const [toast, setToast] = useState(null);
+
+  // ── Subscription snapshot ─────────────────────────────────
+  // Drives the sidebar Upgrade-card visibility and the profile-menu
+  // "Upgrade plan" item. Refreshes when the tab regains visibility so the
+  // sidebar reflects a fresh checkout without a full page reload.
+  const [subscription, setSubscription] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () =>
+      fetch("/api/stripe/subscription")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => { if (!cancelled && d) setSubscription(d); })
+        .catch(() => {});
+    refresh();
+    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
+
+  // Either limit being exhausted re-shows the upgrade nudge on paid plans.
+  // Project limit always real; token limit honors the dev bypass.
+  const planAtLimit = (() => {
+    if (!subscription) return false;
+    const projLimit = subscription.limits?.maxProjectsPerMonth;
+    const projUsed = subscription.usage?.projectsCreated ?? 0;
+    const tokQuota = subscription.limits?.monthlyTokenQuota ?? 0;
+    const tokUsed = subscription.usage?.tokensUsed ?? 0;
+    const extra = subscription.extraTokenBalance ?? 0;
+    const atProj = projLimit != null && projUsed >= projLimit;
+    const atTok = !isTokenBypassActive() && tokUsed >= tokQuota && extra <= 0;
+    return atProj || atTok;
+  })();
+  const isFreePlan = !subscription || subscription.plan === "free";
+  const shouldShowUpgrade = isFreePlan || planAtLimit;
 
   useEffect(() => {
     supabase.auth.getSession().then(({data: {session}}) => {
@@ -604,8 +642,9 @@ export default function EngineerLayout({children}) {
 
             {/* ── Bottom: User Profile with Plan Badge ── */}
             <div className="border-t border-slate-100 dark:border-slate-800/40 p-2.5">
-              {/* Upgrade Card (expanded only) */}
-              {!collapsed && (
+              {/* Upgrade Card — visible on free plan always, on paid plans only
+                  when the user has actually exceeded a limit. */}
+              {!collapsed && shouldShowUpgrade && (
                 <div className="mb-3 mx-0.5">
                   <div className="rounded-xl p-3.5 bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-700/30">
                     <div className="flex items-start gap-2.5 mb-2.5">
@@ -614,15 +653,17 @@ export default function EngineerLayout({children}) {
                       </div>
                       <div>
                         <p className="text-[12.5px] font-bold text-amber-900 dark:text-amber-200 leading-tight">
-                          Upgrade your plan
+                          {planAtLimit ? "Limit reached" : "Upgrade your plan"}
                         </p>
                         <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-snug">
-                          Get more out of your apps
+                          {planAtLimit
+                            ? "Upgrade or buy a credit pack to continue."
+                            : "Get more projects and tokens each month."}
                         </p>
                       </div>
                     </div>
                     <button
-                      onClick={() => router.push("/pricing")}
+                      onClick={() => router.push("/dashboard/billing")}
                       className="w-full flex items-center justify-center gap-1.5 py-1.5 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-[12px] font-semibold transition-colors">
                       Upgrade
                     </button>
@@ -713,18 +754,20 @@ export default function EngineerLayout({children}) {
                       <div className="border-t border-slate-100 dark:border-slate-700/40" />
                       {/* Menu Items — Section 2 */}
                       <div className="py-1.5">
-                        <button
-                          onClick={() => {
-                            setShowProfileMenu(false);
-                            router.push("/pricing");
-                          }}
-                          className="w-full flex items-center gap-3.5 px-5 py-3 text-[14px] font-normal text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04] transition-colors text-left">
-                          <Sparkles
-                            className="w-[18px] h-[18px] text-slate-400 dark:text-slate-500"
-                            strokeWidth={1.75}
-                          />
-                          Upgrade plan
-                        </button>
+                        {shouldShowUpgrade && (
+                          <button
+                            onClick={() => {
+                              setShowProfileMenu(false);
+                              router.push("/dashboard/billing");
+                            }}
+                            className="w-full flex items-center gap-3.5 px-5 py-3 text-[14px] font-normal text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04] transition-colors text-left">
+                            <Sparkles
+                              className="w-[18px] h-[18px] text-slate-400 dark:text-slate-500"
+                              strokeWidth={1.75}
+                            />
+                            Upgrade plan
+                          </button>
+                        )}
                         <button className="w-full flex items-center gap-3.5 px-5 py-3 text-[14px] font-normal text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/[0.04] transition-colors text-left">
                           <Share2
                             className="w-[18px] h-[18px] text-slate-400 dark:text-slate-500"

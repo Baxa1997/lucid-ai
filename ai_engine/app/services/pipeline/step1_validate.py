@@ -28,21 +28,39 @@ logger = logging.getLogger(__name__)
 # "asdfasdfasdf", "aaaaaa") BEFORE we burn a Gemini grounded-research call
 # on them. Real prompts always pass — the bar is intentionally low.
 def _looks_like_garbage(raw: str) -> str:
-    """Return a reason string if the prompt is garbage, else ''."""
+    """Return a clarifying-question string if the prompt is unintelligible, else ''.
+
+    Phrased as a friendly question, not an error. The orchestrator sends it
+    as `type: "clarify"` so the UI renders it as a chat assistant message
+    rather than a red error banner.
+    """
     text = (raw or "").strip().lower()
     if len(text) < 8:
-        return "Description is too short — please describe your project in a sentence or two."
+        return (
+            "Hmm, that's a bit short for me to work with. "
+            "Tell me a little more — what kind of app or website are you building? "
+            "For example: 'a landing page for my coffee shop' or 'a CRM dashboard for sales calls'."
+        )
     compact = re.sub(r"\s+", "", text)
     # Repeated short cluster: "dasdasdas" → matches r"(.{1,4})\1{2,}"
     if re.fullmatch(r"(.{1,4})\1{2,}", compact):
-        return "Description looks like keyboard mashing. Try something like 'Italian restaurant in Brooklyn' or 'B2B logistics dashboard'."
+        return (
+            "That looks like a typo — I couldn't make sense of it. 🙂\n\n"
+            "Could you describe what you'd like to build? A few examples:\n"
+            "• A landing page for an Italian restaurant in Brooklyn\n"
+            "• A SaaS pricing page for a project-management tool\n"
+            "• A portfolio site for a freelance designer"
+        )
     letters = [c for c in text if c.isalpha()]
     if letters:
         vowels = sum(c in "aeiou" for c in letters)
         # English/Latin prose runs 30-50% vowels. Below 15% is almost always
         # consonant-mashing like "dfgdfgdfg" or "qwrtqwrt".
         if vowels / len(letters) < 0.15:
-            return "Description doesn't look like a real sentence. Please describe your project in plain words."
+            return (
+                "I couldn't read that as words. Could you tell me, in plain English, "
+                "what you'd like to build? E.g. 'a blog about plants' or 'an admin panel for orders'."
+            )
     # Need at least 2 distinct ≥3-char tokens — short business descriptors like
     # "kino website", "yoga studio", "coffee shop" are legitimate intent and
     # should pass. Pure single-word inputs ("website", "app") still fail since
@@ -50,7 +68,13 @@ def _looks_like_garbage(raw: str) -> str:
     # ratio, repeated-cluster) catch the real garbage cases.
     tokens = {t for t in re.findall(r"[a-z]{3,}", text)}
     if len(tokens) < 2:
-        return "Please describe your project in a few words — e.g. 'modern coffee shop landing page' or 'fitness coach portfolio'."
+        return (
+            "I need a tiny bit more to go on. What's the project about?\n\n"
+            "A couple of examples:\n"
+            "• 'modern coffee shop landing page'\n"
+            "• 'fitness coach portfolio with booking form'\n"
+            "• 'B2B logistics admin dashboard'"
+        )
     return ""
 
 
@@ -135,7 +159,7 @@ async def validate_inputs(
                 if _garbage_reason:
                     logger.info("validate_inputs: rejecting garbage wizard description %r — %s",
                                 _description[:80], _garbage_reason)
-                    await websocket.send_json({"type": "error", "message": f"❌ {_garbage_reason}"})
+                    await websocket.send_json({"type": "clarify", "message": _garbage_reason})
                     return None
 
             # ── Smart stack resolution when user picked "Choose for me" ─────
@@ -407,7 +431,7 @@ async def validate_inputs(
             if _garbage_reason:
                 logger.info("validate_inputs: rejecting garbage scratch task %r — %s",
                             task[:80], _garbage_reason)
-                await websocket.send_json({"type": "error", "message": f"❌ {_garbage_reason}"})
+                await websocket.send_json({"type": "clarify", "message": _garbage_reason})
                 return None
 
         # Non-wizard normal tasks (user's own repo)

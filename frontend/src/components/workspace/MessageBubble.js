@@ -74,11 +74,16 @@ function ClarificationBubble({ msg }) {
   const { submitClarification } = useWorkspace() || {};
   const answered = !!c.answered;
 
+  // Open-ended question — no options means the agent wants a free-text
+  // answer (the user types in their own words).
+  const isOpenEnded = options.length === 0;
+
   // Two-step interaction: clicking an option only *selects* it. The user
   // then has to click "Confirm" to actually submit. This avoids the previous
   // foot-gun where one stray click locked in a wrong choice.
   const [selectedId, setSelectedId] = useState(null);
   const selectedOpt = options.find((o) => o.id === selectedId) || null;
+  const [text, setText] = useState('');
 
   const handlePick = (opt) => {
     if (answered) return;
@@ -91,6 +96,21 @@ function ClarificationBubble({ msg }) {
       messageId: msg.id,
       archetype: selectedOpt.id,
       label: selectedOpt.label,
+      originalTask: c.originalTask || '',
+      kind: c.kind || '',
+      clarifyKey: c.clarifyKey || '',
+    });
+  };
+
+  // Free-text answer: the typed text is both the marker value (the backend
+  // snake_cases it) and the displayed label.
+  const handleSend = () => {
+    const v = text.trim();
+    if (answered || !v || !submitClarification) return;
+    submitClarification({
+      messageId: msg.id,
+      archetype: v,
+      label: v,
       originalTask: c.originalTask || '',
       kind: c.kind || '',
       clarifyKey: c.clarifyKey || '',
@@ -113,49 +133,90 @@ function ClarificationBubble({ msg }) {
             <p className="text-[13px] leading-relaxed text-slate-700 dark:text-slate-200">
               {c.question}
             </p>
-            <div className="flex flex-col gap-2">
-              {options.map((opt) => {
-                const isSubmitted = answered && c.answerLabel === opt.label;
-                const isSelected = !answered && selectedId === opt.id;
-                const isHighlighted = isSubmitted || isSelected;
-                return (
+            {isOpenEnded ? (
+              answered ? (
+                <p className="text-[13px] leading-snug px-3 py-2 rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-700/60 dark:bg-emerald-900/20 dark:text-emerald-200">
+                  <Check className="w-3.5 h-3.5 inline-block mr-1.5 text-emerald-600" />
+                  {c.answerLabel}
+                </p>
+              ) : (
+                <div className="flex items-end gap-2">
+                  <textarea
+                    rows={1}
+                    value={text}
+                    onChange={(e) => setText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSend();
+                      }
+                    }}
+                    placeholder="Type your answer…"
+                    autoFocus
+                    className="flex-1 resize-none px-3 py-2 rounded-lg border border-slate-200 bg-white text-[13px] leading-snug text-slate-700 placeholder:text-slate-400 outline-none focus:border-orange-400 dark:border-[#2d333b] dark:bg-[#0d1117] dark:text-slate-200"
+                  />
                   <button
-                    key={opt.id}
                     type="button"
-                    onClick={() => handlePick(opt)}
-                    disabled={answered}
-                    aria-pressed={isHighlighted}
+                    onClick={handleSend}
+                    disabled={!text.trim()}
                     className={cn(
-                      'text-left px-3 py-2 rounded-lg border text-[13px] leading-snug transition-colors',
-                      answered
-                        ? (isSubmitted
-                            ? 'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-700/60 dark:bg-emerald-900/20 dark:text-emerald-200'
-                            : 'border-slate-100 bg-slate-50 text-slate-400 dark:border-[#2d333b] dark:bg-[#161b22] dark:text-slate-500')
-                        : isSelected
-                          ? 'border-orange-400 bg-orange-50 text-orange-900 dark:border-orange-600/70 dark:bg-orange-900/20 dark:text-orange-100 cursor-pointer'
-                          : 'border-slate-200 bg-white hover:border-orange-300 hover:bg-orange-50 text-slate-700 dark:border-[#2d333b] dark:bg-[#0d1117] dark:hover:border-orange-700/60 dark:hover:bg-orange-900/10 dark:text-slate-200 cursor-pointer'
+                      'px-3 py-2 rounded-lg text-[12px] font-medium transition-colors shadow-sm shadow-orange-500/20',
+                      text.trim()
+                        ? 'bg-orange-500 hover:bg-orange-600 text-white cursor-pointer'
+                        : 'bg-slate-200 text-slate-400 dark:bg-[#21262d] dark:text-slate-500 cursor-not-allowed',
                     )}
                   >
-                    {isHighlighted && <Check className="w-3.5 h-3.5 inline-block mr-1.5 text-emerald-600" />}
-                    {opt.label}
+                    Send
                   </button>
-                );
-              })}
-            </div>
-            {!answered && selectedOpt && (
-              <div className="flex items-center justify-end pt-1">
-                <button
-                  type="button"
-                  onClick={handleConfirm}
-                  className="px-3 py-1.5 rounded-lg bg-orange-500 hover:bg-orange-600 text-white text-[12px] font-medium transition-colors cursor-pointer shadow-sm shadow-orange-500/20"
-                >
-                  Confirm
-                </button>
-              </div>
+                </div>
+              )
+            ) : (
+              <>
+                <div className="flex flex-col gap-2">
+                  {options.map((opt) => {
+                    const isSubmitted = answered && c.answerLabel === opt.label;
+                    const isSelected = !answered && selectedId === opt.id;
+                    const isHighlighted = isSubmitted || isSelected;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => handlePick(opt)}
+                        disabled={answered}
+                        aria-pressed={isHighlighted}
+                        className={cn(
+                          'text-left px-3 py-2 rounded-lg border text-[13px] leading-snug transition-colors',
+                          answered
+                            ? (isSubmitted
+                                ? 'border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-700/60 dark:bg-emerald-900/20 dark:text-emerald-200'
+                                : 'border-slate-100 bg-slate-50 text-slate-400 dark:border-[#2d333b] dark:bg-[#161b22] dark:text-slate-500')
+                            : isSelected
+                              ? 'border-orange-400 bg-orange-50 text-orange-900 dark:border-orange-600/70 dark:bg-orange-900/20 dark:text-orange-100 cursor-pointer'
+                              : 'border-slate-200 bg-white hover:border-orange-300 hover:bg-orange-50 text-slate-700 dark:border-[#2d333b] dark:bg-[#0d1117] dark:hover:border-orange-700/60 dark:hover:bg-orange-900/10 dark:text-slate-200 cursor-pointer'
+                        )}
+                      >
+                        {isHighlighted && <Check className="w-3.5 h-3.5 inline-block mr-1.5 text-emerald-600" />}
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                {!answered && selectedOpt && (
+                  <div className="flex items-center justify-end pt-1">
+                    <button
+                      type="button"
+                      onClick={handleConfirm}
+                      className="px-3 py-1.5 rounded-lg bg-orange-500 hover:bg-orange-600 text-white text-[12px] font-medium transition-colors cursor-pointer shadow-sm shadow-orange-500/20"
+                    >
+                      Confirm
+                    </button>
+                  </div>
+                )}
+              </>
             )}
             {answered && (
               <p className="text-[11px] text-slate-400 dark:text-slate-500">
-                Choice received — generation continuing.
+                {isOpenEnded ? 'Answer received — generation continuing.' : 'Choice received — generation continuing.'}
               </p>
             )}
           </div>
@@ -561,8 +622,11 @@ function renderAgentContent(text) {
 export default function MessageBubble({ msg, isLatest }) {
   const [copied, setCopied] = useState(false);
 
+  // Animate both `agent` (streamed pipeline replies) and `assistant`
+  // (local clarify pushes + backend `type:'clarify'` rescues) so every
+  // AI response types in letter-by-letter, Claude-style.
   const needsAnimate =
-    msg.role === 'agent' &&
+    (msg.role === 'agent' || msg.role === 'assistant') &&
     !msg.fromHistory &&
     !msg.messageType &&
     Boolean(msg.content) &&

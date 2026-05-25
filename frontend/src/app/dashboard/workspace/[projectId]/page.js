@@ -50,6 +50,8 @@ import ChatPanel from "@/components/workspace/ChatPanel";
 import QualityReportPanel from "@/components/workspace/QualityReportPanel";
 import RightPanel from "@/components/workspace/RightPanel";
 import InviteDialog from "@/components/members/InviteDialog";
+import {isTokenBypassActive} from "@/lib/devQuotaBypass";
+import {validatePromptShape} from "@/lib/promptGuards";
 
 // ── Main Page Component ────────────────────────────────────
 export default function ConversationPage({params}) {
@@ -90,13 +92,38 @@ function ConversationPageInner({params}) {
     }
   });
 
+  // Wizard-prompt extraction with a verification guard.
+  //
+  // The dashboard normally tags every prompt it launches with the
+  // `wizard_validated_<cid>` flag after Gemini approves it. If we see a
+  // wizard_prompt WITHOUT that flag, it means the prompt arrived via an
+  // unvetted path — deep link, manual sessionStorage, tab restore — and
+  // we must NOT ship it to the WebSocket handshake. We move it into a
+  // pending slot and return "" so the handshake fires with no initial
+  // task. The effect below then runs /api/intent-check against the
+  // pending prompt and either:
+  //   • valid → calls sendMessage(cleanedSummary) to kick off the pipeline
+  //   • invalid → pushes a friendly clarify message into the chat,
+  //               leaving the user in an idle workspace where they can
+  //               type a real description.
   const [wizardTask] = useState(() => {
     try {
-      const key = `wizard_prompt_${decodeURIComponent(projectId || "unknown")}`;
+      const cid = decodeURIComponent(projectId || "unknown");
+      const key = `wizard_prompt_${cid}`;
       const prompt = sessionStorage.getItem(key);
       if (!prompt) return "";
 
-      const cid = decodeURIComponent(projectId || "unknown");
+      const isValidated = sessionStorage.getItem(`wizard_validated_${cid}`) === "1";
+      if (!isValidated) {
+        // Stash the unvetted prompt, clear the handshake input so the WS
+        // doesn't auto-recover it from sessionStorage, and let the effect
+        // below validate it.
+        sessionStorage.setItem(`wizard_pending_validation_${cid}`, prompt);
+        sessionStorage.removeItem(key);
+        sessionStorage.removeItem(`wizard_desc_${cid}`);
+        return "";
+      }
+
       const metaKey = `wizard_meta_${cid}`;
       const metaStr = sessionStorage.getItem(metaKey);
       const descKey = `wizard_desc_${cid}`;
@@ -464,6 +491,7 @@ function ConversationPageInner({params}) {
     previewFileMap,
     qualityReport,
     dismissQualityReport,
+    addLocalChatMessage,
   } = useAgentSession({
     projectId: conversationId,
     token: effectiveToken,
@@ -630,6 +658,149 @@ function ConversationPageInner({params}) {
   // button simply emits a chat message that asks the agent to fix the
   // missing element. This gives the click an immediate effect (the
   // agent re-runs against the suggestion) and the report stays mounted
+  // ── Workspace-mount intent guard (navigate-first / Base44-style) ──
+  // The dashboard navigates here WITHOUT validating — every prompt arrives
+  // as `wizard_pending_validation` (the wizardTask initializer stashed it and
+  // fired the WS handshake with no task). This guard runs the whole gate
+  // inside the chat: it echoes the user's prompt, runs the regex pre-filter
+  // + Gemini intent-check, then the project-count gate, and finally either
+  // starts building or posts a clarifying question in-chat.
+  //
+  // StrictMode note: in dev, effects mount→cleanup→mount. We must run exactly
+  // once and RUN TO COMPLETION, so we dedupe with `guardRanRef` (survives the
+  // double-invoke) + the one-shot sessionStorage read (survives real remounts)
+  // and deliberately do NOT register a cancelling cleanup — cancelling the
+  // first pass would strand the prompt (shown but never sent), since the
+  // second pass short-circuits on the ref.
+  // Drives the chat "typing…" indicator while the mount guard runs its
+  // async intent-check + project gate (the regex pre-filter is instant, so
+  // it's excluded). Cleared the moment a clarification is posted or building
+  // starts (sendMessage then drives the normal running-state indicator).
+  const [guardThinking, setGuardThinking] = useState(false);
+  const guardRanRef = useRef(false);
+  useEffect(() => {
+    if (guardRanRef.current) return;
+    if (!sendMessage || !addLocalChatMessage) return;
+    let pending;
+    let bypassLimits = false;
+    try {
+      const cid = decodeURIComponent(projectId || "unknown");
+      pending = sessionStorage.getItem(`wizard_pending_validation_${cid}`);
+      if (!pending) return;
+      sessionStorage.removeItem(`wizard_pending_validation_${cid}`);
+      bypassLimits = sessionStorage.getItem(`wizard_bypass_${cid}`) === "1";
+      sessionStorage.removeItem(`wizard_bypass_${cid}`);
+    } catch {
+      return;
+    }
+    guardRanRef.current = true;
+
+    // Echo the user's prompt immediately so the chat isn't blank while we
+    // validate. The valid path re-sends this same text to the WS with
+    // suppressEcho, so this stays the only user bubble.
+    addLocalChatMessage("user", pending);
+
+    (async () => {
+      const CLARIFY_FALLBACK =
+        "I couldn't quite read that. Could you describe what you'd like to build? For example: \"a landing page for my coffee shop\".";
+
+      // 1. Cheap regex pre-filter — obvious gibberish ("32123213", "asdf")
+      //    is caught here with no Vertex call (instant, no typing indicator).
+      const shape = validatePromptShape(pending);
+      if (!shape.ok) {
+        addLocalChatMessage("assistant", shape.message);
+        return;
+      }
+
+      // Everything past here is a network round trip — show the typing
+      // indicator until we post a clarification or hand off to sendMessage.
+      setGuardThinking(true);
+      try {
+        // 2. Gemini intent-check. We only need its isProject verdict — the
+        //    prompt we send to the WS is the user's ORIGINAL text (see below),
+        //    not the rewritten summary, so the chat bubble, the WS message,
+        //    and the backend's re-emitted echo all match and dedupe to one.
+        let intentOk = false;
+        let clarifyReply = null;
+        try {
+          const res = await fetch("/api/intent-check", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ prompt: pending, mode: "new" }),
+          });
+          const data = await res.json().catch(() => null);
+          if (res.ok && data?.isProject === true) {
+            intentOk = true;
+          } else if (
+            res.ok &&
+            data?.isProject === false &&
+            !data.verifierUnavailable
+          ) {
+            clarifyReply = data.reply || "Could you describe what you'd like to build?";
+          } else {
+            // Verifier down / 5xx / parse error: the regex pre-filter already
+            // vouched for the shape, so proceed rather than block on an outage.
+            console.warn("[workspace guard] intent-check unavailable — proceeding");
+            intentOk = true;
+          }
+        } catch (err) {
+          console.warn("[workspace guard] intent-check threw — proceeding:", err);
+          intentOk = true;
+        }
+        if (!intentOk) {
+          addLocalChatMessage("assistant", clarifyReply || CLARIFY_FALLBACK);
+          return;
+        }
+
+        // 3. Project-count gate — authoritative server check + counter bump.
+        //    Only now, after intent passed, do we consume a project slot.
+        try {
+          const gateRes = await fetch("/api/projects/check-create", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ bypassLimits }),
+          });
+          if (gateRes.status === 402) {
+            addLocalChatMessage(
+              "assistant",
+              "You've reached your project limit on your current plan. Upgrade in Billing to start a new project — your message above is saved.",
+            );
+            return;
+          }
+          if (!gateRes.ok) {
+            addLocalChatMessage(
+              "assistant",
+              "Something went wrong starting your project. Please try again in a moment.",
+            );
+            return;
+          }
+        } catch (err) {
+          console.warn("[workspace guard] check-create threw:", err);
+          addLocalChatMessage(
+            "assistant",
+            "Couldn't reach our server to start your project. Check your connection and try again.",
+          );
+          return;
+        }
+
+        // 4. Approved — persist the validated flag (so a reload before the
+        //    backend session exists doesn't re-gate) and start building. The
+        //    user's prompt is already shown, so suppress the echo.
+        try {
+          const cid = decodeURIComponent(projectId || "unknown");
+          sessionStorage.setItem(`wizard_validated_${cid}`, "1");
+          sessionStorage.setItem(`wizard_prompt_${cid}`, pending);
+          sessionStorage.setItem(`wizard_desc_${cid}`, pending);
+        } catch {}
+        sendMessage(pending, [], { suppressEcho: true });
+      } finally {
+        // Cleared on every exit: clarification posted, gate blocked, or
+        // building started (sendMessage's running state takes over).
+        setGuardThinking(false);
+      }
+    })();
+  }, [projectId, sendMessage, addLocalChatMessage]);
+
   // so the user can click further items.
   const handleQualityRegenerate = useCallback((check) => {
     if (!check) return;
@@ -1141,6 +1312,11 @@ function ConversationPageInner({params}) {
     editSelectMode,
     setEditSelectMode,
     clearEditSelection,
+    // Lets ChatPanel inject local clarify messages from the Gemini guard.
+    addLocalChatMessage,
+    // True while the mount guard is running its async intent-check/gate —
+    // ChatPanel renders a "typing…" bubble so the chat isn't silent.
+    guardThinking,
   };
 
   return (
@@ -1746,8 +1922,21 @@ function ConversationPageInner({params}) {
               </button>
             </div>
 
-            {/* Upgrade — only show when user is on a non-paid plan */}
-            {!subscription?.isPaid && (
+            {/* Upgrade — on free plan ALWAYS; on paid plans only when a
+                token or project quota has been exhausted. Project always
+                real; token honors the dev bypass. */}
+            {(() => {
+              if (!subscription) return false;
+              if (!subscription.isPaid) return true;
+              const projLimit = subscription.limits?.maxProjectsPerMonth;
+              const projUsed  = subscription.usage?.projectsCreated ?? 0;
+              const tokQuota  = subscription.limits?.monthlyTokenQuota ?? 0;
+              const tokUsed   = subscription.usage?.tokensUsed ?? 0;
+              const extra     = subscription.extraTokenBalance ?? 0;
+              const atProj    = projLimit != null && projUsed >= projLimit;
+              const atTok     = !isTokenBypassActive() && tokUsed >= tokQuota && extra <= 0;
+              return atProj || atTok;
+            })() && (
               <a
                 href="/dashboard/billing"
                 className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-[13px] font-semibold transition-all ml-1"

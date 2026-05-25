@@ -6,12 +6,13 @@
 //  Reads shared workspace state via useWorkspace().
 // ─────────────────────────────────────────────────────────
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { cn } from '@/lib/utils';
 import {
   ArrowDown, ArrowRight, Loader2, Sparkles,
   Settings, Plus, Paperclip, Video, Layers, Globe, Check,
   Mic, MousePointer2, MessageCircle, Lightbulb, X, FileImage,
+  CreditCard, Rocket,
 } from 'lucide-react';
 import { useWorkspace } from '@/contexts/WorkspaceContext';
 import MessageBubble from '@/components/workspace/MessageBubble';
@@ -20,6 +21,7 @@ import {
   updateConversation,
   saveChatMessage,
 } from '@/lib/conversations';
+import { isTokenBypassActive } from '@/lib/devQuotaBypass';
 
 export default function ChatPanel() {
   const {
@@ -42,6 +44,10 @@ export default function ChatPanel() {
     // Click-to-edit (Base44) — chip + WS payload field
     editSelection,
     clearEditSelection,
+    // Lets us inject a clarify message when the Gemini guard rejects a prompt.
+    addLocalChatMessage,
+    // True while the mount guard runs its async intent-check/gate.
+    guardThinking,
   } = useWorkspace();
 
   // ── Chat-local state ────────────────────────────────────
@@ -58,6 +64,40 @@ export default function ChatPanel() {
   const [chatMode, setChatMode] = useState('edit');
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef(null);
+
+  // ── Subscription / quota gate ──────────────────────────
+  // Mirrors the dashboard composer guard so the workspace can't bypass
+  // the plan limits via follow-up messages. Refreshed when the tab
+  // regains focus so a fresh checkout reflects without a page reload.
+  const [subscription, setSubscription] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () =>
+      fetch('/api/stripe/subscription')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => { if (!cancelled && d) setSubscription(d); })
+        .catch(() => {});
+    refresh();
+    const onVisible = () => { if (document.visibilityState === 'visible') refresh(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, []);
+
+  const quota = useMemo(() => {
+    if (!subscription) return { atProj: false, atTok: false, atLimit: false };
+    const projLimit = subscription.limits?.maxProjectsPerMonth;
+    const projUsed  = subscription.usage?.projectsCreated ?? 0;
+    const tokQuota  = subscription.limits?.monthlyTokenQuota ?? 0;
+    const tokUsed   = subscription.usage?.tokensUsed ?? 0;
+    const extra     = subscription.extraTokenBalance ?? 0;
+    // Project cap doesn't apply inside an existing workspace; token honors bypass.
+    const atProj    = projLimit != null && projUsed >= projLimit;
+    const atTok     = !isTokenBypassActive() && tokUsed >= tokQuota && extra <= 0;
+    return { atProj, atTok, atLimit: atProj || atTok, plan: subscription.plan };
+  }, [subscription]);
 
   const chatEndRef = useRef(null);
   const chatContainerRef = useRef(null);
@@ -77,6 +117,14 @@ export default function ChatPanel() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Keep the typing bubble in view when it appears (it renders below the
+  // last message, so a messages-keyed scroll won't catch it).
+  useEffect(() => {
+    if (guardThinking && !userScrolledUpRef.current) {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [guardThinking]);
+
   // ── Close tools menu on outside click ──────────────────
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -94,11 +142,19 @@ export default function ChatPanel() {
   const handleSend = async (e) => {
     e.preventDefault();
     if (!chatInput.trim() && attachedImages.length === 0) return;
+    // Token-quota gate. Project-creation limit doesn't apply here because
+    // we're already inside an existing project — only token consumption
+    // can be exhausted by follow-up edits.
+    if (quota.atTok) return;
     panelOverrideRef.current = true;
     const text = chatInput.trim();
-    // Attach any pending click-to-edit selection. Backend reads
-    // ``editable_target`` to skip extractor vocab and route straight
-    // to the direct-edit fast path with a 100%-confidence EditIntent.
+
+    // No client-side Gemini guard here: this is a WebSocket-driven chat
+    // inside an existing project, so we want **immediate** send latency.
+    // The backend's step1_validate still catches obvious gibberish and
+    // emits a friendly clarify event (rescued in useAgentSession.js).
+    // For the dashboard composer (where junk would otherwise launch a
+    // whole workspace), Gemini still runs — see handleBuildFromPrompt.
     const sendOptions = {
       mode: chatMode,
       webSearch: webSearchEnabled,
@@ -361,14 +417,44 @@ export default function ChatPanel() {
             </div>
           ))}
 
+          {/* Typing indicator while the mount guard validates the first
+              prompt (intent-check + project gate). Bridges the gap between
+              the user's bubble and the clarification / build start so the
+              chat never sits silent. */}
+          {guardThinking && (
+            <div className="flex items-center gap-2.5 px-1 py-1 animate-in fade-in duration-300">
+              <div className="w-6 h-6 rounded-full bg-gradient-to-br from-[#dc5426] to-orange-600 flex items-center justify-center shrink-0 shadow-sm shadow-orange-500/15">
+                <Sparkles className="w-3 h-3 text-white" />
+              </div>
+              <div className="flex items-center gap-[3px] px-3 py-2 rounded-2xl bg-slate-100 dark:bg-[#1c2128]">
+                {[0, 200, 400].map((delay) => (
+                  <span
+                    key={delay}
+                    className="w-1.5 h-1.5 rounded-full bg-slate-400 dark:bg-slate-500 animate-bounce"
+                    style={{ animationDelay: `${delay}ms`, animationDuration: '1s' }}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
           <div ref={chatEndRef} className="h-4" />
         </div>
       </div>
 
-      {/* Status bar — pinned above suggestions, always visible when agent is active */}
+      {/* Status bar — pinned above suggestions, always visible when agent is
+          active. After the agent finishes a turn, we also briefly surface a
+          "Waiting for your message…" pill so the user knows the agent has
+          handed control back to them. */}
       {(() => {
+        // While the mount guard validates the first prompt, the typing
+        // bubble above is the sole activity indicator — suppress this bar so
+        // we don't show "Connecting…/Waiting…" and a typing bubble at once.
+        if (guardThinking) return null;
         const ALL_ACTIVE = ['connecting', 'preparing', 'cloning', 'installing', 'starting', 'health_check', 'running'];
-        if (!ALL_ACTIVE.includes(status)) return null;
+        const isActive = ALL_ACTIVE.includes(status);
+        const isWaiting = status === 'ready' && (messages || []).length > 0;
+        if (!isActive && !isWaiting) return null;
         const activePhase = (phases || []).find((p) => p.status === 'active');
         const maxDonePhase = (phases || [])
           .filter((p) => p.status === 'done')
@@ -376,8 +462,8 @@ export default function ChatPanel() {
         const currentPhaseNum = activePhase?.phase || maxDonePhase || 0;
         const PHASE_LABELS = {
           0: 'Thinking…',
-          1: 'Building app...',
-          2: 'Preparing workspace...',
+          1: 'Building your app...',
+          2: 'Building your app...',
           3: 'Researching your idea...',
           4: activePhase?.title?.toLowerCase().includes('design')
               ? 'Choosing design style...'
@@ -393,12 +479,17 @@ export default function ChatPanel() {
               : 'Thinking…');
         const LABELS = {
           connecting: 'Connecting to workspace...',
-          preparing: resolvingProgress?.message || 'Preparing workspace...',
-          cloning: 'Cloning repository...',
+          // Backend sends "Preparing Next.js workspace…" + "Template: Next.js · Stack: nextjs"
+          // here — we deliberately hide the template/stack detail and roll
+          // it into the generic "Building your app…" label so users see one
+          // continuous setup flow, not a separate cloning/templating phase.
+          preparing: 'Building your app...',
+          cloning: 'Building your app...',
           installing: 'Installing dependencies...',
           starting: 'Starting dev server...',
           health_check: 'Connecting live preview...',
           running: phaseLabel,
+          ready: 'Waiting for your message…',
         };
         const primary =
           (status === 'running' && agentStatus?.label) ||
@@ -413,15 +504,22 @@ export default function ChatPanel() {
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <span className="text-[12px] text-slate-500 dark:text-slate-400 truncate">{primary}</span>
-                <div className="flex items-center gap-[3px] shrink-0">
-                  {[0, 200, 400].map((delay) => (
-                    <span
-                      key={delay}
-                      className="w-1 h-1 rounded-full bg-orange-400/70 animate-bounce"
-                      style={{ animationDelay: `${delay}ms`, animationDuration: '1s' }}
-                    />
-                  ))}
-                </div>
+                {isWaiting ? (
+                  // Passive idle indicator — agent is done, waiting on user.
+                  // A single slowly-pulsing dot instead of bouncing dots so
+                  // the bar reads as "ready" rather than "still working".
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500/80 animate-pulse shrink-0" />
+                ) : (
+                  <div className="flex items-center gap-[3px] shrink-0">
+                    {[0, 200, 400].map((delay) => (
+                      <span
+                        key={delay}
+                        className="w-1 h-1 rounded-full bg-orange-400/70 animate-bounce"
+                        style={{ animationDelay: `${delay}ms`, animationDuration: '1s' }}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
               {secondary && (
                 <span className="block text-[11px] text-slate-400 dark:text-slate-500 truncate">{secondary}</span>
@@ -501,6 +599,28 @@ export default function ChatPanel() {
           </div>
         )}
 
+        {/* Token-quota banner — soft block when monthly tokens are exhausted */}
+        {quota.atTok && (
+          <div
+            role="status"
+            className="mb-2 flex items-start gap-3 px-3 py-2.5 rounded-[10px] bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30">
+            <CreditCard className="w-3.5 h-3.5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="text-[12px] font-semibold text-red-900 dark:text-red-200">
+                Token quota reached
+              </p>
+              <p className="text-[11px] text-red-700/90 dark:text-red-200/85 leading-snug mt-0.5">
+                {`You've used all your monthly tokens on the ${quota.plan || 'Free'} plan. Upgrade or buy a credit pack to continue editing.`}
+              </p>
+            </div>
+            <a
+              href="/dashboard/billing"
+              className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-[6px] text-[11px] font-semibold bg-gradient-to-r from-[#dc5426] to-orange-500 text-white hover:opacity-90 transition-all">
+              <Rocket className="w-3 h-3" /> Upgrade
+            </a>
+          </div>
+        )}
+
         <form onSubmit={handleSend} className="relative">
           <div
             className="rounded-2xl overflow-hidden bg-white dark:bg-[#1c2128] shadow-sm"
@@ -510,7 +630,11 @@ export default function ChatPanel() {
               onChange={(e) => setChatInput(e.target.value)}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              placeholder="What would you like to change? (paste or drop images)"
+              placeholder={
+                quota.atTok
+                  ? 'Token quota exhausted — upgrade or buy a credit pack to continue.'
+                  : 'What would you like to change? (paste or drop images)'
+              }
               className="w-full px-4 pt-3.5 pb-8 min-h-[80px] max-h-[240px] outline-none text-[13px] text-[#1f2937] dark:text-slate-100 placeholder:text-[#9ca3af] dark:placeholder:text-slate-500 resize-none leading-relaxed break-words"
               style={{ background: 'transparent', wordBreak: 'break-word', overflowWrap: 'break-word' }}
               rows={2}
@@ -641,10 +765,10 @@ export default function ChatPanel() {
               ) : (
                 <button
                   type="submit"
-                  disabled={!chatInput.trim() && attachedImages.length === 0}
+                  disabled={(!chatInput.trim() && attachedImages.length === 0) || quota.atTok}
                   className={cn(
                     'w-8 h-8 rounded-lg transition-all flex items-center justify-center shrink-0',
-                    chatInput.trim() || attachedImages.length > 0
+                    (chatInput.trim() || attachedImages.length > 0) && !quota.atTok
                       ? 'bg-[#111827] text-white hover:bg-slate-900'
                       : 'bg-[#d1d5db] text-[#9ca3af] cursor-not-allowed',
                   )}>

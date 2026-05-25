@@ -107,7 +107,24 @@ export default function BillingPage() {
       });
   };
 
-  useEffect(refreshSubscription, []);
+  // ── First load + post-checkout sync ─────────────────────
+  // On a normal page load we just fetch /subscription.
+  // After returning from Stripe Checkout (?success=1 or credit_success=1)
+  // we POST /api/stripe/sync first so the row reflects the new plan even
+  // when the webhook hasn't fired yet (common in local dev). Then refresh.
+  useEffect(() => {
+    const justUpgraded =
+      searchParams.get('success') === '1' ||
+      searchParams.get('credit_success') === '1';
+    if (justUpgraded) {
+      safeJsonFetch('/api/stripe/sync', { method: 'POST' })
+        .catch((err) => console.warn('Stripe sync failed:', err))
+        .finally(refreshSubscription);
+    } else {
+      refreshSubscription();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSubscribe = async (planKey) => {
     setCheckoutLoading(`${planKey}_monthly`);

@@ -40,6 +40,64 @@ function dispatchNewInvite(payload) {
   }
 }
 
+// ── Shared, reference-counted Realtime channel ────────────────
+// useInvitations() is mounted by several components at once (sidebar badge,
+// invitations page, count banner). supabase.channel() caches channels by
+// topic name, so when each instance built its own `invites:<email>` channel,
+// the 2nd/3rd call got back the already-subscribed channel and adding a
+// `.on('postgres_changes', …)` to it threw:
+//   "cannot add postgres_changes callbacks … after subscribe()".
+// One shared channel, ref-counted across instances, fans every DB change out
+// to each mounted hook via `refetchSubscribers`.
+const refetchSubscribers = new Set();
+let sharedChannel = null;
+let sharedChannelPromise = null;
+let sharedRefCount = 0;
+
+function dispatchRefetch() {
+  for (const fn of refetchSubscribers) {
+    try { fn(); } catch (_) {}
+  }
+}
+
+function ensureSharedChannel() {
+  // Already built, or a build is in flight — the promise guard makes
+  // concurrent callers from simultaneous mounts share one creation.
+  if (sharedChannel || sharedChannelPromise) return;
+  sharedChannelPromise = (async () => {
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      // Bail if every consumer unmounted while we resolved the user, or
+      // there's no signed-in email to filter on.
+      if (sharedRefCount <= 0 || !user?.email) return;
+      const filterEmail = user.email.toLowerCase();
+      sharedChannel = supabase
+        .channel(`invites:${filterEmail}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "project_invites",
+            filter: `invitee_email=eq.${filterEmail}`,
+          },
+          () => { dispatchRefetch(); },
+        )
+        .subscribe();
+    } finally {
+      sharedChannelPromise = null;
+    }
+  })();
+}
+
+function releaseSharedChannel() {
+  if (!sharedChannel) return;
+  const supabase = getSupabaseBrowserClient();
+  supabase.removeChannel(sharedChannel);
+  sharedChannel = null;
+}
+
 export function useInvitations() {
   const [invites, setInvites] = useState([]);
   const [status, setStatus] = useState("idle");
@@ -78,38 +136,21 @@ export function useInvitations() {
 
   // ── Initial load + Realtime subscription ──
   useEffect(() => {
-    let cancelled = false;
-    let channel = null;
+    fetchInvites();
 
-    (async () => {
-      await fetchInvites();
-      if (cancelled) return;
-
-      const supabase = getSupabaseBrowserClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      if (cancelled || !user?.email) return;
-      const filterEmail = user.email.toLowerCase();
-
-      channel = supabase
-        .channel(`invites:${filterEmail}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table: "project_invites",
-            filter: `invitee_email=eq.${filterEmail}`,
-          },
-          () => { fetchInvites(); },
-        )
-        .subscribe();
-    })();
+    // Join the shared channel: register this instance's refetch and bump the
+    // ref count. The last instance to unmount tears the channel down.
+    const refetch = () => { fetchInvites(); };
+    refetchSubscribers.add(refetch);
+    sharedRefCount += 1;
+    ensureSharedChannel();
 
     return () => {
-      cancelled = true;
-      if (channel) {
-        const supabase = getSupabaseBrowserClient();
-        supabase.removeChannel(channel);
+      refetchSubscribers.delete(refetch);
+      sharedRefCount -= 1;
+      if (sharedRefCount <= 0) {
+        sharedRefCount = 0;
+        releaseSharedChannel();
       }
     };
     // fetchInvites is wrapped with useCallback but its identity changes on

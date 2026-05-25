@@ -52,6 +52,36 @@ import {useWizard} from "./layout";
 import CustomSelect from "@/components/ui/CustomSelect";
 import {getSupabaseBrowserClient} from "@/lib/supabase/client";
 import InvitationsCountBanner from "@/components/invitations/InvitationsCountBanner";
+import PlanUsageStrip from "@/components/PlanUsageStrip";
+import {isTokenBypassActive} from "@/lib/devQuotaBypass";
+
+// Tiny letter-by-letter typewriter for the dashboard's inline clarify
+// notice — mirrors the chat MessageBubble animation so the dashboard
+// and workspace responses feel consistent (Claude-style typing).
+function TypewriterText({ text }) {
+  const [shown, setShown] = useState("");
+  useEffect(() => {
+    setShown("");
+    if (!text) return;
+    let i = 0;
+    const CHARS_PER_TICK = 4;
+    const id = setInterval(() => {
+      i = Math.min(i + CHARS_PER_TICK, text.length);
+      setShown(text.slice(0, i));
+      if (i >= text.length) clearInterval(id);
+    }, 16);
+    return () => clearInterval(id);
+  }, [text]);
+  const done = shown.length >= (text || "").length;
+  return (
+    <>
+      {shown}
+      {!done && (
+        <span className="inline-block w-[2px] h-[1em] bg-amber-700/70 dark:bg-amber-300/70 ml-0.5 align-middle animate-blink" />
+      )}
+    </>
+  );
+}
 
 // ── Helpers ──────────────────────────────────────
 function formatTime(dateStr) {
@@ -384,6 +414,10 @@ export default function EngineerDashboardPage() {
   const [convoLoading, setConvoLoading] = useState(true);
   const [user, setUser] = useState(null);
   const [promptText, setPromptText] = useState("");
+  // Single-shot clarify text shown below the composer when Gemini rejects
+  // the prompt as not-a-project. No mini-chat — just one inline message
+  // that auto-clears as the user starts typing again.
+  const [promptNotice, setPromptNotice] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const fileInputRef = useRef(null);
@@ -418,26 +452,46 @@ export default function EngineerDashboardPage() {
     try {
       const templatePrompt = sessionStorage.getItem("lucid_template_prompt");
       const autoStart = sessionStorage.getItem("lucid_hero_autostart");
+      const trusted = sessionStorage.getItem("lucid_autostart_trusted") === "1";
       if (templatePrompt && autoStart) {
-        // Hero submit → straight to workspace, skip the dashboard composer.
+        // Hero / CTA / template submit from the landing page. The prompt is
+        // launched the same navigate-first way as the dashboard composer:
+        // straight to the workspace as pending, where the mount guard runs
+        // the intent-check in-chat. Junk like "hello how are you" gets the
+        // clarifying question in the workspace instead of building.
+        //
+        // EXCEPTION: trusted=1 marks pre-vetted prompts (e.g., the
+        // landing-page template buttons). Those are launched pre-validated
+        // (`wizard_validated`) so they skip the guard and start building
+        // immediately — they're definitionally real project descriptions.
         sessionStorage.removeItem("lucid_template_prompt");
         sessionStorage.removeItem("lucid_hero_autostart");
-        const cid = crypto.randomUUID();
-        try {
-          sessionStorage.setItem(`wizard_prompt_${cid}`, templatePrompt);
-          sessionStorage.setItem(
-            `wizard_meta_${cid}`,
-            JSON.stringify({
-              stack: "nextjs",
-              projectType: null,
-              backend: "none",
-              deployment: "hosted",
-              figmaUrl: "",
-            }),
-          );
-          sessionStorage.setItem(`wizard_desc_${cid}`, templatePrompt);
-        } catch {}
-        router.replace(`/dashboard/workspace/${cid}`);
+        sessionStorage.removeItem("lucid_autostart_trusted");
+        if (trusted) {
+          const cid = crypto.randomUUID();
+          try {
+            sessionStorage.setItem(`wizard_prompt_${cid}`, templatePrompt);
+            sessionStorage.setItem(
+              `wizard_meta_${cid}`,
+              JSON.stringify({
+                stack: "nextjs",
+                projectType: null,
+                backend: "none",
+                deployment: "hosted",
+                figmaUrl: "",
+              }),
+            );
+            sessionStorage.setItem(`wizard_desc_${cid}`, templatePrompt);
+            // Pre-vetted → skip the workspace-mount intent guard.
+            sessionStorage.setItem(`wizard_validated_${cid}`, "1");
+          } catch {}
+          router.replace(`/dashboard/workspace/${cid}`);
+          return;
+        }
+        setPromptText(templatePrompt);
+        // Defer one tick so the textarea visibly reflects the incoming
+        // prompt before we navigate to the workspace.
+        setTimeout(() => handleBuildFromPrompt(false, templatePrompt), 0);
         return;
       }
       if (templatePrompt) {
@@ -531,6 +585,8 @@ export default function EngineerDashboardPage() {
      Two independent caps: monthly project count + monthly token quota.
      Either one being exhausted opens the upgrade modal. The modal copy
      adapts to whichever cap was hit. */
+  // Project limit is ALWAYS enforced — even with the dev token bypass on,
+  // we still block new project creation once the cap is reached.
   const isAtProjectLimit = () => {
     if (!subscription) return false;
     const limit = subscription.limits?.maxProjectsPerMonth;
@@ -539,6 +595,7 @@ export default function EngineerDashboardPage() {
   };
 
   const isAtTokenLimit = () => {
+    if (isTokenBypassActive()) return false;
     if (!subscription) return false;
     const used   = subscription.usage?.tokensUsed ?? 0;
     const quota  = subscription.limits?.monthlyTokenQuota ?? 0;
@@ -564,43 +621,78 @@ export default function EngineerDashboardPage() {
   // Block the action when either cap is hit, unless force=true (Skip clicked).
   const isAtAnyLimit = () => isAtProjectLimit() || isAtTokenLimit();
 
-  const handleBuildFromPrompt = async (force = false) => {
-    const text = promptText.trim();
-    if (!text) return;
-    if (!force && isAtAnyLimit()) { setPendingAction('build'); setShowUpgradeModal(true); return; }
-    setIsLaunching(true);
+  // Returns true if every sessionStorage write landed and we navigated;
+  // false if the writes failed (Safari ITP, quota exceeded, private mode
+  // restrictions, etc.) so the caller can surface a useful error instead
+  // of silently launching a workspace that arrives blank.
+  //
+  // Navigate-first model (Base44-style): the prompt is launched UNVALIDATED.
+  // We deliberately do NOT set `wizard_validated` — the workspace-mount guard
+  // runs the intent-check + project-count gate inside the workspace chat and
+  // either starts building or asks a clarifying question in-chat. `bypassLimits`
+  // (Skip-from-modal) is forwarded so the in-workspace gate honors the override.
+  const launchWorkspaceWith = (projectDescription, { bypassLimits = false } = {}) => {
+    const resolvedStack =
+      advancedOpts.stack === "auto" ? "nextjs" : advancedOpts.stack;
+    const cid = crypto.randomUUID();
+    let writesOk = false;
     try {
-      // Resolve stack synchronously from user selection (no API call)
-      // 'auto' defaults to 'nextjs' — the backend Gemini research step
-      // handles intelligent stack detection as part of the pipeline.
-      const resolvedStack =
-        advancedOpts.stack === "auto" ? "nextjs" : advancedOpts.stack;
-
-      // Generate a stable UUID for this workspace — no DB round-trip needed
-      const cid = crypto.randomUUID();
-
-      // Store raw prompt in sessionStorage — the backend pipeline's
-      // Gemini research phase replaces the old frontend prompt enhancement.
-      try {
-        sessionStorage.setItem(`wizard_prompt_${cid}`, text);
-        sessionStorage.setItem(
-          `wizard_meta_${cid}`,
-          JSON.stringify({
-            stack: resolvedStack,
-            projectType: null,
-            backend: advancedOpts.backend,
-            deployment: "hosted",
-            figmaUrl: advancedOpts.figmaUrl || "",
-          }),
-        );
-        sessionStorage.setItem(`wizard_desc_${cid}`, text);
-      } catch {}
-
-      // Navigate IMMEDIATELY — user enters workspace in < 300ms
-      router.replace(`/dashboard/workspace/${cid}`);
+      sessionStorage.setItem(`wizard_prompt_${cid}`, projectDescription);
+      sessionStorage.setItem(
+        `wizard_meta_${cid}`,
+        JSON.stringify({
+          stack: resolvedStack,
+          projectType: null,
+          backend: advancedOpts.backend,
+          deployment: "hosted",
+          figmaUrl: advancedOpts.figmaUrl || "",
+        }),
+      );
+      sessionStorage.setItem(`wizard_desc_${cid}`, projectDescription);
+      if (bypassLimits) {
+        sessionStorage.setItem(`wizard_bypass_${cid}`, "1");
+      }
+      // Read one of the keys back to confirm the write actually persisted —
+      // Safari ITP can silently make setItem succeed but immediately drop
+      // the value, especially in private browsing.
+      writesOk = sessionStorage.getItem(`wizard_prompt_${cid}`) === projectDescription;
     } catch (err) {
-      console.error("[Dashboard] Build error:", err);
+      console.error("[Dashboard] sessionStorage write failed:", err);
+      writesOk = false;
+    }
+    if (!writesOk) return false;
+    router.replace(`/dashboard/workspace/${cid}`);
+    return true;
+  };
+
+  const handleBuildFromPrompt = async (force = false, overrideText = null) => {
+    // `overrideText` lets callers (e.g., the landing-page hero/CTA autostart
+    // effect) feed a prompt without flushing it through textarea state.
+    //
+    // Navigate-first (Base44-style): the dashboard does NO intent-check. It
+    // navigates straight to the workspace with the prompt as pending; the
+    // workspace-mount guard runs the regex pre-filter, Gemini intent-check,
+    // and the project-count gate inside the chat, then either starts building
+    // or asks a clarifying question in-chat. The only dashboard-side guard is
+    // the cheap at-limit check below (a count read, no provisioning), so a
+    // user already at their cap sees the upgrade modal instead of bouncing
+    // into a dead-end workspace.
+    const text = (overrideText != null ? overrideText : promptText).trim();
+    // At-limit gate runs FIRST so clicking Send with an empty textarea at
+    // the limit still opens the upgrade modal. Skip in the modal calls
+    // back here with force=true so it bypasses this check.
+    if (!force && isAtAnyLimit()) { setPendingAction('build'); setShowUpgradeModal(true); return; }
+    if (!text) return;
+
+    setPromptNotice("");
+    setIsLaunching(true);
+    const launched = launchWorkspaceWith(text, { bypassLimits: force === true });
+    if (!launched) {
+      // sessionStorage write failed (Safari ITP, quota, etc.) — surface it.
       setIsLaunching(false);
+      setPromptNotice(
+        "Your browser blocked us from saving the project details. Try disabling private mode or clearing site data, then submit again.",
+      );
     }
   };
 
@@ -622,6 +714,19 @@ export default function EngineerDashboardPage() {
     setIsImporting(true);
     setImportError("");
     try {
+      // Server-side project gate — same authority as the new-project flow.
+      // `bypassLimits` is set only when force=true (Skip clicked in upgrade modal).
+      const gateRes = await fetch("/api/projects/check-create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bypassLimits: force === true }),
+      });
+      if (gateRes.status === 402 || !gateRes.ok) {
+        setIsImporting(false);
+        setPendingAction('import');
+        setShowUpgradeModal(true);
+        return;
+      }
       const sb = getSupabaseBrowserClient();
       const {
         data: {user: authUser},
@@ -699,8 +804,8 @@ export default function EngineerDashboardPage() {
               <div className="space-y-2 mb-6">
                 {features.map((f) => (
                   <div key={f} className="flex items-center gap-2.5 text-sm text-slate-600 dark:text-slate-300">
-                    <div className="w-4 h-4 rounded-full bg-emerald-100 dark:bg-emerald-500/20 flex items-center justify-center shrink-0">
-                      <svg viewBox="0 0 10 10" className="w-2.5 h-2.5 text-emerald-600 dark:text-emerald-400"><path d="M2 5l2 2 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/></svg>
+                    <div className="w-4 h-4 rounded-full bg-blue-100 dark:bg-blue-500/20 flex items-center justify-center shrink-0">
+                      <svg viewBox="0 0 10 10" className="w-2.5 h-2.5 text-blue-700 dark:text-blue-400"><path d="M2 5l2 2 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/></svg>
                     </div>
                     {f}
                   </div>
@@ -775,7 +880,7 @@ export default function EngineerDashboardPage() {
             <>
               {/* Title */}
               <h1 className="text-[38px] font-normal text-slate-950 dark:text-white tracking-[-0.035em] leading-[1.12]">
-                What will you <span className="text-[#166534]">build next</span>
+                What will you <span className="text-[#1e3a8a]">build next</span>
                 ?
               </h1>
               <p className="text-[14.5px] text-slate-800 dark:text-slate-300 mt-[10px] leading-[1.6]">
@@ -789,20 +894,29 @@ export default function EngineerDashboardPage() {
                   "mt-7 text-left bg-white dark:bg-[#161b22] rounded-[20px] border overflow-hidden transition-all duration-150",
                   "shadow-[0_8px_24px_-6px_rgba(15,23,42,0.18),0_2px_6px_rgba(15,23,42,0.06)]",
                   promptText.trim()
-                    ? "border-[#166534]/50"
+                    ? "border-[#1e3a8a]/50"
                     : "border-slate-200 dark:border-[#2d333b]",
                 )}>
                 <textarea
                   ref={promptRef}
                   value={promptText}
-                  onChange={(e) => setPromptText(e.target.value)}
+                  onChange={(e) => {
+                    setPromptText(e.target.value);
+                    if (promptNotice) setPromptNotice("");
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey && promptText.trim()) {
                       e.preventDefault();
                       handleBuildFromPrompt();
                     }
                   }}
-                  placeholder="Describe the app you want to create..."
+                  placeholder={
+                    isAtAnyLimit()
+                      ? (isAtTokenLimit()
+                          ? "Token quota exhausted — upgrade or buy a credit pack to continue."
+                          : "Project limit reached — upgrade your plan to start a new project.")
+                      : "Describe the app you want to create..."
+                  }
                   className="w-full px-[22px] pt-5 pb-[14px] text-[14.5px] leading-[1.65] bg-transparent text-slate-900 dark:text-slate-200 placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none resize-none min-h-[110px]"
                 />
                 <div className="flex items-center justify-between px-[14px] py-[10px] border-t border-slate-100 dark:border-[#2d333b] bg-[oklch(99%_0.003_255)] dark:bg-[#161b22]">
@@ -883,8 +997,8 @@ export default function EngineerDashboardPage() {
                     className={cn(
                       "flex items-center gap-[6px] px-[18px] py-2 rounded-[10px] text-[13px] font-semibold transition-all duration-150 active:scale-[0.97]",
                       promptText.trim() && !isLaunching
-                        ? "bg-[#166534] hover:bg-[#14532d] text-white"
-                        : "bg-[oklch(40%_0.01_265)] dark:bg-[#21262d] text-white dark:text-slate-400 opacity-80",
+                        ? "bg-[#1e3a8a] hover:bg-[#172554] text-white"
+                        : "bg-[oklch(40%_0.01_265)] dark:bg-[#21262d] text-white dark:text-slate-400 opacity-80 cursor-not-allowed",
                     )}>
                     {isLaunching ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
@@ -955,6 +1069,48 @@ export default function EngineerDashboardPage() {
                   </div>
                 )}
               </div>
+
+              {/* Inline error notice — the dashboard no longer validates the
+                  prompt (that moved into the workspace chat, Base44-style), so
+                  this only surfaces local launch failures, e.g. a browser that
+                  blocked the sessionStorage handoff. Auto-clears when the user
+                  starts typing again. */}
+              {promptNotice && (
+                <div
+                  role="status"
+                  className="mt-3 flex items-start gap-3 px-4 py-3 rounded-[12px] bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 text-left">
+                  <Sparkles className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <p className="text-[13px] leading-snug text-amber-900 dark:text-amber-100 flex-1 whitespace-pre-wrap">
+                    <TypewriterText text={promptNotice} />
+                  </p>
+                </div>
+              )}
+
+              {/* Limit banner — soft-block when token / project quota is hit */}
+              {isAtAnyLimit() && (
+                <div
+                  role="status"
+                  className="mt-3 flex items-start gap-3 px-4 py-3 rounded-[12px] bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/30 text-left">
+                  <CreditCard className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[13px] font-semibold text-red-900 dark:text-red-200">
+                      {isAtTokenLimit() ? "Token quota reached" : "Project limit reached"}
+                    </p>
+                    <p className="text-[12px] text-red-700/90 dark:text-red-200/85 leading-snug mt-0.5">
+                      {isAtTokenLimit()
+                        ? `You've used all your monthly tokens on the ${subscription?.plan || 'Free'} plan. Upgrade or buy a credit pack to continue.`
+                        : subscription?.plan === 'free'
+                          ? "You've used your free project. Upgrade to keep building."
+                          : `You've hit your monthly project limit. Upgrade for more headroom.`}
+                    </p>
+                  </div>
+                  <a
+                    href="/dashboard/billing"
+                    className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] text-[12px] font-semibold bg-gradient-to-r from-[#dc5426] to-orange-500 text-white hover:opacity-90 transition-all">
+                    <Rocket className="w-3.5 h-3.5" /> Upgrade
+                  </a>
+                </div>
+              )}
 
               {/* Chips */}
               <div className="flex flex-wrap items-center justify-center gap-[7px] mt-[18px]">
@@ -1369,6 +1525,16 @@ export default function EngineerDashboardPage() {
                 )}
               </div>
             )}
+          </div>
+        )}
+
+        {/* ── Plan & Usage strip ──
+             Bottom-of-page summary of the current plan and where the user
+             sits against their monthly caps. Mirrors the workspace footer
+             so the dashboard exposes the same at-a-glance state. */}
+        {homeMode === "build" && subscription && (
+          <div className="px-8 lg:px-10 pb-10 max-w-[1100px] mx-auto">
+            <PlanUsageStrip subscription={subscription} />
           </div>
         )}
       </div>

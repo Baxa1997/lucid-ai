@@ -100,6 +100,10 @@ export default function TemplatesSection() {
     try {
       sessionStorage.setItem("lucid_template_prompt", prompt);
       sessionStorage.setItem("lucid_hero_autostart", "1");
+      // Pre-vetted template prompt — skip the Gemini intent-check on the
+      // dashboard so a Gemini hiccup can't block a button click that's
+      // definitionally a real project description.
+      sessionStorage.setItem("lucid_autostart_trusted", "1");
     } catch {}
     router.push("/dashboard");
   };

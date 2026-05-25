@@ -990,12 +990,55 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         return;
       }
 
+      // ─── Clarify ────────────────────────────────
+      // The pipeline could not understand the prompt (gibberish / too short).
+      // Rendered as a normal assistant chat message — NOT a red error banner —
+      // so the user can simply reply with more detail and try again.
+      if (msg.type === 'clarify') {
+        const clarifyMsg = msg.message || 'Could you tell me more about what you want to build?';
+        setAgentStatus(null);
+        // Clear lingering phase data so the in-chat status pill doesn't
+        // keep showing "Researching your idea…" after a clarify event
+        // has handed control back to the user.
+        setPhases([]);
+        setState('ready');
+        pushChat('assistant', clarifyMsg);
+        pushLog(clarifyMsg, 'system');
+        return;
+      }
+
       // ─── Error ──────────────────────────────────
       if (msg.type === 'error') {
         const errMsg = msg.message || 'Unknown error';
         const code = msg.code || null;
         setAgentStatus(null);
         setErrorCode(code);
+        // Stale-backend rescue: older ai_engine builds emit gibberish-
+        // detection feedback as `type: 'error'` with the legacy
+        // "Please describe your project in a few words" copy. Until the
+        // VPS is redeployed with the friendly `type: 'clarify'` flow,
+        // recognize that shape here and treat it as a clarification
+        // question — render it as a warm assistant message instead of
+        // a red system error banner with the ⚠️ prefix.
+        const isLegacyGibberishMsg =
+          /please describe your project/i.test(errMsg) ||
+          /modern coffee shop landing page/i.test(errMsg) ||
+          /fitness coach portfolio/i.test(errMsg);
+        if (isLegacyGibberishMsg) {
+          // Use the SAME text as /api/intent-check's fail-closed path so
+          // that backend-rejected and frontend-rejected gibberish read
+          // identically. (Previously these diverged — confusing the user
+          // when consecutive messages produced different copy.)
+          const friendly =
+            "I couldn't quite read that. Could you describe what you'd like to build or change? " +
+            "For example: \"a landing page for my coffee shop\" or \"make the hero darker\".";
+          pushChat('assistant', friendly);
+          pushLog(errMsg, 'system');
+          // Clear phases so we don't leave a stale "Researching…" pill behind.
+          setPhases([]);
+          setState('ready');
+          return;
+        }
         pushChat('system', `⚠️ ${errMsg}`);
         pushLog(errMsg, 'error');
         // Fatal codes force the session into error state; the UI reads
@@ -1491,7 +1534,12 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
         }));
       }
       manager.send(payload);
-      pushChat('user', text, { images: images.length > 0 ? images : undefined });
+      // suppressEcho: caller already rendered the user's message locally
+      // (e.g. the workspace intent guard shows the user's ORIGINAL prompt,
+      // then sends the cleaned summary to the WS) — skip the duplicate bubble.
+      if (!options.suppressEcho) {
+        pushChat('user', text, { images: images.length > 0 ? images : undefined });
+      }
       pushLog(`→ ${text}`, 'user');
       // Clear stop suppression — user is starting a new task, any residual
       // events from a prior wind-down should be discarded; from here on the
@@ -1742,6 +1790,10 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     stopSession,
     pushToBranch,
     setInitialMessages,
+    // Direct-injection escape hatch for client-side guards (e.g. the
+    // workspace ChatPanel's pre-send Gemini intent-check). Bypasses the
+    // WebSocket — just appends to the local chat view.
+    addLocalChatMessage: pushChat,
 
     // Preview (noVNC / E2B legacy)
     previewUrl,
