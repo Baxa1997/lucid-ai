@@ -514,11 +514,11 @@ export default function EngineerDashboardPage() {
         const ints = await getIntegrations();
         setIntegrations(ints);
         let repos = [];
-        if (selectedProvider === "github" && ints.github?.token) {
+        if (selectedProvider === "github" && ints.github?.connected) {
           repos = await fetchGitHubRepos(ints.github.token);
-        } else if (selectedProvider === "gitlab" && ints.gitlab?.token) {
+        } else if (selectedProvider === "gitlab" && ints.gitlab?.connected) {
           repos = await fetchGitLabRepos(
-            ints.gitlab.host || "https://gitlab.com",
+            ints.gitlab.host || ints.gitlab.gitlabUrl || "https://gitlab.com",
             ints.gitlab.token,
           );
         }
@@ -545,14 +545,14 @@ export default function EngineerDashboardPage() {
       try {
         const ints = integrations;
         let branches = [];
-        if (selectedProvider === "github" && ints.github?.token) {
+        if (selectedProvider === "github" && ints.github?.connected) {
           branches = await fetchGitHubBranches(
             ints.github.token,
-            selectedRepo.name,
+            selectedRepo.fullName || selectedRepo.name,
           );
-        } else if (selectedProvider === "gitlab" && ints.gitlab?.token) {
+        } else if (selectedProvider === "gitlab" && ints.gitlab?.connected) {
           branches = await fetchGitLabBranches(
-            ints.gitlab.host || "https://gitlab.com",
+            ints.gitlab.host || ints.gitlab.gitlabUrl || "https://gitlab.com",
             ints.gitlab.token,
             selectedRepo.id,
           );
@@ -569,7 +569,7 @@ export default function EngineerDashboardPage() {
       }
     };
     load();
-  }, [selectedRepo]);
+  }, [selectedRepo, selectedProvider, integrations]);
 
   const totalProjects = platformRepos.length;
   const activeCount = conversations.filter((c) => c.status === "active").length;

@@ -120,7 +120,7 @@ class AgentWSManager {
    * before starting a new one. This prevents the manager from getting "stuck"
    * when navigating between projects.
    */
-  connect({ token, projectId, repoUrl, gitToken, branch, task, modelProvider }) {
+  connect({ token, projectId, repoUrl, repoProvider, gitToken, branch, task, modelProvider }) {
     // If already open to the SAME project — do nothing
     if (this.isOpen && this._projectId === projectId) return;
 
@@ -202,7 +202,17 @@ class AgentWSManager {
       if (!resolvedTask && isFirstHandshake && projectId && typeof window !== 'undefined') {
         try {
           const stored = window.sessionStorage.getItem(`wizard_prompt_${projectId}`);
-          if (stored) {
+          const isValidated = window.sessionStorage.getItem(`wizard_validated_${projectId}`) === '1';
+          if (stored && !isValidated) {
+            window.sessionStorage.setItem(`wizard_pending_validation_${projectId}`, stored);
+            window.sessionStorage.removeItem(`wizard_prompt_${projectId}`);
+            window.sessionStorage.removeItem(`wizard_desc_${projectId}`);
+            window.dispatchEvent(new CustomEvent('lucid:wizard-pending-validation', {
+              detail: { projectId },
+            }));
+            // eslint-disable-next-line no-console
+            console.warn('[WS] unvalidated wizard prompt recovered — deferred to workspace guard');
+          } else if (stored) {
             const metaStr = window.sessionStorage.getItem(`wizard_meta_${projectId}`);
             const desc = window.sessionStorage.getItem(`wizard_desc_${projectId}`) || '';
             if (metaStr) {
@@ -234,6 +244,7 @@ class AgentWSManager {
         projectId: projectId || '',
         modelProvider: modelProvider,
         repoUrl: repoUrl || '',
+        repoProvider: repoProvider || '',
         gitToken: gitToken || '',
         branch: branch || '',
         task: resolvedTask,

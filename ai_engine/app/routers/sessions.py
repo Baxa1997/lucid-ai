@@ -1,5 +1,7 @@
 """REST endpoints for agent session lifecycle."""
 
+from urllib.parse import urlparse
+
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.auth import AuthenticatedUser, get_current_user
@@ -12,8 +14,40 @@ from app.exceptions import (
 )
 from app.sdk import OPENHANDS_AVAILABLE
 from app.services.sessions import create_session, destroy_session, store
+from app.services.vcs.tokens import get_integration
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
+
+
+def _provider_from_repo_url(repo_url: str, explicit: str = "") -> str:
+    provider = (explicit or "").strip().lower()
+    if provider in ("github", "gitlab"):
+        return provider.upper()
+    raw = (repo_url or "").lower()
+    host = urlparse(repo_url or "").netloc.lower()
+    if "github.com" in host or "github.com" in raw:
+        return "GITHUB"
+    if "gitlab" in host or "gitlab" in raw:
+        return "GITLAB"
+    return ""
+
+
+async def _resolve_git_token(
+    *,
+    repo_url: str,
+    repo_provider: str,
+    user_id: str,
+    user_jwt: str | None,
+) -> str:
+    provider = _provider_from_repo_url(repo_url, repo_provider)
+    if not provider:
+        return ""
+    integration = await get_integration(
+        user_id=user_id,
+        provider=provider,
+        user_jwt=user_jwt,
+    )
+    return (integration or {}).get("token") or ""
 
 
 @router.post("", response_model=InitSessionResponse)
@@ -23,11 +57,17 @@ async def init_session(
 ):
     """Create a new agent session."""
     try:
+        git_token = payload.gitToken or await _resolve_git_token(
+            repo_url=payload.repoUrl or "",
+            repo_provider=payload.repoProvider or "",
+            user_id=user.user_id,
+            user_jwt=user.raw_jwt,
+        )
         session = await create_session(
             task=payload.task,
             user_id=user.user_id,
             repo_url=payload.repoUrl,
-            git_token=payload.gitToken,
+            git_token=git_token,
             branch=payload.branch,
             git_user_name=payload.gitUserName,
             git_user_email=payload.gitUserEmail,

@@ -25,7 +25,7 @@ const RECONNECT_BACKOFF_MS = [2000, 5000, 10000, 20000, 30000, 60000, 60000, 600
 /**
  * useAgentSession — manages the full lifecycle of an AI agent session.
  */
-export function useAgentSession({ projectId, task = '', token = '', repoUrl = '', gitToken = '', branch = '', autoStart = false }) {
+export function useAgentSession({ projectId, task = '', token = '', repoUrl = '', repoProvider = '', gitToken = '', branch = '', autoStart = false }) {
   // ── State ────────────────────────────────────────────────
   const [state, setState] = useState('idle');
   const [sessionId, setSessionId] = useState(null);
@@ -179,12 +179,14 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
   const tokenRef = useRef(token);
   const projectIdRef = useRef(projectId);
   const repoUrlRef = useRef(repoUrl);
+  const repoProviderRef = useRef(repoProvider);
   const gitTokenRef = useRef(gitToken);
   const branchRef = useRef(branch);
 
   tokenRef.current = token;
   projectIdRef.current = projectId;
   repoUrlRef.current = repoUrl;
+  repoProviderRef.current = repoProvider;
   gitTokenRef.current = gitToken;
   branchRef.current = branch;
 
@@ -429,6 +431,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
                   token: freshToken,
                   projectId: projectIdRef.current,
                   repoUrl: repoUrlRef.current,
+                  repoProvider: repoProviderRef.current,
                   gitToken: gitTokenRef.current,
                   branch: branchRef.current,
                   task: '',
@@ -476,6 +479,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
                     token: fresh,
                     projectId: projectIdRef.current,
                     repoUrl: repoUrlRef.current,
+                    repoProvider: repoProviderRef.current,
                     gitToken: gitTokenRef.current,
                     branch: branchRef.current,
                     task: '',
@@ -511,6 +515,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
                         token: freshToken,
                         projectId: projectIdRef.current,
                         repoUrl: repoUrlRef.current,
+                        repoProvider: repoProviderRef.current,
                         gitToken: gitTokenRef.current,
                         branch: branchRef.current,
                         task: '',
@@ -829,7 +834,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       }
 
       // ─── Published — auto-publish on first generation completed ──
-      // Backend pushed staging→main and created a Vercel project. We surface
+      // Backend pushed staging to the production branch and created a Vercel project. We surface
       // the live URL in chat and feed it into deployUrl so the workspace
       // header / Publish modal pick it up too.
       if (msg.type === 'published') {
@@ -986,6 +991,18 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
             },
           ]);
           pushLog(`Pushed to ${msg.branch}`, 'system');
+        }
+        return;
+      }
+
+      // ─── Auto staging push after manual edits ──────────
+      if (msg.type === 'staging_push_result') {
+        const branch = msg.branch || 'staging';
+        const files = Number(msg.filesPushed || 0);
+        if (msg.pushed) {
+          pushLog(`Auto-pushed ${files || 1} file${files === 1 ? '' : 's'} to ${branch}`, 'system');
+        } else {
+          pushLog(msg.message || `Staging branch ${branch} is already up to date`, 'system');
         }
         return;
       }
@@ -1386,6 +1403,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
           token: freshToken,
           projectId: projectIdRef.current,
           repoUrl: repoUrlRef.current,
+          repoProvider: repoProviderRef.current,
           gitToken: gitTokenRef.current,
           branch: branchRef.current,
           task: taskToSend || '',
@@ -1545,9 +1563,12 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
       // events from a prior wind-down should be discarded; from here on the
       // new task's events should flow through normally.
       stopRequestedRef.current = false;
-      // Show thinking indicator immediately; clear stale phases from previous task
-      // so the buildLabel logic starts fresh (no stale currentPhaseNum).
+      // Show thinking indicator immediately; clear stale phases AND agentStatus
+      // from the previous task so the status bar starts fresh — otherwise a
+      // leftover "Researching…" label leaks into the next intake turn. With
+      // both cleared, the empty-phase state reads "Analyzing your request…".
       setPhases([]);
+      setAgentStatus(null);
       flushedRef.current = false;
       setCompletionSummary('');
       setState('running');
@@ -1579,6 +1600,22 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     },
     [pushLog]
   );
+
+  const sendManualEdit = useCallback((patch, editableTarget = null) => {
+    if (!patch || typeof patch !== 'object') return false;
+    const targetPath = patch.path || editableTarget?.path || 'selection';
+    if (!manager?.isOpen) {
+      pushLog(`Manual edit changed preview only - connection is offline (${targetPath})`, 'warning');
+      return false;
+    }
+    manager.send({
+      type: 'manual_edit',
+      patch,
+      editable_target: editableTarget || null,
+    });
+    pushLog(`Manual edit applied: ${targetPath}`, 'file_write');
+    return true;
+  }, [pushLog]);
 
   const pushToBranch = useCallback((newBranchName) => {
     if (!manager?.isOpen) {
@@ -1651,6 +1688,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
               token: freshToken,
               projectId: projectIdRef.current,
               repoUrl: repoUrlRef.current,
+              repoProvider: repoProviderRef.current,
               gitToken: gitTokenRef.current,
               branch: branchRef.current,
               task: '',
@@ -1787,6 +1825,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
     startSession,
     sendMessage,
     sendCommand,
+    sendManualEdit,
     stopSession,
     pushToBranch,
     setInitialMessages,
@@ -1849,6 +1888,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
               token: freshToken,
               projectId: projectIdRef.current,
               repoUrl: repoUrlRef.current,
+              repoProvider: repoProviderRef.current,
               gitToken: gitTokenRef.current,
               branch: branchRef.current,
               task: '',
@@ -1877,6 +1917,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
               token: freshToken,
               projectId: projectIdRef.current,
               repoUrl: repoUrlRef.current,
+              repoProvider: repoProviderRef.current,
               gitToken: gitTokenRef.current,
               branch: branchRef.current,
               task: '',
@@ -1913,6 +1954,7 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
               token: freshToken,
               projectId: projectIdRef.current,
               repoUrl: repoUrlRef.current,
+              repoProvider: repoProviderRef.current,
               gitToken: gitTokenRef.current,
               branch: branchRef.current,
               task: '',
@@ -1934,7 +1976,13 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
             ? { ...m, clarification: { ...m.clarification, answered: true, answerLabel: label } }
             : m
         )));
-        pushLog(`Choice received: ${label} — starting generation...`, 'system');
+        // The backend is now processing this answer (next clarification or
+        // generation). Show the intake status: running + no phases yet reads
+        // "Analyzing your request…" until real task_phase events arrive.
+        setPhases([]);
+        setAgentStatus(null);
+        setState('running');
+        pushLog(`Answer received: ${label} — analyzing…`, 'system');
       } else {
         pushLog('Failed to send choice — please retry', 'error');
       }

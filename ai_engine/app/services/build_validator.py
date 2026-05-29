@@ -31,6 +31,8 @@ from fastapi import WebSocket
 
 logger = logging.getLogger("lucid.build_validator")
 
+_INSTALL_TIMEOUT_SECONDS = int(os.environ.get("BUILD_VALIDATOR_INSTALL_TIMEOUT", "900"))
+
 # Import helpers from pipeline package
 try:
     from app.services.pipeline import (
@@ -210,6 +212,34 @@ class BuildValidator:
                 "error_count": 1,
             }
 
+    def _expected_binary_ready(self, workspace_path: str, pkg_data: dict) -> bool:
+        """True when node_modules contains the framework binary needed to build.
+
+        A partial dependency install can leave node_modules present but unusable.
+        If we continue into the build loop in that state, Claude gets asked to
+        "fix" missing `next`/`vite` binaries, which wastes minutes and looks
+        like a generation loop. Treat dependency setup as its own failure class.
+        """
+        deps = {
+            **(pkg_data.get("dependencies") or {}),
+            **(pkg_data.get("devDependencies") or {}),
+        }
+        bin_dir = os.path.join(workspace_path, "node_modules", ".bin")
+        if "next" in deps:
+            return os.path.isfile(os.path.join(bin_dir, "next"))
+        if "vite" in deps:
+            return os.path.isfile(os.path.join(bin_dir, "vite"))
+        return os.path.isdir(bin_dir) and bool(os.listdir(bin_dir))
+
+    def _install_command(self, pm: str) -> list[str]:
+        """Build an install command with the same cache bias as preview setup."""
+        cmd = list(_pm_install_cmd(pm))
+        if pm == "pnpm":
+            return cmd + ["--store-dir", "/tmp/pnpm_store", "--prefer-offline"]
+        if pm == "npm":
+            return cmd + ["--prefer-offline"]
+        return cmd
+
     async def fix_errors(self, workspace_path: str, errors: str, build_cmd: list) -> list:
         """Send build errors to Claude for fixing.
 
@@ -361,27 +391,59 @@ STOP when all errors are fixed.
         # Setup
         pm = detect_package_manager(workspace_path, "npm")
         build_cmd = [pm, "run", "build"]
-        build_env = _pm_env(pm)
+        build_env = {
+            **_pm_env(pm),
+            "CI": "true",
+            "ADBLOCK": "true",
+            "DISABLE_OPENCOLLECTIVE": "true",
+            "OPEN_SOURCE_CONTRIBUTOR": "true",
+        }
 
         # Load template manifest for import resolution
         self._load_manifest(workspace_path)
 
         # Ensure node_modules exist
-        if not os.path.isdir(os.path.join(workspace_path, "node_modules")):
+        if not self._expected_binary_ready(workspace_path, pkg_data):
             await self._send("build", "checking", f"📦 Installing dependencies ({pm})...")
+            install_result = None
             try:
-                install_cmd = _pm_install_cmd(pm)
-                await asyncio.to_thread(
+                install_cmd = self._install_command(pm)
+                install_result = await asyncio.to_thread(
                     subprocess.run,
                     install_cmd,
                     cwd=workspace_path,
                     capture_output=True,
                     text=True,
-                    timeout=120,
+                    timeout=_INSTALL_TIMEOUT_SECONDS,
                     env=build_env,
                 )
             except Exception as ie:
                 logger.warning("BuildValidator: install failed: %s", ie)
+
+            if install_result is not None and install_result.returncode != 0:
+                tail = ((install_result.stderr or "") + "\n" + (install_result.stdout or ""))[-2000:]
+                logger.warning(
+                    "BuildValidator: dependency install exited %d: %s",
+                    install_result.returncode,
+                    tail[-500:],
+                )
+
+            if not self._expected_binary_ready(workspace_path, pkg_data):
+                errors = (
+                    "Dependency install did not finish cleanly; framework build "
+                    "binary is still missing. Skipping Claude auto-fix because "
+                    "this is an environment/install failure, not a code error."
+                )
+                await self._send("build", "warning", f"⚠️ {errors}")
+                return {
+                    "success": False,
+                    "needs_fix": True,
+                    "attempts": 0,
+                    "errors": errors,
+                    "fixed_files": self.fixed_files,
+                    "error_count": 1,
+                    "install_failed": True,
+                }
 
         await self._send("build", "checking",
                          f"🔍 Running production build ({' '.join(build_cmd)})...")

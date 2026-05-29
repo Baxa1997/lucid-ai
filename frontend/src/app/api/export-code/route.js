@@ -7,6 +7,7 @@ import { generateGitlabCI } from '@/lib/templates/cicd';
 import { generateMakefile } from '@/lib/templates/makefile';
 import { generateOpsFolder } from '@/lib/templates/ops';
 import { canExportCode } from '@/lib/subscription';
+import { decrypt } from '@/lib/crypto';
 
 // ─────────────────────────────────────────────────────────
 //  POST /api/export-code
@@ -66,8 +67,13 @@ export async function POST(req) {
     return NextResponse.json({ error: 'User not found' }, { status: 404 });
   }
 
-  const meta = user.user_metadata || {};
-  const integration = meta[`${provider}_integration`];
+  const supabase = await getSupabaseServerClient();
+  const { integration, meta } = await loadProviderIntegration({
+    supabase,
+    user,
+    userId: ctx.userId,
+    provider,
+  });
 
   if (!integration?.connected || !integration?.token) {
     return NextResponse.json(
@@ -158,7 +164,6 @@ export async function POST(req) {
   // ══════════════════════════════════════════════════════
   //  STEP 2: Fetch source files + push to new repo
   // ══════════════════════════════════════════════════════
-  const supabase = await getSupabaseServerClient();
 
   // ── Load user's deployment settings (from Settings → Deployment tab) ──
   let deploySettings = {};
@@ -258,7 +263,16 @@ export async function POST(req) {
     try {
       // Try platform token first, then user's own GitHub token as fallback
       const platformToken = process.env.PLATFORM_GITHUB_TOKEN || '';
-      const userGithubToken = meta.github_integration?.token || '';
+      let userGithubToken = provider === 'github' ? integration.token : (meta.github_integration?.token || '');
+      if (!userGithubToken && provider !== 'github') {
+        const githubFallback = await loadProviderIntegration({
+          supabase,
+          user,
+          userId: ctx.userId,
+          provider: 'github',
+        });
+        userGithubToken = githubFallback.integration?.token || '';
+      }
       const readToken = platformToken || userGithubToken;
 
       console.log(`[export-code] Source 1: platformRepoUrl=${platformRepoUrl}, platformToken=${platformToken ? 'SET' : 'MISSING'}, userToken=${userGithubToken ? 'SET' : 'MISSING'}`);
@@ -1191,6 +1205,55 @@ async function saveExportRecord(supabase, userId, projectId, provider, repoUrl, 
     }, { onConflict: 'user_id,project_id,provider' });
   } catch (e) {
     console.warn('[export-code] Could not save export record:', e);
+  }
+}
+
+async function loadProviderIntegration({ supabase, user, userId, provider }) {
+  const meta = user.user_metadata || {};
+  const legacy = meta[`${provider}_integration`];
+  if (legacy?.connected && legacy?.token) {
+    return { integration: legacy, meta };
+  }
+
+  if (!['github', 'gitlab'].includes(provider)) {
+    return { integration: legacy, meta };
+  }
+
+  try {
+    const { data } = await supabase
+      .from('integrations')
+      .select('provider,label,access_token_encrypted,iv,external_username,scopes,created_at')
+      .eq('user_id', userId)
+      .eq('provider', provider.toUpperCase())
+      .maybeSingle();
+
+    if (!data?.access_token_encrypted || !data?.iv) {
+      return { integration: legacy, meta };
+    }
+
+    let scopes = data.scopes || '';
+    let host = 'https://gitlab.com';
+    if (scopes.includes('||')) {
+      const [scopePart, hostPart] = scopes.split('||');
+      scopes = scopePart || '';
+      host = (hostPart || host).replace(/\/+$/, '');
+    }
+
+    return {
+      meta,
+      integration: {
+        connected: true,
+        token: decrypt(data.access_token_encrypted, data.iv),
+        username: data.external_username || '',
+        label: data.label || '',
+        scopes,
+        host,
+        connectedAt: data.created_at || null,
+      },
+    };
+  } catch (e) {
+    console.warn(`[export-code] Could not load encrypted ${provider} integration:`, e.message);
+    return { integration: legacy, meta };
   }
 }
 

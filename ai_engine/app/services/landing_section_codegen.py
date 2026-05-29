@@ -23,6 +23,8 @@ import os
 import re
 from typing import Any
 
+from app.services.project_writer import write_text_file
+
 logger = logging.getLogger(__name__)
 
 # Per-section budget. Sections are small, focused components — even a complex
@@ -1896,6 +1898,7 @@ async def generate_landing_sections(
     sections_meta: list[dict[str, Any]] = []
     page_imports: list[str] = []
     page_renders: list[str] = []
+    files_written: list[str] = []
 
     sections_dir = os.path.join(workspace_path, "src", "components", "sections")
     os.makedirs(sections_dir, exist_ok=True)
@@ -1907,14 +1910,16 @@ async def generate_landing_sections(
         ok = bool(res)
 
         if ok:
-            disk_path = os.path.join(workspace_path, file_path)
-            os.makedirs(os.path.dirname(disk_path), exist_ok=True)
-            with open(disk_path, "w", encoding="utf-8") as fh:
-                fh.write(res["content"])
-            page_imports.append(
-                f'import {component} from "@/components/sections/{component}";'
-            )
-            page_renders.append(f"<{component} />")
+            written_rel = write_text_file(workspace_path, file_path, res["content"])
+            if written_rel:
+                files_written.append(written_rel)
+                page_imports.append(
+                    f'import {component} from "@/components/sections/{component}";'
+                )
+                page_renders.append(f"<{component} />")
+            else:
+                ok = False
+                logger.warning("section %s (%s): generated file rejected by safe writer", section.get("id"), section.get("type"))
         else:
             logger.warning("section %s (%s): codegen FAILED — skipping", section.get("id"), section.get("type"))
 
@@ -1943,6 +1948,7 @@ async def generate_landing_sections(
         "sections": sections_meta,
         "page_imports": page_imports,
         "page_renders": page_renders,
+        "files_written": files_written,
     }
 
 
@@ -2382,12 +2388,12 @@ async def generate_layout_components(
         if not res:
             logger.warning("layout %s: codegen FAILED — pipeline will fall back to deterministic stub", kind)
             continue
-        disk = os.path.join(workspace_path, res["path"])
-        os.makedirs(os.path.dirname(disk), exist_ok=True)
-        with open(disk, "w", encoding="utf-8") as fh:
-            fh.write(res["content"])
+        rel = write_text_file(workspace_path, res.get("path", ""), res.get("content", ""))
+        if not rel:
+            logger.warning("layout %s: skipped unsafe generated path %r", kind, res.get("path"))
+            continue
         out[kind] = True
-        logger.info("layout %s: wrote %s (%d bytes)", kind, disk, len(res["content"]))
+        logger.info("layout %s: wrote %s (%d bytes)", kind, rel, len(res["content"]))
 
     if websocket is not None:
         ok = sum(1 for v in out.values() if v)
@@ -2464,7 +2470,6 @@ def write_landing_page_shell(
     except OSError as _route_err:
         logger.warning("write_landing_page_shell: route-group cleanup failed (non-fatal): %s", _route_err)
 
-    target = os.path.join(app_dir, "page.jsx")
     imports_block = "\n".join(page_imports)
     renders_block = "\n      ".join(page_renders) if page_renders else "<div />"
     needs_top_pad = _header_is_fixed_top(header_anatomy)
@@ -2481,7 +2486,9 @@ export default function Page() {{
   );
 }}
 """
-    with open(target, "w", encoding="utf-8") as fh:
-        fh.write(src)
+    target_rel = write_text_file(workspace_path, "src/app/page.jsx", src)
+    if not target_rel:
+        raise RuntimeError("safe writer rejected src/app/page.jsx")
+    target = os.path.join(workspace_path, target_rel)
     logger.info("write_landing_page_shell: wrote %s with %d sections", target, len(page_renders))
     return target

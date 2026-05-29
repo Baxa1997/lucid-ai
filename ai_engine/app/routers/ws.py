@@ -6,6 +6,7 @@ import asyncio
 import os
 import uuid
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 
@@ -35,6 +36,7 @@ from app.services.local_preview import stop_local_preview
 from app.services.local_preview import start_local_preview
 from app.paths import preview_workspace_path
 from app.supabase_client import db_client
+from app.services.staging_sync import StagingSyncError, sync_workspace_to_staging
 from app.workspace_states import WorkspaceState, transition as ws_transition
 from app.services.workspace_resolver import resolve_workspace_path, ResolvePath
 from app.services.agent_orchestrator import (
@@ -46,6 +48,22 @@ from app.services.agent_orchestrator import (
 )
 
 router = APIRouter()
+
+
+def _insert_marker_preserving_lucid_project(marker: str, task: str) -> str:
+    """Attach an internal marker without hiding the wizard project header."""
+    marker = (marker or "").strip()
+    raw = task or ""
+    stripped = raw.lstrip()
+    leading = raw[: len(raw) - len(stripped)]
+    if marker and stripped.startswith("[LUCID_PROJECT]"):
+        if "\n\n" in stripped:
+            header, body = stripped.split("\n\n", 1)
+            return f"{leading}{header}\n\n{marker} {body}".strip()
+        return f"{leading}{stripped}\n\n{marker}".strip()
+    if marker:
+        return f"{marker} {raw}".strip()
+    return raw.strip()
 
 
 def _is_jwt_expired_error(exc: Exception) -> bool:
@@ -112,6 +130,47 @@ async def _validate_git_pat(token: str, repo_url: str) -> tuple[bool, str]:
         return True, ""
 
 
+def _provider_from_repo_url(repo_url: str, explicit: str = "") -> str:
+    """Return DB provider enum from an explicit provider or repo URL."""
+    provider = (explicit or "").strip().lower()
+    if provider in ("github", "gitlab"):
+        return provider.upper()
+    raw = (repo_url or "").lower()
+    host = urlparse(repo_url or "").netloc.lower()
+    if "github.com" in host or "github.com" in raw:
+        return "GITHUB"
+    if "gitlab" in host or "gitlab" in raw:
+        return "GITLAB"
+    return ""
+
+
+async def _resolve_git_token_from_integrations(
+    *,
+    repo_url: str,
+    repo_provider: str,
+    user_id: str,
+    user_jwt: str | None,
+) -> str:
+    """Resolve the user's encrypted GitHub/GitLab PAT server-side."""
+    provider = _provider_from_repo_url(repo_url, repo_provider)
+    if not provider:
+        return ""
+    try:
+        from app.services.vcs.tokens import get_integration
+        integration = await get_integration(
+            user_id=user_id,
+            provider=provider,
+            user_jwt=user_jwt,
+        )
+        token = (integration or {}).get("token") or ""
+        if token:
+            logger.info("Resolved %s git token from encrypted integrations (len=%d)", provider, len(token))
+        return token
+    except Exception as exc:
+        logger.warning("Failed to resolve %s token from integrations: %s", provider, exc)
+        return ""
+
+
 @router.websocket("/api/v1/ws")
 async def websocket_agent(websocket: WebSocket):
     """Real-time agent communication channel.
@@ -161,7 +220,7 @@ async def websocket_agent(websocket: WebSocket):
             return
 
         # String-type fields that must not be non-string values if present
-        _str_fields = ("task", "repoUrl", "branch", "gitToken", "projectId",
+        _str_fields = ("task", "repoUrl", "repoProvider", "branch", "gitToken", "projectId",
                        "modelProvider", "apiKey")
         for _field in _str_fields:
             if _field in raw and not isinstance(raw[_field], (str, type(None))):
@@ -265,8 +324,16 @@ async def websocket_agent(websocket: WebSocket):
             # Always update from the fresh handshake to fix stale sessions
             # that may have empty or wrong repo_url/git_token/branch.
             fresh_repo_url = raw.get("repoUrl", "")
+            fresh_repo_provider = raw.get("repoProvider", "")
             fresh_git_token = raw.get("gitToken", "")
             fresh_branch = raw.get("branch", "")
+            if not fresh_git_token and (fresh_repo_url or session.repo_url) and not session.git_token:
+                fresh_git_token = await _resolve_git_token_from_integrations(
+                    repo_url=fresh_repo_url or session.repo_url,
+                    repo_provider=fresh_repo_provider,
+                    user_id=user_id,
+                    user_jwt=user_jwt,
+                )
 
             if fresh_repo_url:
                 session.repo_url = fresh_repo_url
@@ -494,14 +561,22 @@ async def websocket_agent(websocket: WebSocket):
             # ── Create new session (no clone — workspace_manager handles it) ──
             try:
                 # Resolve git_token — frontend may send it, or extract from JWT
+                repo_url_raw = raw.get("repoUrl", "")
+                repo_provider = raw.get("repoProvider", "")
                 git_token = raw.get("gitToken", "")
+                if not git_token:
+                    git_token = await _resolve_git_token_from_integrations(
+                        repo_url=repo_url_raw,
+                        repo_provider=repo_provider,
+                        user_id=user_id,
+                        user_jwt=user_jwt,
+                    )
                 if not git_token and user_jwt:
                     # Extract git token from JWT user_metadata as fallback
                     try:
                         import jwt as pyjwt
                         decoded = pyjwt.decode(user_jwt, options={"verify_signature": False})
                         user_meta = decoded.get("user_metadata", {})
-                        repo_url_raw = raw.get("repoUrl", "")
                         if "github" in repo_url_raw.lower():
                             gh = user_meta.get("github_integration", {})
                             git_token = gh.get("token", "")
@@ -676,11 +751,12 @@ async def websocket_agent(websocket: WebSocket):
                     platform_repo_url = None
                     generation_complete = False
                     user_repo_url = None
+                    user_repo_provider = None
                     try:
                         async with managed_admin_client() as client:
                             flags_r = await (
                                 client.table("chat_sessions")
-                                .select("platform_repo_url, user_repo_url, generation_complete")
+                                .select("platform_repo_url, user_repo_url, user_repo_provider, generation_complete")
                                 .eq("id", prev_sid)
                                 .maybe_single()
                                 .execute()
@@ -688,6 +764,7 @@ async def websocket_agent(websocket: WebSocket):
                         if flags_r and flags_r.data:
                             platform_repo_url = flags_r.data.get("platform_repo_url")
                             user_repo_url = flags_r.data.get("user_repo_url")
+                            user_repo_provider = flags_r.data.get("user_repo_provider")
                             generation_complete = flags_r.data.get("generation_complete", False)
                     except Exception as _flags_err:
                         logger.debug(
@@ -710,6 +787,7 @@ async def websocket_agent(websocket: WebSocket):
                         "session_id":          prev_sid,
                         "platform_repo_url":   platform_repo_url,
                         "user_repo_url":       user_repo_url,
+                        "user_repo_provider":  user_repo_provider,
                         "generation_complete": generation_complete,
                         "messages":            prev_msgs.data or [],
                     }
@@ -1038,7 +1116,12 @@ async def websocket_agent(websocket: WebSocket):
                                 #   would 404 against a private user repo.
                                 _user_repo_only = bool(_user_repo) and not bool(_platform_repo)
                                 if _user_repo_only:
-                                    _gh_token = (session.git_token if session else "") or ""
+                                    _gh_token = (session.git_token if session else "") or await _resolve_git_token_from_integrations(
+                                        repo_url=_user_repo or "",
+                                        repo_provider=(_prev_session_data or {}).get("user_repo_provider") or "",
+                                        user_id=user_id,
+                                        user_jwt=user_jwt,
+                                    )
                                 else:
                                     _gh_token = (
                                         os.environ.get("PLATFORM_GITHUB_TOKEN", "")
@@ -1641,7 +1724,10 @@ async def websocket_agent(websocket: WebSocket):
                             # downstream classifier (and project_generator)
                             # skip their own classification step. Existing
                             # infra: knowledge.loader.force_archetype_from_task.
-                            task = f"{ARCHETYPE_LOCK_PREFIX}{_arch}] {task}"
+                            task = _insert_marker_preserving_lucid_project(
+                                f"{ARCHETYPE_LOCK_PREFIX}{_arch}]",
+                                task,
+                            )
                             logger.info(
                                 "[%s] classifier_agent resolved → archetype=%s "
                                 "followup=%s entities=%s reasoning=%r",
@@ -1926,7 +2012,10 @@ async def websocket_agent(websocket: WebSocket):
                             pass
                         continue
                     _marker = format_clarify_marker(_clarify_key, _option_id)
-                    _locked_task = f"{_marker} {_original}"
+                    _locked_task = _insert_marker_preserving_lucid_project(
+                        _marker,
+                        _original,
+                    )
                 else:
                     if _option_id not in LAYOUT_ARCHETYPES or not _original:
                         logger.warning(
@@ -1942,7 +2031,10 @@ async def websocket_agent(websocket: WebSocket):
                         except Exception:
                             pass
                         continue
-                    _locked_task = f"{ARCHETYPE_LOCK_PREFIX}{_option_id}] {_original}"
+                    _locked_task = _insert_marker_preserving_lucid_project(
+                        f"{ARCHETYPE_LOCK_PREFIX}{_option_id}]",
+                        _original,
+                    )
 
                 _option_label = data.get("option_label") or _option_id
                 if chat_session_id:
@@ -2001,6 +2093,91 @@ async def websocket_agent(websocket: WebSocket):
                     break
                 continue
 
+            if msg_type == "manual_edit":
+                patch = data.get("patch")
+                target = data.get("editable_target")
+                workspace_path = session.workspace_dir if session else ""
+                try:
+                    from app.services.manual_edit import apply_manual_content_edit
+
+                    result = apply_manual_content_edit(
+                        workspace_path=workspace_path,
+                        editable_target=target if isinstance(target, dict) else None,
+                        patch=patch if isinstance(patch, dict) else None,
+                    )
+                    if result.get("ok"):
+                        rel_path = result.get("rel_path") or ""
+                        target_path = ""
+                        if isinstance(patch, dict):
+                            target_path = str(patch.get("path") or "").strip()
+                        payload = {
+                            "type": "file_write_event",
+                            "filename": rel_path,
+                            "action": "edit",
+                            "phase": "manual_edit",
+                        }
+                        content_out = result.get("content")
+                        if isinstance(content_out, str):
+                            payload["content"] = content_out
+                            payload["size"] = len(content_out.encode("utf-8"))
+                        await websocket.send_json(payload)
+                        await websocket.send_json({
+                            "type": "progress",
+                            "message": result.get("message") or "Manual edit saved.",
+                        })
+                        try:
+                            await websocket.send_json({
+                                "type": "progress",
+                                "message": "Auto-pushing manual edit to staging...",
+                            })
+                            sync_result = await sync_workspace_to_staging(
+                                project_id=project_id,
+                                user_id=user_id,
+                                user_jwt=user_jwt,
+                                workspace_path=workspace_path,
+                                commit_message=(
+                                    f"Manual edit: {target_path}"
+                                    if target_path else
+                                    "Manual edit via Lucid AI"
+                                ),
+                            )
+                            await websocket.send_json({
+                                "type": "staging_push_result",
+                                "pushed": bool(sync_result.get("changed")),
+                                "branch": sync_result.get("branch") or "staging",
+                                "repoUrl": sync_result.get("repoUrl") or "",
+                                "filesPushed": sync_result.get("filesPushed") or 0,
+                                "message": sync_result.get("message") or "Staging is up to date.",
+                            })
+                        except StagingSyncError as sync_exc:
+                            logger.info(
+                                "manual_edit staging sync skipped (%s): %s",
+                                sync_exc.status_code,
+                                sync_exc.detail,
+                            )
+                            await websocket.send_json({
+                                "type": "warning",
+                                "code": "STAGING_SYNC_SKIPPED",
+                                "message": sync_exc.detail,
+                            })
+                    else:
+                        await websocket.send_json({
+                            "type": "warning",
+                            "code": "MANUAL_EDIT_UNSAVED",
+                            "message": result.get("message") or "Manual edit changed preview only.",
+                        })
+                except Exception as manual_exc:
+                    logger.warning("manual_edit failed: %s", manual_exc, exc_info=True)
+                    try:
+                        await websocket.send_json({
+                            "type": "warning",
+                            "code": "MANUAL_EDIT_FAILED",
+                            "message": f"Manual edit changed preview only: {str(manual_exc)[:120]}",
+                        })
+                    except Exception:
+                        pass
+                continue
+
             if not content and not followup_images:
                 # Skip truly empty messages (no text AND no images)
                 continue
@@ -2050,27 +2227,33 @@ async def websocket_agent(websocket: WebSocket):
             # Detect intent: "scan for bugs", "fix the bugs", "run quality check", etc.
             # Also detects pasted error traces (webpack errors, module-not-found, etc.)
             _content_lower = content.lower().strip()
+            _has_visual_edit_context = bool(followup_images) or bool(followup_editable_target)
             _is_scan_intent = any(kw in _content_lower for kw in (
                 "scan for bugs", "scan my code", "find bugs", "check for bugs",
                 "run quality", "quality check", "code review", "audit the code",
                 "check code quality",
             ))
-            _is_fix_intent = any(kw in _content_lower for kw in (
-                "fix the bugs", "fix the issues", "fix bugs", "apply the fixes",
-                "auto fix", "auto-fix", "fix all bugs", "fix the errors",
-                "fix this", "fix it", "fix the error",
-            ))
+            _is_fix_intent = (
+                not _has_visual_edit_context
+                and any(kw in _content_lower for kw in (
+                    "fix the bugs", "fix the issues", "fix bugs", "apply the fixes",
+                    "auto fix", "auto-fix", "fix all bugs", "fix the errors",
+                    "fix the error", "fix this error", "fix the issue",
+                    "fix this issue",
+                ))
+            )
             # Detect pasted error traces: if the message looks like a build/runtime
             # error (contains Error:, at line, Cannot find module, etc.) treat it
             # as a fix request automatically — no keyword needed.
             _looks_like_error = (
                 not _is_fix_intent
+                and not _has_visual_edit_context
                 and session.workspace_dir
-                and any(sig in content for sig in (
-                    "Error:", "error TS", "Module not found", "Cannot find module",
-                    "SyntaxError", "TypeError", "ReferenceError", "Failed to compile",
-                    "webpack error", "Build failed", "ENOENT", "Unhandled error",
-                    "Uncaught ", "at Object.", "at Module.",
+                and any(sig in _content_lower for sig in (
+                    "error:", "error ts", "module not found", "cannot find module",
+                    "syntaxerror", "typeerror", "referenceerror", "failed to compile",
+                    "webpack error", "build failed", "enoent", "unhandled error",
+                    "uncaught ", "at object.", "at module.",
                 ))
             )
             if _looks_like_error:
@@ -2079,31 +2262,100 @@ async def websocket_agent(websocket: WebSocket):
             if (_is_scan_intent or _is_fix_intent) and session.workspace_dir and api_key:
                 workspace_path = session.workspace_dir
                 _do_fix = _is_fix_intent
+                _ws_out = session.ws_proxy if session and session.ws_proxy is not None else websocket
                 try:
                     from app.services.auto_bug_fixer import scan_and_report_bugs
-                    await websocket.send_json({
+                    _intro = (
+                        "🔧 **Running bug scan and applying fixes…**"
+                        if _do_fix
+                        else "🔍 **Running code quality scan…**"
+                    )
+                    if chat_session_id:
+                        try:
+                            await ChatService.add_message(
+                                session_id=chat_session_id,
+                                role="user",
+                                content=content,
+                                event_type="UserTask",
+                                user_jwt=user_jwt,
+                            )
+                        except Exception as exc:
+                            logger.warning("Failed to persist bug-scan request: %s", exc)
+                    await _ws_out.send_json({
                         "type": "chat_message",
                         "role": "agent",
-                        "content": (
-                            "🔧 **Running bug scan and applying fixes…**"
-                            if _do_fix
-                            else "🔍 **Running code quality scan…**"
-                        ),
+                        "content": _intro,
                     })
                     await scan_and_report_bugs(
                         workspace_path=workspace_path,
                         api_key=api_key,
-                        websocket=websocket,
+                        websocket=_ws_out,
                         auto_fix=_do_fix,
                     )
                 except Exception as _scan_exc:
                     logger.warning("On-demand bug scan failed: %s", _scan_exc)
-                    await websocket.send_json({
+                    await _ws_out.send_json({
                         "type": "chat_message",
                         "role": "agent",
                         "content": f"⚠️ Bug scan failed: {str(_scan_exc)[:120]}",
                     })
                 continue
+
+            # ── Follow-up intent guard ─────────────────────────────
+            # Existing-workspace chat is not the same as new-project intake:
+            # users can ask questions, greet the agent, or type vague edits.
+            # Catch the obvious non-actionable cases before running the full
+            # edit pipeline. Real edits still pass through to Gemini/Claude.
+            try:
+                from app.services.followup_intent import classify_followup_message
+
+                _followup_guard = classify_followup_message(
+                    content,
+                    mode=chat_mode,
+                    has_images=bool(followup_images),
+                    editable_target=followup_editable_target,
+                )
+            except Exception as _guard_exc:
+                logger.warning("followup_intent guard failed: %s — proceeding", _guard_exc)
+                _followup_guard = {"action": "proceed"}
+
+            _guard_action = _followup_guard.get("action", "proceed")
+            if _guard_action in ("reply", "clarify"):
+                _guard_message = (
+                    _followup_guard.get("message")
+                    or "What would you like to change or ask about this project?"
+                )
+                if chat_session_id:
+                    try:
+                        await ChatService.add_message(
+                            session_id=chat_session_id, role="user",
+                            content=content, event_type="UserTask",
+                            user_jwt=user_jwt,
+                        )
+                        await ChatService.add_message(
+                            session_id=chat_session_id, role="agent",
+                            content=_guard_message,
+                            event_type=(
+                                "ClarificationNeeded"
+                                if _guard_action == "clarify"
+                                else "AgentResponse"
+                            ),
+                            user_jwt=user_jwt,
+                        )
+                    except Exception as exc:
+                        logger.warning("Failed to persist follow-up guard message: %s", exc)
+                try:
+                    await websocket.send_json({
+                        "type": "chat_message",
+                        "role": "agent",
+                        "content": _guard_message,
+                    })
+                except Exception:
+                    pass
+                continue
+
+            if _guard_action == "discuss":
+                chat_mode = "discuss"
 
             logger.info("[%s] Follow-up: %s", session.session_id, content[:80])
 

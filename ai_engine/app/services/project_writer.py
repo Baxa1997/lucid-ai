@@ -271,6 +271,164 @@ def _inject_img_onerror(content: str) -> str:
 
 # ── Write path ───────────────────────────────────────────────────────────
 
+def safe_workspace_file(
+    workspace_path: str,
+    rel_path: str,
+    *,
+    protect: bool = True,
+) -> tuple[str, str] | None:
+    """Return ``(normalized_rel_path, abs_path)`` if the target is writable.
+
+    This is the shared path gate for all generation pipelines. It allows
+    harmless leading slashes from LLM output by treating them as workspace
+    relative, but rejects traversal, protected skeleton files, symlink escapes,
+    and writes outside the workspace root.
+    """
+    if not isinstance(rel_path, str):
+        return None
+    raw = rel_path.strip().replace("\\", "/")
+    if not raw or "\x00" in raw:
+        return None
+
+    rel = raw.lstrip("/")
+    if rel.startswith("./"):
+        rel = rel[2:]
+    rel = os.path.normpath(rel).replace("\\", "/")
+    if rel in ("", "."):
+        return None
+    parts = rel.split("/")
+    if any(part in ("", "..") for part in parts):
+        return None
+
+    if protect:
+        basename = os.path.basename(rel)
+        if basename in PROTECTED_FILES:
+            return None
+        first_dir = parts[0] if parts else ""
+        if first_dir in PROTECTED_DIRS:
+            return None
+        norm = rel[2:] if rel.startswith("./") else rel
+        if norm.startswith(PROTECTED_UI_DIR + "/") or norm == PROTECTED_UI_DIR:
+            return None
+
+    try:
+        workspace_real = os.path.realpath(workspace_path)
+    except OSError:
+        return None
+
+    abs_path = os.path.realpath(os.path.join(workspace_real, rel))
+    if abs_path != workspace_real and not abs_path.startswith(workspace_real + os.sep):
+        return None
+    if os.path.islink(abs_path):
+        return None
+
+    parent_dir = os.path.dirname(abs_path)
+    try:
+        parent_real = os.path.realpath(parent_dir)
+    except OSError:
+        return None
+    if parent_real != workspace_real and not parent_real.startswith(workspace_real + os.sep):
+        return None
+
+    return rel, abs_path
+
+
+def write_text_file(
+    workspace_path: str,
+    rel_path: str,
+    content: object,
+    *,
+    protect: bool = True,
+    atomic: bool = True,
+    inject_img_fallback: bool = True,
+    sanity_check: bool = True,
+) -> str | None:
+    """Safely write one generated text file and return its relative path."""
+    safe_path = safe_workspace_file(workspace_path, rel_path, protect=protect)
+    if not safe_path:
+        logger.warning("Skipping unsafe or protected path: %s", rel_path)
+        return None
+    rel, abs_path = safe_path
+
+    if not isinstance(content, str):
+        if isinstance(content, (dict, list)):
+            try:
+                content = json.dumps(content, indent=2, ensure_ascii=False)
+            except (TypeError, ValueError):
+                logger.warning("Unserializable non-string content for %s", rel)
+                return None
+        elif content is None:
+            return None
+        else:
+            content = str(content)
+
+    if not content:
+        return None
+
+    if inject_img_fallback and rel.lower().endswith((".jsx", ".tsx", ".js", ".ts")):
+        content = _inject_img_onerror(content)
+
+    if sanity_check:
+        sanity_err = structural_sanity_check(content, rel)
+        if sanity_err:
+            logger.warning(
+                "Skipping %s - failed structural sanity (%s)",
+                rel, sanity_err,
+            )
+            return None
+
+    try:
+        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+        if not atomic:
+            with open(abs_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            return rel
+
+        tmp_path = abs_path + ".lucid.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp_path, abs_path)
+        return rel
+    except Exception as exc:
+        try:
+            tmp_path = abs_path + ".lucid.tmp"
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
+        logger.error("Failed to write %s: %s", rel, exc)
+        return None
+
+
+def write_file_entries(
+    workspace_path: str,
+    files: list[dict],
+    *,
+    protect: bool = True,
+    atomic: bool = True,
+) -> list[str]:
+    """Safely write a list of ``{"path": ..., "content": ...}`` entries."""
+    written: list[str] = []
+    if not isinstance(files, list):
+        logger.warning(
+            "write_file_entries: files is %s not a list, skipping",
+            type(files).__name__,
+        )
+        return written
+    for entry in files:
+        if not isinstance(entry, dict):
+            continue
+        rel = write_text_file(
+            workspace_path,
+            entry.get("path", ""),
+            entry.get("content", ""),
+            protect=protect,
+            atomic=atomic,
+        )
+        if rel:
+            written.append(rel)
+    return written
+
 def write_files_from_json(
     json_response: dict,
     workspace_path: str,
@@ -308,132 +466,7 @@ def write_files_from_json(
         )
         return []
 
-    # Resolve workspace root once — all target paths must resolve under here
-    try:
-        workspace_real = os.path.realpath(workspace_path)
-    except OSError as exc:
-        logger.error(
-            "write_files_from_json: cannot resolve workspace %s: %s",
-            workspace_path, exc,
-        )
-        return []
-
-    written: list[str] = []
-
-    for entry in files:
-        if not isinstance(entry, dict):
-            continue
-        rel_path = entry.get("path", "")
-        if not isinstance(rel_path, str):
-            continue
-        rel_path = rel_path.strip()
-
-        content = entry.get("content", "")
-        # Claude almost always returns content as a string, but occasionally
-        # emits a dict/list (e.g. JSON-object content for config files) or a
-        # number. Coerce to a string rather than crashing .write(content).
-        if not isinstance(content, str):
-            if isinstance(content, (dict, list)):
-                try:
-                    content = json.dumps(content, indent=2, ensure_ascii=False)
-                except (TypeError, ValueError):
-                    logger.warning(
-                        "Unserializable non-string content for %s — skipping",
-                        rel_path,
-                    )
-                    continue
-            elif content is None:
-                continue
-            else:
-                content = str(content)
-
-        if not rel_path or not content:
-            continue
-
-        # Security: prevent path traversal
-        if ".." in rel_path or rel_path.startswith("/"):
-            logger.warning("Skipping suspicious path: %s", rel_path)
-            continue
-
-        # Check protection
-        basename = os.path.basename(rel_path)
-        if basename in PROTECTED_FILES:
-            logger.info("Skipping protected file: %s", rel_path)
-            continue
-
-        # Check if path starts with a protected directory
-        first_dir = rel_path.split("/")[0] if "/" in rel_path else ""
-        if first_dir in PROTECTED_DIRS:
-            logger.info("Skipping file in protected dir: %s", rel_path)
-            continue
-
-        # Protect pre-built shadcn/ui components — never let Claude overwrite them
-        norm = rel_path.replace("\\", "/")
-        if norm.startswith("./"):
-            norm = norm[2:]
-        if norm.startswith(PROTECTED_UI_DIR + "/") or norm == PROTECTED_UI_DIR:
-            logger.info("Skipping protected UI component: %s", rel_path)
-            continue
-
-        abs_path = os.path.join(workspace_path, rel_path)
-        parent_dir = os.path.dirname(abs_path)
-
-        # Symlink escape check: the file's parent (after symlink resolution)
-        # must be under the workspace root. Also refuse to write through an
-        # existing symlink at the target path itself.
-        try:
-            parent_real = os.path.realpath(parent_dir)
-        except OSError as exc:
-            logger.warning("Cannot resolve parent dir for %s: %s", rel_path, exc)
-            continue
-        if not (parent_real == workspace_real or parent_real.startswith(workspace_real + os.sep)):
-            logger.warning(
-                "Skipping path that resolves outside workspace: %s → %s",
-                rel_path, parent_real,
-            )
-            continue
-        if os.path.islink(abs_path):
-            logger.warning(
-                "Skipping target that is an existing symlink (possible escape): %s",
-                rel_path,
-            )
-            continue
-
-        # Universal <img onError> fallback. Runs before sanity check so any
-        # syntax we accidentally introduce gets caught here, not at build time.
-        if rel_path.lower().endswith((".jsx", ".tsx", ".js", ".ts")):
-            content = _inject_img_onerror(content)
-
-        # Pre-write structural sanity check — catches merge-conflict markers,
-        # truncation placeholders, and unbalanced braces in JS-like files
-        # before they reach the workspace.
-        sanity_err = structural_sanity_check(content, rel_path)
-        if sanity_err:
-            logger.warning(
-                "Skipping %s — failed structural sanity (%s). "
-                "The build validator would have caught this; rejecting now "
-                "keeps the workspace clean for the next phase to regenerate.",
-                rel_path, sanity_err,
-            )
-            continue
-
-        # Atomic write: staged file → os.replace → target
-        tmp_path = abs_path + ".lucid.tmp"
-        try:
-            os.makedirs(parent_dir, exist_ok=True)
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                f.write(content)
-            os.replace(tmp_path, abs_path)  # atomic on POSIX within same fs
-            written.append(rel_path)
-        except Exception as exc:
-            # Clean up the staged file; the real target is untouched because
-            # os.replace either succeeded or never ran.
-            try:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            except OSError:
-                pass
-            logger.error("Failed to write %s: %s", rel_path, exc)
+    written = write_file_entries(workspace_path, files, protect=True, atomic=True)
 
     logger.info("Wrote %d / %d files to %s", len(written), len(files), workspace_path)
     return written

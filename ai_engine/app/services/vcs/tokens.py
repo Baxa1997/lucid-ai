@@ -212,15 +212,21 @@ async def list_integrations(
         logger.error("Unexpected error in list_integrations: %s", exc)
         raise HTTPException(status_code=500, detail="Internal server error") from exc
 
-    return [
-        {
+    out: list[dict] = []
+    for r in rows:
+        raw_scopes = r.get("scopes") or ""
+        scopes = raw_scopes
+        gitlab_url = "https://gitlab.com"
+        if _GITLAB_URL_SEPARATOR in raw_scopes:
+            scopes, gitlab_url = raw_scopes.split(_GITLAB_URL_SEPARATOR, 1)
+        out.append({
             "id": r["id"],
             "provider": r["provider"].lower(),
             "label": r.get("label"),
             "externalUsername": r.get("external_username"),
-            "scopes": r.get("scopes"),
+            "scopes": scopes,
+            "gitlabUrl": gitlab_url if r.get("provider") == "GITLAB" else None,
             "createdAt": r.get("created_at"),
             "connected": True,
-        }
-        for r in rows
-    ]
+        })
+    return out

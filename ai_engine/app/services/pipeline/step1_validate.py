@@ -75,6 +75,28 @@ def _looks_like_garbage(raw: str) -> str:
             "• 'fitness coach portfolio with booking form'\n"
             "• 'B2B logistics admin dashboard'"
         )
+    # Bare project-type inputs ("landing page", "a website", "modern landing
+    # page") pass the token-count check (2+ tokens) but carry NO field signal.
+    # We must ask what it's FOR before building — a landing page for a coffee
+    # shop looks nothing like one for a SaaS product. Mirrors the
+    # deterministic check in clarity_agent.is_bare_project_type; kept in sync
+    # so both gates agree.
+    try:
+        from app.services.clarity_agent import is_bare_project_type, _detected_type_label
+        if is_bare_project_type(text):
+            label = _detected_type_label(text)
+            return (
+                f"Got it — what's this {label} for? "
+                "Tell me about the business, product, or person.\n\n"
+                "A couple of examples:\n"
+                "• 'modern coffee shop landing page'\n"
+                "• 'fitness coach portfolio with booking form'\n"
+                "• 'B2B logistics admin dashboard'"
+            )
+    except Exception:
+        # Fail-open: if the import or check ever breaks, behave as before.
+        # clarity_agent (called earlier in ws.py) is still the primary gate.
+        pass
     return ""
 
 

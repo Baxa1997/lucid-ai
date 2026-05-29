@@ -56,8 +56,8 @@ __all__ = [
     "upsert_integration", "get_integration", "delete_integration", "list_integrations",
     # github
     "is_fine_grained_token", "_derive_html_url", "_sanitize_repo_name",
-    "derive_repo_name", "github_get_user", "github_list_repos", "github_create_pr",
+    "derive_repo_name", "github_get_user", "github_list_repos", "github_list_branches", "github_create_pr",
     "_create_github_repo", "create_github_repo",
     # gitlab
-    "gitlab_get_user", "gitlab_list_repos", "gitlab_create_mr",
+    "gitlab_get_user", "gitlab_list_repos", "gitlab_list_branches", "gitlab_create_mr",
 ]

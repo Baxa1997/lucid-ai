@@ -35,6 +35,15 @@ pending_plan_confirmations: dict[str, asyncio.Future] = {}
 
 PLAN_CONFIRM_TIMEOUT_SECONDS = 1800  # 30 minutes — abort if user doesn't confirm
 
+
+def _env_flag_enabled(name: str, *, default: bool = False) -> bool:
+    """Read a boolean env flag with explicit opt-out support."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
 # ── Persisted plan store ─────────────────────────────────────
 # Keyed by chat_session_id, holds the most recent emitted plan envelope so
 # the ws.py reconnect path can re-emit it when the user's tab refreshes
@@ -7606,14 +7615,13 @@ async def _generate_new_project_inner(
         )
         return ok
 
-    # ── Website pipeline v2 — feature-flagged ──────────────────────
+    # ── Website pipeline v2 ────────────────────────────────────────
     # Per-page parallel Claude calls with visual_dna-driven design.
-    # Gated by env var so we can roll out without breaking existing
-    # consumer_website flow. Set WEBSITE_PIPELINE_V2_ENABLED=true to enable.
-    # Currently scoped to consumer_website only; admin layouts still use
-    # the legacy 3-phase flow since their Sidebar isn't yet deterministic.
+    # Default ON so multi-page sites use the separated config/content/
+    # page-generation path. Set WEBSITE_PIPELINE_V2_ENABLED=0 to force
+    # the legacy 3-phase flow while debugging.
     if (
-        os.environ.get("WEBSITE_PIPELINE_V2_ENABLED", "").lower() in ("1", "true", "yes")
+        _env_flag_enabled("WEBSITE_PIPELINE_V2_ENABLED", default=True)
         and _layout_archetype in {"consumer_website", "portfolio", "blog", "marketplace"}
     ):
         from app.services.website_pipeline import run_website_pipeline

@@ -23,6 +23,141 @@ logger = logging.getLogger(__name__)
 
 _MAX_ROUNDS = 5
 
+# ── Deterministic bare-project-type guard ──────────────────────────────
+# Gemini's clarity check sometimes mis-classifies inputs like "landing page",
+# "dashboard", "build me a website" as CLEAR — but they are missing the
+# field/domain (a landing page for a coffee shop looks nothing like one for
+# a SaaS tool). We MUST ask what the project is FOR before generating.
+# This deterministic pre-check runs BEFORE the Gemini call so the behavior
+# is stable across model drift and prompt variants. Mirrored in
+# step1_validate._looks_like_garbage so a second line of defense exists if
+# clarity_agent is ever bypassed.
+
+_TYPE_WORDS = {
+    "landing", "page", "pages", "website", "websites", "site", "sites",
+    "homepage", "webpage", "web",
+    "app", "apps", "application", "applications",
+    "dashboard", "dashboards", "admin", "panel", "panels",
+    "portal", "platform",
+    "portfolio", "portfolios",
+    "blog", "blogs",
+    "store", "shop", "ecommerce",
+}
+
+_FILLERS = {
+    # Articles, pronouns, auxiliaries
+    "a", "an", "the", "i", "me", "my", "mine", "we", "us", "our",
+    "you", "your", "yours", "they", "them", "their", "he", "she", "it", "its",
+    "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did",
+    "can", "could", "would", "should", "will", "shall", "may", "might", "must",
+    # Verbs of creation
+    "make", "makes", "made", "build", "builds", "built", "building",
+    "create", "creates", "created", "creating",
+    "develop", "develops", "developed", "developing",
+    "design", "designs", "designed", "designing",
+    "want", "wants", "wanted", "need", "needs", "needed",
+    "give", "gives", "gave", "get", "gets", "got",
+    # Prepositions, conjunctions
+    "for", "with", "without", "and", "or", "but", "so", "yet",
+    "of", "to", "from", "in", "on", "at", "by", "about", "as",
+    # Generic style adjectives (don't convey a field)
+    "modern", "simple", "clean", "minimal", "minimalist", "responsive",
+    "fast", "beautiful", "professional", "premium", "stylish", "fresh",
+    "sleek", "elegant", "creative", "fancy", "bold", "nice", "good",
+    "cool", "great", "best", "awesome", "amazing", "new", "old",
+    # Generic colors (don't convey a field)
+    "blue", "red", "green", "dark", "light", "black", "white", "yellow",
+    "orange", "purple", "pink", "gray", "grey", "brown", "gold", "silver",
+    # Size
+    "small", "large", "big", "tiny", "huge",
+    # Politeness, placeholders
+    "please", "thanks", "thank", "kindly",
+    "something", "anything", "everything", "stuff", "thing", "things",
+    "some", "any", "all", "very", "really", "quite", "pretty",
+    "just", "only", "even", "also", "too", "still",
+    # Channels — too generic on their own to identify a field
+    "online", "mobile", "desktop",
+}
+
+
+def _has_field_context(text: str) -> bool:
+    """Return True if text contains a substantive word that could identify a field.
+
+    A substantive word is any token ≥3 chars that is not a project-type word
+    and not a generic filler/style/color word. E.g. 'coffee', 'restaurant',
+    'fitness', 'crm', 'todo', 'bakery' all qualify; 'modern', 'a', 'the' don't.
+    """
+    tokens = re.findall(r"[a-z]+", (text or "").lower())
+    for t in tokens:
+        if len(t) < 3:
+            continue
+        if t in _TYPE_WORDS:
+            continue
+        if t in _FILLERS:
+            continue
+        return True
+    return False
+
+
+def _detected_type_label(text: str) -> str:
+    """Pick a friendly natural-language label for the detected project type."""
+    t = (text or "").lower()
+    if "landing" in t or "homepage" in t:
+        return "landing page"
+    if "dashboard" in t or "admin" in t or "panel" in t or "portal" in t:
+        return "dashboard"
+    if "portfolio" in t:
+        return "portfolio"
+    if "blog" in t:
+        return "blog"
+    if "store" in t or "shop" in t or "ecommerce" in t:
+        return "store"
+    if "app" in t or "application" in t:
+        return "app"
+    return "site"
+
+
+def is_bare_project_type(text: str) -> bool:
+    """True if the text mentions a project type word but lacks any field/domain context.
+
+    Examples that return True (need clarification):
+      'landing page', 'a website', 'build me a site', 'modern landing page',
+      'dashboard', 'portfolio', 'blue landing page', 'I want an app'
+    Examples that return False (field is present, OK to proceed):
+      'coffee shop landing page', 'CRM dashboard', 'todo app',
+      'fitness coach portfolio', 'restaurant website', 'blog about plants'
+    """
+    if not text:
+        return False
+    tokens = set(re.findall(r"[a-z]+", text.lower()))
+    if not tokens & _TYPE_WORDS:
+        return False
+    return not _has_field_context(text)
+
+
+def _bare_type_clarification(text: str) -> dict:
+    """Build the standard 'what's this for?' clarify question for a bare type."""
+    label = _detected_type_label(text)
+    return {
+        "key": "field",
+        "text": f"Got it — what's this {label} for? Tell me about the business, product, or person.",
+        "options": [],
+    }
+
+
+def _strip_lucid_project_header(text: str) -> str:
+    """Return the user-facing prompt from a [LUCID_PROJECT] task envelope."""
+    raw = (text or "").strip()
+    if not raw.startswith("[LUCID_PROJECT]"):
+        return raw
+    if "\n\n" in raw:
+        tail = raw.split("\n\n", 1)[1].strip()
+        if tail:
+            return tail
+    m = re.search(r"description=([^|]+)", raw)
+    return m.group(1).strip() if m else raw
+
 _SYSTEM_PROMPT = """\
 You are a smart project intake agent for an AI web design platform. Talk like a sharp designer scoping a project: ask dynamic, specific questions — ONE per round — to genuinely understand what the user wants, before generation starts.
 
@@ -109,10 +244,24 @@ async def check_prompt_clarity(
     # Strip internal markers before showing to Gemini
     _, clean_task = force_archetype_from_task(task)
     _, clean_task = extract_clarify_context(clean_task)
-    clean_task = clean_task.strip()
+    clean_task = _strip_lucid_project_header(clean_task)
 
     if not clean_task:
         return None
+
+    # ── Deterministic pre-check ────────────────────────────────────────
+    # If the task is a bare project type ("landing page", "a website",
+    # "dashboard", "build me a site"), short-circuit and force a field
+    # clarification. This guarantees stable behavior — we never reach the
+    # Gemini call for inputs that empirically slip through (a 2025-05
+    # regression where "landing page" alone was being marked clear).
+    if "field" not in already_clarified and is_bare_project_type(clean_task):
+        q = _bare_type_clarification(clean_task)
+        logger.info(
+            "clarity_agent: bare project type %r — asking %r (deterministic)",
+            clean_task[:60], q["key"],
+        )
+        return q
 
     prompt = _SYSTEM_PROMPT.format(
         rounds_used=rounds_used,
@@ -169,6 +318,19 @@ async def check_prompt_clarity(
         if not isinstance(result, dict):
             return None
         if result.get("clear"):
+            # Safety net: even if Gemini says clear, override when the prompt
+            # is still a bare project type (the pre-check above should have
+            # caught this, but the model occasionally edits the task in ways
+            # the heuristic doesn't see).
+            if (
+                "field" not in already_clarified
+                and is_bare_project_type(clean_task)
+            ):
+                logger.info(
+                    "clarity_agent: Gemini returned clear=True but %r is bare — overriding",
+                    clean_task[:60],
+                )
+                return _bare_type_clarification(clean_task)
             return None
         q = result.get("question")
         if not isinstance(q, dict):

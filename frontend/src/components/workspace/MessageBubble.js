@@ -235,6 +235,10 @@ function PlanBubble({ msg }) {
   const pagesNested  = planData.pages_nested || [];
   const entities     = planData.entities || [];
   const description  = planData.description || '';
+  const planSummary  = Array.isArray(planData.planSummary) ? planData.planSummary : [];
+  const research     = planData.research || null;
+  const buildSteps   = Array.isArray(planData.buildSteps) ? planData.buildSteps : [];
+  const assumptions  = Array.isArray(planData.assumptions) ? planData.assumptions : [];
   // legacy fallbacks
   const legacyFeatures   = planData.features    || [];
   const legacyComponents = planData.components  || [];
@@ -294,6 +298,21 @@ function PlanBubble({ msg }) {
               <div>
                 <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1.5">About</p>
                 <PlanDescription text={description} />
+              </div>
+            )}
+
+            {planSummary.length > 0 && (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {planSummary.slice(0, 3).map((item, i) => (
+                  <div key={i} className="rounded-lg border border-slate-100 dark:border-[#2d333b] bg-slate-50/70 dark:bg-[#161b22] px-3 py-2">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                      {item.label}
+                    </p>
+                    <p className="mt-0.5 text-[12.5px] font-semibold text-slate-700 dark:text-slate-200 leading-snug">
+                      {item.value}
+                    </p>
+                  </div>
+                ))}
               </div>
             )}
 
@@ -400,6 +419,47 @@ function PlanBubble({ msg }) {
               <div className="pt-1 border-t border-slate-50 dark:border-[#2d333b]">
                 <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1">Design</p>
                 <p className="text-[13px] text-slate-500 dark:text-slate-400">{planData.design}</p>
+              </div>
+            )}
+
+            {research && (
+              <div className="pt-1 border-t border-slate-50 dark:border-[#2d333b]">
+                <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1">Research</p>
+                <p className="text-[13px] text-slate-500 dark:text-slate-400">
+                  {research.confidence || 'Checked'} confidence
+                  {Number.isFinite(Number(research.sources)) ? ` · ${research.sources} sources` : ''}
+                </p>
+                {(research.notes || []).length > 0 && (
+                  <div className="mt-1 space-y-0.5">
+                    {(research.notes || []).slice(0, 2).map((note, i) => (
+                      <p key={i} className="text-[12px] text-slate-400 dark:text-slate-500">• {note}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {buildSteps.length > 0 && (
+              <div className="pt-1 border-t border-slate-50 dark:border-[#2d333b]">
+                <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1">Build Approach</p>
+                <div className="space-y-1">
+                  {buildSteps.slice(0, 3).map((step, i) => (
+                    <p key={i} className="text-[12.5px] text-slate-500 dark:text-slate-400 leading-snug">
+                      <span className="font-semibold text-slate-600 dark:text-slate-300">{i + 1}.</span> {step}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {assumptions.length > 0 && (
+              <div className="pt-1 border-t border-slate-50 dark:border-[#2d333b]">
+                <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-1">Assumptions</p>
+                <div className="space-y-0.5">
+                  {assumptions.slice(0, 2).map((item, i) => (
+                    <p key={i} className="text-[12px] text-slate-500 dark:text-slate-400 leading-snug">• {item}</p>
+                  ))}
+                </div>
               </div>
             )}
           </div>

@@ -36,6 +36,10 @@ import os
 import re
 from typing import Any
 
+from app.services.generation_build import run_generation_build_check
+from app.services.generation_contract import GenerationResult
+from app.services.project_writer import write_file_entries, write_text_file
+
 logger = logging.getLogger(__name__)
 
 
@@ -129,7 +133,7 @@ def _build_editable_component() -> str:
 # against this constant and rewrites the listener when older. Keeps
 # already-generated projects in sync with new features (fuzzy
 # fallback, hover affordances, etc.).
-_EDIT_MODE_LISTENER_VERSION = 3
+_EDIT_MODE_LISTENER_VERSION = 4
 
 _EDIT_MODE_LISTENER_JSX = r'''"use client";
 /* AUTO-GENERATED — Lucid click-to-edit listener. Do not edit by hand.
@@ -150,7 +154,7 @@ _EDIT_MODE_LISTENER_JSX = r'''"use client";
  *                                in the iframe (border stays) until
  *                                the parent sends lucid_clear_selection
  *                                or the user picks a different element.
- *     { type, rect, tag, text, path, editableType, fuzzy, className, src }
+ *     { type, rect, tag, text, path, editableType, fuzzy, className, src, alt, href, route }
  *
  *   lucid_selection_rect_update — selection bounds changed because the
  *                                 user scrolled or the viewport resized
@@ -166,6 +170,10 @@ _EDIT_MODE_LISTENER_JSX = r'''"use client";
  *
  *   lucid_clear_selection      — clear the persistent selection
  *     { type }
+ *
+ *   lucid_apply_manual_edit    — apply a no-LLM preview edit to the
+ *                                currently selected element
+ *     { type, patch: { kind, text, src, alt, href } }
  *
  * Selection works in two tiers:
  *   1. Element (or ancestor) has data-editable-path → high-confidence
@@ -230,6 +238,10 @@ function _lucidBuildSelectedPayload(el) {
   const editablePath = el.getAttribute && el.getAttribute("data-editable-path");
   const tagLower = (el.tagName || "").toLowerCase();
   const text = (el.textContent || "").trim().slice(0, 200);
+  const src = (el.getAttribute && el.getAttribute("src")) || "";
+  const alt = (el.getAttribute && el.getAttribute("alt")) || "";
+  const href = (el.getAttribute && el.getAttribute("href")) || "";
+  const route = window.location && window.location.pathname ? window.location.pathname : "/";
 
   // Preferred — Editable-wrapped element with a known content path.
   if (editablePath) {
@@ -241,12 +253,15 @@ function _lucidBuildSelectedPayload(el) {
       path: editablePath,
       editableType: el.getAttribute("data-editable-type") || "text",
       fuzzy: false,
+      src,
+      alt,
+      href,
+      route,
     };
   }
 
   // Fuzzy fallback — identify by tag + visible text + className + src.
   const className = (el.getAttribute && el.getAttribute("class")) || "";
-  const src = (el.getAttribute && el.getAttribute("src")) || "";
   let displayPath;
   if (tagLower === "img") {
     displayPath = src ? `img:${src.split("/").pop()}` : "img";
@@ -265,7 +280,48 @@ function _lucidBuildSelectedPayload(el) {
     fuzzy: true,
     className: className.slice(0, 240),
     src,
+    alt,
+    href,
+    route,
   };
+}
+
+function _lucidApplyManualPatch(el, patch) {
+  if (!el || !patch || typeof patch !== "object") return false;
+  const kind = (patch.kind || "").toString().toLowerCase();
+  const setText = (value) => {
+    el.textContent = value == null ? "" : String(value);
+  };
+
+  if (kind === "image") {
+    if (el.setAttribute && typeof patch.src === "string" && patch.src.trim()) {
+      el.setAttribute("src", patch.src.trim());
+    }
+    if (el.setAttribute && Object.prototype.hasOwnProperty.call(patch, "alt")) {
+      el.setAttribute("alt", patch.alt == null ? "" : String(patch.alt));
+    }
+    return true;
+  }
+
+  if (kind === "link") {
+    if (Object.prototype.hasOwnProperty.call(patch, "text")) {
+      setText(patch.text);
+    }
+    if (el.setAttribute && typeof patch.href === "string" && patch.href.trim()) {
+      el.setAttribute("href", patch.href.trim());
+    }
+    return true;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, "text")) {
+    setText(patch.text);
+    return true;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "value")) {
+    setText(patch.value);
+    return true;
+  }
+  return false;
 }
 
 export default function EditModeListener() {
@@ -297,6 +353,12 @@ export default function EditModeListener() {
         if (selectedRef.current) {
           selectedRef.current.classList.remove("lucid-edit-selected");
           selectedRef.current = null;
+        }
+      } else if (data.type === "lucid_apply_manual_edit") {
+        if (!selectedRef.current) return;
+        const changed = _lucidApplyManualPatch(selectedRef.current, data.patch || {});
+        if (changed) {
+          post(_lucidBuildSelectedPayload(selectedRef.current));
         }
       }
     };
@@ -483,6 +545,9 @@ async def _emit_website_plan_and_wait(
     plan: dict[str, Any],
     description: str,
     visual_dna: dict[str, Any] | None,
+    domain_res: dict[str, Any] | None = None,
+    design_res: dict[str, Any] | None = None,
+    signals: dict[str, Any] | None = None,
     websocket: Any,
     chat_session_id: str,
 ) -> bool:
@@ -514,6 +579,15 @@ async def _emit_website_plan_and_wait(
     pages = list(plan.get("pages") or [])
     brand_name = brand.get("name") or "your website"
     tagline = brand.get("tagline") or ""
+    from app.services.plan_extras import (
+        compact_count,
+        summarize_grounded_research,
+        summary_chip,
+    )
+    research_summary = summarize_grounded_research(
+        domain_res=domain_res,
+        design_res=design_res,
+    )
 
     # Frontend's PlanBubble renders this list as the page outline.
     # Include `route` so the frontend label rule classifies this as a
@@ -554,9 +628,24 @@ async def _emit_website_plan_and_wait(
             f"I'll build **{brand_name}**. Here's my plan:"
         ),
         "description": description[:280],
+        "planSummary": [
+            summary_chip("Type", "Full website"),
+            summary_chip("Scope", compact_count("", len(page_items), "page")),
+            summary_chip("Research", f"{research_summary['confidence']} · {research_summary['sources']} sources"),
+        ],
+        "research": research_summary,
         "pages": page_items,
         "entities": [],
         "design": design_line,
+        "buildSteps": [
+            "Create shared site config, navigation, and design tokens",
+            "Generate each page with matching sections and reusable layout",
+            "Run image binding, fixers, and a production build check",
+        ],
+        "assumptions": [
+            "Each listed route should be reachable from the navigation",
+            "Content should stay editable and consistent across pages",
+        ],
         "requiresConfirmation": True,
     }
 
@@ -633,6 +722,7 @@ async def run_website_pipeline(
     Mirrors the API surface of `run_landing_pipeline` so the orchestrator
     can dispatch to either based on layout_archetype.
     """
+    generation = GenerationResult(pipeline="website")
     anthropic_key = validated.get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY", "")
     if not anthropic_key:
         await _send(websocket, "error", "Service is missing its API key — please contact support.")
@@ -713,11 +803,16 @@ async def run_website_pipeline(
 
     from app.services.landing_domain_research import run_domain_research
     from app.services.landing_design_research import run_design_research
+    from app.services.research_quality import (
+        research_summary_is_strong,
+        research_summary_score,
+    )
 
     cached_research = pipeline_cache.get(
         project_id, "research",
         clean_description, clarity_answers, purpose_data,
     )
+    research_from_cache = cached_research is not None
     if cached_research is not None:
         # cache-hit; no user-facing message
         domain_res, design_res = cached_research
@@ -731,10 +826,61 @@ async def run_website_pipeline(
             logger.error("website_pipeline: research failed — %s", exc, exc_info=True)
             await _send(websocket, "error", "Couldn't research your industry — please try again.")
             return False
-        pipeline_cache.set(
-            project_id, "research", (domain_res, design_res),
-            clean_description, clarity_answers, purpose_data,
+
+    async def _retry_weak_research(
+        label: str,
+        data: dict | None,
+        retry_fn,
+    ) -> dict | None:
+        if research_summary_is_strong(data):
+            return data
+        summary = (data or {}).get("_summary") or {}
+        await _send(websocket, "progress", f"Improving {label} research coverage…")
+        logger.warning(
+            "website_pipeline: %s research weak — retrying once (cache=%s summary=%s)",
+            label, research_from_cache, summary,
         )
+        try:
+            retried = await retry_fn(
+                intent,
+                websocket=websocket,
+                timeout_s=120.0,
+                purpose_data=purpose_data,
+            )
+        except Exception as exc:
+            logger.warning("website_pipeline: %s research retry failed — %s", label, exc)
+            return data
+        if research_summary_score(retried) >= research_summary_score(data):
+            logger.info(
+                "website_pipeline: %s research retry accepted (old=%s new=%s)",
+                label, summary, (retried or {}).get("_summary") or {},
+            )
+            return retried
+        logger.warning("website_pipeline: %s research retry did not improve", label)
+        return data
+
+    domain_res, design_res = await asyncio.gather(
+        _retry_weak_research("domain", domain_res, run_domain_research),
+        _retry_weak_research("design", design_res, run_design_research),
+    )
+    pipeline_cache.set(
+        project_id, "research", (domain_res, design_res),
+        clean_description, clarity_answers, purpose_data,
+    )
+    try:
+        from app.services.plan_extras import summarize_grounded_research
+        _research_meta = summarize_grounded_research(
+            domain_res=domain_res,
+            design_res=design_res,
+        )
+        await _send(
+            websocket,
+            "progress",
+            f"Research ready — {_research_meta['confidence'].lower()} confidence, "
+            f"{_research_meta['sources']} sources.",
+        )
+    except Exception:
+        pass
 
     # ── Stage 3: Visual_DNA + Voice — CACHED per project ────────────
     # Cache key is (research + intent + purpose). When research is a
@@ -863,6 +1009,9 @@ async def run_website_pipeline(
             plan=plan,
             description=description,
             visual_dna=visual_dna,
+            domain_res=domain_res,
+            design_res=design_res,
+            signals=signals,
             websocket=websocket,
             chat_session_id=chat_session_id,
         )
@@ -1058,11 +1207,10 @@ async def run_website_pipeline(
     foundation_written = 0
     for rel_path, content in foundation_files.items():
         try:
-            abs_path = os.path.join(workspace_path, rel_path)
-            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-            with open(abs_path, "w", encoding="utf-8") as f:
-                f.write(content)
-            foundation_written += 1
+            written_rel = write_text_file(workspace_path, rel_path, content)
+            if written_rel:
+                generation.add_files([written_rel])
+                foundation_written += 1
         except Exception as exc:
             logger.warning("website_pipeline: failed to write %s — %s", rel_path, exc)
     logger.info("website_pipeline: foundation written — %d files", foundation_written)
@@ -1195,24 +1343,11 @@ async def run_website_pipeline(
         await _send(websocket, "error", "Couldn't generate your pages — please try again.")
         return False
 
-    # Write all generated files to workspace
+    # Write all generated files to workspace through the shared safe writer.
     files = result.get("files") or []
-    written = 0
-    for f in files:
-        rel = f.get("path", "").strip()
-        content = f.get("content", "")
-        if not rel or not content:
-            continue
-        try:
-            # Strip leading slash for safety
-            rel = rel.lstrip("/")
-            abs_path = os.path.join(workspace_path, rel)
-            os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-            with open(abs_path, "w", encoding="utf-8") as fh:
-                fh.write(content)
-            written += 1
-        except Exception as exc:
-            logger.warning("website_pipeline: failed to write %s — %s", rel, exc)
+    written_files = write_file_entries(workspace_path, files)
+    generation.add_files(written_files)
+    written = len(written_files)
 
     # ── Fallback Marketing chrome ──────────────────────────────────
     # When Claude's MarketingHeader / MarketingFooter generation returns
@@ -1222,17 +1357,16 @@ async def run_website_pipeline(
     # functional (if generic) header/footer instead of failing the page.
     if not result.get("header_ok"):
         try:
-            header_path = os.path.join(
-                workspace_path, "src", "components", "layout", "MarketingHeader.jsx",
-            )
+            header_rel = "src/components/layout/MarketingHeader.jsx"
+            header_path = os.path.join(workspace_path, header_rel)
             if not os.path.exists(header_path):
-                os.makedirs(os.path.dirname(header_path), exist_ok=True)
-                with open(header_path, "w", encoding="utf-8") as fh:
-                    fh.write(_FALLBACK_MARKETING_HEADER)
-                written += 1
-                logger.warning(
-                    "website_pipeline: MarketingHeader generation failed — wrote deterministic stub",
-                )
+                written_rel = write_text_file(workspace_path, header_rel, _FALLBACK_MARKETING_HEADER)
+                if written_rel:
+                    generation.add_files([written_rel])
+                    written += 1
+                    logger.warning(
+                        "website_pipeline: MarketingHeader generation failed — wrote deterministic stub",
+                    )
         except Exception as exc:
             logger.error(
                 "website_pipeline: failed to write fallback MarketingHeader — %s", exc,
@@ -1240,17 +1374,16 @@ async def run_website_pipeline(
 
     if not result.get("footer_ok"):
         try:
-            footer_path = os.path.join(
-                workspace_path, "src", "components", "layout", "MarketingFooter.jsx",
-            )
+            footer_rel = "src/components/layout/MarketingFooter.jsx"
+            footer_path = os.path.join(workspace_path, footer_rel)
             if not os.path.exists(footer_path):
-                os.makedirs(os.path.dirname(footer_path), exist_ok=True)
-                with open(footer_path, "w", encoding="utf-8") as fh:
-                    fh.write(_FALLBACK_MARKETING_FOOTER)
-                written += 1
-                logger.warning(
-                    "website_pipeline: MarketingFooter generation failed — wrote deterministic stub",
-                )
+                written_rel = write_text_file(workspace_path, footer_rel, _FALLBACK_MARKETING_FOOTER)
+                if written_rel:
+                    generation.add_files([written_rel])
+                    written += 1
+                    logger.warning(
+                        "website_pipeline: MarketingFooter generation failed — wrote deterministic stub",
+                    )
         except Exception as exc:
             logger.error(
                 "website_pipeline: failed to write fallback MarketingFooter — %s", exc,
@@ -1396,41 +1529,18 @@ async def run_website_pipeline(
     # (missing imports like @/components/ui/Reveal, JSX syntax, bad
     # exports) only get caught by the dev server, leaving the user
     # staring at a red overlay with no recovery.
-    await _send(websocket, "progress", "Final build check…")
-    await _phase(websocket, 6, "Verifying build",
-                 "Running production build to catch errors…", "active")
-    try:
-        from app.services.build_validator import BuildValidator
-        validator = BuildValidator(
-            api_key=anthropic_key,
-            classification=classification or {},
-            websocket=websocket,
-            max_retries=2,
-        )
-        build_result = await validator.validate_and_fix(workspace_path)
-        if build_result.get("success"):
-            attempts = build_result.get("attempts", 0)
-            fixed_n = len(build_result.get("fixed_files") or [])
-            if fixed_n:
-                await _send(
-                    websocket, "progress",
-                    "Cleaned up a few small issues.",
-                )
-            await _phase(websocket, 6, "Verifying build",
-                         "Build passed — preview ready", "done")
-        else:
-            err_count = build_result.get("error_count", 0)
-            await _send(
-                websocket, "warning",
-                "Some issues remain — preview it and let me know what to fix.",
-            )
-            await _phase(websocket, 6, "Verifying build",
-                         f"{err_count} error(s) remain", "done")
-    except Exception as exc:
-        logger.warning(
-            "website_pipeline: build_validator failed (non-fatal) — %s", exc,
-        )
-        await _phase(websocket, 6, "Verifying build", "Build check skipped", "done")
+    await run_generation_build_check(
+        pipeline="website_pipeline",
+        workspace_path=workspace_path,
+        api_key=anthropic_key,
+        classification=classification or {},
+        websocket=websocket,
+        max_retries=2,
+        send=lambda kind, message: _send(websocket, kind, message),
+        phase=lambda status, state: _phase(websocket, 6, "Verifying build", status, state),
+        progress_message="Final build check...",
+        generation=generation,
+    )
 
     # ── Stage 10: Quality gate (purpose contract) ───────────────────
     # Verifies the built site actually fulfils its purpose contract
@@ -1450,7 +1560,18 @@ async def run_website_pipeline(
 
     # Success criteria: at least 1 page generated AND we wrote >0 files.
     # Partial failure is still a usable site (failed pages get 404 / can be retried).
-    return successful_pages >= 1 and written > 0
+    generation.ok = successful_pages >= 1 and written > 0
+    generation.metadata.update({
+        "successful_pages": successful_pages,
+        "failed_routes": list(failed_routes),
+        "foundation_written": foundation_written,
+        "creative_files_written": written,
+    })
+    try:
+        setattr(websocket, "_generation_result", generation.as_dict())
+    except Exception:
+        pass
+    return generation.ok
 
 
 # ── Stage 5 helpers — deterministic foundation builders ─────────────────

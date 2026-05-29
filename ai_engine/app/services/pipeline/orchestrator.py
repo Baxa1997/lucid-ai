@@ -46,6 +46,72 @@ from app.paths import NODE_MODULES_CACHE_ROOT, new_project_workspace_path
 
 logger = logging.getLogger(__name__)
 
+
+def _is_discuss_mode_task(task: str) -> bool:
+    return "[DISCUSS MODE" in (task or "")
+
+
+def _is_route_creation_task(task: str) -> bool:
+    text = (task or "").lower()
+    action = any(w in text for w in ("add", "create", "make", "build", "implement", "new"))
+    target = any(w in text for w in (" page", "screen", "route", "view"))
+    return action and target
+
+
+async def _answer_discuss_mode(
+    *,
+    task: str,
+    workspace_path: str,
+    api_key: str,
+    websocket: WebSocket,
+    classification: dict,
+    user_id: str | None = None,
+) -> bool:
+    """Answer an existing-project question with read-only Claude tools."""
+    try:
+        from app.services.claude_cli import run_claude_session
+
+        model_id = str(
+            classification.get("model_id")
+            or classification.get("model")
+            or "claude-sonnet-4-6"
+        )
+        system_prompt = (
+            "You are Lucid AI's read-only project assistant. Answer the user's "
+            "question by inspecting the workspace when helpful. Do not write, edit, "
+            "delete, install, run builds, or mutate files. If the user is actually "
+            "asking for a code change, explain briefly that it should be run in edit mode."
+        )
+        result = await run_claude_session(
+            prompt=task,
+            workspace_path=workspace_path,
+            api_key=api_key,
+            websocket=websocket,
+            user_id=user_id,
+            model=model_id,
+            max_turns=8,
+            timeout_seconds=180,
+            append_system_prompt=system_prompt,
+            allowed_tools="Read,Glob,Grep,LS",
+            disallowed_tools="Write,Edit,MultiEdit,Bash",
+            max_consecutive_reads=12,
+            phase_label="discuss_mode",
+        )
+        return bool(result.success)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("discuss-mode answer failed: %s", exc, exc_info=True)
+        try:
+            await websocket.send_json({
+                "type": "chat_message",
+                "role": "agent",
+                "content": "I couldn't inspect the project for that question. Please try again.",
+            })
+        except Exception:
+            pass
+        return False
+
 # ── node_modules cache ────────────────────────────────────────────────────────
 # Keyed by package-manager + package.json hash so the same template reuses a
 # pre-built node_modules on every subsequent run (~2s symlink vs 60-120s install).
@@ -198,6 +264,7 @@ def _route_edit_mode(
     classification: dict,
     relevant_files: list[str],
     edit_intent: "EditIntent | None" = None,
+    task: str = "",
 ) -> str:
     """Return ``"direct"`` or ``"sdk"`` for the current follow-up task.
 
@@ -223,6 +290,9 @@ def _route_edit_mode(
 
       4. At least one relevant file was found — no files means no target.
     """
+    if _is_route_creation_task(f"{task} {classification.get('intent') or ''}"):
+        return "sdk"
+
     # Rule 1 — must be our own template/project.
     if not validated.get("platform_repo_url") and not validated.get("is_platform_owned"):
         return "sdk"
@@ -770,11 +840,12 @@ async def run_pipeline(
             await openhands_manager.destroy_all()
             await asyncio.sleep(0.5)
 
-        # ── Phase 3: Research project ─────────────────────
-        # For new projects: skip classify (not needed) and go straight to deep research.
+        # ── Phase 3: Understand / classify ─────────────────
+        # For new projects, the generator may still ask clarification questions
+        # before research starts, so keep the label in the intake phase.
         # For existing repos: classify task complexity first, then explore.
         if validated.get("scratch_mode") or validated.get("new_project_mode"):
-            await _send_phase(3, "Researching project", "Gemini is analyzing top products in this domain…", "active")
+            await _send_phase(3, "Understanding project", "Checking whether I have enough detail…", "active")
         else:
             await _send_phase(3, "Classifying task", "Analyzing task complexity…", "active")
             classification = await classify_task(
@@ -784,6 +855,33 @@ async def run_pipeline(
             model = classification.get("model", "sonnet")
             await _send_phase(3, "Classifying task", f"Assigned to {model} ({classification.get('complexity', 'medium')})", "done")
             await asyncio.sleep(0.8)
+
+            if _is_discuss_mode_task(task):
+                await _send_phase(
+                    4,
+                    "Answering question",
+                    "Inspecting the project without editing files…",
+                    "active",
+                )
+                _user_id_for_billing = (
+                    (session.user_id if session else None)
+                    or (user.get("user_id") if isinstance(user, dict) else None)
+                )
+                success = await _answer_discuss_mode(
+                    task=task,
+                    workspace_path=workspace_path,
+                    api_key=validated["anthropic_api_key"],
+                    websocket=websocket,
+                    classification=classification,
+                    user_id=_user_id_for_billing,
+                )
+                await _send_phase(
+                    4,
+                    "Answering question",
+                    "Answered without changing files" if success else "Could not answer question",
+                    "done" if success else "error",
+                )
+                return
 
             # ── Phase 3b: Structured edit-intent extraction ───────────
             # Two paths into the same EditIntent:
@@ -1010,6 +1108,7 @@ async def run_pipeline(
             edit_path = _route_edit_mode(
                 validated, classification, relevant_files,
                 edit_intent=edit_intent,
+                task=task,
             )
             logger.info(
                 "Phase 5 router: path=%s task_type=%s files_estimate=%s relevant=%d "

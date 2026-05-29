@@ -102,7 +102,7 @@ function ConversationPageInner({params}) {
   // pending slot and return "" so the handshake fires with no initial
   // task. The effect below then runs /api/intent-check against the
   // pending prompt and either:
-  //   • valid → calls sendMessage(cleanedSummary) to kick off the pipeline
+  //   • valid → rebuilds the backend wizard envelope and starts the pipeline
   //   • invalid → pushes a friendly clarify message into the chat,
   //               leaving the user in an idle workspace where they can
   //               type a real description.
@@ -129,24 +129,24 @@ function ConversationPageInner({params}) {
       const descKey = `wizard_desc_${cid}`;
 
       let finalPrompt = prompt;
+      let meta = {};
       if (metaStr) {
         try {
-          const meta = JSON.parse(metaStr);
-          const origDesc = sessionStorage.getItem(descKey) || "";
-
-          const parts = [
-            `description=${origDesc || "project"}`,
-            `stack=${meta.stack || "nextjs"}`,
-            `backend=${meta.backend || "none"}`,
-          ];
-          if (meta.projectType) parts.push(`project_type=${meta.projectType}`);
-          if (meta.deployment) parts.push(`deployment=${meta.deployment}`);
-          if (meta.figmaUrl) parts.push(`figma_url=${meta.figmaUrl}`);
-
-          const header = `[LUCID_PROJECT] ${parts.join(" | ")}`;
-          finalPrompt = `${header}\n\n${prompt}`;
+          meta = JSON.parse(metaStr) || {};
         } catch (_) {}
       }
+      const origDesc = sessionStorage.getItem(descKey) || prompt;
+      const parts = [
+        `description=${origDesc || "project"}`,
+        `stack=${meta.stack || "nextjs"}`,
+        `backend=${meta.backend || "none"}`,
+      ];
+      if (meta.projectType) parts.push(`project_type=${meta.projectType}`);
+      if (meta.deployment) parts.push(`deployment=${meta.deployment}`);
+      if (meta.figmaUrl) parts.push(`figma_url=${meta.figmaUrl}`);
+
+      const header = `[LUCID_PROJECT] ${parts.join(" | ")}`;
+      finalPrompt = `${header}\n\n${prompt}`;
 
       // NOTE: Do NOT clear sessionStorage here.
       // It persists until we confirm the project was created (platform_repo_url
@@ -454,6 +454,7 @@ function ConversationPageInner({params}) {
     setFiles,
     error,
     sendMessage,
+    sendManualEdit,
     startSession,
     isReady,
     isPreparing,
@@ -502,6 +503,7 @@ function ConversationPageInner({params}) {
     repoUrl: conversation?.is_platform_owned
       ? ""
       : conversation?.repo_url || "",
+    repoProvider: conversation?.repo_provider || repoInfo.userRepoProvider || "",
     gitToken,
     branch: conversation?.branch || "main",
   });
@@ -677,7 +679,53 @@ function ConversationPageInner({params}) {
   // it's excluded). Cleared the moment a clarification is posted or building
   // starts (sendMessage then drives the normal running-state indicator).
   const [guardThinking, setGuardThinking] = useState(false);
+  const [guardKick, setGuardKick] = useState(0);
   const guardRanRef = useRef(false);
+
+  const buildWizardBackendTask = useCallback((cid, prompt) => {
+    try {
+      const metaStr = sessionStorage.getItem(`wizard_meta_${cid}`);
+      let meta = {};
+      if (metaStr) {
+        try {
+          meta = JSON.parse(metaStr) || {};
+        } catch {}
+      }
+      const desc = sessionStorage.getItem(`wizard_desc_${cid}`) || prompt;
+      const parts = [
+        `description=${desc || "project"}`,
+        `stack=${meta.stack || "nextjs"}`,
+        `backend=${meta.backend || "none"}`,
+      ];
+      if (meta.projectType) parts.push(`project_type=${meta.projectType}`);
+      if (meta.deployment) parts.push(`deployment=${meta.deployment}`);
+      if (meta.figmaUrl) parts.push(`figma_url=${meta.figmaUrl}`);
+      return `[LUCID_PROJECT] ${parts.join(" | ")}\n\n${prompt}`;
+    } catch {
+      return prompt;
+    }
+  }, []);
+
+  useEffect(() => {
+    const onPendingValidation = (event) => {
+      const incoming = event?.detail?.projectId;
+      const current = decodeURIComponent(projectId || "unknown");
+      if (!incoming || incoming === current) {
+        setGuardKick((n) => n + 1);
+      }
+    };
+    window.addEventListener("lucid:wizard-pending-validation", onPendingValidation);
+    try {
+      const current = decodeURIComponent(projectId || "unknown");
+      if (sessionStorage.getItem(`wizard_pending_validation_${current}`)) {
+        setGuardKick((n) => n + 1);
+      }
+    } catch {}
+    return () => {
+      window.removeEventListener("lucid:wizard-pending-validation", onPendingValidation);
+    };
+  }, [projectId]);
+
   useEffect(() => {
     if (guardRanRef.current) return;
     if (!sendMessage || !addLocalChatMessage) return;
@@ -791,6 +839,9 @@ function ConversationPageInner({params}) {
           sessionStorage.setItem(`wizard_validated_${cid}`, "1");
           sessionStorage.setItem(`wizard_prompt_${cid}`, pending);
           sessionStorage.setItem(`wizard_desc_${cid}`, pending);
+          const backendTask = buildWizardBackendTask(cid, pending);
+          sendMessage(backendTask, [], { suppressEcho: true });
+          return;
         } catch {}
         sendMessage(pending, [], { suppressEcho: true });
       } finally {
@@ -799,7 +850,7 @@ function ConversationPageInner({params}) {
         setGuardThinking(false);
       }
     })();
-  }, [projectId, sendMessage, addLocalChatMessage]);
+  }, [projectId, sendMessage, addLocalChatMessage, guardKick, buildWizardBackendTask]);
 
   // so the user can click further items.
   const handleQualityRegenerate = useCallback((check) => {
@@ -1268,6 +1319,7 @@ function ConversationPageInner({params}) {
     isNewProject,
     // Actions
     sendMessage,
+    sendManualEdit,
     stopSession,
     stopPreview,
     // Conversation data

@@ -25,11 +25,10 @@ Stages:
   6    CRUD codegen              WIRED — generate_one_admin_page runs
                                   N×3 (entity × {list, create, edit})
                                   in parallel under a Semaphore.
-                                  Default ADMIN_CODEGEN_MOCK=true writes
-                                  contract-honoring placeholders (zero
-                                  Anthropic cost); set =false with a live
-                                  ANTHROPIC_API_KEY to run real Claude
-                                  Sonnet 4.6 codegen. Output goes through
+                                  Defaults to real Claude codegen when an
+                                  Anthropic key is available; otherwise
+                                  falls back to contract-honoring
+                                  placeholders. Output goes through
                                   admin_codegen_validator before write.
   7    Build verification        WIRED — BuildValidator runs a Vite build
                                   by default in real-codegen mode; mock
@@ -43,10 +42,9 @@ Linking model (admin vs website):
     skips Stages 4.5/4.6/4.7 entirely (data already exists).
 
 Feature flag:
-  ADMIN_PIPELINE_V2_ENABLED=true routes admin_dashboard / crm / tms /
-  saas_dashboard archetypes through this pipeline. While off, the
-  caller falls through to legacy admin generation in project_generator.py.
-  Default OFF.
+  ADMIN_PIPELINE_V2_ENABLED defaults ON for admin_dashboard / crm / tms /
+  saas_dashboard archetypes. Set ADMIN_PIPELINE_V2_ENABLED=0 to force the
+  caller to fall through to legacy admin generation in project_generator.py.
 
 Failure model:
   Returns False on any hard failure so the caller can fall through
@@ -62,6 +60,9 @@ import asyncio
 import logging
 import os
 from typing import Any, Optional
+
+from app.services.generation_build import run_generation_build_check
+from app.services.generation_contract import GenerationResult
 
 logger = logging.getLogger(__name__)
 
@@ -80,23 +81,20 @@ ADMIN_V2_ARCHETYPES = frozenset({
 
 
 def _admin_pipeline_v2_enabled() -> bool:
-    """Gate for Step 3.3 admin pipeline. Default OFF.
+    """Gate for Step 3.3 admin pipeline. Default ON.
 
-    Set ADMIN_PIPELINE_V2_ENABLED=true to route admin_dashboard / crm /
-    tms / saas_dashboard archetypes through this pipeline. While off,
-    the caller falls through to legacy admin generation in
-    project_generator.py.
+    Set ADMIN_PIPELINE_V2_ENABLED=0 to fall through to legacy admin
+    generation in project_generator.py.
     """
-    raw = os.environ.get("ADMIN_PIPELINE_V2_ENABLED", "").strip().lower()
-    return raw in ("1", "true", "yes")
+    raw = os.environ.get("ADMIN_PIPELINE_V2_ENABLED", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
 
 
 def should_route_to_admin_pipeline(layout_archetype: str) -> bool:
     """Single source of truth for project_generator's dispatcher.
 
-    Returns True iff the feature flag is on AND the archetype is in
-    `ADMIN_V2_ARCHETYPES`. Tests assert against this helper directly
-    so routing decisions stay in one place.
+    Returns True iff the pipeline is enabled AND the archetype is in
+    `ADMIN_V2_ARCHETYPES`.
     """
     return (
         _admin_pipeline_v2_enabled()
@@ -154,6 +152,12 @@ def _build_admin_plan_data(
     category = (intent.get("business_category") or "internal tool").strip()
     tables = list(getattr(data_model, "tables", None) or [])
     entity_count = len(tables)
+    from app.services.plan_extras import (
+        compact_count,
+        summarize_grounded_research,
+        summary_chip,
+    )
+    research_meta = summarize_grounded_research(admin_research=admin_research)
 
     # Research summary line — mention the sources so the user sees
     # research actually happened. Falls back gracefully if research
@@ -240,6 +244,12 @@ def _build_admin_plan_data(
             f"**{category}** admin dashboard. Here's my plan:"
         ),
         "description": description,
+        "planSummary": [
+            summary_chip("Type", "Admin panel"),
+            summary_chip("Scope", compact_count("", entity_count, "data model")),
+            summary_chip("Research", f"{research_meta['confidence']} · {research_meta['sources']} sources"),
+        ],
+        "research": research_meta,
         "entities":    entities_list,
         "pages_nested": pages_nested,
         # Flat `pages` mirrors pages_nested for downstream code that
@@ -249,6 +259,15 @@ def _build_admin_plan_data(
             for p in pages_nested
         ],
         "design": design_line,
+        "buildSteps": [
+            "Create auth, dashboard shell, navigation, and data helpers",
+            "Generate list, create, and edit pages for every data model",
+            "Validate generated CRUD pages and run the dashboard build when enabled",
+        ],
+        "assumptions": [
+            "Operators need searchable CRUD screens before advanced analytics",
+            "Data model names should use the terminology found in research",
+        ],
         "requiresConfirmation": True,
     }
 
@@ -318,11 +337,12 @@ async def run_admin_pipeline(
     dispatcher can route to either based on layout_archetype.
     """
     project_id = chat_session_id or "_session_none_"
+    generation = GenerationResult(pipeline="admin")
 
     # ── Feature flag check ──────────────────────────────────────────
     if not _admin_pipeline_v2_enabled():
         logger.warning(
-            "[%s] Admin pipeline SKIPPED: reason=ADMIN_PIPELINE_V2_ENABLED is off",
+            "[%s] Admin pipeline SKIPPED: reason=ADMIN_PIPELINE_V2_ENABLED disabled",
             project_id,
         )
         return False
@@ -424,6 +444,10 @@ async def run_admin_pipeline(
 
     from app.services.admin_entity_research import run_admin_entity_research
     from app.services.pipeline_cache import pipeline_cache
+    from app.services.research_quality import (
+        admin_research_is_strong,
+        admin_research_score,
+    )
 
     admin_research: dict[str, Any] = {
         "entity_research": "", "operations_research": "",
@@ -479,6 +503,49 @@ async def run_admin_pipeline(
                     "[%s] Admin Stage 2 FAILED (non-fatal): %s — continuing without research",
                     project_id, exc, exc_info=True,
                 )
+        if not admin_research_is_strong(admin_research):
+            old_score = admin_research_score(admin_research)
+            await _send(websocket, "progress", "Improving dashboard research coverage…")
+            try:
+                retried_research = await run_admin_entity_research(
+                    intent,
+                    purpose_data=purpose_data,
+                    timeout_s=120.0,
+                    websocket=websocket,
+                )
+                if admin_research_score(retried_research) >= old_score:
+                    admin_research = retried_research
+                    pipeline_cache.set(
+                        project_id, "admin_research", admin_research,
+                        intent, purpose_data,
+                    )
+                    logger.info(
+                        "[%s] Admin Stage 2 retry accepted: entity_sources=%d operations_sources=%d",
+                        project_id,
+                        int(admin_research.get("entity_sources") or 0),
+                        int(admin_research.get("operations_sources") or 0),
+                    )
+                else:
+                    logger.warning(
+                        "[%s] Admin Stage 2 retry did not improve research score",
+                        project_id,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "[%s] Admin Stage 2 retry failed (non-fatal): %s",
+                    project_id, exc,
+                )
+        try:
+            from app.services.plan_extras import summarize_grounded_research
+            _research_meta = summarize_grounded_research(admin_research=admin_research)
+            await _send(
+                websocket,
+                "progress",
+                f"Research ready — {_research_meta['confidence'].lower()} confidence, "
+                f"{_research_meta['sources']} sources.",
+            )
+        except Exception:
+            pass
 
     # ── Linked-admin detection (early) ──────────────────────────────
     # We need to know is_linked BEFORE Stage 3 so that visual_dna can
@@ -900,27 +967,32 @@ async def run_admin_pipeline(
         len(foundation_result["tables_with_seed_data"]),
         len(foundation_result["tables_empty"]),
     )
+    generation.add_files(foundation_result.get("files_written") or [])
     await _send(
         websocket, "progress",
         "Login and dashboard ready.",
     )
 
-    # ── Stage 6: CRUD codegen (Step 3.6 Part A — mock-default) ──────
+    # ── Stage 6: CRUD codegen ───────────────────────────────────────
     # Per-entity Claude codegen for list / create / edit pages.
-    # Default is MOCK mode — writes self-explanatory placeholders that
-    # honour the AuthGuard + db_admin contract. Set
-    # ADMIN_CODEGEN_MOCK=false (with a valid ANTHROPIC_API_KEY) once
-    # Part B is ready to spend credits.
+    # Default is real codegen when an Anthropic key exists; otherwise we
+    # fall back to self-explanatory placeholders that honour the AuthGuard
+    # + db_admin contract. ADMIN_CODEGEN_MOCK explicitly overrides this.
     from app.services.admin_codegen import (
         _EST_PAGE_COST_USD,
         generate_one_admin_page,
         pages_for_entity,
     )
 
-    mock_codegen = (
-        os.environ.get("ADMIN_CODEGEN_MOCK", "true").strip().lower()
-        in ("1", "true", "yes")
+    anthropic_key = (
+        (validated or {}).get("anthropic_api_key")
+        or os.environ.get("ANTHROPIC_API_KEY", "")
     )
+    mock_raw = os.environ.get("ADMIN_CODEGEN_MOCK")
+    if mock_raw is None or not mock_raw.strip():
+        mock_codegen = not bool(str(anthropic_key).strip())
+    else:
+        mock_codegen = mock_raw.strip().lower() in ("1", "true", "yes", "on")
     logger.info(
         "[%s] Admin Stage 6 ENTRY: generating CRUD for %d entities (mock=%s)",
         project_id, len(data_model.tables), mock_codegen,
@@ -928,7 +1000,7 @@ async def run_admin_pipeline(
     if mock_codegen:
         logger.warning(
             "[%s] Admin Stage 6 in MOCK mode — set ADMIN_CODEGEN_MOCK=false "
-            "with a live ANTHROPIC_API_KEY to run real Claude codegen.",
+            "and provide a live ANTHROPIC_API_KEY to force real Claude codegen.",
             project_id,
         )
     await _send(
@@ -936,10 +1008,6 @@ async def run_admin_pipeline(
         "Generating pages…",
     )
 
-    anthropic_key = (
-        (validated or {}).get("anthropic_api_key")
-        or os.environ.get("ANTHROPIC_API_KEY", "")
-    )
     if not mock_codegen and not str(anthropic_key).strip():
         logger.error(
             "[%s] Admin Stage 6 FAILED: ADMIN_CODEGEN_MOCK=false but no "
@@ -1037,6 +1105,13 @@ async def run_admin_pipeline(
     total_est    = len(all_tasks) * _EST_PAGE_COST_USD
     total_files  = sum(len(b["files_written"])           for b in codegen_results.values())
     total_errors = sum(len(b["validation_errors"])       for b in codegen_results.values())
+    for bucket in codegen_results.values():
+        generation.add_files(bucket["files_written"])
+    generation.metadata.update({
+        "crud_files_written": total_files,
+        "crud_validation_errors": total_errors,
+        "mock_codegen": mock_codegen,
+    })
     logger.info(
         "[%s] Admin Stage 6 COMPLETE: files=%d, validator_errors=%d, "
         "cost=$%.4f (est $%.4f, mock=%s)",
@@ -1065,14 +1140,13 @@ async def run_admin_pipeline(
         in ("1", "true", "yes", "on")
     )
     if build_validate:
-        await _send(websocket, "progress", "Checking dashboard build…")
-        from app.services.build_validator import BuildValidator
-
         try:
             retries = int(os.environ.get("ADMIN_BUILD_FIX_RETRIES", "0"))
         except ValueError:
             retries = 0
-        validator = BuildValidator(
+        build_result = await run_generation_build_check(
+            pipeline="admin_pipeline",
+            workspace_path=workspace_path,
             api_key=str(anthropic_key or ""),
             classification={
                 **(classification or {}),
@@ -1081,12 +1155,11 @@ async def run_admin_pipeline(
             },
             websocket=websocket,
             max_retries=max(0, retries),
+            send=lambda kind, message: _send(websocket, kind, message),
+            progress_message="Checking dashboard build...",
+            failure_message="",
+            generation=generation,
         )
-        build_result = await validator.validate_and_fix(workspace_path)
-        try:
-            setattr(websocket, "_build_ok", bool(build_result.get("success")))
-        except Exception:
-            pass
         if not build_result.get("success"):
             logger.error(
                 "[%s] Admin Stage 7 FAILED: %s",
@@ -1108,4 +1181,9 @@ async def run_admin_pipeline(
         websocket, "progress",
         "Your dashboard is ready!",
     )
+    generation.ok = True
+    try:
+        setattr(websocket, "_generation_result", generation.as_dict())
+    except Exception:
+        pass
     return True

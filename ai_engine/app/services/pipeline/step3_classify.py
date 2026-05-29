@@ -65,6 +65,8 @@ Can work across multiple files.
 Handles features, bugs, integrations.
 Reliable for most tasks.
 Mid handles:
+- Adding a new page/screen/route/view to an existing project, because it usually
+  touches routing, navigation, layout, and page/component files.
 - Creating new components with logic
 - Fixing bugs that require debugging
 - Adding functionality that needs state management
@@ -125,6 +127,8 @@ KEY QUESTION — Ask yourself:
 3. If EDIT: Can it be done by editing HTML/JSX template code only?
    If YES → Junior.
    If NO → Mid or Senior.
+   If the user asks to add/create a page, screen, route, or view → Mid,
+   even if the page is visually simple, because navigation/routing context matters.
 
 Return ONLY this JSON:
 {{

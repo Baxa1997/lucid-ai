@@ -28,6 +28,9 @@ import logging
 import os
 from typing import Any
 
+from app.services.generation_build import run_generation_build_check
+from app.services.generation_contract import GenerationResult
+
 logger = logging.getLogger(__name__)
 
 
@@ -46,6 +49,7 @@ async def run_landing_pipeline(
     still useful (e.g. images can fail without blocking the build). The
     only hard failure is build_landing_brief returning empty sections.
     """
+    generation = GenerationResult(pipeline="landing")
     anthropic_key = validated.get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY", "")
 
     if not anthropic_key:
@@ -85,11 +89,12 @@ async def run_landing_pipeline(
     )
     import asyncio
 
-    # Close out Phase 1 (started by ws.py:got_task) before flipping to
-    # Phase 3 — keeps the UI from flickering through interim statuses.
+    # Close out Phase 1 (started by ws.py:got_task). Do NOT mark research
+    # active yet: Stage 0 can still stop and ask a clarification question.
+    # Showing "Researching..." before that question lands made the flow look
+    # like it had started work and then changed its mind.
     await _phase(1, "Preparing workspace", "Workspace ready", "done")
-    await _phase(3, "Researching project", "Searching real reference sites + design DNA…", "active")
-    await _send(websocket, "progress", "Researching your brand…")
+    await _send(websocket, "progress", "Checking whether I have enough detail…")
 
     # ── Stage 0: intent + clarifier gate ─────────────────────────────
     # analyze_intent runs FIRST (sequentially) so we can interrupt the
@@ -269,6 +274,9 @@ async def run_landing_pipeline(
             )
             return False
 
+    await _phase(3, "Researching project", "Searching real reference sites + design DNA…", "active")
+    await _send(websocket, "progress", "Researching your brand…")
+
     async def _research_signals() -> tuple[dict | None, dict | None, dict | None]:
         """parallel(domain, design) → extract. Best-effort — any failure
         returns (intent, partial, partial) so the legacy brief still
@@ -384,6 +392,21 @@ async def run_landing_pipeline(
         except Exception as exc:
             logger.warning("landing_pipeline: directive injection failed (non-fatal) — %s", exc)
 
+    try:
+        from app.services.plan_extras import summarize_grounded_research
+        _research_meta = summarize_grounded_research(
+            domain_res=(_research or {}).get("domain") if isinstance(_research, dict) else None,
+            design_res=(_research or {}).get("design") if isinstance(_research, dict) else None,
+        )
+        await _send(
+            websocket,
+            "progress",
+            f"Research ready — {_research_meta['confidence'].lower()} confidence, "
+            f"{_research_meta['sources']} sources.",
+        )
+    except Exception:
+        pass
+
     brand_name = (brief.get("brand") or {}).get("name", "")
     await _send(
         websocket,
@@ -420,6 +443,7 @@ async def run_landing_pipeline(
     confirmed = await _emit_plan_and_wait(
         brief=brief,
         description=description,
+        research_bundle=research_bundle,
         websocket=websocket,
         chat_session_id=chat_session_id,
     )
@@ -521,6 +545,7 @@ async def run_landing_pipeline(
             api_key=anthropic_key,
             websocket=websocket,
         )
+        generation.add_files(result.get("files_written") or [])
     except Exception as exc:
         logger.error("landing_pipeline: section codegen failed — %s", exc, exc_info=True)
         await _send(websocket, "error", "Couldn't build your sections — please try again.")
@@ -552,12 +577,16 @@ async def run_landing_pipeline(
             brief.get("visual_dna") or {},
             brief=brief,
         )
-        write_landing_page_shell(
+        page_shell_path = write_landing_page_shell(
             workspace_path,
             page_imports,
             page_renders,
             header_anatomy=header_anatomy_text,
         )
+        try:
+            generation.add_files([os.path.relpath(page_shell_path, workspace_path)])
+        except Exception:
+            generation.add_files([page_shell_path])
     except Exception as exc:
         logger.error("landing_pipeline: page shell failed — %s", exc, exc_info=True)
         await _send(websocket, "error", "Couldn't assemble your page — please try again.")
@@ -582,38 +611,18 @@ async def run_landing_pipeline(
     # before handing off to preview. Without this, build-time errors
     # (unresolved imports, JSX syntax, missing exports) only get caught
     # by the dev server, which leaves the user staring at a red overlay.
-    await _send(websocket, "progress", "Final checks…")
-    await _phase(6, "Verifying build", "Running production build to catch errors…", "active")
-    try:
-        from app.services.build_validator import BuildValidator
-        validator = BuildValidator(
-            api_key=anthropic_key,
-            classification=classification or {},
-            websocket=websocket,
-            max_retries=2,
-        )
-        build_result = await validator.validate_and_fix(workspace_path)
-        if build_result.get("success"):
-            attempts = build_result.get("attempts", 0)
-            fixed_n = len(build_result.get("fixed_files") or [])
-            if fixed_n:
-                # build auto-fix is a recovery path — keep the user
-                # message friendly, drop the file/attempt count
-                await _send(
-                    websocket, "progress",
-                    "Cleaned up a few small issues.",
-                )
-            await _phase(6, "Verifying build", "Build passed — preview ready", "done")
-        else:
-            err_count = build_result.get("error_count", 0)
-            await _send(
-                websocket, "warning",
-                "Some issues remain — preview it and let me know what to fix.",
-            )
-            await _phase(6, "Verifying build", f"{err_count} error(s) remain", "done")
-    except Exception as exc:
-        logger.warning("landing_pipeline: build_validator failed (non-fatal) — %s", exc)
-        await _phase(6, "Verifying build", "Build check skipped", "done")
+    await run_generation_build_check(
+        pipeline="landing_pipeline",
+        workspace_path=workspace_path,
+        api_key=anthropic_key,
+        classification=classification or {},
+        websocket=websocket,
+        max_retries=2,
+        send=lambda kind, message: _send(websocket, kind, message),
+        phase=lambda status, state: _phase(6, "Verifying build", status, state),
+        progress_message="Final checks...",
+        generation=generation,
+    )
 
     # ── Step 9: Quality gate ─────────────────────────────────────────
     # Verify the built page actually fulfils its purpose contract
@@ -627,6 +636,14 @@ async def run_landing_pipeline(
         logger.warning("landing_pipeline: quality_gate failed (non-fatal) — %s", exc)
 
     await _send(websocket, "progress", "Your site is ready!")
+    generation.ok = True
+    generation.metadata.update({
+        "sections_written": len(page_renders),
+    })
+    try:
+        setattr(websocket, "_generation_result", generation.as_dict())
+    except Exception:
+        pass
 
     # ── Finalise chat_sessions row ─────────────────────────────────────
     # Three fields the rest of the system reads on reload / publish / list:
@@ -735,6 +752,7 @@ async def _emit_plan_and_wait(
     *,
     brief: dict[str, Any],
     description: str,
+    research_bundle: tuple[dict | None, dict | None, dict | None] | None = None,
     websocket: Any,
     chat_session_id: str,
 ) -> bool:
@@ -765,6 +783,18 @@ async def _emit_plan_and_wait(
     motif = (brief.get("motif") or "").strip()
     personality = dict(brief.get("personality") or {})
     sections = list(brief.get("sections") or [])
+    _intent, _research, _signals = research_bundle or (None, None, None)
+    domain_res = (_research or {}).get("domain") if isinstance(_research, dict) else None
+    design_res = (_research or {}).get("design") if isinstance(_research, dict) else None
+    from app.services.plan_extras import (
+        compact_count,
+        summarize_grounded_research,
+        summary_chip,
+    )
+    research_summary = summarize_grounded_research(
+        domain_res=domain_res,
+        design_res=design_res,
+    )
 
     project_name = brand.get("name") or "your landing page"
     tagline = brand.get("tagline") or ""
@@ -806,9 +836,24 @@ async def _emit_plan_and_wait(
             f"I'll build **{project_name}**. Here's my plan:"
         ),
         "description": (brand.get("description") or description)[:280],
+        "planSummary": [
+            summary_chip("Type", "Landing page"),
+            summary_chip("Scope", compact_count("", len(page_items), "section")),
+            summary_chip("Research", f"{research_summary['confidence']} · {research_summary['sources']} sources"),
+        ],
+        "research": research_summary,
         "pages": page_items,
         "entities": [],  # landing pages don't have backend entities
         "design": design_line,
+        "buildSteps": [
+            "Write editable page content into a structured content file",
+            "Generate each section as its own component",
+            "Run fixers and a production build check before preview",
+        ],
+        "assumptions": [
+            "This is a conversion-focused single-page experience",
+            "Copy and imagery should match the brand voice in the brief",
+        ],
         "requiresConfirmation": True,
     }
 

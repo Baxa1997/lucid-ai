@@ -54,6 +54,10 @@ function PlanReviewPanel({planData, onConfirm, onReject}) {
   const pages = planData?.pages || [];
   const pagesNested = planData?.pages_nested || [];
   const entities = planData?.entities || [];
+  const planSummary = Array.isArray(planData?.planSummary) ? planData.planSummary : [];
+  const research = planData?.research || null;
+  const buildSteps = Array.isArray(planData?.buildSteps) ? planData.buildSteps : [];
+  const assumptions = Array.isArray(planData?.assumptions) ? planData.assumptions : [];
 
   // Multi-page when nested data exists OR flat pages carry routes.
   // Landing pages emit sections-disguised-as-pages without routes.
@@ -157,6 +161,25 @@ function PlanReviewPanel({planData, onConfirm, onReject}) {
                 ),
               )}
             </p>
+          </section>
+        )}
+
+        {planSummary.length > 0 && (
+          <section>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {planSummary.slice(0, 3).map((item, i) => (
+                <div
+                  key={i}
+                  className="rounded-lg border border-slate-100 dark:border-[#2d333b] bg-slate-50 dark:bg-[#161b22] px-3 py-2.5">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                    {item.label}
+                  </p>
+                  <p className="mt-1 text-[13px] font-semibold text-slate-800 dark:text-slate-100 leading-snug">
+                    {item.value}
+                  </p>
+                </div>
+              ))}
+            </div>
           </section>
         )}
 
@@ -276,6 +299,64 @@ function PlanReviewPanel({planData, onConfirm, onReject}) {
             <p className="text-[13px] text-slate-500 dark:text-slate-400 leading-relaxed">
               {planData.design}
             </p>
+          </section>
+        )}
+
+        {research && (
+          <section>
+            <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-2">
+              Research
+            </p>
+            <div className="rounded-lg bg-slate-50 dark:bg-[#161b22] border border-slate-100 dark:border-[#2d333b] px-3 py-2.5">
+              <p className="text-[13px] font-semibold text-slate-800 dark:text-slate-100">
+                {research.confidence || "Checked"} confidence
+                {Number.isFinite(Number(research.sources)) ? ` · ${research.sources} sources` : ""}
+              </p>
+              {(research.notes || []).length > 0 && (
+                <div className="mt-1.5 space-y-1">
+                  {(research.notes || []).slice(0, 3).map((note, i) => (
+                    <p key={i} className="text-[12.5px] text-slate-500 dark:text-slate-400 leading-snug">
+                      {note}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        {buildSteps.length > 0 && (
+          <section>
+            <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-2">
+              Build Approach
+            </p>
+            <div className="space-y-1.5">
+              {buildSteps.slice(0, 3).map((step, i) => (
+                <div
+                  key={i}
+                  className="flex items-start gap-2.5 px-3 py-2 rounded-lg bg-slate-50 dark:bg-[#161b22] border border-slate-100 dark:border-[#2d333b]">
+                  <span className="text-[12px] font-semibold text-[#dc5426] mt-0.5">{i + 1}</span>
+                  <p className="text-[13px] text-slate-600 dark:text-slate-300 leading-snug">
+                    {step}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {assumptions.length > 0 && (
+          <section>
+            <p className="text-[11px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-2">
+              Assumptions
+            </p>
+            <div className="space-y-1">
+              {assumptions.slice(0, 3).map((item, i) => (
+                <p key={i} className="text-[12.5px] text-slate-500 dark:text-slate-400 leading-snug">
+                  {item}
+                </p>
+              ))}
+            </div>
           </section>
         )}
       </div>
@@ -443,6 +524,7 @@ export default function RightPanel() {
     previewStartedAt,
     previewEverReady,
     stopPreview,
+    sendManualEdit,
     completionSummary,
     isNewProject,
     iframeRef,
@@ -620,6 +702,54 @@ export default function RightPanel() {
     [editSelection, sendMessage, closeEditOverlay],
   );
 
+  const applyManualEdit = useCallback(
+    (patch) => {
+      if (!editSelection || !patch || typeof patch !== "object") return;
+      const outgoing = {
+        ...patch,
+        path: patch.path || editSelection.path,
+      };
+
+      try {
+        const win = iframeRef?.current?.contentWindow;
+        if (win) {
+          win.postMessage(
+            { type: "lucid_apply_manual_edit", patch: outgoing },
+            "*",
+          );
+        }
+      } catch {
+        /* no-op */
+      }
+
+      setEditSelection((prev) => {
+        if (!prev) return prev;
+        if (outgoing.kind === "image") {
+          return {
+            ...prev,
+            src: typeof outgoing.src === "string" ? outgoing.src : prev.src,
+            alt: typeof outgoing.alt === "string" ? outgoing.alt : prev.alt,
+            text: typeof outgoing.alt === "string" ? outgoing.alt : prev.text,
+          };
+        }
+        if (outgoing.kind === "link") {
+          return {
+            ...prev,
+            text: typeof outgoing.text === "string" ? outgoing.text : prev.text,
+            href: typeof outgoing.href === "string" ? outgoing.href : prev.href,
+          };
+        }
+        return {
+          ...prev,
+          text: typeof outgoing.text === "string" ? outgoing.text : prev.text,
+        };
+      });
+
+      sendManualEdit?.(outgoing, editSelection);
+    },
+    [editSelection, iframeRef, sendManualEdit, setEditSelection],
+  );
+
   // Listen for selection events from the generated site. Keyed by a
   // ``lucid_`` prefix so we never collide with messages from unrelated
   // origins (Vercel preview banners, Stripe iframes, etc.).
@@ -645,6 +775,9 @@ export default function RightPanel() {
           tag: typeof data.tag === "string" ? data.tag : "",
           className: typeof data.className === "string" ? data.className : "",
           src: typeof data.src === "string" ? data.src : "",
+          alt: typeof data.alt === "string" ? data.alt : "",
+          href: typeof data.href === "string" ? data.href : "",
+          route: typeof data.route === "string" ? data.route : "",
           rect: (data.rect && typeof data.rect === "object") ? {
             x: Number(data.rect.x) || 0,
             y: Number(data.rect.y) || 0,
@@ -1127,6 +1260,7 @@ export default function RightPanel() {
                         active={editSelectMode}
                         onClose={closeEditOverlay}
                         onSubmit={submitInlineEdit}
+                        onManualApply={applyManualEdit}
                       />
                       {previewPhase === "live-with-restart-overlay" && (
                         <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/85 dark:bg-[#0d1117]/85 backdrop-blur-sm z-30">

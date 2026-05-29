@@ -40,6 +40,7 @@ async def gitlab_list_repos(token: str, *, gitlab_url: str = "https://gitlab.com
                 break
             repos.extend(
                 {
+                    "id": r.get("id"),
                     "name": r["name"],
                     "fullName": r["path_with_namespace"],
                     "url": r["web_url"],
@@ -47,6 +48,11 @@ async def gitlab_list_repos(token: str, *, gitlab_url: str = "https://gitlab.com
                     "defaultBranch": r.get("default_branch", "main"),
                     "private": r.get("visibility") == "private",
                     "description": r.get("description"),
+                    "language": "",
+                    "stars": r.get("star_count") or 0,
+                    "updated": r.get("last_activity_at"),
+                    "provider": "gitlab",
+                    "providerHost": gitlab_url.rstrip("/"),
                 }
                 for r in batch
             )

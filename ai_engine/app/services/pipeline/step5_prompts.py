@@ -46,6 +46,10 @@ ANTI_LOOP = (
     "event handlers (onClick, onChange), browser APIs (window, document), or client libraries\n"
     "(framer-motion) MUST have 'use client' as the VERY FIRST line. Missing it crashes the build.\n"
     "When in doubt, ADD IT. It never hurts.\n"
+    "\nRULE 8 — EDIT SCOPE AND ROUTING:\n"
+    "Preserve the user's requested scope. Do not redesign unrelated areas.\n"
+    "If adding a page/screen/route/view, create the page/component AND update the stack's navigation/router/layout references as needed.\n"
+    "If fixing a UI/UX/visual bug, fix the visible issue directly: responsive breakpoints, overflow, spacing, z-index, alignment, contrast, and state styles before rewriting.\n"
 )
 
 

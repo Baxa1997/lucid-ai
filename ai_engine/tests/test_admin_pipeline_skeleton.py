@@ -252,7 +252,7 @@ class TestRouting:
 
     @pytest.mark.asyncio
     async def test_admin_pipeline_skipped_when_flag_off(self, monkeypatch, tmp_path):
-        monkeypatch.delenv("ADMIN_PIPELINE_V2_ENABLED", raising=False)
+        monkeypatch.setenv("ADMIN_PIPELINE_V2_ENABLED", "0")
         result = await run_admin_pipeline(
             description="lead manager",
             classification={"layout_archetype": "admin_dashboard"},

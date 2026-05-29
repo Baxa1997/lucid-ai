@@ -88,14 +88,13 @@ class EditIntent:
 
 
 def _enabled() -> bool:
-    """Default OFF until verified end-to-end on real edits.
+    """Return whether the workspace-grounded edit extractor is enabled.
 
-    The extractor can route detailed prompts to the direct-edit fast path
-    when its confidence is high, but a wrong-file false positive applies
-    a real edit. Until we've A/B'd against a corpus of representative
-    edits, opt-in only — set ``EDIT_INTENT_EXTRACTOR_ENABLED=1`` to enable.
+    It only narrows routing when the result is high-confidence and grounded in
+    real workspace vocab or grep matches. Set ``EDIT_INTENT_EXTRACTOR_ENABLED=0``
+    to fall back to the legacy full-tree Gemini selector.
     """
-    raw = os.environ.get("EDIT_INTENT_EXTRACTOR_ENABLED", "0").strip().lower()
+    raw = os.environ.get("EDIT_INTENT_EXTRACTOR_ENABLED", "1").strip().lower()
     return raw in ("1", "true", "yes", "on")
 
 
@@ -323,6 +322,9 @@ Rules
        narrow     — one page or one section, surgical change
        wide       — touches many sections / global tokens / palette
        ambiguous  — user wasn't specific enough to safely act on
+     Adding a new page/screen/route is WIDE unless the user explicitly says
+     it is a tiny text-only stub, because navigation/router/layout files also
+     need to be checked.
   5. ``change_type``: pick the closest of style | content | layout |
      behavior | feature | "".
   6. ``confidence`` (0-100): how sure are you that following this plan

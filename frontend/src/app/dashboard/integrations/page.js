@@ -56,13 +56,14 @@ function IntegrationModal({ isOpen, onClose, type, integration, onRefresh, onToa
   const isGitHub = type === 'github';
   const isGitLab = type === 'gitlab';
   const connected = integration?.connected;
+  const gitlabHost = (integration?.host || integration?.gitlabUrl || host || 'https://gitlab.com').replace(/\/+$/, '');
 
   useEffect(() => {
     if (isOpen) {
       setError('');
       setToken('');
       setRepoCount(null);
-      if (isGitLab) setHost(integration?.host || 'https://gitlab.com');
+      if (isGitLab) setHost(integration?.host || integration?.gitlabUrl || 'https://gitlab.com');
     }
   }, [isOpen, type]);
 
@@ -72,14 +73,17 @@ function IntegrationModal({ isOpen, onClose, type, integration, onRefresh, onToa
 
 
   const testConnection = useCallback(async () => {
-    if (!integration?.token) return;
+    if (!integration?.connected) return;
     setTestingConnection(true);
     let count = 0;
     if (isGitHub) {
       const repos = await fetchGitHubRepos(integration.token);
       count = repos.length;
     } else if (isGitLab) {
-      const repos = await fetchGitLabRepos(integration.host, integration.token);
+      const repos = await fetchGitLabRepos(
+        integration.host || integration.gitlabUrl || 'https://gitlab.com',
+        integration.token,
+      );
       count = repos.length;
     }
     setRepoCount(count);
@@ -225,7 +229,7 @@ function IntegrationModal({ isOpen, onClose, type, integration, onRefresh, onToa
                   </div>
 
                   <p className="text-sm text-slate-400 dark:text-white/40 mb-4">
-                    {isGitHub ? `https://github.com/${integration.username}` : `${integration.host}/${integration.username}`}
+                    {isGitHub ? `https://github.com/${integration.username}` : `${gitlabHost}/${integration.username}`}
                   </p>
 
                   <div className="flex items-center gap-2.5 flex-wrap justify-center">
@@ -281,7 +285,7 @@ function IntegrationModal({ isOpen, onClose, type, integration, onRefresh, onToa
                     Revoke Access
                   </button>
                   <a
-                    href={isGitHub ? `https://github.com/${integration.username}` : `${integration.host}/${integration.username}`}
+                    href={isGitHub ? `https://github.com/${integration.username}` : `${gitlabHost}/${integration.username}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className={cn(
@@ -1109,4 +1113,3 @@ export default function IntegrationsPage() {
     </div>
   );
 }
-

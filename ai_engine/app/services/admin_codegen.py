@@ -30,9 +30,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from typing import Any
 
+from app.services.project_writer import write_text_file
 from app.services.admin_codegen_validator import (
     summarise_issues,
     validate_generated_crud_file,
@@ -273,19 +273,21 @@ async def generate_one_admin_page(
             label, summarise_issues(issues),
         )
 
-    # Write even if validator complained — easier to inspect a broken
-    # file than to recover from a missing one. Production callers may
-    # choose to skip writes on errors; for the dry run we want
-    # everything on disk.
-    abs_path = os.path.join(workspace_path, rel_path)
-    os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-    with open(abs_path, "w", encoding="utf-8") as fh:
-        fh.write(content)
+    safe_rel_path = write_text_file(workspace_path, rel_path, content)
+    if not safe_rel_path:
+        return {
+            "entity":     entity.name,
+            "page_type":  page_type,
+            "rel_path":   rel_path,
+            "written":    False,
+            "page_cost":  page_cost,
+            "issues":     issues + ["unsafe or rejected output path"],
+        }
 
     return {
         "entity":     entity.name,
         "page_type":  page_type,
-        "rel_path":   rel_path,
+        "rel_path":   safe_rel_path,
         "written":    True,
         "page_cost":  page_cost,
         "issues":     issues,

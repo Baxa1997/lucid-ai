@@ -36,6 +36,7 @@ from app.services.pipeline.constants import PLATFORM_GITHUB_TOKEN, _PLATFORM_ORG
 from app.services.vcs.github import _create_github_repo, _sanitize_repo_name
 from app.services.vcs.git import clone_repo
 from app.services.vcs.tokens import get_integration
+from app.services.staging_sync import StagingSyncError, sync_workspace_to_staging
 from app.services.vercel import create_vercel_project
 from app.supabase_client import db_client
 
@@ -194,7 +195,7 @@ async def bootstrap_publish(
         raise HTTPException(400, "Project is empty — nothing to publish yet.")
 
     # If there's already a platform_repo_url, this is the wrong endpoint —
-    # the frontend should be using the staging→main flow instead.
+    # the frontend should be using the staging→production-branch flow instead.
     if session_row.get("platform_repo_url"):
         return {
             "ok": True,
@@ -380,7 +381,7 @@ async def sync_workspace(
 
     Why this exists
     ───────────────
-    The frontend's "publish" route only fast-forwards ``main`` to wherever
+    The frontend's "publish" route promotes the production branch to wherever
     ``staging`` already points on GitHub. It does NOT push new code. So when
     the user (or our patcher) edits a file in the live preview workspace —
     e.g. our ``next.config.mjs`` assetPrefix fix — those edits never reach
@@ -397,141 +398,11 @@ async def sync_workspace(
     if not PLATFORM_GITHUB_TOKEN:
         raise HTTPException(500, "PLATFORM_GITHUB_TOKEN not configured")
 
-    # ── Look up the project's repo info ─────────────────────────
-    async with db_client(user.raw_jwt) as sb:
-        sess_res = await (
-            sb.table("chat_sessions")
-            .select("platform_repo_url,platform_repo_branch")
-            .eq("user_id", user.user_id)
-            .eq("project_id", project_id)
-            .maybe_single()
-            .execute()
-        )
-    session_row = (sess_res.data if sess_res else None) or {}
-    platform_repo_url = session_row.get("platform_repo_url")
-    if not platform_repo_url:
-        raise HTTPException(
-            400,
-            "This project hasn't been published yet. Use the regular Publish "
-            "button first to create the GitHub repo.",
-        )
-    branch = session_row.get("platform_repo_branch") or "staging"
-
-    # ── Locate the live preview workspace ───────────────────────
-    workspace_path = preview_workspace_path(project_id)
-    if not os.path.isdir(workspace_path):
-        raise HTTPException(
-            404,
-            "No live workspace found for this project — open the workspace "
-            "first so the preview clones it, then try sync again.",
-        )
-    git_dir = os.path.join(workspace_path, ".git")
-    if not os.path.isdir(git_dir):
-        raise HTTPException(
-            500,
-            "Workspace is not a git repository — cannot sync. The preview "
-            "system should have cloned it; please report this.",
-        )
-
-    # ── Run git add / commit / push ─────────────────────────────
-    def _run(cmd, timeout=60):
-        return subprocess.run(
-            cmd,
-            cwd=workspace_path,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env={
-                **os.environ,
-                # Avoid prompting on credential failures
-                "GIT_TERMINAL_PROMPT": "0",
-            },
-        )
-
     try:
-        # Identity (idempotent — only writes if missing)
-        await asyncio.to_thread(_run, ["git", "config", "user.name", "Lucid AI"], 5)
-        await asyncio.to_thread(_run, ["git", "config", "user.email", "ai@lucid.dev"], 5)
-
-        # Detect staged + unstaged changes
-        status_r = await asyncio.to_thread(_run, ["git", "status", "--porcelain"], 15)
-        if status_r.returncode != 0:
-            raise HTTPException(
-                500,
-                f"git status failed: {(status_r.stderr or status_r.stdout)[:200]}",
-            )
-        changed_files = [
-            line[3:] for line in (status_r.stdout or "").splitlines() if line.strip()
-        ]
-        if not changed_files:
-            return {
-                "ok": True,
-                "changed": False,
-                "filesPushed": 0,
-                "message": "Workspace is already in sync with GitHub — nothing to push.",
-            }
-
-        # Stage everything
-        add_r = await asyncio.to_thread(_run, ["git", "add", "-A"], 60)
-        if add_r.returncode != 0:
-            raise HTTPException(
-                500,
-                f"git add failed: {(add_r.stderr or add_r.stdout)[:200]}",
-            )
-
-        # Commit
-        commit_msg = f"Sync workspace via Lucid AI ({len(changed_files)} file{'s' if len(changed_files) != 1 else ''})"
-        commit_r = await asyncio.to_thread(
-            _run, ["git", "commit", "-m", commit_msg], 30,
+        return await sync_workspace_to_staging(
+            project_id=project_id,
+            user_id=user.user_id,
+            user_jwt=user.raw_jwt,
         )
-        # "nothing to commit" is OK (race between status check and commit)
-        if commit_r.returncode != 0 and "nothing to commit" not in (
-            commit_r.stderr + commit_r.stdout
-        ).lower():
-            raise HTTPException(
-                500,
-                f"git commit failed: {(commit_r.stderr or commit_r.stdout)[:200]}",
-            )
-
-        # Make sure origin uses the platform token (the workspace was cloned
-        # by bg_preview which uses an embedded token, but it could have been
-        # rewritten by something else in the workspace lifecycle).
-        m = re.search(r"github\.com[:/]([^/]+)/([^/.]+)", platform_repo_url)
-        if not m:
-            raise HTTPException(
-                500,
-                f"Could not parse owner/repo from platform_repo_url: {platform_repo_url}",
-            )
-        owner, repo = m.group(1), m.group(2)
-        push_url = f"https://{PLATFORM_GITHUB_TOKEN}@github.com/{owner}/{repo}.git"
-        await asyncio.to_thread(_run, ["git", "remote", "set-url", "origin", push_url], 5)
-
-        # Push to the project's branch (default staging)
-        push_r = await asyncio.to_thread(
-            _run, ["git", "push", "origin", f"HEAD:{branch}"], 180,
-        )
-        if push_r.returncode != 0:
-            err = (push_r.stderr or push_r.stdout or "").replace(PLATFORM_GITHUB_TOKEN, "***")
-            raise HTTPException(
-                502,
-                f"git push failed: {err[:300]}",
-            )
-    except subprocess.TimeoutExpired as exc:
-        raise HTTPException(504, f"Git operation timed out: {exc}")
-
-    logger.info(
-        "sync-workspace: pushed %d file change(s) to %s/%s on branch %s",
-        len(changed_files), owner, repo, branch,
-    )
-
-    return {
-        "ok": True,
-        "changed": True,
-        "filesPushed": len(changed_files),
-        "branch": branch,
-        "repoUrl": platform_repo_url,
-        "message": (
-            f"Pushed {len(changed_files)} file change{'s' if len(changed_files) != 1 else ''} "
-            f"to {branch}. Click Publish to deploy to Vercel."
-        ),
-    }
+    except StagingSyncError as exc:
+        raise HTTPException(exc.status_code, exc.detail)

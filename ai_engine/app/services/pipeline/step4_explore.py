@@ -11,6 +11,7 @@ import os
 import json
 import asyncio
 import logging
+import re
 
 from fastapi import WebSocket
 
@@ -20,6 +21,64 @@ from .constants import GEMINI_MODEL, GEMINI_BLUEPRINT_MODEL, GEMINI_RESEARCH_MOD
 from .ws_utils import _send_chat_message
 
 logger = logging.getLogger(__name__)
+
+
+def _is_route_creation_task(task: str) -> bool:
+    text = (task or "").lower()
+    action = any(w in text for w in ("add", "create", "make", "build", "implement", "new"))
+    target = any(w in text for w in (" page", "screen", "route", "view"))
+    return action and target
+
+
+def _is_visual_fix_task(task: str) -> bool:
+    text = (task or "").lower()
+    visual_words = (
+        "ui", "ux", "visual", "design", "responsive", "mobile", "desktop",
+        "layout", "overlap", "spacing", "alignment", "broken", "looks bad",
+        "not aligned", "too small", "too big", "overflow",
+    )
+    return any(w in text for w in visual_words)
+
+
+def _append_if_exists(workspace_path: str, files: list[str], rel: str) -> None:
+    if rel not in files and os.path.isfile(os.path.join(workspace_path, rel)):
+        files.append(rel)
+
+
+def _add_edit_context_files(
+    *,
+    task: str,
+    workspace_path: str,
+    file_paths: list[str],
+    relevant_files: list[str],
+) -> list[str]:
+    """Add deterministic context files for common edit classes."""
+    out = list(relevant_files or [])
+
+    if _is_route_creation_task(task):
+        for rel in (
+            "src/app/layout.js", "src/app/layout.jsx", "src/app/layout.tsx",
+            "src/app/page.js", "src/app/page.jsx", "src/app/page.tsx",
+            "src/App.jsx", "src/App.tsx", "src/main.jsx", "src/main.tsx",
+            "src/router/routes.js", "src/router/routes.jsx", "src/router/index.ts",
+        ):
+            _append_if_exists(workspace_path, out, rel)
+
+        nav_re = re.compile(r"(nav|navbar|header|sidebar|layout|menu)", re.I)
+        for rel in file_paths:
+            if nav_re.search(os.path.basename(rel)) and rel not in out:
+                out.append(rel)
+            if len(out) >= 18:
+                break
+
+    if _is_visual_fix_task(task):
+        for rel in (
+            "src/app/globals.css", "src/index.css", "src/styles.css",
+            "tailwind.config.js", "tailwind.config.ts",
+        ):
+            _append_if_exists(workspace_path, out, rel)
+
+    return out
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -161,7 +220,9 @@ IMPORTANT SELECTION RULES:
 2. ALWAYS include shared config files (tailwind.config.js, tsconfig.json, package.json, etc.) if they could be relevant
 3. ALWAYS include component/module files directly referenced by the task
 4. Include parent layout/wrapper files if the task involves UI changes
-5. Include utility/helper files that the target files import from
+5. If the user asks to add/create a page, screen, route, or view, include routing/layout/navigation files: layout, App, router config, Header/Nav/Navbar/Sidebar/Menu.
+6. If the user reports a UI/UX/visual bug, include the affected component plus global CSS/theme files when relevant.
+7. Include utility/helper files that the target files import from
 
 Return ONLY a valid JSON list of file paths. No markdown formatting, no backticks, just the JSON array.
 Example: ["src/app/page.js", "src/components/Header.js"]"""
@@ -216,6 +277,13 @@ Example: ["src/app/page.js", "src/components/Header.js"]"""
             for rel in intent_files:
                 if rel not in relevant_files:
                     relevant_files.append(rel)
+
+        relevant_files = _add_edit_context_files(
+            task=task,
+            workspace_path=workspace_path,
+            file_paths=file_paths,
+            relevant_files=relevant_files,
+        )
 
     try:
         await websocket.send_json({
@@ -305,6 +373,18 @@ analyze these constraints:
 4. INCLUDE IN PLAN:
    Always state which option resolves
    the conflict and implement that.
+
+5. ROUTE / PAGE ADDITIONS:
+   If the user asks to add a page, screen, route, or view:
+   - identify the stack's routing convention first
+   - create the page file/component
+   - update navigation/header/sidebar/router entries when appropriate
+   - preserve existing layout wrappers and styling conventions
+
+6. UI/UX BUGS:
+   If the request describes a visual or UX bug, target the visible issue only.
+   Check responsive classes, overflow, spacing, z-index, alignment, color contrast,
+   and mobile/desktop breakpoints before planning a rewrite.
 
 CONSTRAINT ANALYSIS:
 (analyze existing code constraints here)

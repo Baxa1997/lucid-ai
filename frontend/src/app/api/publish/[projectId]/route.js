@@ -6,7 +6,7 @@ import { canPublishProject } from '@/lib/subscription';
 // ─────────────────────────────────────────────────────────
 //  POST /api/publish/[projectId]
 //
-//  Publishes a generated project: merges staging→main on the
+//  Publishes a generated project: promotes staging into main/master on the
 //  Lucid-owned GitHub repo, updates visibility, kicks off Vercel
 //  project creation in the background. Returns the GitHub URL
 //  immediately — does NOT wait for the Vercel build to finish.
@@ -115,7 +115,7 @@ export async function POST(req, { params }) {
   }
 
   // ── Sync the live workspace into staging FIRST ──────────────────────────
-  // Without this step, "publish" only fast-forwards main → staging SHA, so any
+  // Without this step, "publish" only promotes the production branch to staging's SHA, so any
   // edits in the live preview workspace (e.g. our next.config.mjs assetPrefix
   // hot-fix, or anything the user changed via the chat agent without
   // committing) never reach Vercel. We call the ai_engine sync-workspace
@@ -187,6 +187,13 @@ export async function POST(req, { params }) {
       console.warn('[publish] visibility update failed:', visRes.status, txt.slice(0, 200));
     }
 
+    const repoInfoRes = await fetch(`${GH_API}/repos/${owner}/${repo}`, {
+      headers: ghHeaders,
+      signal: AbortSignal.timeout(10000),
+    });
+    const repoInfo = repoInfoRes.ok ? await repoInfoRes.json().catch(() => ({})) : {};
+    let productionBranch = repoInfo?.default_branch === 'master' ? 'master' : 'main';
+
     // ── 2. Get staging branch SHA ────────────────────────
     const refRes = await fetch(
       `${GH_API}/repos/${owner}/${repo}/git/ref/heads/${sourceBranch}`,
@@ -198,43 +205,54 @@ export async function POST(req, { params }) {
     }
     const stagingSha = (await refRes.json()).object.sha;
 
-    // ── 3. Push to main (create or fast-forward) ─────────
-    const mainRefRes = await fetch(
-      `${GH_API}/repos/${owner}/${repo}/git/ref/heads/main`,
+    // ── 3. Promote staging to production branch ──────────
+    let prodRefRes = await fetch(
+      `${GH_API}/repos/${owner}/${repo}/git/ref/heads/${productionBranch}`,
       { headers: ghHeaders, signal: AbortSignal.timeout(10000) }
     );
+    if (prodRefRes.status === 404) {
+      const fallbackBranch = productionBranch === 'main' ? 'master' : 'main';
+      const fallbackRefRes = await fetch(
+        `${GH_API}/repos/${owner}/${repo}/git/ref/heads/${fallbackBranch}`,
+        { headers: ghHeaders, signal: AbortSignal.timeout(10000) }
+      );
+      if (fallbackRefRes.ok) {
+        productionBranch = fallbackBranch;
+        prodRefRes = fallbackRefRes;
+      }
+    }
 
-    // Helper — POST a fresh ref. Used both for "main doesn't exist yet"
+    // Helper — POST a fresh ref. Used both for "production branch doesn't exist yet"
     // AND as a fallback when PATCH unexpectedly 404s (GitHub API has
     // intermittent windows where GET succeeds but PATCH on the same ref
     // returns 404; observed in production).
-    const createMain = async () => {
+    const createProductionBranch = async () => {
       const createRes = await fetch(`${GH_API}/repos/${owner}/${repo}/git/refs`, {
         method: 'POST',
         headers: ghHeaders,
-        body: JSON.stringify({ ref: 'refs/heads/main', sha: stagingSha }),
+        body: JSON.stringify({ ref: `refs/heads/${productionBranch}`, sha: stagingSha }),
         signal: AbortSignal.timeout(30000),
       });
-      // 422 "already exists" is success-equivalent — main is there with the
-      // SHA we wanted. Other 4xx/5xx is a real failure.
+      // 422 "already exists" is success-equivalent — the branch is there
+      // with the SHA we wanted. Other 4xx/5xx is a real failure.
       if (!createRes.ok && createRes.status !== 422) {
         const txt = await createRes.text().catch(() => '');
         // Include owner/repo/sha in the error so we can triage 404s without
         // having to repro — bare "404 Not Found" hides which side broke.
         throw new Error(
-          `Failed to create main on ${owner}/${repo} from ${sourceBranch}@${stagingSha.slice(0, 8)}: ` +
+          `Failed to create ${productionBranch} on ${owner}/${repo} from ${sourceBranch}@${stagingSha.slice(0, 8)}: ` +
           `${createRes.status} ${txt.slice(0, 150)}`
         );
       }
     };
 
-    if (mainRefRes.status === 404) {
-      await createMain();
-    } else if (mainRefRes.ok) {
-      // main exists — try fast-forward (force update to staging's SHA).
+    if (prodRefRes.status === 404) {
+      await createProductionBranch();
+    } else if (prodRefRes.ok) {
+      // Production branch exists — update it to staging's SHA.
       // If PATCH 404s anyway (GitHub edge case), recover by re-creating.
       const updateRes = await fetch(
-        `${GH_API}/repos/${owner}/${repo}/git/refs/heads/main`,
+        `${GH_API}/repos/${owner}/${repo}/git/refs/heads/${productionBranch}`,
         {
           method: 'PATCH',
           headers: ghHeaders,
@@ -243,22 +261,22 @@ export async function POST(req, { params }) {
         }
       );
       if (updateRes.status === 404) {
-        console.warn('[publish] PATCH main 404 — falling back to POST create');
-        await createMain();
+        console.warn(`[publish] PATCH ${productionBranch} 404 — falling back to POST create`);
+        await createProductionBranch();
       } else if (!updateRes.ok) {
         const txt = await updateRes.text().catch(() => '');
-        throw new Error(`Failed to update main: ${updateRes.status} ${txt.slice(0, 150)}`);
+        throw new Error(`Failed to update ${productionBranch}: ${updateRes.status} ${txt.slice(0, 150)}`);
       }
     } else {
-      const txt = await mainRefRes.text().catch(() => '');
-      throw new Error(`Unexpected GitHub error on main check: ${mainRefRes.status} ${txt.slice(0, 150)}`);
+      const txt = await prodRefRes.text().catch(() => '');
+      throw new Error(`Unexpected GitHub error on ${productionBranch} check: ${prodRefRes.status} ${txt.slice(0, 150)}`);
     }
 
     // ── 4. Vercel project ensure + deploy ───────────────────────
     // ALWAYS call this — first-publish creates the project and deploys,
     // republish just triggers a new deploy on the existing project.
     // Vercel's webhook doesn't fire reliably for our flow because we push
-    // to main *before* the project link, so we trigger deploys explicitly.
+    // to the production branch *before* the project link, so we trigger deploys explicitly.
     //
     // CRITICAL: this MUST be awaited. A previous version was fire-and-forget
     // (.catch() with no await), which let the publish response return before
@@ -290,6 +308,7 @@ export async function POST(req, { params }) {
           owner,
           repo,
           ghToken: platformToken,
+          productionBranch,
         });
         // The project may have been created in this call. Re-resolve the
         // canonical alias now that Vercel has had a moment to assign it,
@@ -340,7 +359,7 @@ export async function POST(req, { params }) {
     let message;
     if (vercelEnsureError) {
       message = (
-        'Code is live on main, but the Vercel deploy could not be queued. ' +
+        `Code is live on ${productionBranch}, but the Vercel deploy could not be queued. ` +
         'Click Publish again in a minute — Vercel sometimes takes a moment ' +
         'to recognize a freshly-created repo.'
       );
@@ -351,7 +370,7 @@ export async function POST(req, { params }) {
         `rebuilding — check back in a minute.`
       );
     } else {
-      message = 'Published! Your code is live on main. Vercel is building in the background — check back in a minute.';
+      message = `Published! Your code is live on ${productionBranch}. Vercel is building in the background — check back in a minute.`;
     }
 
     return NextResponse.json({
@@ -361,6 +380,7 @@ export async function POST(req, { params }) {
       visibility,
       synced: syncResult.changed,
       filesPushed: syncResult.filesPushed,
+      productionBranch,
       vercelDeployFailed: !!vercelEnsureError,
       message,
     });
@@ -409,11 +429,11 @@ async function resolveVercelProductionUrl({ token, teamId, projectSlug }) {
 //  Background helper — create Vercel project (if missing) + trigger deploy
 //
 //  Vercel's GitHub webhook only fires on pushes that happen *after* a
-//  project is linked. We push to main first, then call this — so we have
+//  project is linked. We push to the production branch first, then call this — so we have
 //  to trigger the deploy ourselves. Idempotent: republish callers can
 //  invoke this every time and Vercel handles the queueing.
 // ─────────────────────────────────────────────────────────
-async function ensureVercelProject({ token, teamId, projectSlug, owner, repo, ghToken }) {
+async function ensureVercelProject({ token, teamId, projectSlug, owner, repo, ghToken, productionBranch = 'main' }) {
   const headers = {
     Authorization: `Bearer ${token}`,
     'Content-Type': 'application/json',
@@ -478,7 +498,7 @@ async function ensureVercelProject({ token, teamId, projectSlug, owner, repo, gh
     return;
   }
 
-  // Trigger production deploy from the latest main commit
+  // Trigger production deploy from the latest production-branch commit.
   const deployRes = await fetch(`${VERCEL_API}/v13/deployments${qs}`, {
     method: 'POST',
     headers,
@@ -486,7 +506,7 @@ async function ensureVercelProject({ token, teamId, projectSlug, owner, repo, gh
       name: projectSlug,
       project: projectId,
       target: 'production',
-      gitSource: { type: 'github', ref: 'main', repoId },
+      gitSource: { type: 'github', ref: productionBranch, repoId },
     }),
     signal: AbortSignal.timeout(30000),
   });

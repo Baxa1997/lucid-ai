@@ -12,6 +12,7 @@ class InitSessionRequest(BaseModel):
 
     token: Optional[str] = None
     repoUrl: Optional[str] = None
+    repoProvider: Optional[str] = None
     gitToken: Optional[str] = None
     branch: Optional[str] = None
     task: str

@@ -180,6 +180,7 @@ async def github_list_repos(token: str) -> list[dict]:
                 break
             repos.extend(
                 {
+                    "id": r.get("id"),
                     "name": r["name"],
                     "fullName": r["full_name"],
                     "url": r["html_url"],
@@ -187,6 +188,10 @@ async def github_list_repos(token: str) -> list[dict]:
                     "defaultBranch": r["default_branch"],
                     "private": r["private"],
                     "description": r.get("description"),
+                    "language": r.get("language") or "",
+                    "stars": r.get("stargazers_count") or 0,
+                    "updated": r.get("updated_at"),
+                    "provider": "github",
                 }
                 for r in batch
             )

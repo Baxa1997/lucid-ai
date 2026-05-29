@@ -12,9 +12,9 @@ from __future__ import annotations
 import time
 from collections import deque
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, unquote, urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
 from app.auth import AuthenticatedUser, get_current_user
@@ -97,6 +97,21 @@ def _normalize_provider(provider: str) -> str:
             detail=f"Unsupported provider '{provider}'. Use 'github' or 'gitlab'.",
         )
     return p
+
+
+def _gitlab_project_id(project_id: str | None, owner: str | None = None, repo: str | None = None) -> str:
+    """Return the GitLab project id/path encoded for API URL segments."""
+    raw = (project_id or "").strip()
+    if not raw and owner and repo:
+        raw = f"{owner.strip('/')}/{repo.strip('/')}"
+    if not raw:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="GitLab branch lookup requires projectId or owner/repo.",
+        )
+    if raw.isdigit():
+        return raw
+    return quote(unquote(raw).strip("/"), safe="")
 
 
 # ── B1: Save / update PAT ────────────────────────────────────────────────
@@ -260,6 +275,64 @@ async def list_repos(
     return {"provider": provider.lower(), "repos": repos, "count": len(repos)}
 
 
+# ── B2b: List branches by query ─────────────────────────────────────────
+
+@router.get("/{provider}/branches")
+async def list_branches_query(
+    provider: str,
+    projectId: Optional[str] = Query(None),
+    owner: Optional[str] = Query(None),
+    repo: Optional[str] = Query(None),
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Return branches via the stored PAT.
+
+    GitHub accepts owner/repo or projectId="owner/repo".
+    GitLab accepts numeric projectId or any nested path like "group/sub/repo".
+    """
+    _rate_limit("list_branches", user.user_id, max_calls=60, window_s=60.0)
+    normalized = _normalize_provider(provider)
+    integration = await get_integration(user_id=user.user_id, provider=normalized, user_jwt=user.raw_jwt)
+
+    if not integration:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No {provider} token saved.",
+        )
+
+    try:
+        if normalized == "GITHUB":
+            repo_owner = (owner or "").strip()
+            repo_name = (repo or "").strip()
+            if (not repo_owner or not repo_name) and projectId:
+                parts = unquote(projectId).strip("/").split("/")
+                if len(parts) >= 2:
+                    repo_owner, repo_name = parts[0], parts[1]
+            if not repo_owner or not repo_name:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="GitHub branch lookup requires owner/repo.",
+                )
+            branches = await github_list_branches(integration["token"], repo_owner, repo_name)
+        else:
+            gitlab_project = _gitlab_project_id(projectId, owner, repo)
+            branches = await gitlab_list_branches(
+                integration["token"],
+                gitlab_project,
+                gitlab_url=integration.get("gitlabUrl", "https://gitlab.com"),
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("Failed to list branches for %s projectId=%s owner=%s repo=%s: %s", provider, projectId, owner, repo, exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to fetch branches: {exc}",
+        )
+
+    return {"provider": provider.lower(), "branches": branches, "count": len(branches)}
+
+
 # ── B2b: List branches ───────────────────────────────────────────────────
 
 @router.get("/{provider}/repos/{owner}/{repo}/branches")
@@ -284,7 +357,7 @@ async def list_branches(
         if normalized == "GITHUB":
             branches = await github_list_branches(integration["token"], owner, repo)
         else:
-            project_id = f"{owner}%2F{repo}"
+            project_id = _gitlab_project_id(None, owner, repo)
             branches = await gitlab_list_branches(
                 integration["token"],
                 project_id,

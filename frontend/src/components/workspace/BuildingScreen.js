@@ -8,6 +8,7 @@
 // ─────────────────────────────────────────────────────────
 
 import {useState, useEffect} from "react";
+import {computeBuildLabel} from "@/components/workspace/buildingLabel";
 
 // ── Building Tips carousel ────────────────────────────────
 const BUILDING_TIPS = [
@@ -84,150 +85,15 @@ export default function BuildingScreen({
   previewLoading = false,
   previewStatusMsg = "",
 }) {
-  const activePhase = phases.find((p) => p.status === "active");
-  const maxDonePhase = phases
-    .filter((p) => p.status === "done")
-    .reduce((max, p) => Math.max(max, p.phase || 0), 0);
-  const currentPhaseNum = activePhase?.phase || maxDonePhase || 0;
-
-  let buildLabel = "Building App...";
-  let buildSubtext = "Setting up your workspace";
-
-  // Returning to an existing conversation — show a friendlier init message
-  // while the conversation data + WS connection are being established.
-  if (
-    !isWizardMode &&
-    (status === "idle" || (convLoading && status === "connecting"))
-  ) {
-    buildLabel = "Loading your conversation...";
-    buildSubtext = "Retrieving chat history and workspace state";
-  } else if (status === "connecting") {
-    buildLabel = "Connecting...";
-    buildSubtext = "Opening secure connection to AI Engine";
-  } else if (status === "preparing") {
-    // Backend sends labels like "Preparing Next.js workspace..." +
-    // "Template: Next.js · Stack: nextjs" in resolvingInfo/resolvingProgress,
-    // but we don't want to expose the template/stack as a separate phase
-    // to the user — it's an implementation detail rolled into the overall
-    // "Building your app…" flow.
-    buildLabel = "Building your app...";
-    buildSubtext = "Setting up the project foundation";
-  } else if (status === "cloning" && resolvingInfo?.path === "existing_repo") {
-    // For imported repos we still surface the repo name — the user
-    // explicitly chose one, so showing which one is cloning is useful.
-    buildLabel = `Cloning ${resolvingInfo.repoDisplay || "repository"}...`;
-    buildSubtext = `Fetching files · Branch: ${resolvingInfo.branch || "main"}`;
-  } else if (status === "cloning") {
-    // For new projects (template clones) the template name is an
-    // implementation detail. Roll it into the generic "building" label
-    // so the flow reads as one continuous step instead of a separate
-    // "Downloading Next.js template" surprise.
-    buildLabel = "Building your app...";
-    buildSubtext = "Setting up the project foundation";
-  } else if (status === "installing") {
-    buildLabel = "Installing dependencies...";
-    buildSubtext = "Running npm install — this takes up to 60 seconds";
-  } else if (status === "starting") {
-    buildLabel = "Running the code for Preview...";
-    buildSubtext = "Starting dev server — this takes a moment";
-  } else if (status === "health_check") {
-    buildLabel = "Running the code for Preview...";
-    buildSubtext = "Waiting for dev server to respond";
-  } else if (status === "ready" && phases.length === 0) {
-    buildLabel = "Workspace ready...";
-    buildSubtext = "Ready for your task";
-  }
-
-  // Agent running — phase-specific labels
-  if (currentPhaseNum <= 1 && status === "running") {
-    buildLabel = "Building App...";
-    buildSubtext = "Setting things up";
-  } else if (
-    currentPhaseNum === 2 &&
-    activePhase?.title?.toLowerCase().includes("clone")
-  ) {
-    // Hide the template-clone sub-step; users perceive it as still "building".
-    buildLabel = "Building your app...";
-    buildSubtext =
-      activePhase?.description || "Setting up the project foundation";
-  } else if (currentPhaseNum === 2) {
-    buildLabel = "Preparing workspace...";
-    buildSubtext =
-      activePhase?.description || "Setting up your project environment";
-  } else if (currentPhaseNum === 3) {
-    buildLabel = "Researching your idea...";
-    buildSubtext = "Gemini is analyzing top products in this domain";
-  } else if (
-    currentPhaseNum === 4 &&
-    activePhase?.title?.toLowerCase().includes("design")
-  ) {
-    buildLabel = "Choosing design style...";
-    buildSubtext =
-      activePhase?.description || "Selecting colors, typography and layout";
-  } else if (
-    currentPhaseNum === 4 &&
-    activePhase?.title?.toLowerCase().includes("research")
-  ) {
-    buildLabel = "Researching your idea...";
-    buildSubtext = "Analyzing top products in this domain";
-  } else if (currentPhaseNum === 4) {
-    buildLabel = "Planning code...";
-    buildSubtext = "Creating implementation plan from research insights";
-  } else if (currentPhaseNum === 5) {
-    buildLabel = "Writing your code...";
-    buildSubtext = "AI is generating components, pages, and logic";
-  } else if (currentPhaseNum === 6) {
-    buildLabel = "Verifying build...";
-    buildSubtext = "Running build checks to ensure everything compiles";
-  } else if (currentPhaseNum === 7) {
-    buildLabel = "Publishing project...";
-    buildSubtext = "Committing and pushing code to repository";
-  } else if (currentPhaseNum >= 8) {
-    buildLabel = "Deploying...";
-    buildSubtext = "Setting up live preview";
-  }
-
-  const researchDone = phases.find(
-    (p) =>
-      (p.phase === 3 || p.phase === 4) &&
-      p.status === "done" &&
-      p.title?.toLowerCase().includes("research"),
-  );
-  const designDone = phases.find(
-    (p) =>
-      p.phase === 4 &&
-      p.status === "done" &&
-      p.title?.toLowerCase().includes("design"),
-  );
-  const codingStarted = phases.find(
-    (p) => p.phase === 5 && (p.status === "active" || p.status === "done"),
-  );
-
-  if (designDone && !codingStarted) {
-    buildLabel = "Starting to code...";
-    buildSubtext = "Design and plan ready. Building your codebase now.";
-  } else if (researchDone && !codingStarted) {
-    buildLabel = "Planning project...";
-    buildSubtext = "Research complete. Choosing design style.";
-  }
-
-  // Background preview setup (Cases 2 & 3: returning to existing project).
-  // previewLoading overrides the generic workspace labels with live status.
-  if (previewLoading && previewStatusMsg && status !== "running") {
-    const msg = previewStatusMsg.toLowerCase();
-    if (msg.includes("cloning") || msg.includes("clone")) {
-      buildLabel = "Building your app...";
-    } else if (msg.includes("install")) {
-      buildLabel = "Installing dependencies...";
-    } else if (msg.includes("starting") || msg.includes("cached")) {
-      buildLabel = "Running the code for Preview...";
-    } else if (msg.includes("waiting") || msg.includes("health")) {
-      buildLabel = "Waiting for dev server...";
-    } else {
-      buildLabel = "Setting up preview...";
-    }
-    buildSubtext = previewStatusMsg;
-  }
+  const {label: buildLabel, subtext: buildSubtext} = computeBuildLabel({
+    status,
+    phases,
+    resolvingInfo,
+    isWizardMode,
+    convLoading,
+    previewLoading,
+    previewStatusMsg,
+  });
 
   return (
     <div className="h-full flex flex-col items-center justify-center relative overflow-hidden bg-white dark:bg-[#0d1117]">

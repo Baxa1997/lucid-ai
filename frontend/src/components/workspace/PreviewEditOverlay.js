@@ -8,9 +8,10 @@
 //    • Hover outline that tracks the cursor inside the iframe
 //    • Persistent selection box around the picked element
 //    • "tag" badge in the top-left of the selection (h1 / button / img …)
-//    • Floating action toolbar below the selection — two modes:
-//        (1) Quick actions: ✨ Edit Element + X (close)
-//        (2) Inline AI input: ← back, "What to change?" textarea, ↑ submit, X
+//    • Floating action toolbar below the selection — three modes:
+//        (1) Quick actions: Manual / AI + X (close)
+//        (2) Manual edit modal: deterministic form fields + Apply
+//        (3) Inline AI input: ← back, "What to change?" textarea, ↑ submit, X
 //
 //  Coordinates flow:
 //
@@ -23,7 +24,17 @@
 // ─────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowUp, Sparkles, ArrowLeft, X } from 'lucide-react';
+import {
+  ArrowUp,
+  Sparkles,
+  ArrowLeft,
+  X,
+  Pencil,
+  Check,
+  Image as ImageIcon,
+  Link2,
+  Type,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /**
@@ -34,6 +45,7 @@ import { cn } from '@/lib/utils';
  * @param {boolean} props.active      - true when edit-select mode is enabled
  * @param {Function} props.onClose    - clear selection + leave edit-select mode
  * @param {Function} props.onSubmit   - (text) => void; called when inline input is submitted
+ * @param {Function} props.onManualApply - (patch) => void; no-LLM manual edit
  */
 export default function PreviewEditOverlay({
   iframeRef,
@@ -42,6 +54,7 @@ export default function PreviewEditOverlay({
   active,
   onClose,
   onSubmit,
+  onManualApply,
 }) {
   // Iframe's bounding rect — we need it to translate the iframe-local
   // coordinates the listener sent into the parent's viewport space.
@@ -86,9 +99,13 @@ export default function PreviewEditOverlay({
     };
   }, [iframeRef, measureFrame]);
 
-  // ── Local UI state — toolbar mode + inline draft text ──────
-  const [mode, setMode] = useState('actions'); // 'actions' | 'inline'
+  // ── Local UI state — toolbar mode + inline/manual drafts ───
+  const [mode, setMode] = useState('actions'); // 'actions' | 'inline' | 'manual'
   const [draft, setDraft] = useState('');
+  const [manualText, setManualText] = useState('');
+  const [manualSrc, setManualSrc] = useState('');
+  const [manualAlt, setManualAlt] = useState('');
+  const [manualHref, setManualHref] = useState('');
   const inputRef = useRef(null);
 
   // Switching to inline mode focuses the input on the next paint so
@@ -113,7 +130,31 @@ export default function PreviewEditOverlay({
     if (!selection) return;
     setMode(selection.rect ? 'actions' : 'inline');
     setDraft('');
-  }, [selection?.rect?.x, selection?.rect?.y, selection?.path]);
+    setManualText(selection.text || '');
+    setManualSrc(selection.src || '');
+    setManualAlt(selection.alt || selection.text || '');
+    setManualHref(selection.href || '');
+  }, [selection?.path, selection?.file]);
+
+  const manualKind = useMemo(() => {
+    const rawType = (selection?.type || '').toLowerCase();
+    const tag = (selection?.tag || '').toLowerCase();
+    if (rawType === 'image' || rawType === 'image_url' || tag === 'img') return 'image';
+    if (rawType === 'url' || rawType === 'link' || tag === 'a') return 'link';
+    return 'text';
+  }, [selection?.type, selection?.tag]);
+
+  const manualSupported = useMemo(() => (
+    Boolean(selection?.path)
+    && !selection?.fuzzy
+    && ['text', 'image', 'link'].includes(manualKind)
+  ), [selection?.path, selection?.fuzzy, manualKind]);
+
+  const ManualIcon = manualKind === 'image'
+    ? ImageIcon
+    : manualKind === 'link'
+      ? Link2
+      : Type;
 
   // Esc clears the selection. Keyboard handler lives on the parent
   // because the iframe also forwards its own Esc keypresses up here.
@@ -190,7 +231,8 @@ export default function PreviewEditOverlay({
   // over the iframe so the user can still type their edit.
   const toolbarStyle = useMemo(() => {
     if (!selection || !frame) return null;
-    const toolbarApproxWidth = mode === 'inline' ? 460 : 220;
+    const toolbarApproxWidth = mode === 'inline' ? 460 : mode === 'manual' ? 420 : 290;
+    const toolbarApproxHeight = mode === 'manual' ? 250 : 56;
     // Centered-modal fallback when no rect — sits in the middle of
     // the iframe area, vertically biased toward the top third so it
     // doesn't cover the page content the user is editing.
@@ -203,10 +245,10 @@ export default function PreviewEditOverlay({
       };
     }
     const wantTop = frame.top + selection.rect.y + selection.rect.height + 8;
-    const fitsBelow = wantTop + 56 < frame.top + frame.height;
+    const fitsBelow = wantTop + toolbarApproxHeight < frame.top + frame.height;
     const top = fitsBelow
       ? wantTop
-      : Math.max(frame.top + 4, frame.top + selection.rect.y - 56);
+      : Math.max(frame.top + 4, frame.top + selection.rect.y - toolbarApproxHeight - 8);
     // Clamp left so the toolbar never bleeds past the right edge of the iframe.
     const desiredLeft = frame.left + selection.rect.x;
     const maxLeft = frame.left + frame.width - toolbarApproxWidth - 4;
@@ -259,6 +301,43 @@ export default function PreviewEditOverlay({
     [handleSubmit],
   );
 
+  const handleManualSubmit = useCallback(
+    (e) => {
+      e?.preventDefault?.();
+      if (!manualSupported || !selection) return;
+
+      const patch = {
+        kind: manualKind,
+        path: selection.path,
+        type: selection.type || '',
+        tag: selection.tag || '',
+      };
+
+      if (manualKind === 'image') {
+        patch.src = manualSrc.trim();
+        patch.alt = manualAlt;
+      } else if (manualKind === 'link') {
+        patch.text = manualText;
+        patch.href = manualHref.trim();
+      } else {
+        patch.text = manualText;
+      }
+
+      onManualApply?.(patch);
+      setMode('actions');
+    },
+    [
+      manualSupported,
+      selection,
+      manualKind,
+      manualSrc,
+      manualAlt,
+      manualText,
+      manualHref,
+      onManualApply,
+    ],
+  );
+
   // ── Output ─────────────────────────────────────────────────
   // We need ``frame`` (iframe bounding rect) to position anything.
   // Beyond that, we render whenever the user is in edit-select mode,
@@ -300,11 +379,25 @@ export default function PreviewEditOverlay({
             <div className="inline-flex items-center gap-1 h-11 px-1.5 rounded-2xl bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-[#2d333b] shadow-[0_8px_24px_rgba(15,23,42,0.12)]">
               <button
                 type="button"
+                onClick={() => manualSupported && setMode('manual')}
+                disabled={!manualSupported}
+                className={cn(
+                  'inline-flex items-center gap-1.5 h-8 px-3 rounded-xl text-[12px] font-semibold transition-colors',
+                  manualSupported
+                    ? 'bg-slate-100 dark:bg-[#21262d] hover:bg-slate-200 dark:hover:bg-[#2d333b] text-slate-800 dark:text-slate-100'
+                    : 'bg-slate-50 dark:bg-[#161b22] text-slate-400 cursor-not-allowed',
+                )}
+                title={manualSupported ? 'Manual edit' : 'Manual edit is available for editable content'}>
+                <Pencil className="w-3.5 h-3.5 text-blue-600" />
+                Manual
+              </button>
+              <button
+                type="button"
                 onClick={() => setMode('inline')}
                 className="inline-flex items-center gap-1.5 h-8 px-3 rounded-xl bg-slate-100 dark:bg-[#21262d] hover:bg-slate-200 dark:hover:bg-[#2d333b] text-[12px] font-semibold text-slate-800 dark:text-slate-100 transition-colors"
                 title="Describe what to change with AI">
                 <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-                Edit Element
+                AI
               </button>
               <button
                 type="button"
@@ -314,6 +407,123 @@ export default function PreviewEditOverlay({
                 <X className="w-4 h-4" />
               </button>
             </div>
+          ) : mode === 'manual' ? (
+            <form
+              onSubmit={handleManualSubmit}
+              className="w-[420px] max-w-[calc(100vw-32px)] rounded-2xl bg-white dark:bg-[#1c2128] border border-slate-200 dark:border-[#2d333b] shadow-[0_10px_32px_rgba(15,23,42,0.16)] p-3">
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <div className="flex items-center gap-2 min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => setMode('actions')}
+                    className="w-8 h-8 shrink-0 inline-flex items-center justify-center rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 dark:hover:bg-[#21262d] transition-colors"
+                    title="Back to actions">
+                    <ArrowLeft className="w-4 h-4" />
+                  </button>
+                  <div className="w-8 h-8 shrink-0 rounded-xl bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-300 inline-flex items-center justify-center">
+                    <ManualIcon className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-semibold text-slate-900 dark:text-slate-100 leading-tight">
+                      Manual edit
+                    </p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                      {selection.path}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onClose?.()}
+                  className="w-8 h-8 shrink-0 inline-flex items-center justify-center rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 dark:hover:bg-[#21262d] transition-colors"
+                  title="Close">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {manualKind === 'image' ? (
+                <div className="space-y-3">
+                  <label className="block">
+                    <span className="block mb-1 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">
+                      Image URL
+                    </span>
+                    <input
+                      value={manualSrc}
+                      onChange={(e) => setManualSrc(e.target.value)}
+                      placeholder="https://..."
+                      className="w-full h-9 px-3 rounded-xl border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] outline-none text-[13px] text-slate-800 dark:text-slate-100 placeholder:text-slate-400 focus:border-blue-500"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="block mb-1 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">
+                      Alt Text
+                    </span>
+                    <input
+                      value={manualAlt}
+                      onChange={(e) => setManualAlt(e.target.value)}
+                      className="w-full h-9 px-3 rounded-xl border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] outline-none text-[13px] text-slate-800 dark:text-slate-100 focus:border-blue-500"
+                    />
+                  </label>
+                </div>
+              ) : manualKind === 'link' ? (
+                <div className="space-y-3">
+                  <label className="block">
+                    <span className="block mb-1 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">
+                      Label
+                    </span>
+                    <input
+                      value={manualText}
+                      onChange={(e) => setManualText(e.target.value)}
+                      className="w-full h-9 px-3 rounded-xl border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] outline-none text-[13px] text-slate-800 dark:text-slate-100 focus:border-blue-500"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="block mb-1 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">
+                      URL
+                    </span>
+                    <input
+                      value={manualHref}
+                      onChange={(e) => setManualHref(e.target.value)}
+                      placeholder="/contact"
+                      className="w-full h-9 px-3 rounded-xl border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] outline-none text-[13px] text-slate-800 dark:text-slate-100 placeholder:text-slate-400 focus:border-blue-500"
+                    />
+                  </label>
+                </div>
+              ) : (
+                <label className="block">
+                  <span className="block mb-1 text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase">
+                    Text
+                  </span>
+                  <textarea
+                    value={manualText}
+                    onChange={(e) => setManualText(e.target.value)}
+                    rows={4}
+                    className="w-full resize-none px-3 py-2 rounded-xl border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] outline-none text-[13px] leading-5 text-slate-800 dark:text-slate-100 focus:border-blue-500"
+                  />
+                </label>
+              )}
+
+              <div className="flex items-center justify-end gap-2 mt-3">
+                <button
+                  type="button"
+                  onClick={() => setMode('actions')}
+                  className="h-8 px-3 rounded-xl text-[12px] font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-[#21262d] transition-colors">
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!manualSupported}
+                  className={cn(
+                    'h-8 px-3 inline-flex items-center gap-1.5 rounded-xl text-[12px] font-semibold transition-colors',
+                    manualSupported
+                      ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                      : 'bg-slate-100 dark:bg-[#21262d] text-slate-400 cursor-not-allowed',
+                  )}>
+                  <Check className="w-3.5 h-3.5" />
+                  Apply
+                </button>
+              </div>
+            </form>
           ) : (
             <form
               onSubmit={handleSubmit}

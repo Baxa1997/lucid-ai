@@ -336,15 +336,14 @@ def _is_status_question(text: str) -> bool:
 
 
 def _inflight_status_enabled() -> bool:
-    """Default OFF until verified end-to-end.
+    """Return whether explicit status questions are answered immediately.
 
-    When on, status questions during a running pipeline get answered in
-    parallel by a Gemini Flash call. Until we've verified the detector
-    doesn't false-positive on real user prompts in production, opt-in
-    only — set ``INFLIGHT_STATUS_ANSWER_ENABLED=1`` to enable. The safer
-    fall-through (queue + ack) still runs in the off state.
+    The detector is intentionally conservative, so this defaults ON: users can
+    ask "what stage are you at?" while generation continues in the background.
+    Set ``INFLIGHT_STATUS_ANSWER_ENABLED=0`` to force status questions into the
+    normal queued-message path.
     """
-    raw = os.environ.get("INFLIGHT_STATUS_ANSWER_ENABLED", "0").strip().lower()
+    raw = os.environ.get("INFLIGHT_STATUS_ANSWER_ENABLED", "1").strip().lower()
     return raw in ("1", "true", "yes", "on")
 
 
@@ -438,6 +437,7 @@ class AgentOrchestrator:
         # ── 4. Listen for stop messages ────────────────────────────
         stopped = await self._listen_for_stop(
             pipeline_task, websocket, session, chat_session_id or "",
+            user_jwt=user_jwt,
         )
 
         # ── 5. Stopped path ────────────────────────────────────────
@@ -547,12 +547,23 @@ class AgentOrchestrator:
             except IndexError:
                 break
             queued_text = (entry.get("text") or "").strip()
+            queued_images = entry.get("images") or []
+            if not queued_text and queued_images:
+                queued_text = (
+                    f"Analyze the {len(queued_images)} attached image(s) "
+                    "and implement any changes they suggest."
+                )
             if not queued_text:
                 continue
+            queued_mode = entry.get("mode", "edit")
+            queued_web_search = entry.get("web_search", True)
             try:
                 await websocket.send_json({
                     "type": "progress",
-                    "message": f"▶️  Applying queued change: {queued_text[:80]}",
+                    "message": (
+                        f"▶️  {'Answering queued question' if queued_mode == 'discuss' else 'Applying queued change'}: "
+                        f"{queued_text[:80]}"
+                    ),
                 })
             except Exception:
                 pass
@@ -562,8 +573,30 @@ class AgentOrchestrator:
                 len(session.pending_tasks), queued_text,
             )
             try:
+                context_briefing = ""
+                if user_jwt and getattr(session, "project_id", ""):
+                    context_briefing = await build_conversation_context(
+                        session.user_id,
+                        session.project_id,
+                        user_jwt,
+                        current_task=queued_text,
+                    )
+                discuss_prefix = (
+                    "[DISCUSS MODE — Analyze and explain only. "
+                    "Do NOT write, edit, or delete any files. Just answer the question.]\n\n"
+                    if queued_mode == "discuss" else ""
+                )
+                web_search_note = (
+                    ""
+                    if queued_web_search
+                    else "\n\n[Web search disabled — use only existing codebase knowledge.]"
+                )
+                drained_task = f"{discuss_prefix}{queued_text}{web_search_note}"
+                if context_briefing:
+                    drained_task = f"{context_briefing}\n\nCURRENT TASK: {drained_task}"
+
                 _drained_result = await self.execute_task(
-                    enriched_task=queued_text,
+                    enriched_task=drained_task,
                     session=session,
                     websocket=websocket,
                     pipeline_user=pipeline_user,
@@ -571,7 +604,7 @@ class AgentOrchestrator:
                     conversation_id=conversation_id,
                     user_jwt=user_jwt,
                     task=queued_text,
-                    images=entry.get("images") or [],
+                    images=queued_images,
                     editable_target=entry.get("editable_target"),
                     _is_drain_call=True,
                 )
@@ -658,6 +691,7 @@ class AgentOrchestrator:
         websocket: Any,
         session: AgentSession,
         chat_session_id: str = "",
+        user_jwt: str | None = None,
     ) -> bool:
         """Listen for WS messages while the pipeline runs.
 
@@ -774,38 +808,107 @@ class AgentOrchestrator:
                             ).strip()
                             images = data.get("images") or []
                             editable_tgt = data.get("editable_target")
+                            queued_mode = data.get("mode", "edit")
+                            queued_web_search = data.get("web_search", True)
                             # Empty text AND no images AND no editable_target
                             # → genuinely empty message; drop silently.
                             if not text and not images and not editable_tgt:
                                 continue
 
-                            if (
-                                text
-                                and _inflight_status_enabled()
-                                and _is_status_question(text)
-                            ):
-                                logger.info(
-                                    "[%s] In-flight status question — answering "
-                                    "in parallel: %.60s",
-                                    getattr(session, "session_id", "?"),
-                                    text,
-                                )
-                                # Save a strong reference so the event loop
-                                # doesn't GC the fire-and-forget task while
-                                # Gemini is still answering. _track_qa_task
-                                # removes it on completion.
-                                _qa_task = asyncio.create_task(
-                                    self._answer_in_flight_question(
-                                        session, websocket, text,
+                            out_ws = session.ws_proxy or websocket
+                            if chat_session_id:
+                                try:
+                                    user_content = text
+                                    if not user_content and images:
+                                        user_content = f"[{len(images)} image(s) attached]"
+                                    if not user_content and editable_tgt:
+                                        user_content = "[Selected preview element]"
+                                    await ChatService.add_message(
+                                        session_id=chat_session_id,
+                                        role="user",
+                                        content=user_content,
+                                        event_type="UserTask",
+                                        user_jwt=user_jwt,
                                     )
-                                )
-                                _track_qa_task(_qa_task)
+                                except Exception as persist_exc:
+                                    logger.warning(
+                                        "[%s] Failed to persist in-flight user message: %s",
+                                        getattr(session, "session_id", "?"),
+                                        persist_exc,
+                                    )
+
+                            if text and _is_status_question(text):
+                                if _inflight_status_enabled():
+                                    logger.info(
+                                        "[%s] In-flight status question — answering "
+                                        "in parallel: %.60s",
+                                        getattr(session, "session_id", "?"),
+                                        text,
+                                    )
+                                    # Save a strong reference so the event loop
+                                    # doesn't GC the fire-and-forget task while
+                                    # Gemini is still answering. _track_qa_task
+                                    # removes it on completion.
+                                    _qa_task = asyncio.create_task(
+                                        self._answer_in_flight_question(
+                                            session, out_ws, text,
+                                        )
+                                    )
+                                    _track_qa_task(_qa_task)
+                                else:
+                                    try:
+                                        await out_ws.send_json({
+                                            "type": "chat_message",
+                                            "role": "agent",
+                                            "content": (
+                                                "I'm still working on the current build. "
+                                                "I'll apply queued edits right after it finishes."
+                                            ),
+                                        })
+                                    except Exception:
+                                        pass
                                 continue
+
+                            try:
+                                from app.services.followup_intent import classify_followup_message
+
+                                guard = classify_followup_message(
+                                    text,
+                                    mode=queued_mode,
+                                    has_images=bool(images),
+                                    editable_target=editable_tgt,
+                                )
+                            except Exception as guard_exc:
+                                logger.warning(
+                                    "[%s] In-flight follow-up guard failed: %s — queueing",
+                                    getattr(session, "session_id", "?"),
+                                    guard_exc,
+                                )
+                                guard = {"action": "proceed"}
+
+                            guard_action = guard.get("action", "proceed")
+                            if guard_action in ("reply", "clarify"):
+                                try:
+                                    await out_ws.send_json({
+                                        "type": "chat_message",
+                                        "role": "agent",
+                                        "content": guard.get("message") or (
+                                            "What would you like to change or ask about this project?"
+                                        ),
+                                    })
+                                except Exception:
+                                    pass
+                                continue
+
+                            if guard_action == "discuss":
+                                queued_mode = "discuss"
 
                             queued_entry = {
                                 "text": text,
                                 "images": images,
                                 "editable_target": editable_tgt,
+                                "mode": queued_mode,
+                                "web_search": queued_web_search,
                                 "queued_at": time.time(),
                             }
                             session.pending_tasks.append(queued_entry)
@@ -816,11 +919,13 @@ class AgentOrchestrator:
                                 queued_count, text or "(images only)",
                             )
                             try:
-                                await websocket.send_json({
+                                await out_ws.send_json({
                                     "type": "progress",
                                     "message": (
-                                        f"📥 Queued — I'll apply that right after the current "
-                                        f"build finishes ({queued_count} pending)."
+                                        f"📥 Queued — I'll "
+                                        f"{'answer that' if queued_mode == 'discuss' else 'apply that'} "
+                                        f"right after the current build finishes "
+                                        f"({queued_count} pending)."
                                     ),
                                 })
                             except Exception:

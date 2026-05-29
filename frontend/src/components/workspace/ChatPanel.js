@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useWorkspace } from '@/contexts/WorkspaceContext';
 import MessageBubble from '@/components/workspace/MessageBubble';
+import { computeBuildLabel } from '@/components/workspace/buildingLabel';
 import {
   addMessage as saveMessage,
   updateConversation,
@@ -33,14 +34,15 @@ export default function ChatPanel() {
     sendMessage,
     conversation,
     conversationId,
-    wizardDesc,
     resolvingProgress,
+    resolvingInfo,
+    previewLoading,
+    previewStatusMsg,
     setRightPanel,
     panelOverrideRef,
     convLoading,
     isWizardMode,
     setConversation,
-    agentStatus,
     // Click-to-edit (Base44) — chip + WS payload field
     editSelection,
     clearEditSelection,
@@ -448,54 +450,29 @@ export default function ChatPanel() {
           handed control back to them. */}
       {(() => {
         // While the mount guard validates the first prompt, the typing
-        // bubble above is the sole activity indicator — suppress this bar so
-        // we don't show "Connecting…/Waiting…" and a typing bubble at once.
+        // bubble above is the sole activity indicator — suppress this bar.
         if (guardThinking) return null;
         const ALL_ACTIVE = ['connecting', 'preparing', 'cloning', 'installing', 'starting', 'health_check', 'running'];
         const isActive = ALL_ACTIVE.includes(status);
         const isWaiting = status === 'ready' && (messages || []).length > 0;
         if (!isActive && !isWaiting) return null;
-        const activePhase = (phases || []).find((p) => p.status === 'active');
-        const maxDonePhase = (phases || [])
-          .filter((p) => p.status === 'done')
-          .reduce((max, p) => Math.max(max, p.phase || 0), 0);
-        const currentPhaseNum = activePhase?.phase || maxDonePhase || 0;
-        const PHASE_LABELS = {
-          0: 'Thinking…',
-          1: 'Building your app...',
-          2: 'Building your app...',
-          3: 'Researching your idea...',
-          4: activePhase?.title?.toLowerCase().includes('design')
-              ? 'Choosing design style...'
-              : 'Planning your code...',
-          5: 'Writing your code...',
-          6: 'Verifying build...',
-          7: 'Publishing project...',
-        };
-        const phaseLabel = currentPhaseNum > 0
-          ? (PHASE_LABELS[currentPhaseNum] || PHASE_LABELS[currentPhaseNum >= 8 ? 7 : 0])
-          : (wizardDesc
-              ? `Designing your ${wizardDesc.length > 28 ? wizardDesc.slice(0, 28) + '…' : wizardDesc.toLowerCase()}...`
-              : 'Thinking…');
-        const LABELS = {
-          connecting: 'Connecting to workspace...',
-          // Backend sends "Preparing Next.js workspace…" + "Template: Next.js · Stack: nextjs"
-          // here — we deliberately hide the template/stack detail and roll
-          // it into the generic "Building your app…" label so users see one
-          // continuous setup flow, not a separate cloning/templating phase.
-          preparing: 'Building your app...',
-          cloning: 'Building your app...',
-          installing: 'Installing dependencies...',
-          starting: 'Starting dev server...',
-          health_check: 'Connecting live preview...',
-          running: phaseLabel,
-          ready: 'Waiting for your message…',
-        };
-        const primary =
-          (status === 'running' && agentStatus?.label) ||
-          LABELS[status] ||
-          'Thinking…';
-        const secondary = status === 'running' ? (agentStatus?.subtext || '') : '';
+
+        // Mirror BuildingScreen exactly so the right-panel headline and the
+        // chat status pill never disagree (e.g. "Researching…" on one side
+        // and "Building your app…" on the other). The two surfaces share
+        // computeBuildLabel as the source of truth — only the chat-only
+        // "Waiting for your message…" idle state is overridden here, since
+        // BuildingScreen hides itself entirely once the workspace is ready.
+        const {label: computed} = computeBuildLabel({
+          status,
+          phases,
+          resolvingInfo,
+          isWizardMode,
+          convLoading,
+          previewLoading,
+          previewStatusMsg,
+        });
+        const primary = isWaiting ? 'Waiting for your message…' : computed;
         return (
           <div className="shrink-0 flex items-center gap-2.5 px-4 py-2 border-t border-[#e3e5eb] dark:border-[#1c2128] bg-[#f8f9fc] dark:bg-[#0d1117] animate-in fade-in duration-300">
             <div className="w-5 h-5 rounded-full bg-gradient-to-br from-[#dc5426] to-orange-600 flex items-center justify-center shrink-0 shadow-sm shadow-orange-500/15">
@@ -506,8 +483,6 @@ export default function ChatPanel() {
                 <span className="text-[12px] text-slate-500 dark:text-slate-400 truncate">{primary}</span>
                 {isWaiting ? (
                   // Passive idle indicator — agent is done, waiting on user.
-                  // A single slowly-pulsing dot instead of bouncing dots so
-                  // the bar reads as "ready" rather than "still working".
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500/80 animate-pulse shrink-0" />
                 ) : (
                   <div className="flex items-center gap-[3px] shrink-0">
@@ -521,9 +496,6 @@ export default function ChatPanel() {
                   </div>
                 )}
               </div>
-              {secondary && (
-                <span className="block text-[11px] text-slate-400 dark:text-slate-500 truncate">{secondary}</span>
-              )}
             </div>
           </div>
         );
@@ -545,13 +517,16 @@ export default function ChatPanel() {
             <Lightbulb className="w-3 h-3 text-[#9ca3af]" />
             <span className="text-[11px] font-medium text-[#9ca3af] dark:text-slate-500">Suggestions</span>
           </div>
-          <div className="flex items-center gap-3 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
-            {['Add Admin Dashboard', 'Build Dedicated Menu', 'Improve Mobile Design'].map((s) => (
+          <div className="flex flex-wrap items-center gap-y-1.5">
+            {['Add Admin Dashboard', 'Build Dedicated Menu', 'Improve Mobile Design'].map((s, i) => (
               <button
                 key={s}
                 type="button"
                 onClick={() => setChatInput(s)}
-                className="text-[12px] text-[#4b5563] dark:text-slate-300 hover:text-[#1f2937] dark:hover:text-white transition-colors whitespace-nowrap shrink-0">
+                className={cn(
+                  'text-[12px] text-[#4b5563] dark:text-slate-300 hover:text-[#1f2937] dark:hover:text-white transition-colors whitespace-nowrap px-3 first:pl-0',
+                  i > 0 && 'border-l border-slate-200 dark:border-[#2d333b]',
+                )}>
                 {s}
               </button>
             ))}

@@ -211,7 +211,10 @@ async def resolve_classification(
         extract_clarify_context, force_archetype_from_task,
         map_project_type_to_archetype,
     )
-    from app.services.clarity_agent import check_prompt_clarity
+    from app.services.clarity_agent import (
+        _strip_lucid_project_header,
+        check_prompt_clarity,
+    )
 
     # Strip force-archetype marker first (highest priority) so a user
     # who already picked a mode via the UI toggle bypasses all
@@ -221,13 +224,13 @@ async def resolve_classification(
         return _build_resolved(
             archetype=forced_archetype,
             answers={"force_archetype": forced_archetype},
-            description=task_after_force,
+            description=_strip_lucid_project_header(task_after_force).strip(),
             extract_entities=extract_entities,
             reasoning="archetype forced by UI marker",
         )
 
     answers, clean_task = extract_clarify_context(task_after_force)
-    clean_task = (clean_task or "").strip()
+    clean_task = _strip_lucid_project_header(clean_task).strip()
 
     # If the user's prior answers already pin down a project_type, map it
     # and short-circuit — no need to ask Gemini again.
