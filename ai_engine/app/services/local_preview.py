@@ -772,8 +772,13 @@ async def _ensure_node_modules(workspace_path: str, websocket) -> None:
     # --prefer-offline + shared store lets repeat installs hit the cache and
     # finish in seconds instead of minutes. The store dir matches bg_preview
     # in ws.py so they share packages across all preview workspaces.
+    # `--package-import-method=copy` is REQUIRED on Docker Desktop's macOS bind
+    # mount — without it, pnpm tries hardlink/reflink first and intermittently
+    # fails with errno -116 (EREMOTE). See _pm_env() in package_manager.py for
+    # the full root-cause writeup.
     install_cmd = (
         "pnpm install --prefer-offline --store-dir /tmp/pnpm_store "
+        "--package-import-method=copy "
         "|| npm install --prefer-offline "
         "|| yarn install"
     )

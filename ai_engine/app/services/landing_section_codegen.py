@@ -28,8 +28,12 @@ from app.services.project_writer import write_text_file
 logger = logging.getLogger(__name__)
 
 # Per-section budget. Sections are small, focused components — even a complex
-# pricing table fits in <8K tokens of JSX. 16K leaves room for thorough copy.
-_SECTION_MAX_TOKENS = 16000
+# pricing table fits in <8K tokens of JSX. Bumped to 24K so the new
+# editorial-numbering eyebrow + hero floating data cards + motif watermarks
+# don't get truncated on rich sections (hero with overlay cards, full pricing
+# table, multi-step process). At ~150 tok/s that's ~160s — comfortably inside
+# the 240s outer timeout. Sonnet 4 supports up to 64K output tokens.
+_SECTION_MAX_TOKENS = 24000
 
 
 # ── Section anatomy: minimal fallback skeletons ──────────────────────
@@ -58,6 +62,15 @@ _FALLBACK_SKELETONS: dict[str, str] = {
         "      D. FLOATING COUNTER — main photo left or right at `aspect-[4/3]`, secondary photo card stacked at small size with a numbered indicator (`<span className=\"text-3xl font-bold\">03</span>` + `<ChevronLeft/>` `<ChevronRight/>` icons). Architecture / portfolio / gallery sites (the architecture-site pattern with `03→`).\n"
         "      E. CENTERED EDITORIAL — fully centered, oversized serif headline that spans 3 lines (text-6xl md:text-7xl lg:text-8xl), 1-line eyebrow above, single CTA below; minimal photo treatment OR a small framed photo card at the bottom. Best for boutique / wedding / ceremony / cultural-institution brands.\n"
         "    Default if visual_dna offers no signal: pick A for hospitality/travel, B for architecture/product, C for luxury/fragrance, E for ceremony/cultural.\n"
+        "  • FLOATING DATA CARDS (REQUIRED on patterns A, B, C, D when a hero photo is present): overlay 1-2 small UI cards on the hero image to make it feel like a live product, not just stock photography. Each card sits on the photo with backdrop-blur + subtle border + small shadow, NOT inside the copy column. Position ONE top-right (`absolute top-6 right-6 md:top-10 md:right-10`) and ONE bottom-left (`absolute bottom-6 left-6 md:bottom-10 md:left-10`) — never both on the same edge. Card surface: `inline-flex items-center gap-3 px-4 py-3 rounded-2xl bg-background/85 backdrop-blur-md border border-border/40 shadow-lg`. Content MUST be business-specific (read from brand.business_info or section.items when present, otherwise infer from the brief domain):\n"
+        "      • Restaurant / café    → live stat (\"4.9 ★ — 2,340 reviews\"), status pill (\"Open · Closes 11pm\"), or menu badge (\"Tonight's special — Pici al Tartufo\").\n"
+        "      • Hotel / travel       → progress bar (\"32 / 48 rooms booked tonight\"), location chip with map pin (\"Brooklyn Heights · 0.4 mi from Promenade\").\n"
+        "      • SaaS / tech / dev    → metric card (\"+38% conversion · 7-day rollout\"), status row (\"All systems normal\" + green dot).\n"
+        "      • Logistics / freight  → counter card (\"412 loads delivered this week\"), live-tracker badge (\"En route — ETA 4h 12m\").\n"
+        "      • Healthcare / wellness → rating row (\"5.0 ★ — 312 patient reviews\"), next-available chip (\"Earliest: Thu 9:30am\").\n"
+        "      • Education / kids     → enrollment bar (\"82% full — Fall 2026 cohort\"), badge (\"Accredited K-8 · est. 1972\").\n"
+        "      • Agency / studio      → metric (\"24 launches · 9 awards · 2025\"), status (\"Now booking Q3\").\n"
+        "    These cards are STATIC display elements — no React state needed, no functional widget. Use real lucide icons (Star, MapPin, Clock, TrendingUp, CheckCircle2, Truck, GraduationCap) sized `h-4 w-4` with `text-primary` stroke. NEVER render generic placeholder data (\"100+\", \"Awesome\", \"Trusted\") — derive numbers from brand.business_info, section.items, or domain-realistic numbers. Pattern E (Centered Editorial) is the ONE exception and may skip these cards.\n"
         "  • Apply ≥2 motifs/textures from visual_dna in concrete accent positions (eyebrow ornament, divider, decorative SVG in a corner — small, not loud)."
     ),
     "menu": (
@@ -1193,7 +1206,17 @@ PIXEL-PRECISE LAYOUT TOKENS (use exactly these — they keep the whole page on o
     on the section that owns the decoration. Add it preemptively whenever you introduce an absolute
     decorative element; do NOT wait to see it leak.
   • Container: `<div className="container max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">` — never wider, never narrower.
-  • Eyebrow:    `text-xs tracking-[0.2em] uppercase text-primary font-semibold mb-3`
+  • Eyebrow:    `text-[11px] tracking-[0.18em] uppercase text-primary font-semibold mb-3`
+      EDITORIAL NUMBERING (REQUIRED on every non-hero, non-cta section). Prefix the eyebrow
+      with the section's two-digit index + an em-dash:
+        `<p className="..."><span className="tabular-nums">{{indexStr}}</span> &mdash; {{section.nav_label || section.role}}</p>`
+        where `indexStr = String(sectionIndex + 1).padStart(2, "0")` and `sectionIndex` is the
+        SECTION_INDEX value provided in the user message (NOT a hardcoded number).
+      Examples of valid eyebrows: "01 — STORY", "02 — MENU", "03 — RESERVATIONS", "04 — PRESS".
+      The hero (index 0) and CTA-band sections may use a plain eyebrow label without the number
+      (the hero's eyebrow is a brand tagline, not a section index). Every other section MUST
+      carry the numbered prefix — it gives the page editorial rhythm and matches the reference
+      aesthetic (Bella Luna, architecture studios, premium product brands).
   • H2:         `text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight font-[family-name:var(--font-heading)]`
   • Subhead:    `mt-4 text-lg md:text-xl text-muted-foreground max-w-2xl`  (max-w-3xl when centered)
   • Body copy:  `text-base md:text-lg text-muted-foreground leading-relaxed`
@@ -1411,6 +1434,27 @@ SECTION SURFACE RHYTHM (forces the page to alternate, not look monotone)
       background section, or `bg-muted/40 border border-border` when the section IS bg-background.
       An input that visually disappears against its container is a FAILURE.
 
+BRAND MOTIF AS PAGE-WIDE WATERMARK (cohesion across sections)
+  The brief carries ONE `motif` word (e.g. "warm", "editorial", "luxe", "organic") and
+  `visual_dna.decorative_motifs` (concrete glyph candidates: ampersand `&`, brand initial
+  letter, ornamental dot, simple geometric shape, industry icon — knot, leaf, anchor, gear).
+  Pick ONE concrete glyph from `visual_dna.decorative_motifs` (or, when absent, derive one:
+  brand initial for editorial/luxury, ampersand for hospitality, leaf for wellness,
+  hexagon for industrial). THE SAME glyph MUST appear on EVERY non-hero/non-cta section
+  this brand renders — that's how a page reads as ONE brand instead of 8 stitched components.
+  Placement rules per section:
+    • LIGHT-BG sections (`bg-background`, `bg-muted/40`, `bg-card`): place glyph TOP-RIGHT
+      of the section, oversized (`text-[8rem] md:text-[12rem] font-serif`) at very low
+      opacity (`text-foreground/[0.04]`) inside an `absolute -top-8 right-4 md:-top-12 md:right-12 pointer-events-none select-none` wrapper. The parent <section> needs `overflow-hidden` (which Rule 1186 already mandates for decorative bleed).
+    • DARK-BG sections (`bg-foreground text-background`): place glyph BOTTOM-LEFT at the same
+      oversized scale, opacity `text-background/[0.06]` inside `absolute -bottom-12 left-4 md:-bottom-16 md:left-12 pointer-events-none select-none`.
+    • SECTION 0 (hero) renders the motif as a SMALL eyebrow ornament next to the eyebrow
+      label (not the giant watermark) — the hero already carries the photo + headline weight.
+    • CTA-band sections (`bg-primary`) skip the watermark — the band's color is loud enough.
+  The watermark glyph is the SAME character on every section (consistency over surprise).
+  Do NOT swap glyphs per-section. Do NOT use full words ("Premium", "Quality") as watermarks.
+  Do NOT raise opacity above 8% — it stops reading as decoration and starts competing with copy.
+
 BRAND COLOR DISCIPLINE (the references' aesthetic — restrained, not rainbow)
   The way reference sites (Bella Luna, Chanel, Apple, Veloretti, modern studios) use color:
     1. ONE primary surface dominates the page — the palette's `background` slot. This is
@@ -1447,7 +1491,6 @@ QUALITY BAR
   • Spacing follows the PIXEL-PRECISE LAYOUT TOKENS above.
   • DO NOT produce a section that is purely a paragraph of text — every section earns its place visually.
   • DO NOT default to a 3-column icon-card grid for non-photo sections — pick a NO-PHOTO LAYOUT VARIANT from the user message.
-  • DO NOT use literal `bg-white` / `bg-black` / `bg-gray-*` Tailwind classes — always use the palette tokens (`bg-background`, `bg-foreground`, `bg-muted`, etc.) so the brand-tuned neutrals come through.
   • DO ensure the brand color appears in every section (CTA / eyebrow / icon / accent word) — see BRAND COLOR DISCIPLINE above.
 """
 
@@ -1674,6 +1717,7 @@ SECTION TYPE:  {section.get('type')}
 LAYOUT HINT:   {section.get('layout_hint')}
 ROLE:          {section.get('role','')}
 POSITION:      section {section_index + 1} of {section_count}.
+SECTION_INDEX: {section_index}  (zero-based; use for editorial-numbering eyebrow as `String({section_index}+1).padStart(2,"0")` → `"{section_index + 1:02d}"`)
 SECTION BG:    `{bg_hint}` — use this on the outer <section>. Previous section was `{prev_bg_hint}`, so DO NOT
                repeat that surface. Pair the bg with inner-card surfaces per the SECTION SURFACE RHYTHM rules.
 

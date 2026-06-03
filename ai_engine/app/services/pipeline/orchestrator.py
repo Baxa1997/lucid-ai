@@ -398,6 +398,18 @@ async def _cached_install(
             if not os.path.exists(ws_nm):
                 os.symlink(cache_dir, ws_nm)
                 logger.info("node_modules cache hit (%s) — symlinked in <1s", cache_key)
+            # Drop the .lucid_install_done marker so local_preview._ensure_node_modules
+            # skips its own install pass. Without this, every cache-hit run was
+            # still re-running pnpm (3-9 min) because local_preview only trusts
+            # the marker, not the symlinked node_modules. Bug: silent perf loss
+            # on every subsequent run of the same template.
+            try:
+                import time as _time
+                marker_path = os.path.join(workspace_path, ".lucid_install_done")
+                with open(marker_path, "w", encoding="utf-8") as mf:
+                    mf.write(f"{pm}\n{int(_time.time())}\n")
+            except OSError as mexc:
+                logger.debug("_cached_install: cache-hit marker write failed: %s", mexc)
             try:
                 await websocket.send_json({
                     "type": "progress",
@@ -436,6 +448,15 @@ async def _cached_install(
                     logger.info("node_modules cached → %s", cache_key)
                 except Exception as _ce:
                     logger.warning("Failed to cache node_modules (non-fatal): %s", _ce)
+            # Drop install marker so BuildValidator + local_preview skip their
+            # own install passes (same reason as the cache-hit branch above).
+            try:
+                import time as _time
+                marker_path = os.path.join(workspace_path, ".lucid_install_done")
+                with open(marker_path, "w", encoding="utf-8") as mf:
+                    mf.write(f"{pm}\n{int(_time.time())}\n")
+            except OSError as mexc:
+                logger.debug("_cached_install: cache-miss marker write failed: %s", mexc)
             try:
                 await websocket.send_json({
                     "type": "progress",
@@ -1381,7 +1402,13 @@ async def run_pipeline(
                     openai_model=str(validated.get("openai_model") or ""),
                     classification=classification,
                     websocket=websocket,
-                    max_retries=3,
+                    # 1 retry (2 attempts total). The 3-retry budget was burning
+                    # up to ~27 min (4× builds × 180s + 3× Codex fix × 300s) on
+                    # non-trivial build errors that Codex couldn't fix anyway.
+                    # One fix attempt catches the easy cases (apostrophe, import
+                    # path); beyond that, ship to staging and let the user
+                    # iterate via chat. Matches landing_pipeline's bias.
+                    max_retries=1,
                 )
                 _build_result = await _bv.validate_and_fix(workspace_path)
                 logger.info(
@@ -1663,6 +1690,24 @@ async def run_pipeline(
             # and iterate. With the staging-only push, even a broken build
             # leaves a recoverable GitHub repo and the user can fix in chat,
             # then click Publish to merge staging→main when they're ready.
+            #
+            # Background-BV sync: landing_pipeline now kicks BuildValidator
+            # off as an asyncio task and returns immediately so the dev-server
+            # preview can boot in parallel. Before we make the publish decision
+            # we MUST await that task — otherwise we'd read the provisional
+            # `_build_ok=True` and ship broken code to main + Vercel.
+            _build_task = getattr(websocket, "_build_task", None)
+            if _build_task is not None and not _build_task.done():
+                try:
+                    # 5 min cap — well above the ~120s typical BV time, but
+                    # bounded so a stuck build doesn't strand Phase 7 forever.
+                    await asyncio.wait_for(asyncio.shield(_build_task), timeout=300)
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Phase 7: background BV task timed out at 300s — proceeding with current _build_ok"
+                    )
+                except Exception as _bv_wait_err:
+                    logger.warning("Phase 7: background BV await error: %s", _bv_wait_err)
             _build_ok_for_publish = getattr(websocket, "_build_ok", True)
             _publish_draft_only = not _build_ok_for_publish
             if _publish_draft_only:

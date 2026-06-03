@@ -141,6 +141,63 @@ class BuildValidator:
                 entries.append(os.path.relpath(os.path.join(root, fname), workspace_path))
         return "\n".join(sorted(entries)) if entries else "(empty)"
 
+    def _patch_nextjs_dist_dir(self, workspace_path: str) -> None:
+        """Ensure next.config supports `distDir: process.env.NEXT_DIST || ".next"`.
+
+        Needed for the background-BV optimisation: BV runs concurrently with
+        `next dev` and they both default to writing under `.next/`, which
+        corrupts the dev server. With this patch BV runs with NEXT_DIST=
+        .next-build and the two processes own separate output trees.
+
+        Idempotent — does nothing when the config already reads NEXT_DIST.
+        """
+        import re
+        env_expr = "process.env.NEXT_DIST"
+        dist_line = f'distDir: {env_expr} || ".next",'
+
+        for fname in ("next.config.mjs", "next.config.js", "next.config.ts"):
+            config_path = os.path.join(workspace_path, fname)
+            if not os.path.isfile(config_path):
+                continue
+            try:
+                with open(config_path, "r", encoding="utf-8") as fh:
+                    content = fh.read()
+                original = content
+                if env_expr in content:
+                    return  # already env-driven
+                if "distDir" in content:
+                    # Existing distDir literal — replace with env-driven form
+                    content = re.sub(
+                        r"distDir\s*:\s*[^,\n}]+,?",
+                        dist_line,
+                        content,
+                        count=1,
+                    )
+                else:
+                    # Inject right after the nextConfig opening brace.
+                    # Pattern handles: `const nextConfig = {`, `module.exports = {`,
+                    # `export default { ... }` — anything ending in `{` on its own line.
+                    new_content, n = re.subn(
+                        r"(=\s*\{)",
+                        rf"\1\n  {dist_line}",
+                        content,
+                        count=1,
+                    )
+                    if n == 0:
+                        # Could not locate a brace — bail rather than mangle.
+                        return
+                    content = new_content
+                if content != original:
+                    with open(config_path, "w", encoding="utf-8") as fh:
+                        fh.write(content)
+                    logger.info(
+                        "BuildValidator: patched %s with NEXT_DIST distDir override",
+                        fname,
+                    )
+            except OSError as exc:
+                logger.debug("BuildValidator: distDir patch on %s failed: %s", fname, exc)
+            return  # only patch the first config we find
+
     def _load_manifest(self, workspace_path: str):
         """Load TEMPLATE_MANIFEST.md for import resolution context."""
         manifest_path = os.path.join(workspace_path, "TEMPLATE_MANIFEST.md")
@@ -261,10 +318,13 @@ class BuildValidator:
         return os.path.isdir(bin_dir) and bool(os.listdir(bin_dir))
 
     def _install_command(self, pm: str) -> list[str]:
-        """Build an install command with the same cache bias as preview setup."""
+        """Build an install command with the same cache bias as preview setup.
+
+        For pnpm, `_pm_install_cmd` already injects --store-dir +
+        --package-import-method=copy (REQUIRED on Docker Desktop's macOS bind
+        mount to dodge errno -116). Don't duplicate them here.
+        """
         cmd = list(_pm_install_cmd(pm))
-        if pm == "pnpm":
-            return cmd + ["--store-dir", "/tmp/pnpm_store", "--prefer-offline"]
         if pm == "npm":
             return cmd + ["--prefer-offline"]
         return cmd
@@ -518,13 +578,28 @@ Rules:
         # Setup
         pm = detect_package_manager(workspace_path, "npm")
         build_cmd = [pm, "run", "build"]
+        # BUILD vs DEV-SERVER .next/ COLLISION: BV runs concurrently with the
+        # dev server (background-BV optimisation in landing_pipeline). Both
+        # default to writing artifacts under `.next/` which causes the dev
+        # server to serve half-written chunks while `next build` is overwriting
+        # them. Point BV at `.next-build/` via NEXT_DIST so the two processes
+        # never touch the same files. Next.js reads NEXT_DIST when our patched
+        # `next.config.mjs` sets `distDir: process.env.NEXT_DIST || ".next"`
+        # — see `_patch_nextjs_dist_dir()` in local_preview.
         build_env = {
             **_pm_env(pm),
             "CI": "true",
             "ADBLOCK": "true",
             "DISABLE_OPENCOLLECTIVE": "true",
             "OPEN_SOURCE_CONTRIBUTOR": "true",
+            "NEXT_DIST": ".next-build",
         }
+        # Make sure the workspace's next.config.mjs honors NEXT_DIST so the
+        # env var actually redirects the output dir.
+        try:
+            self._patch_nextjs_dist_dir(workspace_path)
+        except Exception as _pdd:
+            logger.debug("BuildValidator: distDir patch skipped: %s", _pdd)
 
         # Load template manifest for import resolution
         self._load_manifest(workspace_path)

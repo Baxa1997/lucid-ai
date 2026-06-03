@@ -613,28 +613,48 @@ async def run_landing_pipeline(
     except Exception as exc:
         logger.warning("landing_pipeline: fixers failed (non-fatal) — %s", exc)
 
-    # ── Step 8: Build verification + auto-fix loop ───────────────────
-    # Run `npm run build` and ask Claude to fix any errors it surfaces
-    # before handing off to preview. Without this, build-time errors
-    # (unresolved imports, JSX syntax, missing exports) only get caught
-    # by the dev server, which leaves the user staring at a red overlay.
-    # max_retries=1 (2 attempts total): the 3-attempt budget was burning
-    # ~9 min on doomed retries when the failures all shared a root cause
-    # Claude couldn't fix. One auto-fix attempt is enough to recover the
-    # easy cases; harder ones fall through to the user's first preview
-    # message so they can describe the runtime error directly.
-    await run_generation_build_check(
-        pipeline="landing_pipeline",
-        workspace_path=workspace_path,
-        api_key=anthropic_key,
-        classification=classification or {},
-        websocket=websocket,
-        max_retries=1,
-        send=lambda kind, message: _send(websocket, kind, message),
-        phase=lambda status, state: _phase(6, "Verifying build", status, state),
-        progress_message="Final checks...",
-        generation=generation,
+    # ── Step 8: Build verification — BACKGROUND TASK ─────────────────
+    # Verification runs `next build` (~60-120s) + an optional Codex fix
+    # loop. Previously this BLOCKED the pipeline before workspace promotion
+    # and before the live dev-server preview could boot — easily adding
+    # 2-3 min of perceived wait when the user's preview iframe could
+    # have been showing instantly.
+    #
+    # Strategy: kick BV off as an asyncio.Task and let landing_pipeline
+    # return immediately. The orchestrator's Phase 7 (publish) awaits the
+    # task before deciding draft-only-vs-Vercel-deploy. Meanwhile:
+    #   • Sandpack instant preview shows ~0s after this returns
+    #   • Dev-server iframe preview boots in parallel (~30-60s)
+    #   • BV finishes concurrently (~60-120s) — when it's done, Phase 7
+    #     reads `_build_ok` and either promotes staging→main+Vercel, or
+    #     emits the "saved to draft" banner.
+    #
+    # Provisional `_build_ok = True` lets gates that read it early (e.g.
+    # quality_gate side-channel) treat the build as passing until proved
+    # otherwise. Phase 7 always re-reads after awaiting the task.
+    try:
+        setattr(websocket, "_build_ok", True)
+    except Exception:
+        pass
+    await _phase(6, "Verifying build", "Running build in background while preview boots…", "active")
+    _build_task = asyncio.create_task(
+        run_generation_build_check(
+            pipeline="landing_pipeline",
+            workspace_path=workspace_path,
+            api_key=anthropic_key,
+            classification=classification or {},
+            websocket=websocket,
+            max_retries=1,
+            send=lambda kind, message: _send(websocket, kind, message),
+            phase=lambda status, state: _phase(6, "Verifying build", status, state),
+            progress_message="Verifying build in background…",
+            generation=generation,
+        )
     )
+    try:
+        setattr(websocket, "_build_task", _build_task)
+    except Exception:
+        pass
 
     # ── Step 9: Quality gate ─────────────────────────────────────────
     # Verify the built page actually fulfils its purpose contract

@@ -79,7 +79,17 @@ def _pm_install_cmd(pm: str, packages: list = None) -> list:
         if pm == "yarn":
             return ["yarn", "install", "--non-interactive"]
         elif pm == "pnpm":
-            return ["pnpm", "install", "--no-frozen-lockfile"]
+            # --store-dir + --package-import-method=copy duplicate the env vars
+            # in _pm_env() but are safer here as explicit flags — pnpm sometimes
+            # ignores npm_config_* during nested invocations (e.g. when a build
+            # script triggers its own install). See _pm_env() docstring for the
+            # Docker Desktop -116 / EREMOTE root cause.
+            return [
+                "pnpm", "install", "--no-frozen-lockfile",
+                "--store-dir", "/tmp/pnpm_store",
+                "--package-import-method=copy",
+                "--prefer-offline",
+            ]
         elif pm == "bun":
             return ["bun", "install"]
         else:
@@ -87,7 +97,22 @@ def _pm_install_cmd(pm: str, packages: list = None) -> list:
 
 
 def _pm_env(pm: str) -> dict:
-    """Build environment variables for running a package manager."""
+    """Build environment variables for running a package manager.
+
+    PNPM-on-Docker-Desktop trap (errno -116 / EREMOTE / ESTALE): the bind-mounted
+    macOS filesystem (`fakeowner` gRPC-fuse) does not support cross-mountpoint
+    hardlinks reliably AND intermittently rejects `copyfile()` syscalls during
+    high-concurrency installs. pnpm's defaults (store on the same FS as the
+    workspace + hardlink-first import) trip this every time on `/app/storage`.
+
+    Two env-level fixes that apply to every pnpm invocation in the codebase:
+      • npm_config_store_dir=/tmp/pnpm_store   — keeps the store on the
+        container overlay FS (fast, native filesystem, supports all syscalls).
+      • npm_config_package_import_method=copy  — skips the hardlink/clone path
+        entirely; plain copy works on every filesystem.
+    Together these cut a typical install from ~8 min (with retries on -116) to
+    ~2 min, AND make the result deterministic across host OSes.
+    """
     import pwd as _pwd
     try:
         _lu = _pwd.getpwnam("lucidai")
@@ -106,6 +131,10 @@ def _pm_env(pm: str) -> dict:
         # Shared caches — packages downloaded once are reused across all workspaces
         "npm_config_cache": "/tmp/npm_cache",
         "PNPM_HOME": "/tmp/pnpm_global",
+        # pnpm-specific: pin store + force copy-based import so installs survive
+        # Docker Desktop's macOS bind mount (see docstring above).
+        "npm_config_store_dir": "/tmp/pnpm_store",
+        "npm_config_package_import_method": "copy",
     }
     # Enable corepack for yarn/pnpm if needed
     if pm in ("yarn", "pnpm"):

@@ -412,6 +412,42 @@ brand: name (real, ≤30 chars); tagline (≤60 chars); description (≤140 char
   social (0-5 entries): each {{label: "instagram"|"facebook"|"twitter"|"linkedin"|"youtube", href: URL}}.
 
 palette: 8 HSL strings ("220 90% 56%" — no hsl(), no commas) — USE the palette from DESIGN_DNA_RESEARCH conclusion. Keys: primary, secondary, accent, background, foreground, muted, border, card.
+  ── PALETTE DISCIPLINE (overrides DESIGN_DNA when research is weak / generic) ──
+  • `background` MUST be a warm/cool brand-tuned NEUTRAL — never pure white. Valid HSL ranges:
+      warm cream    "30-45 25-45% 94-97%"   (food, hospitality, boutique, wellness)
+      cool sand     "30-50 10-22% 93-96%"   (luxury, fine dining, fashion)
+      cool gray     "210-220 15-25% 94-97%" (architecture, agency, premium product)
+      off-white     "0 0% 96-98%"           (only for plain B2B SaaS; default to one of the above)
+    Pure `0 0% 100%` is FORBIDDEN — it reads as un-styled and breaks the editorial mood.
+  • `foreground` (dark text + dark sections) MUST be a brand-tuned charcoal/navy — never pure black.
+    Valid HSL ranges: "210-230 20-40% 8-18%" (navy charcoal) or "30-40 10-20% 10-18%" (warm charcoal).
+    Pure `0 0% 0%` is FORBIDDEN.
+  • `primary` (the BRAND ACCENT) MUST be industry-appropriate. Generic blue (`220 90% 56%` ± 10°)
+    is FORBIDDEN unless the domain is plainly B2B SaaS / dev tools / fintech / corporate. Map by
+    domain — if DESIGN_DNA_RESEARCH gave you a generic blue for a non-SaaS domain, OVERRIDE it
+    using this table:
+      Food / restaurant / café / bakery       → warm terracotta (15-25° 60-75% 45-55%), burnt
+                                                  amber (30-40° 70-85% 45-55%), or burgundy
+                                                  (350-360° 50-65% 30-40%)
+      Education / kids / family               → deep teal (180-195° 50-65% 35-45%) or forest
+                                                  green (140-160° 35-50% 28-38%)
+      Logistics / industrial / construction   → safety lime (75-95° 70-85% 45-55%) or signal
+                                                  amber (40-50° 90-100% 50-58%)
+      Healthcare / wellness / spa             → sage (95-115° 20-35% 45-55%) or teal
+                                                  (170-185° 35-50% 40-50%)
+      Luxury / fashion / fragrance / hotel    → muted gold (35-45° 35-55% 50-60%) or deep
+                                                  navy (215-230° 45-65% 22-32%)
+      Tech / SaaS / dev tools / fintech       → blue is allowed, but bias toward an UNUSUAL
+                                                  hue (electric violet 260-280°, mint
+                                                  165-180°, sunset orange 18-28°) when the
+                                                  brand is consumer-facing.
+      Agency / portfolio / studio             → black-on-cream with ONE saturated accent
+                                                  (red, electric blue, lime — picked from
+                                                  references).
+    Choose ONE saturated brand accent — do NOT make `secondary` and `accent` BOTH saturated
+    (that produces the rainbow look references avoid). `secondary` is usually a darker
+    desaturated relative of the foreground; `accent` is a single companion tint to `primary`
+    (e.g. for terracotta primary, a soft cream-amber accent).
 
 typography: USE the heading_font/body_font from DESIGN_DNA_RESEARCH conclusion. Real Google Fonts only. scale: tight|balanced|expressive.
 
@@ -619,6 +655,26 @@ For EVERY section, populate:
 
     application_form / apply →
       image_queries: 0. Render as a working form, not a banner.
+
+  ── HEADLINE VOICE (every section.headline + the hero h1) ──
+  • SPECIFIC > generic. The headline must name a CONCRETE thing about the business — a
+    number, a place, a process, a sensory detail, a hard tradeoff. Editorial concrete copy
+    is the single largest "doesn't look AI-generated" lever.
+      ✗ "Welcome to Our Restaurant"            ✓ "Three counters. One kitchen."
+      ✗ "Best Service in Town"                  ✓ "Made slow, served warm."
+      ✗ "Transform Your Logistics Today"        ✓ "Freight that moves on your schedule."
+      ✗ "Award-Winning Italian Dining"          ✓ "Where Naples comes to your table."
+      ✗ "Premium Quality Coffee"                ✓ "Roasted Tuesday. On your counter Wednesday."
+  • Use an EM-DASH (—) for a dramatic pause when the headline has two beats:
+      ✓ "Built by drivers — for drivers."
+      ✓ "Eleven seats. One menu. No phones at the table."
+    Use a real em-dash character, not " - " (hyphen-space).
+  • CTA labels must name the ACTION specifically — never "Learn More" / "Click Here".
+      ✗ "Learn More"                            ✓ "See the Tasting Menu"
+      ✗ "Get Started"                            ✓ "Book Your Free Diagnostic"
+      ✗ "Contact Us"                             ✓ "Request a Route Quote"
+  • Subheadline ≤2 lines, conversational, supports the headline with a SECOND concrete
+    detail (a location, a number, a name) — not a restatement of the headline.
 
   ── BANNED COPY PATTERNS (do not write these in headline / subheadline / body / item.description) ──
   • CURLY-BRACE PLACEHOLDERS — NEVER write copy with `{{adjective}}` / `{{noun}}` inline,

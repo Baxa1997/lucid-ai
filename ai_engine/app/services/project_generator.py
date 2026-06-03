@@ -1743,11 +1743,15 @@ async def call_claude_for_json(
     # Anthropic's streaming API frequently aborts mid-stream with
     # "Overloaded" or returns an empty stream (no stop_reason) under
     # load. Without retry, every transient hiccup kills a section.
-    # We retry up to 3 times with exponential backoff (1s, 3s, 7s).
+    # We retry up to 2 times with 1s backoff. Caller wraps this in a
+    # primary→fallback model loop, so the effective budget is 2× per
+    # model = 4 total Anthropic attempts before the section is dropped —
+    # ~120s instead of the old ~360s (3+3 × 60s read timeout). Faster
+    # failure frees the section semaphore slot for the next section.
     # `max_tokens` failures are NOT retried (slimmer-prompt path
     # below handles that); 4xx HTTP errors are NOT retried (returned
     # as None directly from _make_request).
-    async def _request_with_retry(use_model: str, max_attempts: int = 3) -> Optional[dict]:
+    async def _request_with_retry(use_model: str, max_attempts: int = 2) -> Optional[dict]:
         import asyncio as _asyncio
         backoff = 1.0
         for attempt in range(1, max_attempts + 1):
