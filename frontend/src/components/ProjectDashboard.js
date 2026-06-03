@@ -18,6 +18,7 @@ import {
   Copy, Check, ExternalLink, Pencil, Star, Share2, ChevronDown,
   Eye, EyeOff, Lock, ArrowRight, Sliders, UserPlus, Diamond, Loader2,
   CreditCard, AlertTriangle, Trash2, Send, Mail, AlertCircle,
+  Plus, Save, X, RefreshCw,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getSupabaseBrowserClient } from '@/lib/supabase/client';
@@ -28,6 +29,7 @@ import { safeJsonFetch } from '@/lib/api/safeFetch';
 // Domains kept as a live tab since it's an existing shipped feature.
 const TABS = [
   { key: 'general',  label: 'General',     icon: SettingsIcon },
+  { key: 'data',     label: 'Data',        icon: Database     },
   { key: 'users',    label: 'Users',       icon: UsersIcon    },
   { key: 'domains',  label: 'Domains',     icon: Globe        },
   { key: 'billing',  label: 'Billing',     icon: CreditCard   },
@@ -71,6 +73,72 @@ function timeAgo(iso) {
   const months = Math.floor(days / 30);
   if (months === 1) return '1 month ago';
   return `${months} months ago`;
+}
+
+function humanizeName(name = '') {
+  return String(name)
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+function formatCellValue(value) {
+  if (value == null) return '—';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+function inputTypeForField(field) {
+  if (field.type === 'email') return 'email';
+  if (field.type === 'url' || field.type === 'image_url') return 'url';
+  if (field.type === 'number' || field.type === 'integer') return 'number';
+  if (field.type === 'date') return 'date';
+  if (field.type === 'datetime') return 'datetime-local';
+  return 'text';
+}
+
+function valueForInput(field, row = {}) {
+  const value = row[field.name];
+  if (field.type === 'boolean') return Boolean(value);
+  if (field.type === 'json') {
+    if (value == null) return '';
+    return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  }
+  if (field.type === 'datetime' && typeof value === 'string') {
+    return value.slice(0, 16);
+  }
+  return value ?? '';
+}
+
+function buildDraftPayload(fields, draft) {
+  const payload = {};
+  for (const field of fields) {
+    let value = draft[field.name];
+    if (field.type === 'boolean') {
+      payload[field.name] = Boolean(value);
+      continue;
+    }
+    if (value === '') {
+      payload[field.name] = field.required ? '' : null;
+      continue;
+    }
+    if (field.type === 'integer') {
+      const parsed = Number.parseInt(value, 10);
+      payload[field.name] = Number.isNaN(parsed) ? null : parsed;
+      continue;
+    }
+    if (field.type === 'number') {
+      const parsed = Number.parseFloat(value);
+      payload[field.name] = Number.isNaN(parsed) ? null : parsed;
+      continue;
+    }
+    if (field.type === 'json' && typeof value === 'string') {
+      payload[field.name] = value.trim() ? JSON.parse(value) : null;
+      continue;
+    }
+    payload[field.name] = value;
+  }
+  return payload;
 }
 
 // ── Sidebar ──────────────────────────────────────────────
@@ -679,6 +747,378 @@ function UsersTab({ project }) {
 }
 
 // ─────────────────────────────────────────────────────────
+//  DATA TAB — editable generated Supabase collections
+// ─────────────────────────────────────────────────────────
+function ProjectDataTable({ projectId, table, defaultOpen = false }) {
+  const fields = Array.isArray(table.fields) ? table.fields : [];
+  const visibleFields = fields.slice(0, 6);
+  const [open, setOpen] = useState(defaultOpen);
+  const [loaded, setLoaded] = useState(false);
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [busyRow, setBusyRow] = useState(null);
+  const [error, setError] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [draft, setDraft] = useState({});
+
+  const loadRows = useCallback(async () => {
+    if (!projectId || !table?.name) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await safeJsonFetch(
+        `/api/projects/${encodeURIComponent(projectId)}/data/${encodeURIComponent(table.name)}?limit=100`,
+      );
+      setRows(Array.isArray(data?.rows) ? data.rows : []);
+      setLoaded(true);
+    } catch (err) {
+      setError(err.message || 'Failed to load rows.');
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId, table?.name]);
+
+  useEffect(() => {
+    if (open && !loaded) loadRows();
+  }, [open, loaded, loadRows]);
+
+  const openEditor = (mode, row = null) => {
+    const nextDraft = {};
+    for (const field of fields) nextDraft[field.name] = valueForInput(field, row || {});
+    setDraft(nextDraft);
+    setError(null);
+    setEditing({ mode, row });
+  };
+
+  const handleSave = async (e) => {
+    e?.preventDefault?.();
+    if (!editing) return;
+    setBusyRow(editing.row?.id || 'new');
+    setError(null);
+    try {
+      const payload = buildDraftPayload(fields, draft);
+      const base = `/api/projects/${encodeURIComponent(projectId)}/data/${encodeURIComponent(table.name)}`;
+      const isCreate = editing.mode === 'create';
+      const url = isCreate ? base : `${base}/${encodeURIComponent(editing.row.id)}`;
+      await safeJsonFetch(url, {
+        method: isCreate ? 'POST' : 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payload }),
+      });
+      setEditing(null);
+      await loadRows();
+    } catch (err) {
+      setError(err.message || 'Failed to save row.');
+    } finally {
+      setBusyRow(null);
+    }
+  };
+
+  const handleDelete = async (row) => {
+    if (!row?.id || !confirm('Delete this row?')) return;
+    setBusyRow(row.id);
+    setError(null);
+    try {
+      await safeJsonFetch(
+        `/api/projects/${encodeURIComponent(projectId)}/data/${encodeURIComponent(table.name)}/${encodeURIComponent(row.id)}`,
+        { method: 'DELETE' },
+      );
+      await loadRows();
+    } catch (err) {
+      setError(err.message || 'Failed to delete row.');
+    } finally {
+      setBusyRow(null);
+    }
+  };
+
+  return (
+    <div className="bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-2xl overflow-hidden">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between gap-3 px-5 py-4 text-left hover:bg-slate-50 dark:hover:bg-white/[0.03]"
+      >
+        <div className="min-w-0">
+          <h3 className="text-base font-bold text-slate-900 dark:text-white truncate">
+            {table.plural_label || humanizeName(table.name)}
+          </h3>
+          <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+            {table.description || table.name}
+          </p>
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+            {loaded ? `${rows.length} rows` : `${fields.length} fields`}
+          </span>
+          <ChevronDown className={cn('w-4 h-4 text-slate-400 transition-transform', open && 'rotate-180')} />
+        </div>
+      </button>
+
+      {open && (
+        <div className="border-t border-slate-100 dark:border-[#21262d]">
+          <div className="flex items-center justify-between gap-3 px-5 py-3">
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {table.public_read ? 'Public collection' : 'Private collection'}
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={loadRows}
+                disabled={loading}
+                className="p-2 rounded-lg border border-slate-200 dark:border-[#2d333b] text-slate-500 hover:bg-slate-50 dark:hover:bg-white/[0.04] disabled:opacity-50"
+                title="Refresh"
+              >
+                {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+              </button>
+              <button
+                onClick={() => openEditor('create')}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-[13px] font-semibold hover:opacity-90"
+              >
+                <Plus className="w-3.5 h-3.5" /> Add Row
+              </button>
+            </div>
+          </div>
+
+          {error && (
+            <div className="mx-5 mb-3 px-3 py-2 rounded-lg bg-red-50 dark:bg-red-500/10 text-xs text-red-600 dark:text-red-300 flex items-center gap-2">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {error}
+            </div>
+          )}
+
+          {loading && !loaded ? (
+            <div className="px-5 py-10 flex items-center justify-center">
+              <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+            </div>
+          ) : rows.length === 0 ? (
+            <div className="px-5 py-10 text-center text-sm text-slate-500">No rows yet.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[760px] text-sm">
+                <thead className="bg-slate-50 dark:bg-[#0d1117] border-y border-slate-100 dark:border-[#21262d]">
+                  <tr>
+                    {visibleFields.map((field) => (
+                      <th key={field.name} className="px-5 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                        {humanizeName(field.name)}
+                      </th>
+                    ))}
+                    <th className="px-5 py-3 text-right text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row) => (
+                    <tr key={row.id} className="border-b border-slate-100 dark:border-[#21262d] last:border-b-0 hover:bg-slate-50/70 dark:hover:bg-white/[0.02]">
+                      {visibleFields.map((field) => (
+                        <td key={field.name} className="px-5 py-3 text-[13px] text-slate-700 dark:text-slate-200 max-w-[260px]">
+                          <span className="block truncate" title={formatCellValue(row[field.name])}>
+                            {formatCellValue(row[field.name])}
+                          </span>
+                        </td>
+                      ))}
+                      <td className="px-5 py-3">
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={() => openEditor('edit', row)}
+                            disabled={busyRow === row.id}
+                            className="p-1.5 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100 dark:hover:text-slate-200 dark:hover:bg-white/[0.05]"
+                            title="Edit row"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(row)}
+                            disabled={busyRow === row.id}
+                            className="p-1.5 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10"
+                            title="Delete row"
+                          >
+                            {busyRow === row.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {editing && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/45 px-4">
+          <form
+            onSubmit={handleSave}
+            className="w-full max-w-2xl max-h-[86vh] overflow-hidden rounded-2xl bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] shadow-2xl flex flex-col"
+          >
+            <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-slate-100 dark:border-[#21262d]">
+              <div className="min-w-0">
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  {editing.mode === 'create' ? 'Add Row' : 'Edit Row'}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                  {table.plural_label || humanizeName(table.name)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditing(null)}
+                className="p-2 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-white/[0.05]"
+                title="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+              {fields.map((field) => (
+                <label key={field.name} className={cn('block', field.type === 'json' && 'md:col-span-2')}>
+                  <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1.5">
+                    {humanizeName(field.name)}
+                    {field.required && <span className="text-red-500">*</span>}
+                  </span>
+                  {field.type === 'boolean' ? (
+                    <span className="flex items-center h-10 px-3 rounded-lg border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117]">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(draft[field.name])}
+                        onChange={(e) => setDraft((d) => ({ ...d, [field.name]: e.target.checked }))}
+                        className="w-4 h-4 rounded border-slate-300 text-[#dc5426] focus:ring-[#dc5426]/40"
+                      />
+                    </span>
+                  ) : field.type === 'json' ? (
+                    <textarea
+                      value={draft[field.name] ?? ''}
+                      onChange={(e) => setDraft((d) => ({ ...d, [field.name]: e.target.value }))}
+                      rows={5}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] text-[13px] text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[#dc5426]/40 font-mono"
+                    />
+                  ) : (
+                    <input
+                      type={inputTypeForField(field)}
+                      value={draft[field.name] ?? ''}
+                      onChange={(e) => setDraft((d) => ({ ...d, [field.name]: e.target.value }))}
+                      required={field.required}
+                      step={field.type === 'integer' ? '1' : field.type === 'number' ? 'any' : undefined}
+                      className="w-full px-3 py-2.5 rounded-lg border border-slate-200 dark:border-[#2d333b] bg-white dark:bg-[#0d1117] text-[13px] text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[#dc5426]/40"
+                    />
+                  )}
+                  {field.description && (
+                    <span className="block mt-1 text-[11px] text-slate-400 dark:text-slate-500">
+                      {field.description}
+                    </span>
+                  )}
+                </label>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-slate-100 dark:border-[#21262d]">
+              <button
+                type="button"
+                onClick={() => setEditing(null)}
+                className="px-4 py-2 rounded-lg border border-slate-200 dark:border-[#2d333b] text-[13px] font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.04]"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={busyRow === (editing.row?.id || 'new')}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-[13px] font-semibold hover:opacity-90 disabled:opacity-60"
+              >
+                {busyRow === (editing.row?.id || 'new') ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                Save
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DataTab({ project }) {
+  const projectId = project?.id;
+  const [modelInfo, setModelInfo] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const fetchModel = useCallback(async () => {
+    if (!projectId) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await safeJsonFetch(
+        `/api/projects/${encodeURIComponent(projectId)}/data-model`,
+      );
+      setModelInfo(data);
+    } catch (err) {
+      setError(err.message || 'Failed to load project data.');
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    fetchModel();
+  }, [fetchModel]);
+
+  const tables = Array.isArray(modelInfo?.tables) ? modelInfo.tables : [];
+
+  return (
+    <div className="max-w-6xl mx-auto px-8 py-8">
+      <div className="flex items-start justify-between gap-3 mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white mb-1">Data</h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400">Manage generated collections connected to this project.</p>
+        </div>
+        <button
+          onClick={fetchModel}
+          disabled={loading}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 dark:border-[#2d333b] text-[13px] font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-white/[0.04] disabled:opacity-60"
+        >
+          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+          Refresh
+        </button>
+      </div>
+
+      {!projectId ? (
+        <div className="bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-2xl px-5 py-10 text-center text-sm text-slate-500">
+          Project metadata is still loading.
+        </div>
+      ) : loading ? (
+        <div className="bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-2xl px-5 py-10 flex items-center justify-center">
+          <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+        </div>
+      ) : error ? (
+        <div className="bg-red-50 dark:bg-red-500/10 border border-red-200/60 dark:border-red-500/20 rounded-2xl px-5 py-4 text-sm text-red-600 dark:text-red-300 flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0" /> {error}
+        </div>
+      ) : !modelInfo?.provisioned || tables.length === 0 ? (
+        <div className="bg-white dark:bg-[#161b22] border border-slate-200 dark:border-[#2d333b] rounded-2xl px-5 py-10 text-center">
+          <Database className="w-8 h-8 text-slate-300 mx-auto mb-3" />
+          <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">No editable collections yet.</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+            This project may be using static JSON content, or the data schema has not been provisioned.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {tables.map((table, index) => (
+            <ProjectDataTable
+              key={table.name}
+              projectId={projectId}
+              table={table}
+              defaultOpen={index === 0}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────
 //  BILLING TAB — project-level billing summary + link to global billing
 // ─────────────────────────────────────────────────────────
 function BillingTab({ subscription, onUpgradeClick }) {
@@ -883,6 +1323,9 @@ export default function ProjectDashboard({
             )}
             {activeTab === 'users' && (
               <UsersTab project={project} />
+            )}
+            {activeTab === 'data' && (
+              <DataTab project={project} />
             )}
             {activeTab === 'domains' && (
               <DomainsTab

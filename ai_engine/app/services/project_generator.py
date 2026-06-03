@@ -444,7 +444,7 @@ async def _emit_file_writes(
 # ║  The caller supplies opaque batch payloads + an async runner ║
 # ║  that turns one payload into a `{"files": [...]}` dict. The  ║
 # ║  helper does:                                                ║
-# ║    • parallel gather() with hard timeout                     ║
+# ║    • parallel tasks with hard timeout + partial preservation ║
 # ║    • one retry pass for failed batches (transient errors)    ║
 # ║    • per-batch WS events (`phase2_batch_started/complete`)   ║
 # ║    • per-file write + emit with `batch_index` attribution    ║
@@ -529,22 +529,62 @@ async def _run_phase2_parallel_batches(
             pass
         return res
 
-    try:
-        batch_results = await asyncio.wait_for(
-            asyncio.gather(
-                *[_wrapped(i, b) for i, b in enumerate(batches)],
-                return_exceptions=True,
-            ),
-            timeout=initial_timeout,
-        )
-    except asyncio.TimeoutError:
-        logger.error(
-            "Phase 2 (batched) hit %ds hard timeout — proceeding with no results",
-            int(initial_timeout),
-        )
-        batch_results = []
+    async def _run_batch_indices(indices: list[int], timeout_s: float, label: str) -> dict[int, object]:
+        tasks: dict[asyncio.Task, int] = {
+            asyncio.create_task(_wrapped(i, batches[i])): i
+            for i in indices
+        }
+        done, pending = await asyncio.wait(tasks.keys(), timeout=timeout_s)
+        results: dict[int, object] = {}
 
-    batch_results = list(batch_results)
+        for task in done:
+            idx = tasks[task]
+            try:
+                results[idx] = task.result()
+            except Exception as exc:
+                results[idx] = exc
+
+        if pending:
+            timed_out = [tasks[task] for task in pending]
+            logger.warning(
+                "Phase 2 %s hit %ds timeout — preserving %d completed batch(es), cancelling timed-out batch(es): %s",
+                label,
+                int(timeout_s),
+                len(done),
+                timed_out,
+            )
+            await _ws_send(
+                websocket,
+                "warning",
+                f"Phase 2 {label} timed out for {len(timed_out)} batch(es); continuing with completed work.",
+            )
+            for task in pending:
+                idx = tasks[task]
+                task.cancel()
+                results[idx] = TimeoutError(f"phase2_{label}_timeout_{int(timeout_s)}s")
+                try:
+                    await websocket.send_json({
+                        "type": "phase2_batch_complete",
+                        "batch_index": idx,
+                        "total_batches": total,
+                        "ok": False,
+                        "error": f"timeout after {int(timeout_s)}s",
+                    })
+                except Exception:
+                    pass
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        return results
+
+    initial_results = await _run_batch_indices(
+        list(range(total)),
+        initial_timeout,
+        "initial",
+    )
+    batch_results = [
+        initial_results.get(i, TimeoutError("phase2_initial_missing_result"))
+        for i in range(total)
+    ]
 
     # Retry pass: re-run only the batches that failed, capped so Phase 3 still has time.
     retry_indices = [i for i, r in enumerate(batch_results) if _failed(r)]
@@ -558,21 +598,13 @@ async def _run_phase2_parallel_batches(
             "progress",
             f"🔁 Retrying {len(retry_indices)} failed batch(es)...",
         )
-        try:
-            retry_results = await asyncio.wait_for(
-                asyncio.gather(
-                    *[_wrapped(i, batches[i]) for i in retry_indices],
-                    return_exceptions=True,
-                ),
-                timeout=retry_timeout,
-            )
-            for pos, idx in enumerate(retry_indices):
-                batch_results[idx] = retry_results[pos]
-        except asyncio.TimeoutError:
-            logger.warning(
-                "Phase 2 retry hit %ds cap — proceeding with partial results",
-                int(retry_timeout),
-            )
+        retry_results = await _run_batch_indices(
+            retry_indices,
+            retry_timeout,
+            "retry",
+        )
+        for idx, result in retry_results.items():
+            batch_results[idx] = result
 
     # Write each successful batch separately so file_write_event carries
     # batch_index. Path-level dedupe across batches: first-batch-wins, so
@@ -5285,6 +5317,21 @@ delimiters — the JSX/SWC parser cannot read entity-delimited attributes.
 
 Rule of thumb: entities (&apos; &quot;) go INSIDE text between tags. Attribute
 values always use literal " or ' as the delimiter — never an HTML entity.
+
+====================================
+HUMAN COPY STRING LITERALS (non-negotiable)
+====================================
+When writing human-visible copy as a JS value (object property, array item,
+variable initializer, prop value), use double-quoted strings. Names and places
+often contain apostrophes, including Uzbek names like Farg'ona and Ko'cha.
+
+  ✗ name: 'Farg'ona'          → JS syntax error
+  ✓ name: "Farg'ona"          → correct
+  ✗ title='Farg'ona'          → JSX syntax error
+  ✓ title="Farg'ona"          → correct
+
+Single quotes are allowed only for directives/import paths like 'use client'
+and from '@/components/...'. Default to "..." for every human copy string.
 
 ====================================
 FORM INPUT DISCIPLINE — solid, consistent, professional (non-negotiable)

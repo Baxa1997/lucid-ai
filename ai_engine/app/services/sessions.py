@@ -51,7 +51,7 @@ class AgentSession:
 
     __slots__ = (
         "session_id", "user_id", "task", "repo_url",
-        "branch", "git_token",
+        "branch", "git_token", "repo_provider",
         "created_at", "last_active", "is_alive",
         "conversation", "workspace", "workspace_dir",
         "agent", "llm",
@@ -76,6 +76,7 @@ class AgentSession:
         repo_url: Optional[str] = None,
         branch: Optional[str] = None,
         git_token: Optional[str] = None,
+        repo_provider: Optional[str] = None,
     ):
         self.session_id = session_id
         self.user_id = user_id
@@ -83,6 +84,7 @@ class AgentSession:
         self.repo_url = repo_url
         self.branch = branch or "main"
         self.git_token = git_token
+        self.repo_provider = (repo_provider or "").strip().lower()
         self.created_at = datetime.now(timezone.utc)
         self.last_active = time.monotonic()
         self.is_alive = True
@@ -143,6 +145,7 @@ def _serialize(session: AgentSession) -> dict:
         "user_id": session.user_id,
         "task": session.task,
         "repo_url": session.repo_url,
+        "repo_provider": session.repo_provider,
         "branch": session.branch,
         "git_token": session.git_token,
         "created_at": session.created_at.isoformat(),
@@ -164,6 +167,7 @@ def _deserialize(data: dict) -> AgentSession:
         user_id=data["user_id"],
         task=data["task"],
         repo_url=data.get("repo_url"),
+        repo_provider=data.get("repo_provider"),
         branch=data.get("branch", "main"),
         git_token=data.get("git_token"),
     )
@@ -461,6 +465,7 @@ async def create_session(
     task: str,
     user_id: str | None = None,
     repo_url: str | None = None,
+    repo_provider: str | None = None,
     git_token: str | None = None,
     branch: str | None = None,
     git_user_name: str | None = None,
@@ -584,6 +589,7 @@ async def create_session(
         user_id=user_id,
         task=task,
         repo_url=repo_url,
+        repo_provider=repo_provider,
         branch=branch,
         git_token=git_token,
     )
@@ -646,14 +652,36 @@ async def destroy_session(session_id: str) -> None:
             logger.error("Error closing conversation: %s", exc)
 
     # Clean up local workspace directory.
-    # Only delete session-specific workspaces (under the storage root).
-    # Shared preview workspaces (`/tmp/lucid_ws_*`) are managed by
-    # local_preview.py and must NOT be deleted here — the dev server
-    # process is still running and uses those files.
+    # Skip when ANY of the following is true:
+    #   1. Path is itself a preview workspace (lucid_ws_*) — shared, managed
+    #      by local_preview; the dev server is still using it.
+    #   2. Path is the SYMLINK TARGET of an existing preview workspace —
+    #      i.e. the source was promoted via landing_pipeline. Deleting it
+    #      would leave the preview_ws symlink dangling and the next reconnect
+    #      finds an empty workspace ("Internal Server Error" on the iframe).
+    #   3. Session has project_id set — code is persisted, the user can
+    #      re-enter; the workspace_manager TTL reaper handles eventual cleanup.
     if session.workspace_dir and os.path.isdir(session.workspace_dir):
-        from app.paths import is_preview_workspace
+        from app.paths import is_preview_workspace, PREVIEW_WS_ROOT
         _wd = session.workspace_dir
-        if not is_preview_workspace(_wd):
+        _wd_real = os.path.realpath(_wd)
+        _is_promoted = False
+        try:
+            if os.path.isdir(PREVIEW_WS_ROOT):
+                for _name in os.listdir(PREVIEW_WS_ROOT):
+                    _link = os.path.join(PREVIEW_WS_ROOT, _name)
+                    if os.path.islink(_link) and os.path.realpath(_link) == _wd_real:
+                        _is_promoted = True
+                        break
+        except OSError:
+            pass
+        _has_project = bool(getattr(session, "project_id", "") or "")
+        if is_preview_workspace(_wd) or _is_promoted or _has_project:
+            logger.info(
+                "destroy_session: keeping workspace %s (preview=%s promoted=%s project=%s)",
+                _wd, is_preview_workspace(_wd), _is_promoted, _has_project,
+            )
+        else:
             shutil.rmtree(_wd, ignore_errors=True)
 
 

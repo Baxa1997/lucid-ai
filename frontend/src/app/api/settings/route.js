@@ -5,7 +5,7 @@ import { getSupabaseServerClient } from '@/lib/supabase/server';
 // ─────────────────────────────────────────────────────────
 //  Supported providers and models (mirrors the frontend UI)
 // ─────────────────────────────────────────────────────────
-const VALID_PROVIDERS = ['anthropic'];
+const VALID_PROVIDERS = ['anthropic', 'openai'];
 
 const VALID_MODELS = {
   anthropic: [
@@ -13,6 +13,10 @@ const VALID_MODELS = {
     'anthropic/claude-3-5-opus-20241022',
     'anthropic/claude-sonnet-4-6',
     'anthropic/claude-opus-4-6',
+  ],
+  openai: [
+    'openai/gpt-5.2-codex',
+    'openai/gpt-5.1-codex-max',
   ],
 };
 

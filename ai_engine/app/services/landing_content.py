@@ -25,7 +25,11 @@ logger = logging.getLogger(__name__)
 # Header anchors are derived from sections, but a few section types
 # don't make sense as nav entries (the hero is what loads first; the
 # footer has its own role; CTAs are bands, not destinations).
-_NOT_IN_NAV = {"hero", "footer", "cta", "cta_band", "newsletter"}
+_NOT_IN_NAV = {
+    "hero", "footer", "cta", "cta_band", "newsletter",
+    # CTA-bar variants Claude emits — these are "sign up" prompts, not nav targets
+    "mid_cta", "final_cta", "lead_form", "signup",
+}
 
 
 def build_landing_content(brief: dict[str, Any]) -> dict[str, Any]:
@@ -141,8 +145,17 @@ def _derive_nav(sections: list[dict[str, Any]]) -> list[dict[str, str]]:
 
 
 _NAV_LABEL_NOISE = {
+    # generic structural words
     "section", "hook", "showcase", "incentive", "block", "band", "details",
     "info", "area", "panel", "module", "page", "view",
+    # visual / layout descriptors that should NEVER end up as a nav label
+    # ("trust-strip" → "Trust", not "Strip"; "course-grid" → "Course", not "Grid")
+    "strip", "bar", "ticker", "grid", "list", "row", "stack", "rail",
+    "carousel", "slider", "marquee", "tabs", "split", "stage", "deck",
+    # position / variant descriptors
+    "main", "mid", "primary", "secondary", "alt", "alternate", "top", "bottom",
+    # call-to-action words that should never be a NAV target (CTAs go in NOT_IN_NAV)
+    "cta", "signup", "form",
 }
 
 # Domain-aware single-word labels for common section types. Used to compress
@@ -192,7 +205,10 @@ def _nav_label(section: dict[str, Any]) -> str:
       3. Cleaned-up section id with noise words ("section", "hook", …) removed.
     """
     explicit = (section.get("nav_label") or "").strip()
-    if explicit:
+    # Reject brief-supplied labels that are themselves visual noise — Claude
+    # sometimes echoes the section id directly into nav_label, so we treat
+    # a single-word noise label as if it weren't set.
+    if explicit and explicit.lower() not in _NAV_LABEL_NOISE:
         return explicit[:14]
 
     stype_raw = (section.get("type") or "").strip().lower()
@@ -205,16 +221,18 @@ def _nav_label(section: dict[str, Any]) -> str:
         if w and w.lower() not in _NAV_LABEL_NOISE
     ]
     if sid_words:
-        # Prefer the LAST meaningful word ("about-philosophy" → "Philosophy",
-        # "direct-booking-incentive" → "Booking"). One word, never two.
-        return sid_words[-1].title()[:14]
+        # Prefer the FIRST meaningful word ("trust-strip" → "Trust",
+        # "course-selection" → "Course", "platform-showcase" → "Platform").
+        # The first word carries the noun; trailing words are usually layout
+        # descriptors (strip, grid, showcase) already filtered as noise.
+        return sid_words[0].title()[:14]
 
     stype_words = [
         w for w in stype_raw.replace("_", " ").replace("-", " ").split()
         if w and w not in _NAV_LABEL_NOISE
     ]
     if stype_words:
-        return stype_words[-1].title()[:14]
+        return stype_words[0].title()[:14]
 
     head = (section.get("headline") or "").strip()
     return head[:14]

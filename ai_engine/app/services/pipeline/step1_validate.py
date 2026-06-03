@@ -8,7 +8,10 @@ Zero logic changes.
 from __future__ import annotations
 
 import logging
+import os
 import re
+import shutil
+from urllib.parse import urlparse, urlunparse
 
 from fastapi import WebSocket
 
@@ -22,6 +25,32 @@ from .github import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_repo_clone_url(provider: str, repo: str) -> str:
+    """Return an HTTPS clone URL without credentials for GitHub/GitLab repos."""
+    raw = str(repo or "").strip()
+    if not raw:
+        return ""
+
+    parsed = urlparse(raw)
+    if parsed.scheme and parsed.hostname:
+        host = parsed.hostname
+        if parsed.port:
+            host = f"{host}:{parsed.port}"
+        path = parsed.path.strip("/")
+        clean = urlunparse(parsed._replace(netloc=host, path=f"/{path}", query="", fragment=""))
+        return clean if clean.endswith(".git") else f"{clean}.git"
+
+    scp_match = re.match(r"^(?:[^@]+@)?([^:]+):(.+)$", raw)
+    if scp_match:
+        host, path = scp_match.group(1), scp_match.group(2).strip("/")
+        clean = f"https://{host}/{path}"
+        return clean if clean.endswith(".git") else f"{clean}.git"
+
+    host = "github.com" if provider == "github" else "gitlab.com"
+    path = raw.strip("/")
+    return f"https://{host}/{path}.git"
 
 
 # Cheap heuristics that catch the obvious garbage prompts ("dasdasdasdas",
@@ -117,14 +146,37 @@ async def validate_inputs(
     uses the existing repo instead of entering scratch mode.
     """
     try:
-        # ── Anthropic API key ─────────────────────────────
+        # ── LLM/code-agent keys ───────────────────────────
+        # New-project generation still uses Anthropic in the downstream
+        # generation pipeline. Existing-project edits can use Codex/OpenAI for
+        # the agentic code-edit pass, with Claude as fallback when available.
         api_key = user.get("anthropic_api_key")
-        if api_key is None or str(api_key).strip() in ("", "None"):
+        anthropic_api_key = "" if api_key is None else str(api_key).strip()
+        if anthropic_api_key == "None":
+            anthropic_api_key = ""
+        openai_api_key = str(
+            user.get("openai_api_key")
+            or os.environ.get("OPENAI_API_KEY", "")
+            or ""
+        ).strip()
+        openai_model = str(user.get("openai_model") or "").strip()
+        codex_agent_available = bool(
+            openai_api_key
+            or os.environ.get("CODEX_CLI_PATH")
+            or shutil.which("codex")
+        )
+
+        def _has_anthropic_key() -> bool:
+            return bool(anthropic_api_key)
+
+        async def _send_missing_generation_key() -> None:
             await websocket.send_json({
                 "type": "error",
-                "message": "❌ Anthropic API key not found. Add it in Settings.",
+                "message": (
+                    "❌ Anthropic API key not found. New project generation "
+                    "still requires Anthropic. Add it in Settings."
+                ),
             })
-            return None
 
         # Gemini auth is now Vertex ADC inside gemini_post — no per-user key.
 
@@ -160,6 +212,10 @@ async def validate_inputs(
 
         if _is_wizard_task:
             logger.info("NEW_PROJECT_MODE DETECTED — header: %s", _header_raw[:300])
+
+            if not _has_anthropic_key():
+                await _send_missing_generation_key()
+                return None
 
             # ── Extract fields from header ────────────────────────────────
             def _hdr(field: str) -> str:
@@ -251,7 +307,9 @@ async def validate_inputs(
             await websocket.send_json({"type": "progress", "message": msg})
 
             return {
-                "anthropic_api_key": str(api_key).strip(),
+                "anthropic_api_key": anthropic_api_key,
+                "openai_api_key": openai_api_key,
+                "openai_model": openai_model,
                 "git_provider":      "github",
                 "repo_url":          "",
                 "branch":            "main",
@@ -401,11 +459,10 @@ async def validate_inputs(
                         return None
                 repo = str(repo).strip()
                 token = str(token).strip()
-                repo = repo.replace("https://github.com/", "").strip("/")
-                if repo.endswith(".git"):
-                    repo = repo[:-4]
-                repo_url = f"https://{token}@github.com/{repo}.git"
-                logger.info("repo_url built for github/%s", repo)
+                base_repo_url = _normalize_repo_clone_url("github", repo)
+                from app.services.vcs.git import _inject_token_into_url, strip_auth_from_url
+                repo_url = _inject_token_into_url(base_repo_url, token)
+                logger.info("repo_url built for github/%s", strip_auth_from_url(base_repo_url))
 
             elif git_provider == "gitlab":
                 if not token or not str(token).strip():
@@ -416,11 +473,10 @@ async def validate_inputs(
                     return None
                 repo = str(repo).strip()
                 token = str(token).strip()
-                repo = repo.replace("https://gitlab.com/", "").strip("/")
-                if repo.endswith(".git"):
-                    repo = repo[:-4]
-                repo_url = f"https://oauth2:{token}@gitlab.com/{repo}.git"
-                logger.info("repo_url built for gitlab/%s", repo)
+                base_repo_url = _normalize_repo_clone_url("gitlab", repo)
+                from app.services.vcs.git import _inject_token_into_url, strip_auth_from_url
+                repo_url = _inject_token_into_url(base_repo_url, token)
+                logger.info("repo_url built for gitlab/%s", strip_auth_from_url(base_repo_url))
 
             else:
                 await websocket.send_json({
@@ -449,6 +505,9 @@ async def validate_inputs(
         # only enforce the garbage gate when this is genuinely a fresh request.
         # `scratch_mode=True` means no repo, no chat history → first message.
         if scratch_mode:
+            if not _has_anthropic_key():
+                await _send_missing_generation_key()
+                return None
             _garbage_reason = _looks_like_garbage(task)
             if _garbage_reason:
                 logger.info("validate_inputs: rejecting garbage scratch task %r — %s",
@@ -459,7 +518,9 @@ async def validate_inputs(
         # Non-wizard normal tasks (user's own repo)
         # new_project_mode is always False here — wizard tasks returned early above.
         validated = {
-            "anthropic_api_key": str(api_key).strip(),
+            "anthropic_api_key": anthropic_api_key,
+            "openai_api_key": openai_api_key,
+            "openai_model": openai_model,
             "git_provider": git_provider,
             "repo_url": repo_url or "",
             "branch": branch,
@@ -476,6 +537,15 @@ async def validate_inputs(
         }
 
         mode_label = " (scratch mode)" if scratch_mode else ""
+        if not _has_anthropic_key() and not codex_agent_available:
+            await websocket.send_json({
+                "type": "error",
+                "message": (
+                    "❌ No code-edit agent is configured. Add an Anthropic key "
+                    "or configure Codex/OpenAI on the server."
+                ),
+            })
+            return None
         await websocket.send_json({
             "type": "progress",
             "message": f"✅ Inputs validated{mode_label}",

@@ -212,6 +212,9 @@ def _build_vocab(workspace_path: str) -> dict[str, list[str]]:
         "section_files":    section_files,
         "component_files":  component_files,
         "content_keys":     content_keys,
+        # Kept out of the LLM prompt. Used only after parsing so target_files
+        # cannot smuggle hallucinated src/... paths into the edit pipeline.
+        "all_files":        paths[:4000],
     }
 
 
@@ -559,11 +562,9 @@ def _parse(raw: str, vocab: dict[str, list[str]]) -> EditIntent | None:
 
     # Candidate files: extractor's target_files filtered against the real
     # vocab. We never trust a path that didn't come from `_walk_workspace_paths`.
-    real_files: set[str] = set()
+    real_files: set[str] = set(vocab.get("all_files") or [])
     real_files.update(vocab.get("section_files") or [])
     real_files.update(vocab.get("component_files") or [])
-    # Re-walk content + page files lightly so the extractor can name them.
-    # `vocab.routes` is just routes; we need the file paths too.
     candidate_files: list[str] = []
     raw_files = data.get("target_files") or []
     if isinstance(raw_files, list):
@@ -571,9 +572,9 @@ def _parse(raw: str, vocab: dict[str, list[str]]) -> EditIntent | None:
             if not isinstance(f, str):
                 continue
             rel = f.strip().lstrip("/")
-            # Always allow files we recorded in vocab; allow path/page
-            # combinations that obviously belong to the project layout.
-            if rel in real_files or rel.startswith("src/"):
+            # Only allow files observed in the real workspace. This prevents
+            # an LLM response from routing Codex toward invented src/... paths.
+            if rel in real_files:
                 if rel not in candidate_files:
                     candidate_files.append(rel)
 

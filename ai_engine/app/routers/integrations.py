@@ -420,9 +420,18 @@ async def create_pr(
                 base=payload.baseBranch,
             )
         else:
-            gitlab_url = payload.gitlabUrl or "https://gitlab.com"
             # Build project_id from the URL path relative to the GitLab host
             parsed = urlparse(payload.repoUrl)
+            repo_gitlab_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
+            requested_gitlab_url = (payload.gitlabUrl or "").rstrip("/")
+            if requested_gitlab_url == "https://gitlab.com" and repo_gitlab_url and "gitlab.com" not in parsed.netloc:
+                requested_gitlab_url = ""
+            gitlab_url = (
+                requested_gitlab_url
+                or repo_gitlab_url
+                or integration.get("gitlabUrl")
+                or "https://gitlab.com"
+            )
             path = parsed.path.strip("/")
             if path.endswith(".git"):
                 path = path[:-4]

@@ -85,6 +85,38 @@ async def run_landing_fixers(workspace_path: str, websocket: Any = None) -> dict
     # (which only stubs missing modules and doesn't touch JSX class strings).
     _run("fix_low_contrast_text_on_image", F.fix_low_contrast_text_on_image, workspace_path)
     _run("fix_dropdown_zindex", F.fix_dropdown_zindex, workspace_path)
+    # Carousel autoplay + scrollIntoView(block: 'nearest') was hijacking page
+    # scroll every 4.5s, locking the user to the testimonials section. Convert
+    # to parent-relative scrollLeft so only the carousel moves.
+    _run("fix_carousel_scroll_hijack", F.fix_carousel_scroll_hijack, workspace_path)
+    # `col-span-*` / `row-span-*` on the inner div instead of the <Reveal>
+    # wrapper (CSS Grid ignores grid placement on non-direct children). Bento
+    # grids collapsed to a single column with all cards overlapping —
+    # TrustTickerSection 2026-06-03. Move tokens onto the Reveal wrapper.
+    _run("fix_grid_positioning_on_wrapper", F.fix_grid_positioning_on_wrapper, workspace_path)
+    # Footer rendering empty placeholder columns (em-dash ghosts) because
+    # Claude hardcodes a 4-column structure even when the brief only fills
+    # one group. Strip the placeholder branch + filter empty groups before
+    # render so the footer scales to actual data.
+    _run("fix_footer_empty_columns", F.fix_footer_empty_columns, workspace_path)
+    # Hero "Score Guarantee" / score-badge clipping — negative top/right
+    # offsets push the badge above the section while overflow-hidden clips
+    # it. Clamp the offset back inside the section.
+    _run("fix_badge_clipping_in_hero", F.fix_badge_clipping_in_hero, workspace_path)
+    # FAQ "04" giant decorative number bleeding into the next section because
+    # the section root forgot overflow-hidden. Add the clip when the section
+    # carries any decorative absolute element (huge type, blob blur, big
+    # negative offset).
+    _run("fix_section_overflow_clip", F.fix_section_overflow_clip, workspace_path)
+    # Telemetry only — log sections that hardcode data arrays despite the
+    # prompt rule. Auto-fix isn't safe (would break the component) but the
+    # counts let us measure how often Claude ignores the rule and prioritize
+    # tightening the prompt vs enriching landing.json items.
+    _run("audit_hardcoded_data_arrays", F.audit_hardcoded_data_arrays, workspace_path)
+    # Telemetry only — log sections that render the same JSX expression as
+    # both a giant absolute watermark AND a normal label (the Elena Rodriguez
+    # ghost-name bug). Auto-removal would risk unbalanced JSX.
+    _run("audit_duplicate_text_watermark", F.audit_duplicate_text_watermark, workspace_path)
     # Strip kebab/snake-case lucide imports BEFORE unresolved-imports stubs them.
     _run("fix_invalid_lucide_imports", F.fix_invalid_lucide_imports, workspace_path)
     # Strip Claude-emitted hardcoded UNSPLASH_IMAGES dicts so components fall

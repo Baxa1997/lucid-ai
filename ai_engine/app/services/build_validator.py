@@ -1,12 +1,12 @@
-"""BuildValidator — Production build validator with Claude-powered self-healing.
+"""BuildValidator — Production build validator with agent-powered self-healing.
 
 This module implements the build validation gate that sits between code generation
 and GitHub commit/push. It runs `npm run build` (or pnpm/yarn), and if the build
-fails, sends the errors to Claude for auto-fixing (up to 3 attempts).
+fails, sends the errors to Codex or Claude for auto-fixing (up to 3 attempts).
 
 Architecture:
   Layer 1 (MCP): TEMPLATE_MANIFEST.md — tells Claude what components exist
-  Layer 2 (Skills): Quality standards — tells Claude HOW to fix correctly
+  Layer 2 (Skills): Quality standards — tells the fixer HOW to fix correctly
   Layer 3 (Plugin): CLAUDE.md — auto-read by Claude before any prompt
 
 Usage:
@@ -21,6 +21,7 @@ Usage:
         # Build failed after 3 attempts — commit with flag
 """
 import os
+import time
 import json
 import asyncio
 import subprocess
@@ -85,7 +86,7 @@ except ImportError:
 
 
 class BuildValidator:
-    """Production build validator with Claude-powered self-healing.
+    """Production build validator with agent-powered self-healing.
 
     Usage:
         validator = BuildValidator(api_key, classification, websocket)
@@ -104,8 +105,12 @@ class BuildValidator:
         classification: dict,
         websocket: WebSocket,
         max_retries: int = 1,
+        openai_api_key: str = "",
+        openai_model: str = "",
     ):
         self.api_key = api_key
+        self.openai_api_key = openai_api_key
+        self.openai_model = openai_model
         self.classification = classification
         self.websocket = websocket
         self.max_retries = max_retries
@@ -113,6 +118,7 @@ class BuildValidator:
         self.fixed_files: list = []
         self.errors: str = ""
         self.template_manifest: str = ""
+        self.codex_fix_failed: bool = False
 
     async def _send(self, msg_type: str, status: str, message: str, **extra):
         """Send a websocket message (best-effort)."""
@@ -169,18 +175,41 @@ class BuildValidator:
             if result.returncode == 0:
                 return {"success": True}
 
-            # Extract meaningful error lines
+            # Extract meaningful error lines.
+            # Pnpm/npm noise (Progress:, Packages:, Recreating, resolved/reused
+            # download counters) drowns out the actual compile errors when we
+            # just tail the last 80 lines — the next-build output gets pushed
+            # off the bottom. Filter noise first, then surface the real errors.
             error_lines = full_output.splitlines()
+            _NOISE_PREFIXES = (
+                "progress:", "packages:", "recreating", "lockfile",
+                "warning", "warn ", "info ", "fetched",
+                "+++", "===", "│", "?",
+            )
+            def _is_noise(line: str) -> bool:
+                low = line.strip().lower()
+                if not low:
+                    return True
+                if low.startswith(_NOISE_PREFIXES):
+                    return True
+                if low.startswith("packages:") or low.startswith("progress:"):
+                    return True
+                return False
+            denoised = [ln for ln in error_lines if not _is_noise(ln)]
             meaningful = [
-                line for line in error_lines
+                line for line in denoised
                 if any(kw in line.lower() for kw in [
-                    "error", "module not found", "cannot find", "syntaxerror",
-                    "unexpected token", "is not defined", "failed to compile",
-                    "can't resolve", "export", "import",
+                    "error:", "type error", "module not found", "cannot find",
+                    "syntaxerror", "unexpected token", "is not defined",
+                    "failed to compile", "can't resolve", "× ", "⨯ ",
+                    " at ", "expected", "unexpected",
                 ])
             ]
             error_count = len(meaningful) or 1
-            truncated = "\n".join(error_lines[-80:])[:4000]
+            # Prefer the tail of the *denoised* output so install progress
+            # doesn't crowd out next-build's compile errors.
+            tail_source = denoised if denoised else error_lines
+            truncated = "\n".join(tail_source[-80:])[:4000]
 
             return {
                 "success": False,
@@ -241,10 +270,18 @@ class BuildValidator:
         return cmd
 
     async def fix_errors(self, workspace_path: str, errors: str, build_cmd: list) -> list:
-        """Send build errors to Claude for fixing.
+        """Send build errors to the configured code agent for fixing.
 
         Returns list of files that were modified.
         """
+        if self._prefer_codex_fixer():
+            modified = await self.fix_errors_with_codex(workspace_path, errors, build_cmd)
+            if modified or not str(self.api_key or "").strip():
+                return modified
+
+        if not str(self.api_key or "").strip():
+            logger.info("BuildValidator: no Anthropic key available, skipping Claude auto-fix")
+            return []
         if not ClaudeCodeOptions or not query:
             logger.warning("BuildValidator: Claude SDK not available, skipping fix")
             return []
@@ -353,6 +390,96 @@ STOP when all errors are fixed.
 
         return modified_files
 
+    def _prefer_codex_fixer(self) -> bool:
+        if self.codex_fix_failed:
+            return False
+        raw = os.environ.get(
+            "LUCID_BUILD_FIX_AGENT_PROVIDER",
+            os.environ.get("LUCID_EDIT_AGENT_PROVIDER", "codex"),
+        ).strip().lower()
+        if raw in {"claude", "anthropic"}:
+            return False
+        try:
+            from app.services.codex_cli import codex_cli_available
+            return codex_cli_available()
+        except Exception:
+            return False
+
+    def _codex_model(self) -> str:
+        model = (
+            self.openai_model
+            or os.environ.get("CODEX_BUILD_FIX_MODEL", "")
+            or os.environ.get("CODEX_EDIT_MODEL", "")
+            or os.environ.get("CODEX_MODEL", "")
+        ).strip()
+        if model.startswith("openai/"):
+            return model.split("/", 1)[1]
+        return model
+
+    async def fix_errors_with_codex(
+        self,
+        workspace_path: str,
+        errors: str,
+        build_cmd: list,
+    ) -> list:
+        """Use Codex to fix build errors when Codex is the edit executor."""
+        try:
+            from app.services.codex_cli import run_codex_session
+        except Exception as exc:
+            logger.info("BuildValidator: Codex CLI unavailable for build fix: %s", exc)
+            return []
+
+        ws_tree = self._build_file_tree(workspace_path)
+        manifest_block = ""
+        if self.template_manifest:
+            manifest_block = (
+                "\n## TEMPLATE MANIFEST (available components — check before importing):\n"
+                f"{self.template_manifest}\n"
+            )
+
+        prompt = f"""The production build (`{' '.join(build_cmd)}`) failed with these errors:
+
+```
+{errors}
+```
+
+## WORKSPACE FILES
+{ws_tree}
+{manifest_block}
+## FIX INSTRUCTIONS
+Fix only the files causing these build errors.
+
+Rules:
+- Do not redesign or refactor.
+- Do not commit, push, pull, reset, or delete the repository.
+- If 'Module not found', check the actual file tree and TEMPLATE_MANIFEST before creating anything.
+- If a component import path is wrong, fix the import path.
+- If a component is missing and clearly required, create a minimal component using the project's style.
+- If hooks/browser APIs are used in a Next.js App Router component, add 'use client' as the first line.
+- If JSX siblings are invalid inside a ternary/map callback, wrap them in a fragment.
+- Stop after the build errors are fixed.
+"""
+        try:
+            result = await run_codex_session(
+                prompt=prompt,
+                workspace_path=workspace_path,
+                websocket=self.websocket,
+                api_key=self.openai_api_key or os.environ.get("OPENAI_API_KEY", ""),
+                model=self._codex_model(),
+                timeout_seconds=300,
+                phase_label="build_fix_codex",
+            )
+            if not result.success:
+                self.codex_fix_failed = True
+                return []
+            return result.files_written
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.codex_fix_failed = True
+            logger.warning("BuildValidator: Codex build fix failed: %s", exc)
+            return []
+
     async def validate_and_fix(self, workspace_path: str) -> dict:
         """Main entry point: validate build and auto-fix errors.
 
@@ -403,7 +530,8 @@ STOP when all errors are fixed.
         self._load_manifest(workspace_path)
 
         # Ensure node_modules exist
-        if not self._expected_binary_ready(workspace_path, pkg_data):
+        already_ready_pre_install = self._expected_binary_ready(workspace_path, pkg_data)
+        if not already_ready_pre_install:
             await self._send("build", "checking", f"📦 Installing dependencies ({pm})...")
             install_result = None
             try:
@@ -420,10 +548,14 @@ STOP when all errors are fixed.
             except Exception as ie:
                 logger.warning("BuildValidator: install failed: %s", ie)
 
+            # pnpm exits 1 for purely advisory warnings — ERR_PNPM_IGNORED_BUILDS
+            # (postinstall scripts skipped), peer-dep warnings, etc. The structural
+            # truth is whether the framework binary landed; if it did, treat the
+            # install as success regardless of rc and avoid the bogus fix loop.
             if install_result is not None and install_result.returncode != 0:
                 tail = ((install_result.stderr or "") + "\n" + (install_result.stdout or ""))[-2000:]
                 logger.warning(
-                    "BuildValidator: dependency install exited %d: %s",
+                    "BuildValidator: dependency install exited %d (advisory if binaries are present): %s",
                     install_result.returncode,
                     tail[-500:],
                 )
@@ -431,7 +563,7 @@ STOP when all errors are fixed.
             if not self._expected_binary_ready(workspace_path, pkg_data):
                 errors = (
                     "Dependency install did not finish cleanly; framework build "
-                    "binary is still missing. Skipping Claude auto-fix because "
+                    "binary is still missing. Skipping code-agent auto-fix because "
                     "this is an environment/install failure, not a code error."
                 )
                 await self._send("build", "warning", f"⚠️ {errors}")
@@ -444,6 +576,18 @@ STOP when all errors are fixed.
                     "error_count": 1,
                     "install_failed": True,
                 }
+
+        # Marker so local_preview._ensure_node_modules skips its own install
+        # pass. Write whenever binaries are ready — even if we never ran the
+        # install above (already_ready_pre_install) or pnpm exited 1 with
+        # ERR_PNPM_IGNORED_BUILDS. Without this, local_preview re-runs pnpm
+        # for ~9 min after BuildValidator already had the deps in place.
+        try:
+            marker_path = os.path.join(workspace_path, ".lucid_install_done")
+            with open(marker_path, "w", encoding="utf-8") as mf:
+                mf.write(f"{pm}\n{int(time.time())}\n")
+        except OSError as mexc:
+            logger.debug("BuildValidator: install marker write failed: %s", mexc)
 
         await self._send("build", "checking",
                          f"🔍 Running production build ({' '.join(build_cmd)})...")
@@ -493,15 +637,66 @@ STOP when all errors are fixed.
                 "BuildValidator: build failed (attempt %d/%d) — %d errors",
                 self.attempt + 1, self.max_retries + 1, last_error_count,
             )
+            # Log the first ~1500 chars of the actual error text so failures
+            # are diagnosable from the log alone. Without this we only know
+            # the count, and the workspace is reaped before anyone can grep.
+            if last_errors:
+                logger.warning(
+                    "BuildValidator: error detail (attempt %d):\n%s",
+                    self.attempt + 1, last_errors[:1500],
+                )
 
-            if self.attempt < self.max_retries:
-                await self._send("build", "fixing",
-                    f"⚠️ Build failed with {last_error_count} error(s) — "
-                    f"Claude is auto-fixing (attempt {self.attempt + 1}/{self.max_retries})...",
+            # Short-circuit when the build failure is an install-time symptom,
+            # not a code error. The code-fix agent can't fix missing packages
+            # or post-install scripts, so burning 2–5 min on a fix loop +
+            # 180s retry timeout is wasted. Bail straight to "warning".
+            _err_low = (last_errors or "").lower()
+            _install_signals = (
+                "command failed with exit code 1: pnpm install",
+                "command failed with exit code 1: npm install",
+                "err_pnpm_",
+                "enoent: no such file or directory, open",
+                "cannot find module 'next/",
+                "cannot find module 'react'",
+                "module not found: can't resolve 'next'",
+            )
+            if any(sig in _err_low for sig in _install_signals):
+                logger.warning(
+                    "BuildValidator: detected install-time failure — skipping code-agent fix loop"
+                )
+                await self._send("build", "warning",
+                    f"⚠️ Build failed due to an install-time issue ({last_error_count} error(s)) — "
+                    "skipping auto-fix because this isn't a code error. Project deploys to staging only.",
                     errors=last_errors[:2000],
                 )
-                modified = await self.fix_errors(workspace_path, last_errors, build_cmd)
-                self.fixed_files.extend(modified)
+                return {
+                    "success": False,
+                    "needs_fix": True,
+                    "attempts": self.attempt + 1,
+                    "errors": last_errors,
+                    "fixed_files": self.fixed_files,
+                    "error_count": last_error_count,
+                    "install_failed": True,
+                }
+
+            if self.attempt < self.max_retries:
+                has_codex_fixer = self._prefer_codex_fixer()
+                if not str(self.api_key or "").strip() and not has_codex_fixer:
+                    await self._send("build", "warning",
+                        f"⚠️ Build failed with {last_error_count} error(s). "
+                        "No code-fix agent is available for automatic build fixing.",
+                        errors=last_errors[:2000],
+                    )
+                    break
+                else:
+                    fixer_name = "Codex" if has_codex_fixer else "Claude"
+                    await self._send("build", "fixing",
+                        f"⚠️ Build failed with {last_error_count} error(s) — "
+                        f"{fixer_name} is auto-fixing (attempt {self.attempt + 1}/{self.max_retries})...",
+                        errors=last_errors[:2000],
+                    )
+                    modified = await self.fix_errors(workspace_path, last_errors, build_cmd)
+                    self.fixed_files.extend(modified)
 
             self.attempt += 1
 

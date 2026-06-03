@@ -67,6 +67,7 @@ async def init_session(
             task=payload.task,
             user_id=user.user_id,
             repo_url=payload.repoUrl,
+            repo_provider=payload.repoProvider,
             git_token=git_token,
             branch=payload.branch,
             git_user_name=payload.gitUserName,

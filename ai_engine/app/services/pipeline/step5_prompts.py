@@ -50,6 +50,10 @@ ANTI_LOOP = (
     "Preserve the user's requested scope. Do not redesign unrelated areas.\n"
     "If adding a page/screen/route/view, create the page/component AND update the stack's navigation/router/layout references as needed.\n"
     "If fixing a UI/UX/visual bug, fix the visible issue directly: responsive breakpoints, overflow, spacing, z-index, alignment, contrast, and state styles before rewriting.\n"
+    "\nRULE 9 — HUMAN COPY STRINGS:\n"
+    "Use double quotes for human-visible JS/JSX copy strings. Names and places can contain apostrophes, including Uzbek names like Farg'ona and Ko'cha.\n"
+    "Correct: name: \"Farg'ona\" and title=\"Farg'ona\". Incorrect: name: 'Farg'ona' or title='Farg'ona'.\n"
+    "Single quotes are allowed only for directives/import paths such as 'use client' and from '@/...'.\n"
 )
 
 

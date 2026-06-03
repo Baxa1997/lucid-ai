@@ -281,9 +281,610 @@ _LUCIDE_IMPORT_RE = re.compile(
 )
 
 
+_SCROLL_INTO_VIEW_RE = re.compile(
+    r"(\w+)\.scrollIntoView\s*\(\s*\{[^}]*\}\s*\)\s*;?"
+)
+
+# Top-level ALL_CAPS const that initializes a multi-item array — Claude's
+# go-to pattern for fabricating "search results", "filter options", etc.
+# when landing.json doesn't provide items. We can't auto-fix safely (the
+# component references the constant), so we only log it as telemetry.
+_HARDCODED_DATA_ARRAY_RE = re.compile(
+    r"^const\s+([A-Z_]{3,})\s*=\s*\[",
+    re.MULTILINE,
+)
+# These names are infrastructure, not fabricated data — skip them in counts.
+_HARDCODED_DATA_IGNORE = frozenset({
+    "UNSPLASH_IMAGES",  # already handled by fix_hardcoded_unsplash_dicts
+})
+
+
+def audit_hardcoded_data_arrays(workspace_path: str) -> list[str]:
+    """Telemetry-only: log section files that hardcode data arrays.
+
+    The codegen prompt forbids this pattern — sections should pull arrays
+    from `section.items` in landing.json. When Claude fabricates anyway,
+    the user can't edit the data and every site reads templated. Log so
+    we can measure how often the rule fails; do NOT auto-fix (removing
+    the const breaks the component that references it).
+    """
+    flagged: list[str] = []
+    sections_dir = os.path.join(workspace_path, "src", "components", "sections")
+    if not os.path.isdir(sections_dir):
+        return flagged
+
+    for root, _, files in os.walk(sections_dir):
+        for name in files:
+            if not name.endswith((".jsx", ".tsx", ".js", ".ts")):
+                continue
+            path = os.path.join(root, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except OSError:
+                continue
+            matches = [
+                m for m in _HARDCODED_DATA_ARRAY_RE.findall(content)
+                if m not in _HARDCODED_DATA_IGNORE
+            ]
+            if matches:
+                rel = os.path.relpath(path, workspace_path)
+                logger.warning(
+                    "hardcoded_data: %s declares %s — should read from landing.json section.items",
+                    rel, ", ".join(matches),
+                )
+                flagged.append(path)
+    return flagged
+
+
+# Negative-offset Tailwind classes that push an element OUTSIDE its parent.
+# Matches: -top-4, -right-8, -bottom-2, -left-12, -top-[20px], -inset-x-4, etc.
+_NEGATIVE_OFFSET_RE = re.compile(
+    r"-(?:top|right|bottom|left|inset|inset-x|inset-y)-(?:\[[^\]]+\]|\d+(?:\.\d+)?)"
+)
+
+# Marks a JSX element as a "badge / chip / callout" that contains user-readable
+# copy. When we find one of these AND it sits on `absolute` AND uses a negative
+# offset, the badge clips the moment the section is `overflow-hidden` (which
+# every hero section is). Strip the negative offset so the badge stays in-frame.
+_BADGE_HINT_RE = re.compile(
+    r"\b(?:badge|chip|pill|guarantee|callout|tag-label|highlight-card|sticker)\b",
+    re.IGNORECASE,
+)
+
+
+def fix_badge_clipping_in_hero(workspace_path: str) -> list[str]:
+    """Strip negative offsets on absolute-positioned badges inside hero sections.
+
+    The pattern Claude keeps producing:
+        <div className="absolute -top-4 right-8 ... ">Score Guarantee</div>
+    inside `<section className="overflow-hidden ...">`. The -top-4 pushes the
+    badge above the section's top edge, and the parent's `overflow-hidden`
+    chops it off. Replace the negative offset with a safe positive one
+    (`-top-4` → `top-4`) only inside files that look like hero sections.
+    """
+    fixed: list[str] = []
+    sections_dir = os.path.join(workspace_path, "src", "components", "sections")
+    if not os.path.isdir(sections_dir):
+        return fixed
+
+    for root, _, files in os.walk(sections_dir):
+        for name in files:
+            if not name.endswith((".jsx", ".tsx", ".js", ".ts")):
+                continue
+            # Hero-style sections only — story sections and gallery cards
+            # sometimes use negative offsets intentionally for decorative
+            # bleed, and we don't want to flatten those.
+            lower = name.lower()
+            if "hero" not in lower and "banner" not in lower:
+                continue
+            path = os.path.join(root, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except OSError:
+                continue
+            if "absolute" not in content or "-" not in content:
+                continue
+
+            new_content = content
+            # Walk each line; only rewrite when the line carries both an
+            # absolute-positioned class AND looks like a badge/chip.
+            changed = False
+            out_lines: list[str] = []
+            for line in new_content.splitlines(keepends=True):
+                if (
+                    "absolute" in line
+                    and _BADGE_HINT_RE.search(line)
+                    and _NEGATIVE_OFFSET_RE.search(line)
+                ):
+                    fixed_line = _NEGATIVE_OFFSET_RE.sub(
+                        lambda m: m.group(0).lstrip("-"), line,
+                    )
+                    out_lines.append(fixed_line)
+                    if fixed_line != line:
+                        changed = True
+                else:
+                    out_lines.append(line)
+            if not changed:
+                continue
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.writelines(out_lines)
+                fixed.append(path)
+                logger.info(
+                    "fix_badge_clipping_in_hero: clamped negative offsets in %s",
+                    os.path.relpath(path, workspace_path),
+                )
+            except OSError as exc:
+                logger.warning(
+                    "fix_badge_clipping_in_hero: failed to write %s: %s",
+                    path, exc,
+                )
+    return fixed
+
+
+# Section root opener: `<section className="..."` (the first one in the file).
+_SECTION_ROOT_RE = re.compile(
+    r'<section\b([^>]*?)className=(["\'])([^"\']*)\2',
+    re.DOTALL,
+)
+
+# Heuristic for "decorative absolute element that overflows the section":
+# Claude renders these as massive serif numerals or background SVG blobs that
+# use `absolute` + an oversized font / size. Examples we have seen:
+#   • <span className="absolute -left-4 top-0 text-9xl font-serif text-muted/10">04</span>
+#   • <div className="absolute -top-20 -right-32 h-96 w-96 rounded-full bg-primary/20 blur-3xl" />
+# When the parent <section> does NOT carry `overflow-hidden`, these bleed into
+# the next section and read as a layout glitch.
+_DECORATIVE_ABSOLUTE_RE = re.compile(
+    r"absolute[^\"']*(?:"
+    r"text-(?:7|8|9)xl|"           # huge type used as background numeral
+    r"text-\[\d{3,}px\]|"          # arbitrary huge size
+    r"blur-(?:2xl|3xl)|"           # blob blur
+    r"-(?:top|right|bottom|left|inset)-(?:\d{2,}|\[)"  # negative offset ≥10
+    r")"
+)
+
+
+def fix_section_overflow_clip(workspace_path: str) -> list[str]:
+    """Ensure sections containing decorative absolute elements clip overflow.
+
+    The FAQ "04" bleed pattern: a giant decorative number is rendered with
+    `position: absolute` inside the section, but the section's root <section>
+    tag is missing `overflow-hidden`. The numeral bleeds into the adjacent
+    section. Add `overflow-hidden` to the section root only when:
+      • the file contains an absolute decorative element (giant text, blur,
+        or large negative offset), AND
+      • the section root's className does NOT already contain `overflow-`.
+    """
+    fixed: list[str] = []
+    sections_dir = os.path.join(workspace_path, "src", "components", "sections")
+    if not os.path.isdir(sections_dir):
+        return fixed
+
+    for root, _, files in os.walk(sections_dir):
+        for name in files:
+            if not name.endswith((".jsx", ".tsx", ".js", ".ts")):
+                continue
+            path = os.path.join(root, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except OSError:
+                continue
+            if "absolute" not in content:
+                continue
+            if not _DECORATIVE_ABSOLUTE_RE.search(content):
+                continue
+
+            match = _SECTION_ROOT_RE.search(content)
+            if not match:
+                continue
+            classes = match.group(3)
+            if "overflow-" in classes:
+                continue  # already clipping (visible|hidden|clip|auto) — respect
+
+            new_classes = f"{classes.rstrip()} overflow-hidden".strip()
+            new_content = (
+                content[: match.start()]
+                + f'<section{match.group(1)}className={match.group(2)}{new_classes}{match.group(2)}'
+                + content[match.end():]
+            )
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                fixed.append(path)
+                logger.info(
+                    "fix_section_overflow_clip: added overflow-hidden to %s",
+                    os.path.relpath(path, workspace_path),
+                )
+            except OSError as exc:
+                logger.warning(
+                    "fix_section_overflow_clip: failed to write %s: %s",
+                    path, exc,
+                )
+    return fixed
+
+
+# Detect duplicate-text watermark pattern: same JSX interpolation appears
+# inside a huge-text absolute element AND a normal label element within the
+# same card. Renders as a "ghost" name behind the readable name (saw this on
+# the Lumina IELTS expert card where "Elena Rodriguez" was rendered twice).
+_JSX_EXPR_RE = re.compile(r"\{(\w+\.\w+(?:\.\w+)?)\}")
+_WATERMARK_LINE_RE = re.compile(
+    r"absolute[^\"']*text-(?:5|6|7|8|9)xl"
+)
+
+
+def audit_duplicate_text_watermark(workspace_path: str) -> list[str]:
+    """Log sections where the same JSX expression is rendered as both a huge
+    absolute watermark AND a normal label — creates a confusing ghost-text
+    overlay (the Elena Rodriguez double-name bug). Audit-only; auto-removal
+    would risk leaving unbalanced JSX behind.
+    """
+    flagged: list[str] = []
+    sections_dir = os.path.join(workspace_path, "src", "components", "sections")
+    if not os.path.isdir(sections_dir):
+        return flagged
+
+    for root, _, files in os.walk(sections_dir):
+        for name in files:
+            if not name.endswith((".jsx", ".tsx", ".js", ".ts")):
+                continue
+            path = os.path.join(root, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+            except OSError:
+                continue
+
+            # Collect (line_no, set_of_exprs, is_watermark) per JSX-bearing line
+            watermark_exprs: dict[str, int] = {}   # expr → line_no of watermark
+            normal_exprs: dict[str, list[int]] = {}  # expr → [line_no, ...]
+
+            for idx, line in enumerate(lines):
+                exprs = _JSX_EXPR_RE.findall(line)
+                if not exprs:
+                    continue
+                # Heuristic: a watermark element typically has both `absolute`
+                # and a large text class on the SAME or PREVIOUS line (the
+                # className often wraps).
+                window = "".join(lines[max(0, idx - 2):idx + 1])
+                is_watermark = bool(_WATERMARK_LINE_RE.search(window))
+                for e in exprs:
+                    if is_watermark:
+                        watermark_exprs.setdefault(e, idx + 1)
+                    else:
+                        normal_exprs.setdefault(e, []).append(idx + 1)
+
+            dupes = [
+                (e, watermark_exprs[e], normal_exprs[e])
+                for e in watermark_exprs
+                if e in normal_exprs
+                # close enough to be the same card (within ~25 lines)
+                and any(abs(n - watermark_exprs[e]) <= 25 for n in normal_exprs[e])
+            ]
+            if dupes:
+                rel = os.path.relpath(path, workspace_path)
+                summary = ", ".join(
+                    f"{e} at L{w_line}=watermark + L{n_lines[0]}=label"
+                    for e, w_line, n_lines in dupes
+                )
+                logger.warning(
+                    "duplicate_text_watermark: %s renders same content twice — %s",
+                    rel, summary,
+                )
+                flagged.append(path)
+    return flagged
+
+
+def fix_carousel_scroll_hijack(workspace_path: str) -> list[str]:
+    """Stop carousel autoplay from yanking the whole page back into view.
+
+    Claude likes to write `card.scrollIntoView({inline: 'center', block: 'nearest'})`
+    inside `setInterval` autoplay loops. `block: 'nearest'` makes the BROWSER
+    scroll the page vertically every time the carousel rotates, locking the
+    user to that section. Replace any `scrollIntoView` call in a file that
+    also has `setInterval` with a parent-relative scrollLeft so only the
+    carousel itself moves.
+    """
+    fixed: list[str] = []
+    sections_dir = os.path.join(workspace_path, "src", "components", "sections")
+    if not os.path.isdir(sections_dir):
+        return fixed
+
+    for root, _, files in os.walk(sections_dir):
+        for name in files:
+            if not name.endswith((".jsx", ".tsx", ".js", ".ts")):
+                continue
+            path = os.path.join(root, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except OSError:
+                continue
+            if "scrollIntoView" not in content or "setInterval" not in content:
+                continue
+            new_content = _SCROLL_INTO_VIEW_RE.sub(
+                lambda m: (
+                    f"if ({m.group(1)} && {m.group(1)}.parentElement) {{ "
+                    f"{m.group(1)}.parentElement.scrollTo({{ "
+                    f"left: {m.group(1)}.offsetLeft - {m.group(1)}.parentElement.offsetLeft, "
+                    f"behavior: 'smooth' }}); }}"
+                ),
+                content,
+            )
+            if new_content != content:
+                try:
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(new_content)
+                    fixed.append(path)
+                    logger.info(
+                        "fix_carousel_scroll_hijack: replaced scrollIntoView in %s",
+                        os.path.relpath(path, workspace_path),
+                    )
+                except OSError as exc:
+                    logger.warning(
+                        "fix_carousel_scroll_hijack: failed to write %s: %s",
+                        path, exc,
+                    )
+    return fixed
+
+
+_GRID_POS_TOKEN_RE = re.compile(
+    r"\b(col-(?:span|start|end)-(?:\d+|\[[^\]]+\]|full|auto)(?:\s+(?:sm|md|lg|xl|2xl):col-(?:span|start|end)-(?:\d+|\[[^\]]+\]|full|auto))*"
+    r"|\b(?:sm|md|lg|xl|2xl):col-(?:span|start|end)-(?:\d+|\[[^\]]+\]|full|auto)"
+    r"|\brow-(?:span|start|end)-(?:\d+|\[[^\]]+\]|full|auto)"
+    r"|\b(?:sm|md|lg|xl|2xl):row-(?:span|start|end)-(?:\d+|\[[^\]]+\]|full|auto))"
+)
+_REVEAL_WRAPS_GRID_CHILD_RE = re.compile(
+    r"(<Reveal\b)((?:\s+[\w-]+(?:=(?:\"[^\"]*\"|\{[^}]*\}))?)*)\s*>\s*"
+    r"(<div\s+className=\"([^\"]*)\")",
+    re.DOTALL,
+)
+
+# Template-literal case:
+#   <Reveal variant="fade-up" delay={i*80}>
+#     <div className={`${colSpan} ${variant} rounded-2xl ...`}>
+# The col-span lives in a variable expression. We can't statically read it,
+# but the strong convention in our codegen is that the FIRST `${name}` in the
+# template literal IS the grid-positioning variable when its name matches
+# /col|span|grid|pos|placement/. If it does, move the expression onto the
+# Reveal as `className={name}` and strip the leading `${name} ` from the
+# template literal.
+_REVEAL_WRAPS_TPL_LITERAL_RE = re.compile(
+    r"(<Reveal\b)((?:\s+[\w-]+(?:=(?:\"[^\"]*\"|\{[^}]*\}))?)*)\s*>\s*"
+    r"(<div\s+className=\{`\$\{([A-Za-z_][A-Za-z0-9_]*)\}\s*)",
+    re.DOTALL,
+)
+_GRID_VAR_NAME_RE = re.compile(r"(?:col|span|grid|placement|pos|layout)", re.I)
+
+
+def fix_grid_positioning_on_wrapper(workspace_path: str) -> list[str]:
+    """Move col-span-*/row-span-* from inner div onto the <Reveal> wrapper.
+
+    CSS Grid only honors grid-positioning classes on the direct child of the
+    grid container. Claude often emits:
+
+        <div className="grid grid-cols-12 ...">
+          <Reveal variant="fade-up">
+            <div className="col-span-12 lg:col-span-7 ...">  ← IGNORED
+
+    The result: every card collapses to 1 column and tiles stack over each
+    other. This fixer detects the pattern and pulls grid-positioning tokens
+    out of the inner div's className into the <Reveal>'s className prop. The
+    visual classes (bg-*, p-*, rounded-*) stay on the inner div.
+
+    Safe because:
+      • Only moves CLASSES, never restructures markup.
+      • Only matches when the inner div is the FIRST child of <Reveal> AND
+        carries at least one col/row positioning token.
+      • Idempotent — re-running on already-fixed code is a no-op.
+
+    Returns the list of files modified.
+    """
+    fixed: list[str] = []
+    sections_dir = os.path.join(workspace_path, "src", "components", "sections")
+    if not os.path.isdir(sections_dir):
+        return fixed
+
+    for root, _, files in os.walk(sections_dir):
+        for name in files:
+            if not name.endswith((".jsx", ".tsx")):
+                continue
+            path = os.path.join(root, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except OSError:
+                continue
+            if "<Reveal" not in content or "col-span" not in content:
+                continue
+
+            mutated = False
+
+            def _rewrite(m: "re.Match[str]") -> str:
+                nonlocal mutated
+                reveal_tag = m.group(1)
+                reveal_attrs = m.group(2) or ""
+                inner_div_open = m.group(3)
+                inner_classes = m.group(4) or ""
+
+                pos_tokens = _GRID_POS_TOKEN_RE.findall(inner_classes)
+                pos_flat: list[str] = []
+                for t in pos_tokens:
+                    if isinstance(t, tuple):
+                        for sub in t:
+                            if sub:
+                                pos_flat.append(sub)
+                    elif t:
+                        pos_flat.append(t)
+                pos_flat = [s.strip() for s in pos_flat if s and s.strip()]
+                if not pos_flat:
+                    return m.group(0)
+
+                cleaned_inner = _GRID_POS_TOKEN_RE.sub(" ", inner_classes)
+                cleaned_inner = re.sub(r"\s+", " ", cleaned_inner).strip()
+
+                pos_str = " ".join(pos_flat).strip()
+                pos_str = re.sub(r"\s+", " ", pos_str)
+
+                existing_className_match = re.search(
+                    r'className="([^"]*)"', reveal_attrs
+                )
+                if existing_className_match:
+                    existing = existing_className_match.group(1)
+                    merged = (existing + " " + pos_str).strip()
+                    new_attrs = (
+                        reveal_attrs[: existing_className_match.start()]
+                        + f'className="{merged}"'
+                        + reveal_attrs[existing_className_match.end():]
+                    )
+                else:
+                    new_attrs = reveal_attrs + f' className="{pos_str}"'
+
+                mutated = True
+                return f'{reveal_tag}{new_attrs}><div className="{cleaned_inner}"'
+
+            new_content = _REVEAL_WRAPS_GRID_CHILD_RE.sub(_rewrite, content)
+
+            # Second pass: template-literal classNames with a leading
+            # `${variable}` expression that names a grid-positioning var.
+            def _rewrite_tpl(m: "re.Match[str]") -> str:
+                nonlocal mutated
+                reveal_tag = m.group(1)
+                reveal_attrs = m.group(2) or ""
+                inner_div_open = m.group(3)
+                var_name = m.group(4) or ""
+                if not _GRID_VAR_NAME_RE.search(var_name):
+                    return m.group(0)
+                # If Reveal already has a className prop, we leave it alone —
+                # ambiguous which value wins.
+                if re.search(r'\sclassName=', reveal_attrs):
+                    return m.group(0)
+                new_attrs = reveal_attrs + f' className={{{var_name}}}'
+                # Strip the leading `${var_name} ` from the inner template
+                # literal so we don't end up with col-span declared twice.
+                new_inner = re.sub(
+                    r"^<div\s+className=\{`\$\{" + re.escape(var_name) + r"\}\s*",
+                    "<div className={`",
+                    inner_div_open,
+                )
+                mutated = True
+                return f'{reveal_tag}{new_attrs}>{new_inner}'
+
+            new_content = _REVEAL_WRAPS_TPL_LITERAL_RE.sub(_rewrite_tpl, new_content)
+
+            if mutated and new_content != content:
+                try:
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(new_content)
+                    fixed.append(path)
+                    logger.info(
+                        "fix_grid_positioning_on_wrapper: moved col/row-span onto <Reveal> in %s",
+                        os.path.relpath(path, workspace_path),
+                    )
+                except OSError as exc:
+                    logger.warning(
+                        "fix_grid_positioning_on_wrapper: failed to write %s: %s",
+                        path, exc,
+                    )
+
+    return fixed
+
+
+def fix_footer_empty_columns(workspace_path: str) -> list[str]:
+    """Stop the footer from rendering empty placeholder columns ('—').
+
+    Claude's instinct is to render a fixed 4-column footer (Languages, About,
+    Support, Legal) even when the brief only supplies links for ONE of those
+    groups. The result is three near-empty columns with an italic em-dash
+    placeholder, which reads as a broken site.
+
+    This fixer rewrites MarketingFooter.jsx in two ways:
+      1. The `<li ...>—</li>` placeholder (or any single-token placeholder
+         like '...', 'coming soon') inside the empty-column branch becomes
+         `null` — empty columns now render nothing instead of a ghost row.
+      2. The column-padding loop that force-adds empty entries to reach a
+         fixed count (e.g. `while (result.length < 4)` /
+         `if (!result.find(...)) result.push({heading, links: []})`) gets a
+         guard that drops empty-links entries from the final column list.
+
+    Both rewrites are surgical and idempotent. We don't restructure the JSX
+    tree — just neuter the dead-end branches. Returns the list of files
+    modified.
+    """
+    fixed: list[str] = []
+    footer_path = os.path.join(
+        workspace_path, "src", "components", "layout", "MarketingFooter.jsx"
+    )
+    if not os.path.isfile(footer_path):
+        return fixed
+
+    try:
+        with open(footer_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except OSError:
+        return fixed
+
+    original = content
+
+    # 1) Strip the `col.links.length > 0 ? (...) : (<li>—</li>)` ternary so
+    #    the empty-column branch is `null`. The map stays; only the empty
+    #    placeholder vanishes.
+    _ternary_empty_re = re.compile(
+        r"(col\.links\.length\s*>\s*0\s*\?\s*\(\s*col\.links\.map\([\s\S]*?\)\s*\))"
+        r"\s*:\s*\(\s*(?://[^\n]*\n\s*)*"  # tolerate JS line-comments before the placeholder
+        r"<li[^>]*>[^<]*(?:—|---|\.\.\.|coming soon|tbd|—)[^<]*</li>\s*\)",
+        re.IGNORECASE,
+    )
+    content = _ternary_empty_re.sub(r"\1 : null", content)
+
+    # 2) Filter out empty groups in `buildColumns` before render. Insert a
+    #    guard right at the return statement. Idempotent — skips if already
+    #    present.
+    if "buildColumns" in content and "filter(c => c.links && c.links.length" not in content:
+        content = re.sub(
+            r"(return\s+result\.slice\([^)]+\)\s*;\s*\n?\s*\})",
+            lambda m: m.group(1).replace(
+                "return result.slice(",
+                "return result.filter(c => c.links && c.links.length > 0).slice(",
+            ),
+            content,
+        )
+
+    # 3) Also guard the final columns variable at the render site so an
+    #    empty `links: []` entry that slipped through earlier filters never
+    #    becomes a rendered column.
+    content = re.sub(
+        r"const\s+columns\s*=\s*buildColumns\(([^)]+)\)\s*;",
+        r"const columns = buildColumns(\1).filter(c => c.links && c.links.length > 0);",
+        content,
+        count=1,
+    )
+
+    if content != original:
+        try:
+            with open(footer_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            fixed.append(footer_path)
+            logger.info(
+                "fix_footer_empty_columns: removed empty-column placeholders in %s",
+                os.path.relpath(footer_path, workspace_path),
+            )
+        except OSError as exc:
+            logger.warning(
+                "fix_footer_empty_columns: failed to write %s: %s",
+                footer_path, exc,
+            )
+
+    return fixed
+
+
 def fix_banned_icons(workspace_path: str) -> list[str]:
     """Replace banned lucide-react icon imports with inline SVG components.
-    
+
     Returns list of file paths that were fixed.
     """
     fixed_files = []
@@ -1446,19 +2047,74 @@ def fix_unescaped_entities(workspace_path: str) -> list[str]:
 # correctly skipped. A real bug like
 #     '14 guests per evening's seating'
 # DOES contain `g's ` (letter-apos-letter), so we rewrite it.
+_APOSTROPHE_WORD_CHARS = r"A-Za-zÀ-ÖØ-öø-ÿĀ-ſƀ-ɏ"
+_APOSTROPHE_WORD_RE = rf"[{_APOSTROPHE_WORD_CHARS}]'[{_APOSTROPHE_WORD_CHARS}]"
 _CONTRACTION_QUOTED_RE = re.compile(
-    r"'(?P<body>[^'\n]*?[A-Za-z]'[A-Za-z][^'\n]*?)'(?=[\s,;:)\]}])"
+    rf"'(?P<body>[^'\n]*?{_APOSTROPHE_WORD_RE}[^'\n]*?)'(?=[\s,;:)\]}}])"
 )
+_BROKEN_SINGLE_QUOTED_PATTERNS = [
+    # Object/property values: name: 'Farg'ona', title: 'Ko'cha'
+    re.compile(
+        rf"(?P<prefix>\b[\w$]+\s*:\s*)'(?P<body>[^\"\n]*?{_APOSTROPHE_WORD_RE}[^\"\n]*?)'(?P<suffix>\s*[,}}\]])"
+    ),
+    # Assignments and call/array arguments: const city = 'Farg'ona';
+    re.compile(
+        rf"(?P<prefix>(?:=|\(|\[|,)\s*)'(?P<body>[^\"\n]*?{_APOSTROPHE_WORD_RE}[^\"\n]*?)'(?P<suffix>\s*[,;)\]\}}])"
+    ),
+    # JSX single-quoted attributes: <Card title='Farg'ona' />
+    re.compile(
+        rf"(?P<prefix>\s[\w:-]+\s*=\s*)'(?P<body>[^\"\n]*?{_APOSTROPHE_WORD_RE}[^\"\n]*?)'(?P<suffix>\s|/?>)"
+    ),
+]
 
 
 def _line_quotes_balanced(line: str) -> bool:
-    """Return True if the line has an even number of `'` and `\"`.
+    """Return True if JS-like string delimiters are balanced on this line.
 
-    A simple sanity check used to reject any rewrite that produces
-    mismatched quotes (e.g. ``'X"`` or ``"X'``) — the symptom of the
-    bug this fixer is meant to repair.
+    Apostrophes inside double-quoted strings are content, not delimiters:
+    ``"Farg'ona"`` is valid and must pass.
     """
-    return line.count("'") % 2 == 0 and line.count('"') % 2 == 0
+    quote: str | None = None
+    escaped = False
+    for ch in line:
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\" and quote:
+            escaped = True
+            continue
+        if quote:
+            if ch == quote:
+                quote = None
+            continue
+        if ch in ("'", '"', "`"):
+            quote = ch
+    return quote is None
+
+
+def _double_quote_broken_single_literals(line: str) -> tuple[str, bool]:
+    """Repair single-quoted literals containing a real word apostrophe.
+
+    The older fixer handled only already-balanced literals. Uzbek place names
+    such as ``'Farg'ona'`` are syntactically broken before the final quote, so
+    the balanced-literal regex never saw them. These targeted patterns cover
+    object values, assignments/array items, and JSX attributes without trying
+    to parse all JavaScript.
+    """
+    mutated = False
+
+    def _swap(match: re.Match) -> str:
+        nonlocal mutated
+        body = match.group("body")
+        if '"' in body:
+            return match.group(0)
+        mutated = True
+        return f'{match.group("prefix")}"{body}"{match.group("suffix")}'
+
+    candidate = line
+    for pattern in _BROKEN_SINGLE_QUOTED_PATTERNS:
+        candidate = pattern.sub(_swap, candidate)
+    return candidate, mutated
 
 
 def fix_jsx_apostrophe_in_js_string(workspace_path: str) -> list[str]:
@@ -1506,7 +2162,6 @@ def fix_jsx_apostrophe_in_js_string(workspace_path: str) -> list[str]:
                 if (
                     stripped.startswith("//")
                     or stripped.startswith("import ")
-                    or stripped.startswith("export ")
                     or stripped.startswith("from ")
                     or stripped.startswith("*")
                     or "'use client'" in stripped
@@ -1522,10 +2177,16 @@ def fix_jsx_apostrophe_in_js_string(workspace_path: str) -> list[str]:
                         return match.group(0)
                     return f'"{body}"'
 
-                candidate = _CONTRACTION_QUOTED_RE.sub(_swap, line)
-                if candidate != line and _line_quotes_balanced(candidate):
+                candidate, repaired_broken = _double_quote_broken_single_literals(line)
+                candidate = _CONTRACTION_QUOTED_RE.sub(_swap, candidate)
+                if candidate != line and (_line_quotes_balanced(candidate) or repaired_broken):
                     new_lines.append(candidate)
                     mutated = True
+                elif repaired_broken and candidate != line:
+                    # If the line still looks quote-unbalanced after a targeted
+                    # repair, keep the original. Better to let the build error
+                    # surface than silently corrupt adjacent JSX/JS.
+                    new_lines.append(line)
                 else:
                     new_lines.append(line)
 

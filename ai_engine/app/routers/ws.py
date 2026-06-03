@@ -29,6 +29,7 @@ from app.services.sessions import (
 )
 from app.services.vcs.git import push_changes, get_git_status
 from app.services.pipeline import run_pipeline, PLATFORM_GITHUB_TOKEN
+from app.services.pipeline.constants import _PLATFORM_ORG
 from app.services.event_bus import WebSocketProxy
 from app.services.workspace_manager import workspace_manager
 from app.services.local_preview import stop_local_preview
@@ -264,6 +265,7 @@ async def websocket_agent(websocket: WebSocket):
         # ── 1.5 Resolve LLM Settings (Handshake > Supabase > Default) ──
         model_provider = raw.get("modelProvider") or raw.get("model_provider")
         api_key = raw.get("apiKey") or raw.get("api_key")
+        openai_api_key = os.environ.get("OPENAI_API_KEY", "")
         user_package_manager = "npm"  # default, may be overridden from user_settings
 
         # Always fetch user_settings — needed for package_manager even if API key is provided
@@ -304,13 +306,35 @@ async def websocket_agent(websocket: WebSocket):
         if not model_provider:
             model_provider = settings.DEFAULT_PROVIDER
 
-        # Fallback: if no API key from handshake or user settings, use server's .env key
+        # Provider split:
+        # - Existing-project Codex edits use OpenAI/Codex credentials.
+        # - New-project generation and Claude fallback still use Anthropic.
+        # The settings table stores one encrypted API key, so infer its family
+        # from the selected model/provider.
+        _model_provider_l = str(model_provider or "").lower()
+        _is_openai_model = (
+            _model_provider_l.startswith(("openai", "codex", "gpt-"))
+            or "/gpt-" in _model_provider_l
+        )
+        openai_model = str(model_provider or "").strip() if _is_openai_model else ""
+        if api_key and _is_openai_model:
+            openai_api_key = str(api_key).strip()
+            api_key = ""
+
+        # Fallback: if no Anthropic API key from handshake/settings, use server .env
         if not api_key:
             api_key = os.environ.get("ANTHROPIC_API_KEY") or settings.ANTHROPIC_API_KEY or ""
             if api_key:
                 logger.info("Using server fallback ANTHROPIC_API_KEY for user %s", user_id)
         
-        logger.info("[%s] Using model: %s, api_key prefix: %s (len=%d)", project_id or "new-session", model_provider, str(api_key or "")[:15], len(str(api_key or "")))
+        logger.info(
+            "[%s] Using model: %s, anthropic_key prefix: %s (len=%d), openai_key=%s",
+            project_id or "new-session",
+            model_provider,
+            str(api_key or "")[:15],
+            len(str(api_key or "")),
+            "yes" if openai_api_key else "no",
+        )
 
         # ── 2. Try to reconnect to existing session ───────
         existing = await session_store.find_by_user_and_project(user_id, project_id) if project_id else None
@@ -338,6 +362,9 @@ async def websocket_agent(websocket: WebSocket):
             if fresh_repo_url:
                 session.repo_url = fresh_repo_url
                 logger.info("Session repo_url refreshed → %s", fresh_repo_url[:60])
+            if fresh_repo_provider:
+                session.repo_provider = str(fresh_repo_provider).strip().lower()
+                logger.info("Session repo_provider refreshed → %s", session.repo_provider)
             if fresh_git_token:
                 session.git_token = fresh_git_token
                 logger.info("Session git_token refreshed (len=%d)", len(fresh_git_token))
@@ -592,6 +619,7 @@ async def websocket_agent(websocket: WebSocket):
                     task=task or "Workspace initialization",
                     user_id=user_id,
                     repo_url=raw.get("repoUrl", ""),
+                    repo_provider=repo_provider,
                     git_token=git_token,
                     branch=raw.get("branch", ""),
                     git_user_name=raw.get("gitUserName", ""),
@@ -1444,10 +1472,29 @@ async def websocket_agent(websocket: WebSocket):
                     # Hard 30-second cap on clone — shallow clone should always
                     # fit within this window. If it doesn't, something is wrong.
                     async with asyncio.timeout(30):
+                        # Token priority — must mirror bg_preview at line ~1144:
+                        # platform-owned repos (LucidSoftware-tech/*) MUST use
+                        # PLATFORM_GITHUB_TOKEN; the user's personal PAT 404s
+                        # against a private org repo it doesn't own. Without
+                        # this guard, edit-clone on every generated project
+                        # fails with "Repository not found".
+                        _repo_url_for_clone = session.repo_url or ""
+                        _is_platform_repo = (
+                            _PLATFORM_ORG and f"github.com/{_PLATFORM_ORG}/" in _repo_url_for_clone
+                        )
+                        if _is_platform_repo:
+                            _clone_token = (
+                                PLATFORM_GITHUB_TOKEN
+                                or os.environ.get("PLATFORM_GITHUB_TOKEN", "")
+                                or session.git_token
+                                or ""
+                            )
+                        else:
+                            _clone_token = session.git_token or ""
                         pre_validated = {
-                            "repo_url": session.repo_url,
+                            "repo_url": _repo_url_for_clone,
                             "branch": session.branch or "main",
-                            "git_token": session.git_token or "",
+                            "git_token": _clone_token,
                         }
                         pre_workspace = await workspace_manager.get_or_create_workspace(
                             conversation_id=project_id,
@@ -1832,7 +1879,14 @@ async def websocket_agent(websocket: WebSocket):
 
                 # ── Build enriched task + run pipeline via orchestrator ──
                 enriched_task = await build_enriched_task(task, session, project_id, user_id, user_jwt)
-                pipeline_user = build_pipeline_user(session, api_key, user_package_manager, user_jwt)
+                pipeline_user = build_pipeline_user(
+                    session,
+                    api_key,
+                    user_package_manager,
+                    user_jwt,
+                    openai_api_key=openai_api_key,
+                    openai_model=openai_model,
+                )
                 _task_result: TaskResult = await agent_orchestrator.execute_task(
                     enriched_task=enriched_task,
                     session=session,
@@ -1983,6 +2037,7 @@ async def websocket_agent(websocket: WebSocket):
                 _kind = (data.get("kind") or "").strip()
                 _clarify_key = (data.get("clarify_key") or "").strip()
                 _option_id = (data.get("archetype") or data.get("id") or "").strip()
+                _option_label = str(data.get("option_label") or _option_id).strip()
                 _original = (data.get("task") or data.get("original_task") or "").strip()
 
                 # Two clarification flavours share this handler:
@@ -2016,6 +2071,11 @@ async def websocket_agent(websocket: WebSocket):
                         _marker,
                         _original,
                     )
+                    if _option_label:
+                        _locked_task = (
+                            f"{_locked_task}\n\n"
+                            f"Clarification answer — {_clarify_key}: {_option_label}"
+                        ).strip()
                 else:
                     if _option_id not in LAYOUT_ARCHETYPES or not _original:
                         logger.warning(
@@ -2036,7 +2096,6 @@ async def websocket_agent(websocket: WebSocket):
                         _original,
                     )
 
-                _option_label = data.get("option_label") or _option_id
                 if chat_session_id:
                     try:
                         await ChatService.add_message(
@@ -2075,7 +2134,12 @@ async def websocket_agent(websocket: WebSocket):
                     _locked_task, session, project_id, user_id, user_jwt,
                 )
                 pipeline_user = build_pipeline_user(
-                    session, api_key, user_package_manager, user_jwt,
+                    session,
+                    api_key,
+                    user_package_manager,
+                    user_jwt,
+                    openai_api_key=openai_api_key,
+                    openai_model=openai_model,
                 )
                 _task_result: TaskResult = await agent_orchestrator.execute_task(
                     enriched_task=enriched_task,
@@ -2414,7 +2478,14 @@ async def websocket_agent(websocket: WebSocket):
             )
 
             # Run follow-up pipeline via orchestrator (handles hydration + stop + completion)
-            pipeline_user = build_pipeline_user(session, api_key, user_package_manager, user_jwt)
+            pipeline_user = build_pipeline_user(
+                session,
+                api_key,
+                user_package_manager,
+                user_jwt,
+                openai_api_key=openai_api_key,
+                openai_model=openai_model,
+            )
             _followup_result: TaskResult = await agent_orchestrator.execute_task(
                 enriched_task=full_task,
                 session=session,
@@ -2469,7 +2540,13 @@ async def websocket_agent(websocket: WebSocket):
         #         watchdog that cancels the pipeline after RECONNECT_GRACE_SECONDS
         #         to avoid burning API credits on a session that can never be
         #         recovered (in-memory only, no persistence).
-        _RECONNECT_GRACE_SECONDS = 120  # 2 minutes to reconnect before aborting
+        try:
+            _RECONNECT_GRACE_SECONDS = int(
+                os.environ.get("LUCID_RECONNECT_GRACE_SECONDS", "900")
+            )
+        except ValueError:
+            _RECONNECT_GRACE_SECONDS = 900
+        # Default 15 minutes to reconnect before aborting when Redis is unavailable.
         if pipeline_task and not pipeline_task.done():
             if explicit_stop:
                 pipeline_task.cancel()
@@ -2599,11 +2676,27 @@ async def websocket_agent(websocket: WebSocket):
             except Exception as exc:
                 logger.debug("Preview server cleanup error (ok): %s", exc)
 
-            try:
-                await workspace_manager.destroy_workspace(conversation_id)
-                logger.info("Workspace destroyed for conversation %s", conversation_id)
-            except Exception as exc:
-                logger.error("Failed to destroy workspace for conversation %s: %s", conversation_id, exc)
+            # Keep workspaces for projects with persisted state — the user
+            # might re-enter the workspace (browser refresh, return from
+            # another tab) and expect the preview + file tree to still work.
+            # Without this guard, every disconnect wiped the project files,
+            # so re-entry hit "Internal Server Error" because next dev was
+            # booting in an empty directory. The 2h TTL reaper still cleans
+            # truly-stale workspaces in the background.
+            _has_persisted_project = bool(
+                session and getattr(session, "project_id", "") and chat_session_id
+            )
+            if _has_persisted_project:
+                logger.info(
+                    "Workspace kept for conversation %s — project %s persisted; reaper will clean on TTL",
+                    conversation_id, session.project_id,
+                )
+            else:
+                try:
+                    await workspace_manager.destroy_workspace(conversation_id)
+                    logger.info("Workspace destroyed for conversation %s", conversation_id)
+                except Exception as exc:
+                    logger.error("Failed to destroy workspace for conversation %s: %s", conversation_id, exc)
 
             # Cancel any pending plan confirmation Future ONLY when the pipeline
             # is not running. If the pipeline IS still running (and we kept the
@@ -2704,21 +2797,32 @@ async def _auto_push_if_needed(
         if result.get("pushed"):
             target_branch = new_branch or session.branch or "main"
             repo_url = session.repo_url or ""
-            # Build a GitHub/GitLab compare URL for easy PR creation
-            pr_url = ""
-            if "github.com" in repo_url:
-                # https://github.com/owner/repo/compare/main...branch
-                clean_url = repo_url.rstrip(".git").rstrip("/")
-                pr_url = f"{clean_url}/compare/{session.branch}...{target_branch}" if new_branch else ""
-            elif "gitlab" in repo_url:
-                clean_url = repo_url.rstrip(".git").rstrip("/")
-                pr_url = f"{clean_url}/-/merge_requests/new?merge_request[source_branch]={target_branch}" if new_branch else ""
+            from app.services.vcs.git import (
+                branch_browser_url,
+                detect_git_provider,
+                provider_display_name,
+                review_request_url,
+                strip_auth_from_url,
+            )
+            clean_url = strip_auth_from_url(repo_url, session.git_token)
+            provider = detect_git_provider(clean_url)
+            provider_label = provider_display_name(provider)
+            base_branch = session.branch or "main"
+            pr_url = (
+                review_request_url(clean_url, target_branch, base_branch, provider)
+                if new_branch
+                else ""
+            )
 
             await websocket.send_json({
                 "type": "git_push_result",
                 "pushed": True,
+                "provider": provider,
+                "providerLabel": provider_label,
                 "branch": target_branch,
-                "repoUrl": repo_url,
+                "baseBranch": base_branch,
+                "repoUrl": clean_url,
+                "branchUrl": branch_browser_url(clean_url, target_branch, provider),
                 "prUrl": pr_url,
                 "summary": result.get("summary", ""),
                 "newBranch": bool(new_branch),

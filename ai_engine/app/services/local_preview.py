@@ -27,6 +27,7 @@ import logging
 import os
 import signal
 import socket
+import time
 from typing import Optional
 
 from fastapi import WebSocket
@@ -733,6 +734,27 @@ async def _ensure_node_modules(workspace_path: str, websocket) -> None:
     tailwind_bin = os.path.join(nm, ".bin", "tailwindcss")
     next_bin = os.path.join(nm, ".bin", "next")
     vite_bin = os.path.join(nm, ".bin", "vite")
+    install_marker = os.path.join(workspace_path, ".lucid_install_done")
+
+    # BuildValidator drops .lucid_install_done after it runs the install.
+    # If the marker is recent (<30 min) AND the framework binary exists,
+    # trust the install and skip — re-running install here was burning
+    # 2-3 minutes per generation because the freshly-installed pnpm tree
+    # was being misdetected as "missing".
+    if (
+        os.path.isfile(install_marker)
+        and (os.path.isfile(next_bin) or os.path.isfile(vite_bin))
+    ):
+        try:
+            age_s = time.time() - os.path.getmtime(install_marker)
+        except OSError:
+            age_s = float("inf")
+        if age_s < 1800:
+            logger.info(
+                "local_preview: BuildValidator install marker present (%.0fs old) — skipping install",
+                age_s,
+            )
+            return
 
     # Skip if node_modules has the framework binary (install already done)
     if os.path.isfile(next_bin) or os.path.isfile(vite_bin):

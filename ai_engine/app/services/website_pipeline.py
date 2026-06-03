@@ -1021,6 +1021,14 @@ async def run_website_pipeline(
             )
             return False
 
+        # Status pill was stuck on "Researching" through all post-confirm
+        # stages (4.5 data model, 4.6 schema, 5/5.5/5.6/5.7 content) because
+        # phase 3 only flipped to "done" right before Stage 6 codegen. Mark
+        # research done now and put phase 4 ("Planning code") active so the
+        # UI tracks what's actually running until Stage 6 takes over.
+        await _phase(websocket, 3, "Researching project", "Research complete", "done")
+        await _phase(websocket, 4, "Planning code", "Designing data + content…", "active")
+
     # ── Stage 4.5: Data-model planning ──────────────────────────────
     # Decides which sections need Supabase-backed collections (tables
     # that grow + are edited over time) vs which stay as JSON singletons.
@@ -1446,9 +1454,14 @@ async def run_website_pipeline(
         if audit["ok"]:
             pass  # silent success — final "Site is ready!" covers it
         else:
+            issues = audit.get("issues") or {}
+            counts = ", ".join(
+                f"{k}: {len(v)}" for k, v in issues.items() if v
+            )
+            detail = f" ({counts})" if counts else ""
             await _send(
-                websocket, "warning",
-                "Some parts of the site may have gaps — preview it and let me know what to fix.",
+                websocket, "progress",
+                f"Audit found a few rough spots{detail}. Preview should still work — let me know what to polish.",
             )
     except Exception as exc:
         logger.warning("website_pipeline: verification threw (non-fatal) — %s", exc)
@@ -1525,17 +1538,18 @@ async def run_website_pipeline(
 
     # ── Stage 9: Build verification + Claude-driven auto-fix ────────
     # Runs `npm run build` and feeds any errors back to Claude for
-    # repair (up to 2 attempts). Without this, build-time failures
-    # (missing imports like @/components/ui/Reveal, JSX syntax, bad
-    # exports) only get caught by the dev server, leaving the user
-    # staring at a red overlay with no recovery.
+    # repair. max_retries=1 (2 attempts total): the 3-attempt budget was
+    # burning ~9 min on doomed retries when the failures all shared a
+    # root cause Claude couldn't fix. One auto-fix attempt is enough to
+    # recover the easy cases; harder ones fall through to the user's
+    # first preview message so they can describe the runtime error.
     await run_generation_build_check(
         pipeline="website_pipeline",
         workspace_path=workspace_path,
         api_key=anthropic_key,
         classification=classification or {},
         websocket=websocket,
-        max_retries=2,
+        max_retries=1,
         send=lambda kind, message: _send(websocket, kind, message),
         phase=lambda status, state: _phase(websocket, 6, "Verifying build", status, state),
         progress_message="Final build check...",

@@ -73,6 +73,8 @@ def build_pipeline_user(
     api_key: str,
     package_manager: str,
     user_jwt: str | None,
+    openai_api_key: str = "",
+    openai_model: str = "",
 ) -> dict:
     """Build the pipeline_user config dict from current session state.
 
@@ -80,9 +82,14 @@ def build_pipeline_user(
     may mutate it in-place during _hydrate_repo_url if repo_url was empty.
     Gemini auth is now Vertex ADC inside gemini_post — no per-call key.
     """
-    git_provider = "gitlab" if "gitlab" in (session.repo_url or "").lower() else "github"
+    git_provider = (
+        session.repo_provider
+        or ("gitlab" if "gitlab" in (session.repo_url or "").lower() else "github")
+    )
     return {
         "anthropic_api_key": api_key,
+        "openai_api_key": openai_api_key or os.environ.get("OPENAI_API_KEY", ""),
+        "openai_model": openai_model,
         "git_provider": git_provider,
         "github_repo": session.repo_url or "",
         "github_token": session.git_token or "",
@@ -673,7 +680,10 @@ class AgentOrchestrator:
 
             # Update pipeline_user in-place so the pipeline gets the fresh URL
             if pipeline_user is not None:
-                git_provider = "gitlab" if "gitlab" in url.lower() else "github"
+                git_provider = (
+                    session.repo_provider
+                    or ("gitlab" if "gitlab" in url.lower() else "github")
+                )
                 pipeline_user.update({
                     "git_provider": git_provider,
                     "github_repo": url,
@@ -1123,37 +1133,46 @@ class AgentOrchestrator:
         files_changed = await self._get_files_changed(session)
         last_msg = self._extract_last_agent_message(session)
 
-        finish_summary: list[str] = []
+        # Live summary (sent to the open websocket) keeps the file list so the
+        # user can see what changed in real time. Persisted summary (saved to
+        # chat history) drops the file list — re-entering the workspace was
+        # showing a huge wall of paths next to every past task, which is noise
+        # the side file tree already covers.
+        live_parts: list[str] = []
         if last_msg:
-            finish_summary.append(last_msg)
+            live_parts.append(last_msg)
         if files_changed:
-            finish_summary.append(f"\nChanged files:\n{files_changed}")
-        summary_text = "\n".join(finish_summary) if finish_summary else "Task completed."
+            live_parts.append(f"\nChanged files:\n{files_changed}")
+        live_summary = "\n".join(live_parts) if live_parts else "Task completed."
+
+        chat_summary = (last_msg or "").strip()
 
         try:
             await websocket.send_json({
                 "type": "step", "step": "finished",
                 "label": "Finished", "done": True,
-                "summary": summary_text,
+                "summary": live_summary,
             })
         except Exception:
             pass
 
-        if chat_session_id and summary_text and summary_text != "Task completed.":
-            # Only persist when there is a real agent-authored summary.
-            # The fallback "Task completed." string is not meaningful content —
-            # skipping it prevents a generic bubble from showing in chat history
-            # every time the user re-enters the workspace.
+        if chat_session_id and chat_summary:
+            # Only persist when there is a real agent-authored message. The
+            # fallback "Task completed." string is not meaningful content, and
+            # the bare file-change list (no agent prose) is just noise — both
+            # are skipped so chat history stays readable on re-entry.
             try:
                 await ChatService.add_message(
                     session_id=chat_session_id,
                     role="assistant",
-                    content=summary_text,
+                    content=chat_summary,
                     event_type="AgentResponse",
                     user_jwt=user_jwt,
                 )
             except Exception as exc:
                 logger.warning("Failed to persist agent response: %s", exc)
+
+        summary_text = live_summary
 
         await self._update_session_summary(chat_session_id, task, session, user_jwt)
 

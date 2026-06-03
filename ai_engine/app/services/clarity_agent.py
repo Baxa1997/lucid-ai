@@ -44,6 +44,43 @@ _TYPE_WORDS = {
     "store", "shop", "ecommerce",
 }
 
+_SURFACE_WORDS = {
+    # Public surfaces
+    "landing", "onepage", "onepager", "website", "websites", "site", "sites",
+    "homepage", "webpage", "portfolio", "blog", "store", "shop", "ecommerce",
+    "marketplace",
+    # Product/internal surfaces
+    "dashboard", "dashboards", "panel", "panels", "portal",
+    "platform", "app", "apps", "application", "applications",
+    "cms", "crm", "tms", "erp", "internal", "public",
+}
+
+_ADMIN_SIGNALS = {
+    "admin", "dashboard", "panel", "backoffice", "back-office", "back", "office",
+    "manage", "management", "crud", "cms", "crm", "tms", "erp", "internal",
+    "operator", "operations", "inventory",
+}
+
+_PUBLIC_SITE_SIGNALS = {
+    "website", "site", "landing", "homepage", "page", "pages", "public",
+    "marketing", "seo", "blog", "portfolio", "store", "shop", "ecommerce",
+}
+
+_BLUEPRINT_SIGNALS = {
+    "blueprint", "brief", "spec", "specification", "requirements",
+    "prd", "scope", "user", "users", "roles", "features", "modules",
+    "entities", "schema", "database", "flows", "workflow", "wireframe",
+    "apis", "api", "endpoints", "acceptance", "milestones",
+}
+
+_PROJECT_TYPE_OPTIONS = [
+    {"id": "landing_page", "label": "Landing page"},
+    {"id": "full_website", "label": "Full website"},
+    {"id": "admin_dashboard", "label": "Admin panel"},
+    {"id": "marketing_with_admin", "label": "Website + admin"},
+    {"id": "web_app", "label": "Web app / SaaS"},
+]
+
 _FILLERS = {
     # Articles, pronouns, auxiliaries
     "a", "an", "the", "i", "me", "my", "mine", "we", "us", "our",
@@ -98,6 +135,85 @@ def _has_field_context(text: str) -> bool:
             continue
         return True
     return False
+
+
+def _has_project_type_context(text: str) -> bool:
+    """True when the prompt already states the intended product surface."""
+    tokens = set(re.findall(r"[a-z]+", (text or "").lower()))
+    # Do not treat technical-layer words such as "frontend" or "backend" as a
+    # product surface. Blueprints often include those while still omitting the
+    # routing decision: landing page vs full website vs admin panel vs both.
+    if tokens & _SURFACE_WORDS:
+        return True
+    if _has_admin_surface_signal(text):
+        return True
+    lowered = (text or "").lower()
+    route_count = len(re.findall(r"(?m)(?:^|[\s,])/[a-z0-9][a-z0-9_/-]*", lowered))
+    if route_count >= 2:
+        return True
+    if re.search(r"\bpages?\s*:", lowered) or re.search(r"\broutes?\s*:", lowered):
+        return True
+    if re.search(r"\bsections?\s*:", lowered):
+        return True
+    return False
+
+
+def _has_admin_surface_signal(text: str) -> bool:
+    """True for an admin product surface, not merely an "admin" user role."""
+    lowered = (text or "").lower()
+    tokens = set(re.findall(r"[a-z-]+", lowered))
+    strong_admin_terms = _ADMIN_SIGNALS - {"admin"}
+    if tokens & strong_admin_terms:
+        return True
+    return bool(re.search(
+        r"\badmin\s+(dashboard|panel|portal|console|app|site|page|pages|area|section|view|crud)\b",
+        lowered,
+    ))
+
+
+def _looks_like_blueprint(text: str) -> bool:
+    """Detect a pasted product brief/blueprint/spec, not a one-line prompt."""
+    lowered = (text or "").lower()
+    tokens = set(re.findall(r"[a-z]+", lowered))
+    signal_count = len(tokens & _BLUEPRINT_SIGNALS)
+    has_structure_lines = bool(re.search(
+        r"(?mi)^\s*(overview|goal|features?|modules?|roles?|entities|pages?|routes?|database|schema|requirements?)\s*[:#-]",
+        text or "",
+    ))
+    return signal_count >= 3 or (signal_count >= 1 and has_structure_lines)
+
+
+def _project_type_question(text: str, *, blueprint: bool = False) -> dict:
+    """Ask the surface/depth question with stable option ids."""
+    lowered = (text or "").lower()
+    has_admin = _has_admin_surface_signal(lowered)
+    has_public = bool(set(re.findall(r"[a-z-]+", lowered)) & _PUBLIC_SITE_SIGNALS)
+    if blueprint:
+        question = (
+            "This looks like a blueprint. What should Lucid build from it?"
+        )
+    elif has_admin and has_public:
+        question = "Should this be public-facing, internal admin, or both?"
+    else:
+        question = "What kind of project should I build from this?"
+
+    options = list(_PROJECT_TYPE_OPTIONS)
+    if has_admin and not has_public:
+        options = [
+            {"id": "admin_dashboard", "label": "Admin panel"},
+            {"id": "marketing_with_admin", "label": "Website + admin"},
+            {"id": "full_website", "label": "Full website"},
+            {"id": "web_app", "label": "Web app"},
+        ]
+    elif has_public and not has_admin:
+        options = [
+            {"id": "landing_page", "label": "Landing page"},
+            {"id": "full_website", "label": "Full website"},
+            {"id": "marketing_with_admin", "label": "Website + admin"},
+            {"id": "web_app", "label": "Web app"},
+        ]
+
+    return {"key": "project_type", "text": question, "options": options}
 
 
 def _detected_type_label(text: str) -> str:
@@ -260,6 +376,38 @@ async def check_prompt_clarity(
         logger.info(
             "clarity_agent: bare project type %r — asking %r (deterministic)",
             clean_task[:60], q["key"],
+        )
+        return q
+
+    # Blueprint/spec mode: a pasted brief can be very detailed while still
+    # omitting the most important routing decision: landing page vs full site
+    # vs admin vs both. Ask before research so the expensive stages can fill
+    # the right gaps instead of guessing.
+    if (
+        "project_type" not in already_clarified
+        and _looks_like_blueprint(clean_task)
+        and not _has_project_type_context(clean_task)
+    ):
+        q = _project_type_question(clean_task, blueprint=True)
+        logger.info(
+            "clarity_agent: blueprint without project_type — asking project_type",
+        )
+        return q
+
+    # Domain-only prompt: "Italian restaurant in Brooklyn" is rich enough
+    # for research, but not enough to know whether to build one page or a
+    # multi-page website. Deterministically ask this before Gemini so the
+    # first generation never picks the wrong surface.
+    if (
+        "project_type" not in already_clarified
+        and "field" not in already_clarified
+        and _has_field_context(clean_task)
+        and not _has_project_type_context(clean_task)
+    ):
+        q = _project_type_question(clean_task)
+        logger.info(
+            "clarity_agent: domain-only prompt %r — asking project_type",
+            clean_task[:80],
         )
         return q
 

@@ -203,9 +203,17 @@ const PROVIDER_CONFIG = {
       { id: 'anthropic/claude-opus-4-6',            label: 'Claude Opus 4.6' },
     ],
   },
+  openai: {
+    label: 'OpenAI Codex',
+    docsUrl: 'https://platform.openai.com/api-keys',
+    models: [
+      { id: 'openai/gpt-5.2-codex',     label: 'GPT-5.2 Codex' },
+      { id: 'openai/gpt-5.1-codex-max', label: 'GPT-5.1 Codex Max' },
+    ],
+  },
 };
 
-const PROVIDER_KEYS = Object.keys(PROVIDER_CONFIG); // ['google', 'anthropic']
+const PROVIDER_KEYS = Object.keys(PROVIDER_CONFIG);
 
 const LLMTab = forwardRef(function LLMTab(_, ref) {
   // ── local state ──────────────────────────────────

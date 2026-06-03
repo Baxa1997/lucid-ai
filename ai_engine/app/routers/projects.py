@@ -13,16 +13,18 @@ messages, and files.
 from __future__ import annotations
 
 import os
+import re
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from postgrest.exceptions import APIError
+from pydantic import BaseModel, Field
 
 from app.auth import AuthenticatedUser, get_current_user
 from app.config import logger, settings
-from app.services.chat import _with_retry
 from app.services.members import MembershipService
-from app.supabase_client import managed_admin_client
+from app.supabase_client import db_client, managed_admin_client
 
 router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
 
@@ -34,6 +36,14 @@ _EXCLUDE_DIRS = {
     ".venv", "venv", ".mypy_cache", ".pytest_cache",
     "dist", "build", ".tox", ".eggs",
 }
+
+_TENANT_TABLE_RE = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
+_TENANT_COLUMN_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+_SYSTEM_ROW_FIELDS = {"id", "created_at", "updated_at"}
+
+
+class TenantRowPayload(BaseModel):
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 # ── Shared auth helper ────────────────────────────────────────────────
@@ -62,6 +72,146 @@ async def _require_member(project_id: str, user: AuthenticatedUser) -> None:
 
     if not await MembershipService.is_member(project_id, user.user_id):
         raise HTTPException(status_code=403, detail="Not authorized to access this project")
+
+
+def _normalize_data_model(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
+def _list_data_model_tables(data_model: dict[str, Any]) -> list[dict[str, Any]]:
+    tables = data_model.get("tables")
+    if not isinstance(tables, list):
+        return []
+    return [table for table in tables if isinstance(table, dict)]
+
+
+def _get_table_definition(
+    data_model: dict[str, Any],
+    table_name: str,
+) -> dict[str, Any] | None:
+    if not _TENANT_TABLE_RE.fullmatch(table_name or ""):
+        return None
+    for table in _list_data_model_tables(data_model):
+        if table.get("name") == table_name:
+            return table
+    return None
+
+
+def _table_field_names(table: dict[str, Any]) -> set[str]:
+    fields = table.get("fields")
+    if not isinstance(fields, list):
+        return set()
+    names: set[str] = set()
+    for field in fields:
+        if isinstance(field, dict) and isinstance(field.get("name"), str):
+            names.add(field["name"])
+    return names
+
+
+def _clean_payload_for_table(
+    table: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Drop system columns and fields not declared in the project's DataModel."""
+    if not isinstance(payload, dict):
+        return {}
+    allowed = _table_field_names(table)
+    return {
+        key: value
+        for key, value in payload.items()
+        if key in allowed and key not in _SYSTEM_ROW_FIELDS
+    }
+
+
+def _validate_order_by(table: dict[str, Any], order_by: str) -> str:
+    if not _TENANT_COLUMN_RE.fullmatch(order_by or ""):
+        raise HTTPException(status_code=400, detail="Invalid order column")
+    allowed = _table_field_names(table) | _SYSTEM_ROW_FIELDS
+    if order_by not in allowed:
+        raise HTTPException(status_code=400, detail="Unknown order column")
+    return order_by
+
+
+def _require_user_jwt_for_tenant_rpc(user: AuthenticatedUser) -> str:
+    """Tenant RPCs depend on auth.uid(), so they need the user's JWT."""
+    if not user.raw_jwt:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A user session token is required for project data edits",
+        )
+    return user.raw_jwt
+
+
+async def _get_effective_data_model(project_id: str) -> dict[str, Any]:
+    """Return the DataModel/tenant metadata used by this project.
+
+    Linked admin panels keep membership on their own row but operate on
+    the parent website's tenant schema and DataModel. This mirrors the
+    database RPC behavior in migrations 027/028.
+    """
+    try:
+        async with managed_admin_client() as client:
+            res = (
+                await client.table("chat_sessions")
+                .select("id, parent_project_id, tenant_schema, data_model")
+                .eq("id", project_id)
+                .maybe_single()
+                .execute()
+            )
+            project = (res.data if res else None) or {}
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+
+            parent_project_id = project.get("parent_project_id")
+            effective = project
+            if parent_project_id:
+                parent_res = (
+                    await client.table("chat_sessions")
+                    .select("id, tenant_schema, data_model")
+                    .eq("id", parent_project_id)
+                    .maybe_single()
+                    .execute()
+                )
+                effective = (parent_res.data if parent_res else None) or {}
+                if not effective:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Linked project parent was not found",
+                    )
+    except HTTPException:
+        raise
+    except APIError as exc:
+        logger.error("Supabase error loading data model for %s: %s", project_id, exc)
+        raise HTTPException(status_code=500, detail="Database error") from exc
+
+    data_model = _normalize_data_model(effective.get("data_model"))
+    return {
+        "project_id": project_id,
+        "parent_project_id": project.get("parent_project_id"),
+        "effective_project_id": effective.get("id") or project_id,
+        "tenant_schema": effective.get("tenant_schema"),
+        "data_model": data_model,
+        "tables": _list_data_model_tables(data_model),
+    }
+
+
+def _raise_tenant_rpc_error(exc: APIError) -> None:
+    message = str(exc)
+    lower = message.lower()
+    if "access_denied" in lower or "insufficient_privilege" in lower:
+        raise HTTPException(status_code=403, detail="Not authorized to edit this project data") from exc
+    if "row_not_found" in lower:
+        raise HTTPException(status_code=404, detail="Data row not found") from exc
+    if "project_not_found" in lower:
+        raise HTTPException(status_code=404, detail="Project data is not provisioned") from exc
+    if "no_tenant" in lower:
+        raise HTTPException(status_code=409, detail="Project data is not provisioned yet") from exc
+    if "invalid_" in lower or "unknown_order" in lower:
+        raise HTTPException(status_code=400, detail="Invalid project data request") from exc
+    logger.error("Tenant data RPC failed: %s", exc)
+    raise HTTPException(status_code=500, detail="Project data operation failed") from exc
 
 
 # ── GET /api/v1/projects/{project_id} ─────────────────────────────────
@@ -181,6 +331,176 @@ async def get_project(
         "latest_generation": latest_generation,
         "preview_url":     preview_url,
     }
+
+
+# ── Project DataModel + tenant row CRUD ───────────────────────────────
+
+@router.get("/{project_id}/data-model")
+async def get_project_data_model(
+    project_id: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Return the generated Supabase-backed collections for Settings > Data."""
+    await _require_member(project_id, user)
+    model_info = await _get_effective_data_model(project_id)
+    return {
+        **model_info,
+        "provisioned": bool(model_info.get("tenant_schema")),
+        "table_count": len(model_info.get("tables") or []),
+    }
+
+
+@router.get("/{project_id}/data/{table_name}")
+async def list_project_data_rows(
+    project_id: str,
+    table_name: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+    order_by: str = Query("created_at"),
+    order_direction: str = Query("desc"),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
+    """List rows from one generated collection.
+
+    The actual read goes through the authenticated Supabase RPC so linked
+    admin panels and per-project table allowlists match production runtime
+    behavior.
+    """
+    await _require_member(project_id, user)
+    user_jwt = _require_user_jwt_for_tenant_rpc(user)
+    model_info = await _get_effective_data_model(project_id)
+    table = _get_table_definition(model_info["data_model"], table_name)
+    if table is None:
+        raise HTTPException(status_code=404, detail="Project data table not found")
+    order_by = _validate_order_by(table, order_by)
+    direction = (order_direction or "").lower()
+    if direction not in {"asc", "desc"}:
+        raise HTTPException(status_code=400, detail="Invalid order direction")
+
+    try:
+        async with db_client(user_jwt) as client:
+            res = await client.rpc(
+                "get_tenant_collection_authenticated",
+                {
+                    "p_project_id": project_id,
+                    "p_table_name": table_name,
+                    "p_order_by": order_by,
+                    "p_order_direction": direction,
+                    "p_limit": limit,
+                    "p_offset": offset,
+                },
+            ).execute()
+        rows = res.data if isinstance(res.data, list) else []
+        return {"table": table, "rows": rows, "limit": limit, "offset": offset}
+    except APIError as exc:
+        _raise_tenant_rpc_error(exc)
+
+
+@router.post("/{project_id}/data/{table_name}", status_code=status.HTTP_201_CREATED)
+async def create_project_data_row(
+    project_id: str,
+    table_name: str,
+    body: TenantRowPayload,
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Insert one row into a generated collection."""
+    await _require_member(project_id, user)
+    user_jwt = _require_user_jwt_for_tenant_rpc(user)
+    model_info = await _get_effective_data_model(project_id)
+    table = _get_table_definition(model_info["data_model"], table_name)
+    if table is None:
+        raise HTTPException(status_code=404, detail="Project data table not found")
+    payload = _clean_payload_for_table(table, body.payload)
+    if not payload:
+        raise HTTPException(status_code=400, detail="No editable fields in payload")
+
+    try:
+        async with db_client(user_jwt) as client:
+            res = await client.rpc(
+                "set_tenant_row",
+                {
+                    "p_project_id": project_id,
+                    "p_table_name": table_name,
+                    "p_payload": payload,
+                },
+            ).execute()
+        return {"row": res.data}
+    except APIError as exc:
+        _raise_tenant_rpc_error(exc)
+
+
+@router.patch("/{project_id}/data/{table_name}/{row_id}")
+async def update_project_data_row(
+    project_id: str,
+    table_name: str,
+    row_id: str,
+    body: TenantRowPayload,
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Patch one row in a generated collection."""
+    await _require_member(project_id, user)
+    user_jwt = _require_user_jwt_for_tenant_rpc(user)
+    try:
+        parsed_row_id = str(uuid.UUID(row_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid row id") from exc
+
+    model_info = await _get_effective_data_model(project_id)
+    table = _get_table_definition(model_info["data_model"], table_name)
+    if table is None:
+        raise HTTPException(status_code=404, detail="Project data table not found")
+    payload = _clean_payload_for_table(table, body.payload)
+    if not payload:
+        raise HTTPException(status_code=400, detail="No editable fields in payload")
+
+    try:
+        async with db_client(user_jwt) as client:
+            res = await client.rpc(
+                "update_tenant_row",
+                {
+                    "p_project_id": project_id,
+                    "p_table_name": table_name,
+                    "p_row_id": parsed_row_id,
+                    "p_payload": payload,
+                },
+            ).execute()
+        return {"row": res.data}
+    except APIError as exc:
+        _raise_tenant_rpc_error(exc)
+
+
+@router.delete("/{project_id}/data/{table_name}/{row_id}")
+async def delete_project_data_row(
+    project_id: str,
+    table_name: str,
+    row_id: str,
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    """Delete one row from a generated collection."""
+    await _require_member(project_id, user)
+    user_jwt = _require_user_jwt_for_tenant_rpc(user)
+    try:
+        parsed_row_id = str(uuid.UUID(row_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid row id") from exc
+
+    model_info = await _get_effective_data_model(project_id)
+    if _get_table_definition(model_info["data_model"], table_name) is None:
+        raise HTTPException(status_code=404, detail="Project data table not found")
+
+    try:
+        async with db_client(user_jwt) as client:
+            await client.rpc(
+                "delete_tenant_row",
+                {
+                    "p_project_id": project_id,
+                    "p_table_name": table_name,
+                    "p_row_id": parsed_row_id,
+                },
+            ).execute()
+        return {"success": True}
+    except APIError as exc:
+        _raise_tenant_rpc_error(exc)
 
 
 # ── GET /api/v1/projects/{project_id}/messages ────────────────────────

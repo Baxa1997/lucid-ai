@@ -40,6 +40,7 @@ from .step4b_images import analyze_images
 from .step5_execute import execute_with_claude, execute_project_in_batches
 from .step5_direct import execute_direct_edit
 from .step5_cli import execute_with_claude_cli
+from .step5_codex import execute_with_codex_cli
 from .step5b_build_verify import verify_build
 from .step6_verify import verify_changes, push_with_openhands
 from app.paths import NODE_MODULES_CACHE_ROOT, new_project_workspace_path
@@ -58,6 +59,22 @@ def _is_route_creation_task(task: str) -> bool:
     return action and target
 
 
+def _edit_agent_provider() -> str:
+    """Return the preferred agentic edit executor.
+
+    ``codex`` is the default for the long-horizon code-edit path. Claude stays
+    available as a fallback while Codex burns in.
+    """
+    raw = os.environ.get("LUCID_EDIT_AGENT_PROVIDER", "codex").strip().lower()
+    if raw in {"codex", "openai"}:
+        return "codex"
+    if raw in {"claude", "anthropic"}:
+        return "claude"
+    if raw in {"auto", ""}:
+        return "codex"
+    return "codex"
+
+
 async def _answer_discuss_mode(
     *,
     task: str,
@@ -66,8 +83,42 @@ async def _answer_discuss_mode(
     websocket: WebSocket,
     classification: dict,
     user_id: str | None = None,
+    openai_api_key: str = "",
+    openai_model: str = "",
 ) -> bool:
     """Answer an existing-project question with read-only Claude tools."""
+    if not str(api_key or "").strip() and _edit_agent_provider() == "codex":
+        try:
+            from app.services.codex_cli import run_codex_session
+
+            model = str(openai_model or "").strip()
+            if model.startswith("openai/"):
+                model = model.split("/", 1)[1]
+            readonly_prompt = (
+                "You are Lucid AI's read-only project assistant. Answer the "
+                "user's question by inspecting the workspace when helpful. "
+                "Do not write, edit, delete, install, run builds, commit, or "
+                "push. If the user is actually asking for a code change, "
+                "explain briefly that it should be run in edit mode.\n\n"
+                f"USER QUESTION:\n{task}"
+            )
+            result = await run_codex_session(
+                prompt=readonly_prompt,
+                workspace_path=workspace_path,
+                websocket=websocket,
+                api_key=openai_api_key,
+                user_id=user_id,
+                model=model,
+                timeout_seconds=180,
+                phase_label="discuss_mode_codex",
+                sandbox_mode="read-only",
+            )
+            return bool(result.success)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Codex discuss-mode answer failed: %s", exc, exc_info=True)
+
     try:
         from app.services.claude_cli import run_claude_session
 
@@ -840,6 +891,55 @@ async def run_pipeline(
             await openhands_manager.destroy_all()
             await asyncio.sleep(0.5)
 
+        # ── External repo index ───────────────────────────
+        # User-connected repositories do not have Lucid's generated content
+        # manifest/editable metadata. Build a deterministic repo briefing and
+        # move edits off production-like branches before any code agent runs.
+        if not (validated.get("scratch_mode") or validated.get("new_project_mode")):
+            try:
+                from app.services.external_project_index import (
+                    index_external_project,
+                    is_external_project,
+                )
+                if is_external_project(validated):
+                    await websocket.send_json({
+                        "type": "progress",
+                        "message": "🧭 Indexing connected project structure...",
+                    })
+                    _external_index = await index_external_project(
+                        workspace_path=workspace_path,
+                        validated=validated,
+                        task=task,
+                        websocket=websocket,
+                    )
+                    _proj = (_external_index.get("project") or {})
+                    _routes = _external_index.get("routes") or []
+                    await websocket.send_json({
+                        "type": "project_indexed",
+                        "framework": _proj.get("framework") or "unknown",
+                        "language": _proj.get("language") or "unknown",
+                        "packageManager": _proj.get("package_manager") or validated.get("package_manager", "npm"),
+                        "routeCount": len(_routes),
+                        "branch": validated.get("branch") or "",
+                        "message": (
+                            f"Connected project indexed: {_proj.get('framework') or 'unknown'} "
+                            f"({len(_routes)} route{'s' if len(_routes) != 1 else ''})"
+                        ),
+                    })
+                    logger.info(
+                        "External project indexed: framework=%s branch=%s routes=%d",
+                        _proj.get("framework"), validated.get("branch"), len(_routes),
+                    )
+            except Exception as _idx_err:
+                logger.warning("External project index failed (non-fatal): %s", _idx_err, exc_info=True)
+                try:
+                    await websocket.send_json({
+                        "type": "warning",
+                        "message": "Project indexing failed, so the agent will inspect the repo directly.",
+                    })
+                except Exception:
+                    pass
+
         # ── Phase 3: Understand / classify ─────────────────
         # For new projects, the generator may still ask clarification questions
         # before research starts, so keep the label in the intake phase.
@@ -874,6 +974,8 @@ async def run_pipeline(
                     websocket=websocket,
                     classification=classification,
                     user_id=_user_id_for_billing,
+                    openai_api_key=str(validated.get("openai_api_key") or ""),
+                    openai_model=str(validated.get("openai_model") or ""),
                 )
                 await _send_phase(
                     4,
@@ -1048,6 +1150,12 @@ async def run_pipeline(
                 websocket,
                 edit_intent=edit_intent,
             )
+            if validated.get("external_project_brief"):
+                plan = (
+                    f"{validated['external_project_brief']}\n\n"
+                    "## Implementation Plan\n"
+                    f"{plan or ''}"
+                )
             await asyncio.sleep(0.8)
             await _send_phase(4, "Exploring codebase", "Implementation plan ready", "done")
 
@@ -1175,39 +1283,79 @@ async def run_pipeline(
                 # a failed direct attempt. No partial direct-edit state is
                 # on disk at this point (execute_direct_edit is all-or-none).
                 #
-                # Default: new direct-CLI implementation (token-transparent).
-                # Set LUCID_USE_CLAUDE_SDK=1 to fall back to the legacy SDK
-                # path while we burn in the CLI integration.
-                await _send_phase(5, "Writing code", f"Claude ({model}) is implementing the task…", "active")
+                # Default: Codex for the long-horizon project-edit pass.
+                # Claude CLI/SDK remains as fallback so one provider failure
+                # does not strand the user's workspace.
+                preferred_agent = _edit_agent_provider()
+                await _send_phase(
+                    5,
+                    "Writing code",
+                    (
+                        "Codex is implementing the task…"
+                        if preferred_agent == "codex"
+                        else f"Claude ({model}) is implementing the task…"
+                    ),
+                    "active",
+                )
                 _user_id_for_billing = (
                     (session.user_id if session else None)
                     or (user.get("user_id") if isinstance(user, dict) else None)
                 )
-                _use_legacy_sdk = os.environ.get("LUCID_USE_CLAUDE_SDK", "").lower() in ("1", "true", "yes")
-                if _use_legacy_sdk:
-                    success = await execute_with_claude(
+                _stack = (
+                    validated.get("project_stack")
+                    or validated.get("skeleton_stack")
+                    or ""
+                )
+
+                if preferred_agent == "codex":
+                    _openai_key = str(
+                        validated.get("openai_api_key")
+                        or os.environ.get("OPENAI_API_KEY", "")
+                        or ""
+                    ).strip()
+                    success = await execute_with_codex_cli(
                         task,
                         workspace_path,
-                        validated["anthropic_api_key"],
-                        classification,
-                        plan,
-                        websocket,
-                    )
-                else:
-                    success = await execute_with_claude_cli(
-                        task,
-                        workspace_path,
-                        validated["anthropic_api_key"],
+                        _openai_key,
                         classification,
                         plan,
                         websocket,
                         user_id=_user_id_for_billing,
-                        stack=(
-                            validated.get("project_stack")
-                            or validated.get("skeleton_stack")
-                            or ""
-                        ),
+                        stack=_stack,
+                        model=str(validated.get("openai_model") or ""),
                     )
+                    if not success and str(validated.get("anthropic_api_key") or "").strip():
+                        logger.info("Codex edit path declined — falling back to Claude")
+                        try:
+                            await websocket.send_json({
+                                "type": "progress",
+                                "message": "↪️  Falling back to Claude agent mode…",
+                            })
+                        except Exception:
+                            pass
+
+                if not success and str(validated.get("anthropic_api_key") or "").strip():
+                    _use_legacy_sdk = os.environ.get("LUCID_USE_CLAUDE_SDK", "").lower() in ("1", "true", "yes")
+                    if _use_legacy_sdk:
+                        success = await execute_with_claude(
+                            task,
+                            workspace_path,
+                            validated["anthropic_api_key"],
+                            classification,
+                            plan,
+                            websocket,
+                        )
+                    else:
+                        success = await execute_with_claude_cli(
+                            task,
+                            workspace_path,
+                            validated["anthropic_api_key"],
+                            classification,
+                            plan,
+                            websocket,
+                            user_id=_user_id_for_billing,
+                            stack=_stack,
+                        )
 
             if not success:
                 await _send_phase(5, "Writing code", "Code execution failed", "error")
@@ -1229,6 +1377,8 @@ async def run_pipeline(
                 from app.services.build_validator import BuildValidator
                 _bv = BuildValidator(
                     api_key=validated["anthropic_api_key"],
+                    openai_api_key=str(validated.get("openai_api_key") or ""),
+                    openai_model=str(validated.get("openai_model") or ""),
                     classification=classification,
                     websocket=websocket,
                     max_retries=3,
@@ -1244,11 +1394,19 @@ async def run_pipeline(
                 await verify_build(workspace_path, validated["anthropic_api_key"], classification, websocket)
             await _send_phase(6, "Verifying build", "Build verification complete", "done")
 
-        # ── Phase 6.5: Verify changes ────────────────────
-        changed = await verify_changes(workspace_path, websocket)
-        if not changed:
-            await _send_phase(6, "Verifying build", "No changes detected", "error")
-            return
+        # ── Phase 6.5: Verify changes (edit-mode only) ──────────
+        # `verify_changes` runs `git status --porcelain` and is meaningful only
+        # in edit mode, where we're checking whether Claude actually touched
+        # files. For scratch / new-project mode we just wrote the whole project
+        # via the website/admin/landing pipelines — the diff check produces
+        # false negatives (empty stdout if the workspace isn't a git repo or
+        # if generation auto-committed) and silently skips the preview boot
+        # below at Phase 6.7.
+        if not (validated.get("scratch_mode") or validated.get("new_project_mode")):
+            changed = await verify_changes(workspace_path, websocket)
+            if not changed:
+                await _send_phase(6, "Verifying build", "No changes detected", "error")
+                return
 
         # ── Phase 6.7: Start Live Preview + Verify build in parallel ─────────
         # The preview dev server boot and the build verification are independent:
@@ -1496,34 +1654,32 @@ async def run_pipeline(
                         logger.info("Project pushed to staging: %s", html_url)
 
         elif validated.get("new_project_mode"):
-            # Gate publish on the in-process build result. Pushing a broken
-            # project to GitHub + deploying to Vercel produces a noisy "your
-            # project is live" celebration on top of an actually-broken site,
-            # and worse — when the user pastes the error into chat to ask
-            # for a fix, the orchestrator is mid-deploy and the follow-up
-            # message races the deployment events. Skipping publish on a
-            # failed build keeps the workspace in a clean state where the
-            # user's next chat message can drive a focused fix loop.
+            # Build result gates the GO-LIVE step (push to main + Vercel
+            # deploy). When the build fails we still create the GitHub repo
+            # and push to the `staging` branch — that's the user's only
+            # remote backup of the generated code. Previously this whole
+            # block returned early and the entire project could be lost if
+            # the local workspace was reaped before the user could re-open
+            # and iterate. With the staging-only push, even a broken build
+            # leaves a recoverable GitHub repo and the user can fix in chat,
+            # then click Publish to merge staging→main when they're ready.
             _build_ok_for_publish = getattr(websocket, "_build_ok", True)
-            if not _build_ok_for_publish:
+            _publish_draft_only = not _build_ok_for_publish
+            if _publish_draft_only:
                 logger.info(
-                    "new_project_mode Phase 7: skipping publish — build failed. "
-                    "User can describe the error and the next agent run will fix it."
-                )
-                await _send_phase(
-                    7, "Publishing project",
-                    "Skipped — build failed. Tell the agent what you see and it'll fix it.",
-                    "skipped",
+                    "new_project_mode Phase 7: build failed — pushing to staging only, "
+                    "skipping main + Vercel deploy. User can iterate via chat and "
+                    "publish manually once the build passes."
                 )
                 await websocket.send_json({
                     "type": "chat_message",
                     "role": "system",
                     "content": (
-                        "⚠️ The build had errors, so I skipped publishing. "
-                        "Paste the runtime error you see in the preview and I'll fix it."
+                        "⚠️ The build had errors, so I saved your code to a draft branch "
+                        "instead of publishing live. Paste the runtime error you see in the "
+                        "preview and I'll fix it — then click Publish to go live."
                     ),
                 })
-                return workspace_path
 
             await _send_phase(7, "Publishing project", "Creating new repository…", "active")
 
@@ -1655,27 +1811,36 @@ async def run_pipeline(
                     # user gets a live URL on the very first generation.
                     # Follow-up edits stay on staging only (publish is then
                     # explicit via the workspace's Publish button).
+                    # SKIPPED when build failed: code is safely on staging,
+                    # but we don't promote a broken site to main / Vercel.
                     auto_vercel_url = None
-                    main_push = await asyncio.to_thread(
-                        subprocess.run,
-                        ["git", "push", "origin", "staging:main"],
-                        cwd=workspace_path,
-                        capture_output=True, text=True, timeout=60,
-                    )
-                    if main_push.returncode == 0:
-                        logger.info("Auto-published initial gen to main: %s", new_repo_html_url)
-                        try:
-                            from app.services.vercel import create_vercel_project
-                            auto_vercel_url = await create_vercel_project(
-                                owner=_PLATFORM_ORG, repo=new_repo_name,
-                            )
-                        except Exception as _vc_err:
-                            logger.warning("Vercel auto-create failed (non-fatal): %s", _vc_err)
+                    if _publish_draft_only:
+                        logger.info(
+                            "new_project_mode: staging push complete — skipping main+Vercel "
+                            "because build failed. Repo: %s",
+                            new_repo_html_url,
+                        )
                     else:
-                        _err = (main_push.stderr or main_push.stdout or "")[:200]
-                        if git_token:
-                            _err = _err.replace(git_token, "***")
-                        logger.warning("Auto-push to main failed (non-fatal): %s", _err)
+                        main_push = await asyncio.to_thread(
+                            subprocess.run,
+                            ["git", "push", "origin", "staging:main"],
+                            cwd=workspace_path,
+                            capture_output=True, text=True, timeout=60,
+                        )
+                        if main_push.returncode == 0:
+                            logger.info("Auto-published initial gen to main: %s", new_repo_html_url)
+                            try:
+                                from app.services.vercel import create_vercel_project
+                                auto_vercel_url = await create_vercel_project(
+                                    owner=_PLATFORM_ORG, repo=new_repo_name,
+                                )
+                            except Exception as _vc_err:
+                                logger.warning("Vercel auto-create failed (non-fatal): %s", _vc_err)
+                        else:
+                            _err = (main_push.stderr or main_push.stdout or "")[:200]
+                            if git_token:
+                                _err = _err.replace(git_token, "***")
+                            logger.warning("Auto-push to main failed (non-fatal): %s", _err)
 
                     if chat_session_id and new_repo_html_url:
                         try:
@@ -1754,6 +1919,32 @@ async def run_pipeline(
                             ),
                         })
                         await _send_phase(7, "Publishing project", "Project is going live", "done")
+                    elif _publish_draft_only:
+                        # Build failed → no Vercel deploy. Send an explicit
+                        # "draft saved" banner with the staging URL so the
+                        # user sees something prominent (instead of just the
+                        # generic chat message above) and knows the next step.
+                        await websocket.send_json({
+                            "type": "published",
+                            "repoUrl":   new_repo_html_url,
+                            "vercelUrl": "",
+                            "draft":     True,
+                            "branchUrl": f"{new_repo_html_url}/tree/staging",
+                            "message": (
+                                "Saved to draft branch (build had errors). "
+                                "Fix the errors in chat, then click Publish to go live."
+                            ),
+                        })
+                        await websocket.send_json({
+                            "type": "complete",
+                            "message": (
+                                f"⚠️ Saved to staging at {new_repo_html_url}/tree/staging — "
+                                "the build had errors so I didn't deploy to Vercel. "
+                                "Paste any preview error in chat and I'll fix it, "
+                                "then Publish promotes staging → main."
+                            ),
+                        })
+                        await _send_phase(7, "Publishing project", "Saved as draft (build errors)", "done")
                     else:
                         await websocket.send_json({
                             "type": "complete",
@@ -1785,13 +1976,16 @@ async def run_pipeline(
 
         else:
             await _send_phase(7, "Pushing changes", "Committing and pushing to remote…", "active")
-            await push_with_openhands(
+            push_ok = await push_with_openhands(
                 workspace_path,
                 validated,
                 task,
                 task_id,
                 websocket,
             )
+            if not push_ok:
+                await _send_phase(7, "Pushing changes", "Push failed", "error")
+                return
             auto_repo = validated.get("auto_created_repo")
             if auto_repo:
                 await websocket.send_json({

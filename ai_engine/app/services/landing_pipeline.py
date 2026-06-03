@@ -452,6 +452,12 @@ async def run_landing_pipeline(
         # checks for `_plan_correction` and re-runs with the new prompt.
         return False
 
+    # Phase 4 was never set active between plan-confirm and Stage 5 codegen,
+    # so the status pill sat on "Research complete" while runtime content +
+    # fixers ran. Flip phase 4 active here so the UI tracks the in-between
+    # work; Stage 5 below marks it done before flipping to "Writing code".
+    await _phase(4, "Planning code", "Writing runtime content + setup…", "active")
+
     # ── Step 2: Runtime content JSON ─────────────────────────────────
     from app.services.landing_content import write_landing_content
     try:
@@ -526,6 +532,7 @@ async def run_landing_pipeline(
         generate_layout_components,
         write_landing_page_shell,
     )
+    await _phase(4, "Planning code", "Plan ready", "done")
     await _phase(
         5,
         "Writing code",
@@ -611,13 +618,18 @@ async def run_landing_pipeline(
     # before handing off to preview. Without this, build-time errors
     # (unresolved imports, JSX syntax, missing exports) only get caught
     # by the dev server, which leaves the user staring at a red overlay.
+    # max_retries=1 (2 attempts total): the 3-attempt budget was burning
+    # ~9 min on doomed retries when the failures all shared a root cause
+    # Claude couldn't fix. One auto-fix attempt is enough to recover the
+    # easy cases; harder ones fall through to the user's first preview
+    # message so they can describe the runtime error directly.
     await run_generation_build_check(
         pipeline="landing_pipeline",
         workspace_path=workspace_path,
         api_key=anthropic_key,
         classification=classification or {},
         websocket=websocket,
-        max_retries=2,
+        max_retries=1,
         send=lambda kind, message: _send(websocket, kind, message),
         phase=lambda status, state: _phase(6, "Verifying build", status, state),
         progress_message="Final checks...",
@@ -685,6 +697,30 @@ async def run_landing_pipeline(
                     "landing_pipeline: finalised chat_session %s (project_id=%s, complete=True)",
                     chat_session_id, update_payload.get("project_id", current_pid),
                 )
+
+                # Promote the generated workspace to PREVIEW_WS_ROOT so that
+                # the next session-reconnect resolves to it via
+                # `preview_workspace_path(project_id)`. Without this, every
+                # re-entry creates a fresh empty workspace and the user sees
+                # the bare template instead of their generated site. Use a
+                # symlink so the live preview server keeps running off the
+                # original lucid_new_* path with no file movement.
+                _effective_pid = update_payload.get("project_id") or current_pid
+                if _effective_pid:
+                    try:
+                        from app.paths import preview_workspace_path
+                        _target = preview_workspace_path(_effective_pid)
+                        if os.path.isdir(workspace_path) and not os.path.lexists(_target):
+                            os.symlink(workspace_path, _target)
+                            logger.info(
+                                "landing_pipeline: promoted workspace to %s → %s",
+                                _target, workspace_path,
+                            )
+                    except Exception as _sym_exc:
+                        logger.warning(
+                            "landing_pipeline: workspace promotion failed (non-fatal) — %s",
+                            _sym_exc,
+                        )
         except Exception as exc:
             logger.warning("landing_pipeline: finalisation update failed (non-fatal) — %s", exc)
 

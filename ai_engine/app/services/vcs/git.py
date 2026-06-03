@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import subprocess
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import quote, urlparse, urlunparse
 
 from app.config import logger
 
@@ -32,8 +33,97 @@ def _inject_token_into_url(repo_url: str, token: str) -> str:
     else:
         user = "oauth2"  # GitLab convention
 
-    authed = parsed._replace(netloc=f"{user}:{token}@{parsed.hostname}")
+    host = parsed.hostname
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    authed = parsed._replace(netloc=f"{user}:{token}@{host}")
     return urlunparse(authed)
+
+
+def strip_auth_from_url(repo_url: str, token: str = "") -> str:
+    """Return a browser-safe repo URL with credentials and .git suffix removed."""
+    url = (repo_url or "").strip()
+    if not url:
+        return ""
+    if token:
+        url = url.replace(token, "***")
+
+    parsed = urlparse(url)
+    if parsed.scheme and parsed.hostname:
+        host = parsed.hostname
+        if parsed.port:
+            host = f"{host}:{parsed.port}"
+        clean = urlunparse(parsed._replace(netloc=host, query="", fragment=""))
+    else:
+        # Best effort for scp-style URLs: git@github.com:owner/repo.git
+        match = re.match(r"^(?:[^@]+@)?([^:]+):(.+)$", url)
+        clean = f"https://{match.group(1)}/{match.group(2)}" if match else url
+
+    if clean.endswith(".git"):
+        clean = clean[:-4]
+    return clean.rstrip("/")
+
+
+def detect_git_provider(repo_url: str = "", explicit_provider: str = "") -> str:
+    """Normalize a git provider label from explicit metadata or repo host."""
+    explicit = (explicit_provider or "").strip().lower()
+    if explicit in {"github", "gitlab"}:
+        return explicit
+    host = (urlparse(repo_url or "").hostname or repo_url or "").lower()
+    if "github" in host:
+        return "github"
+    if "gitlab" in host:
+        return "gitlab"
+    return "git"
+
+
+def provider_display_name(provider: str) -> str:
+    provider = (provider or "").lower()
+    if provider == "github":
+        return "GitHub"
+    if provider == "gitlab":
+        return "GitLab"
+    return "Git"
+
+
+def branch_browser_url(repo_url: str, branch: str, provider: str = "") -> str:
+    """Build the browser URL for a branch on GitHub/GitLab."""
+    clean = strip_auth_from_url(repo_url)
+    if not clean or not branch:
+        return ""
+    safe_branch = quote(str(branch), safe="/")
+    normalized_provider = detect_git_provider(clean, provider)
+    if normalized_provider == "gitlab":
+        return f"{clean}/-/tree/{safe_branch}"
+    if normalized_provider == "github":
+        return f"{clean}/tree/{safe_branch}"
+    return clean
+
+
+def review_request_url(
+    repo_url: str,
+    source_branch: str,
+    base_branch: str = "main",
+    provider: str = "",
+) -> str:
+    """Build a GitHub PR or GitLab MR creation URL for a pushed branch."""
+    clean = strip_auth_from_url(repo_url)
+    if not clean or not source_branch:
+        return ""
+    normalized_provider = detect_git_provider(clean, provider)
+    source = quote(str(source_branch), safe="/")
+    base = quote(str(base_branch or "main"), safe="/")
+    if normalized_provider == "github":
+        return f"{clean}/compare/{base}...{source}"
+    if normalized_provider == "gitlab":
+        source_q = quote(str(source_branch), safe="")
+        base_q = quote(str(base_branch or "main"), safe="")
+        return (
+            f"{clean}/-/merge_requests/new"
+            f"?merge_request[source_branch]={source_q}"
+            f"&merge_request[target_branch]={base_q}"
+        )
+    return ""
 
 
 async def run_git_with_retry(

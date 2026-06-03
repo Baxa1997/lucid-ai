@@ -48,6 +48,9 @@ _FALLBACK_SKELETONS: dict[str, str] = {
         "  • THREE stacked layers when bg media exists: media (z-0) → readability overlay (z-10) → content (z-20).\n"
         "  • Foreground content includes (in order): eyebrow tag → headline (text-5xl md:text-6xl lg:text-7xl, leading-[1.05]) → 1-line subhead (text-lg md:text-xl, max-w-xl) → ≥1 CTA + 0-1 secondary.\n"
         "  • Wrap content group in <Reveal variant=\"fade-up\">.\n"
+        "  • FLOATING BADGES / CHIPS (Score Guarantee badge, status pill, callout card) MUST stay inside the section's content container — never use negative offsets that push them outside the viewport (`-top-4`, `-right-8`, etc.) and never position them with absolute coordinates that exceed the parent. Use `absolute top-4 right-4` AT MOST, and prefer placing them in the document flow inside the copy column instead of floating. A clipped or floating-off-edge badge is a hard fail — it reads as a layout bug.\n"
+        "  • Hero copy column MUST sit on a grid (grid grid-cols-1 lg:grid-cols-2 gap-8 + relative z-20 on the copy block) — NEVER stack copy on top of the hero image with `position: absolute`. Absolute layered copy creates overlapping/unreadable text at every viewport unless the photo is intentionally darkened with the readability overlay.\n"
+        "  • DECORATIVE WATERMARK TEXT (large background numerals, oversized initials, ghosted brand letters) is allowed but MUST be DIFFERENT content from the foreground label. NEVER render `{item.name}` or `{member.name}` or any prose interpolation twice — once as the watermark and once as the readable title — that creates a confusing double-vision ghost. Watermarks are for static decoration (an index number like `01`, a single Greek letter, a quote mark `&ldquo;`), not for repeating the title.\n"
         "  • COMPOSITION — pick ONE pattern from this catalog (driven by visual_dna.layout_signature + section_flavors.hero):\n"
         "      A. FULL-BLEED PHOTO — hero image covers entire section as <Image fill object-cover>; readability overlay `bg-foreground/40` (light bg) or `bg-foreground/60` (over busy photo); content left-aligned in a max-w-2xl block. Best for travel / hospitality / restaurants / lifestyle. Headline allowed to use ONE italic accent word: `<span className=\"italic text-primary\">Table</span>` (the Bella Luna pattern).\n"
         "      B. ASYMMETRIC SPLIT 60/40 — copy column (lg:col-span-3) on left with eyebrow + h1 + subhead + CTA; image column (lg:col-span-2) on right with a single large photo `aspect-[4/5]` + rounded-3xl + decorative motif overlay. No overlay on copy column. Best for editorial brands, architecture, premium product (the architecture-studio + Veloretti pattern).\n"
@@ -774,11 +777,27 @@ MANDATORY RULES
    The ONLY single-quoted strings allowed are: `'use client'`, import paths (`from '@/...'`),
    and CSS-class strings inside className (where there are no apostrophes). Default to `"..."` for
    all human copy, no exceptions.
-1. The component reads its content from `@/content/landing.json` — never hardcode copy.
+1. The component reads ALL content from `@/content/landing.json` — never hardcode copy OR data arrays.
    Pattern:
      import landing from "@/content/landing.json";
      const section = landing.sections.find((s) => s.id === "<section-id>");
      // then render section.headline, section.subheadline, section.items, section.cta, section.images, etc.
+
+   ✗ FORBIDDEN — hardcoded data constants at the top of the file:
+       const CAFE_LOCATIONS = [{{ id: 1, name: "Alpine & Bean — Niederdorf", ... }}, ...];
+       const MENU_ITEMS = [...];
+       const FAQ_QUESTIONS = [...];
+       const TESTIMONIALS = [...];
+       const TABS = ["Coffee", "Pastries", "Tea"];
+       const FLAVOR_FILTERS = ["All", "Chocolate", ...];
+
+   If your section needs an array to render (cards, filter chips, tabs, search results,
+   carousel items, FAQ list), the array MUST come from `section.items` in landing.json.
+   When `section.items` is empty or missing, render a CALM STATIC LAYOUT (eyebrow +
+   headline + subhead + CTA) — do NOT fabricate data to satisfy an interactive widget.
+   Interactive widgets (search, filter, tabs) only render WHEN `section.items.length > 0`.
+   Fabricated data feels generic and breaks user editability ("our cafe in Niederdorf"
+   applies to nobody's actual business).
 1.5 VISUAL DNA IS THE LEAD DESIGN DIRECTIVE. The DESIGN CONTEXT block below carries a VISUAL DNA
     section with concrete, culturally-specific cues (decorative motifs, signature textures,
     iconography anchors, photography style, layout signature, palette emphasis, typography
@@ -1224,6 +1243,38 @@ CONTRAST & READABILITY (NON-NEGOTIABLE — every line of text must be plainly le
       NEVER ship a button that is `bg-white text-white`, `bg-primary/10 text-primary` on `bg-card` (too low contrast),
       or any combo where label and surface differ by less than ~3:1 luminance.
   • Disabled / hover states still show a label — never fade label opacity below 70%.
+
+GRID-POSITIONING CLASSES ON WRAPPED CHILDREN — MUST GO ON THE WRAPPER
+  CSS Grid only honors `col-span-*`, `row-span-*`, `col-start-*`, `row-start-*`
+  on the DIRECT child of the grid container. Putting them on the inner element
+  inside a wrapper component (`<Reveal>`, `<motion.div>`, `<Tilt>`, any HOC) is
+  SILENTLY IGNORED — every card collapses to 1 column and they STACK over each
+  other. This is a hard-fail production bug (Al-Qalam TrustTickerSection,
+  2026-06-03 — bento grid with 7 tiles all collapsed into one column).
+  ✗ FORBIDDEN — col-span on the inner div inside a Reveal:
+      <div className="grid grid-cols-12 gap-4">
+        <Reveal variant="fade-up">
+          <div className="col-span-12 lg:col-span-7 row-span-2 ...">   ← IGNORED
+            ...
+          </div>
+        </Reveal>
+      </div>
+  ✓ CORRECT — col-span on the Reveal wrapper (Reveal forwards className to its root):
+      <div className="grid grid-cols-12 gap-4">
+        <Reveal variant="fade-up" className="col-span-12 lg:col-span-7 row-span-2">
+          <div className="bg-card rounded-2xl p-6 ...">    ← only visual classes here
+            ...
+          </div>
+        </Reveal>
+      </div>
+  Same rule for `<motion.div>` and any other element wrapped between the grid
+  and the card: grid-positioning classes belong on the OUTERMOST wrapper that
+  is the direct grid child. Every other class (bg-*, p-*, rounded-*, etc.)
+  stays on the inner div.
+  Final check before output: for every `<div className="grid ...">`, the FIRST
+  className token on each direct child MUST include a `col-span-` or
+  `col-start-` (or that child must be inside a single-column wrapper that's
+  itself a grid child). No direct grid child without grid placement.
 
 CARD ALIGNMENT — PIXEL-PERFECT (cards in a row MUST line up; no jagged grids)
   • Every card in a multi-card row MUST share the SAME outer chrome: same padding, radius, border, height behavior.
@@ -2111,6 +2162,25 @@ MANDATORY RULES
    Newsletter input/email-capture inputs use `rounded-md`. Logo lockup container `rounded-md`
    if it has a background color, no radius if it's transparent. NEVER use `rounded-none`
    on any header/footer element.
+8. FOOTER COLUMNS — DRIVEN BY DATA, NEVER PADDED:
+   • Render footer columns ONLY from the groups that actually exist in
+     `landing.footer.links` (group by the `group` field; if absent, fall
+     back to a single 'Explore' column).
+   • NEVER hardcode a column-name list like
+     `const DESIRED = ['Languages', 'About', 'Support', 'Legal']` and then
+     pad missing groups with empty arrays. That produces ghost columns with
+     only an em-dash or placeholder, which reads as a broken site.
+   • NEVER render any placeholder ('—', '...', '(coming soon)', italicized
+     blank) for an empty column. If a column has zero links, the column
+     MUST NOT be rendered at all.
+   • The grid column count adjusts to actual data:
+       - 1 group  → single-column stack (or merge into the brand block).
+       - 2 groups → `grid-cols-1 sm:grid-cols-2`.
+       - 3 groups → `grid-cols-1 sm:grid-cols-2 md:grid-cols-3`.
+       - 4+ groups → `grid-cols-2 md:grid-cols-4`.
+   • The header labels above each list come from the actual `group` field
+     in landing.footer.links (Title-Case it). Do not invent labels like
+     "Languages", "Support", "Legal" if the data doesn't carry them.
 
 ANATOMY — {anatomy_intro}:
 {anatomy}
@@ -2246,12 +2316,12 @@ async def _generate_layout_component(
                     websocket=websocket,
                     max_tokens=_SECTION_MAX_TOKENS,
                 ),
-                timeout=90.0,
+                timeout=150.0,
             )
         except asyncio.TimeoutError:
-            last_failure_reason = "timeout after 90s"
+            last_failure_reason = "timeout after 150s"
             logger.warning(
-                "layout %s: codegen timed out on attempt %d/%d — falling back to stub",
+                "layout %s: codegen timed out after 150s on attempt %d/%d — falling back to stub",
                 kind, attempt, max_attempts,
             )
             continue

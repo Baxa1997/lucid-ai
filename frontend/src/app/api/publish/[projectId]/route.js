@@ -413,10 +413,27 @@ async function resolveVercelProductionUrl({ token, teamId, projectSlug }) {
     if (!res.ok) return null;
     const proj = await res.json();
     const aliases = proj?.targets?.production?.alias || [];
-    // Filter to plain *.vercel.app entries (skip git-branch and team-scoped
-    // aliases). Pick the shortest — that's Vercel's canonical assignment.
-    const canonical = aliases
-      .filter((a) => /\.vercel\.app$/.test(a) && !a.includes('-git-') && !a.includes('-projects.'))
+    // Filter to plain *.vercel.app entries.
+    //   • Skip git-branch deploy URLs (they contain `-git-<branch>-...`).
+    //   • For TEAM projects, the canonical alias IS team-suffixed
+    //     (e.g. `<slug>-<team-slug>-projects.vercel.app`); do NOT exclude
+    //     `-projects.` here — that filter only made sense for personal-scope
+    //     deploys where `-projects.` URLs were redirects. On team accounts
+    //     excluding them dropped the only canonical entry and we fell back
+    //     to a wrong `<slug>.vercel.app` guess that 404s.
+    //   • If a team is configured, prefer aliases that carry the team suffix
+    //     (those are the ones serving traffic for team-owned projects).
+    const candidates = aliases.filter(
+      (a) => /\.vercel\.app$/.test(a) && !/-git-/.test(a)
+    );
+    const teamSuffix = teamId ? '-projects.vercel.app' : null;
+    const teamScoped = teamSuffix
+      ? candidates.filter((a) => a.endsWith(teamSuffix))
+      : [];
+    // Pick the shortest match — Vercel's canonical assignment is the
+    // shortest non-git alias. Prefer team-scoped if present, otherwise
+    // fall back to any non-git candidate.
+    const canonical = (teamScoped.length > 0 ? teamScoped : candidates)
       .sort((a, b) => a.length - b.length)[0];
     return canonical ? `https://${canonical}` : null;
   } catch (e) {
