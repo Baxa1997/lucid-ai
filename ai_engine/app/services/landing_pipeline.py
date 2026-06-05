@@ -56,6 +56,19 @@ async def run_landing_pipeline(
         await _send(websocket, "error", "Service is missing its API key — please contact support.")
         return False
 
+    # Pipeline-level telemetry. Wrapped fail-soft so telemetry can never
+    # break generation — emit() itself is also fail-soft as a backstop.
+    from app.services.telemetry import emit as _emit
+    import time as _time
+    _pipeline_t0 = _time.perf_counter()
+    _emit(
+        "pipeline.start",
+        pipeline="landing",
+        project_id=chat_session_id,
+        description_len=len(description or ""),
+        stack=(classification or {}).get("stack") or "",
+    )
+
     # Drive the UI's task-phase indicator from inside this pipeline.
     # The orchestrator only emits Phase 3 "active" before calling us, so
     # without these the indicator stays stuck on RESEARCHING for the
@@ -420,6 +433,27 @@ async def run_landing_pipeline(
         "done",
     )
 
+    # ── OPT-IN: Reference screenshots for multimodal grounding ───────
+    # Fetches 2-3 screenshots of brief.references[*].url and stashes them
+    # under /tmp/lucid_screenshots/<project_id>/ for downstream Claude
+    # codegen to attach as image inputs. Entirely fail-soft: if
+    # SCREENSHOT_API_KEY is unset OR any fetch fails, returns [] and the
+    # pipeline proceeds with text-only prompts (unchanged behavior).
+    reference_screenshots: list[bytes] = []
+    try:
+        from app.services.landing_vision_refs import fetch_landing_reference_screenshots
+        reference_screenshots = await fetch_landing_reference_screenshots(
+            brief=brief,
+            project_id=chat_session_id or brand_name or "anon",
+            websocket=websocket,
+        )
+    except Exception as _vision_exc:
+        logger.warning(
+            "landing_pipeline: reference screenshot fetch failed (non-fatal): %s",
+            _vision_exc,
+        )
+        reference_screenshots = []
+
     # Rename the chat session to the brand name so the project shows up as
     # "The Bali Haven" in Apps / sidebar instead of the truncated raw prompt.
     if chat_session_id and brand_name:
@@ -551,6 +585,7 @@ async def run_landing_pipeline(
             workspace_path=workspace_path,
             api_key=anthropic_key,
             websocket=websocket,
+            reference_images=reference_screenshots,
         )
         generation.add_files(result.get("files_written") or [])
     except Exception as exc:
@@ -644,7 +679,11 @@ async def run_landing_pipeline(
             api_key=anthropic_key,
             classification=classification or {},
             websocket=websocket,
-            max_retries=1,
+            # max_retries=0 means ONE build attempt, no auto-fix retry. The
+            # fix loop was adding 2-5 min per generation for diminishing return
+            # — most build failures here are install-time (handled separately)
+            # or genuine bugs the user wants to see + edit, not silent fixes.
+            max_retries=0,
             send=lambda kind, message: _send(websocket, kind, message),
             phase=lambda status, state: _phase(6, "Verifying build", status, state),
             progress_message="Verifying build in background…",
@@ -761,6 +800,15 @@ async def run_landing_pipeline(
         except Exception:
             pass
 
+    _emit(
+        "pipeline.complete",
+        pipeline="landing",
+        project_id=chat_session_id,
+        success=True,
+        duration_sec=round(_time.perf_counter() - _pipeline_t0, 2),
+        section_count=len((generation.sections if hasattr(generation, "sections") else []) or []),
+        brand_name=brand_name or "",
+    )
     return True
 
 

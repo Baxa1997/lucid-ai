@@ -411,6 +411,23 @@ brand: name (real, ≤30 chars); tagline (≤60 chars); description (≤140 char
   business_info (encouraged for local businesses): address ≤80, phone ≤24, email ≤60, hours ≤200 (multi-line ok).
   social (0-5 entries): each {{label: "instagram"|"facebook"|"twitter"|"linkedin"|"youtube", href: URL}}.
 
+  ── GEOGRAPHY LOCK (single source of truth for ALL location text) ──
+  Pick ONE city + ONE neighborhood + ONE country before you write ANY copy.
+  Lock `business_info.address` to that location (e.g. "1245 W 6th St, Clarksville, Austin, TX 78703"),
+  and EVERY downstream string — testimonials, trust bar, catering blurbs, story copy, locations
+  section, footer — MUST stay inside that geography. Concretely:
+    • Trust / press: cite outlets, neighborhoods, awards consistent with the city you chose
+      (Austin TX → "Texas Monthly", "Eater Austin", "South Congress", "East Side"; NOT
+      "Brooklyn", "Carroll Gardens", "Prospect Heights").
+    • Testimonials role labels mention the same metro ("Austin foodie", "South Lamar resident"),
+      NEVER another metro's neighborhoods.
+    • Phone area code matches the city (Austin → 512, Brooklyn → 718, LA → 213/323, Chicago → 312).
+    • Catering / events copy references local venues / events in the chosen city only.
+  Failure mode to avoid: footer says "Clarksville, Austin TX 78703" but the catering section
+  mentions "a Carroll Gardens block party" — that's TWO cities in one site. Pick ONE and stay
+  there across every section. If you're unsure of the city, default to the one named in the
+  prompt; if the prompt names none, pick a single US city and stick with it for the entire brief.
+
 palette: 8 HSL strings ("220 90% 56%" — no hsl(), no commas) — USE the palette from DESIGN_DNA_RESEARCH conclusion. Keys: primary, secondary, accent, background, foreground, muted, border, card.
   ── PALETTE DISCIPLINE (overrides DESIGN_DNA when research is weak / generic) ──
   • `background` MUST be a warm/cool brand-tuned NEUTRAL — never pure white. Valid HSL ranges:
@@ -471,15 +488,116 @@ footer_archetype: pick ONE from [mega-columns, minimalist-row, cta-band-footer, 
 
 references: copy 3-5 entries from STRUCTURE_RESEARCH ===REFERENCES===. Each: {{url, name, why (≤120 chars), section_order (5-10 strings), notable_features (2-4 strings)}}.
 
-sections: ARRAY of OBJECT items, FIRST type "hero", in order. The COUNT is DYNAMIC —
-  match what STRUCTURE_RESEARCH recommended. Minimum 5, no hard maximum (real conversion-optimized
-  tour / hotel / SaaS landings often run 9-12 sections). Do NOT pad with filler if the references
-  only support 6; do NOT truncate to 7 if the references show 11. Pick types from the
-  STRUCTURE_RESEARCH conclusion. NO footer in this array (added downstream).
+sections: ARRAY of OBJECT items, FIRST type "hero", in order. The COUNT and SHAPE
+  are DYNAMIC and category-driven (see PAGE SHAPE BY CATEGORY below). Do NOT pad
+  with filler. Pick types from the STRUCTURE_RESEARCH conclusion, but FIRST narrow
+  to the category shape — generic 10-section funnels are a failure, not a default.
+  NO footer in this array (added downstream).
   Allowed types: features, how_it_works, pricing, testimonials, faq, stats, gallery, menu,
   integrations, comparison, team, contact, contact_form, reservation, booking_form,
   newsletter, cta, mid_cta_banner, lead_form, quote_form, trust_bar, process, benefits,
   value_prop, locations, story, philosophy, press, hours.
+
+  ── PAGE SHAPE BY CATEGORY (single most important brief decision) ──
+  Map the brand to ONE shape archetype below using DOMAIN_RESEARCH + brand category.
+  Each shape lists the REQUIRED section types and which to AVOID — but the
+  COUNT is driven by STRUCTURE_RESEARCH references, not by the shape. Real
+  conversion-optimized landings (hospitality, SaaS, education) commonly ship
+  9-12 sections. Lean LONGER when references support it; only go shorter for
+  pure boutique editorial brands that explicitly want a magazine-spread feel.
+
+    A. BOUTIQUE EDITORIAL
+       Fine dining, boutique hotel, luxury fashion, cultural institution, art
+       gallery, jeweler, bespoke service, ceremony venue.
+       Required: hero (editorial) → story / philosophy → ONE flagship section
+       (menu | gallery | collection | exhibitions) → press OR testimonials →
+       contact / hours.
+       Optional add-ons (use when references support density): chef / team,
+       awards strip, private events, private dining, mailing list.
+       SKIP: features grid, how_it_works, stats band, pricing tiers, faq.
+       The page feels like a magazine spread, not a SaaS funnel.
+
+    B. HOSPITALITY DENSE
+       Restaurant chains, casual dining, café, mid-tier hotel, day spa,
+       wellness studio, salon, tourism operator, event venue.
+       Required: hero → trust_bar (3-4 chips) → flagship offering (menu | rooms |
+       services | packages) → gallery → story / about → testimonials / press →
+       reservation / contact → hours.
+       Optional add-ons: dessert / specials, locations / map, private events,
+       awards, newsletter, blog teaser, sticky_cta in page_features.
+       page_features SHOULD include sticky_cta for the primary booking CTA.
+
+    C. SAAS / DEV TOOL FUNNEL
+       B2B SaaS, dev tools, fintech apps, productivity platforms, AI agents,
+       analytics dashboards.
+       Required: hero → trust_bar (logos OR stat strip) → features (3-6 capabilities)
+       → how_it_works (numbered steps) → integrations OR comparison → pricing
+       (REQUIRED if paid) → testimonials → faq → final cta.
+       Optional add-ons: case_studies, security / compliance, changelog, blog,
+       team, careers teaser, code_sample.
+       SKIP: menu, gallery, hours, locations.
+
+    D. EDUCATION / COURSES
+       Schools, language centers, bootcamps, training programs, certification
+       providers, online courses.
+       Required: hero → trust_bar (accreditations / outcomes) → courses / programs
+       → method / approach → format / schedule → testimonials OR outcomes →
+       faq → enroll / contact_form.
+       Optional add-ons: campus / facilities gallery, instructors / faculty,
+       student outcomes, partners / employers, stats band.
+       SKIP: pricing tiers (unless explicit pricing), integrations, comparison.
+       NOTE: avoid duplicating "assessment" + "method" + "format" + "approach" as
+       four separate sections — collapse to ≤2 pedagogy sections.
+
+    E. AGENCY / PORTFOLIO
+       Design studios, dev agencies, marketing shops, photographers, individual
+       creatives, consultancies, architecture practices.
+       Required: hero → work / portfolio → process → story / about →
+       press OR clients (logo strip) → contact.
+       Optional add-ons: services, team, awards, case_studies, capabilities,
+       press_quotes.
+       SKIP: stats band, pricing, faq, features grid, how_it_works.
+
+    F. E-COMMERCE / D2C
+       Brands selling products, D2C retail, marketplaces, single-product launches.
+       Required: hero → featured products / collection → categories OR
+       press → story / craftsmanship → testimonials → newsletter / community →
+       contact (optional).
+       Optional add-ons: gift_guides, sustainability, materials / ingredients,
+       press / awards, lookbook, stockists, FAQ.
+       SKIP: how_it_works (unless service), pricing tiers, integrations.
+
+    G. SERVICES / LOCAL / LOGISTICS
+       Local services (legal, accounting, plumbing, dental), logistics & freight,
+       cleaning, contractors, B2B services, healthcare.
+       Required: hero → services → coverage OR locations → process /
+       how_it_works → testimonials OR trust_bar → contact_form / quote_form.
+       Optional add-ons: team, credentials / licenses, faq, gallery (before /
+       after), case_studies, press, hours, sticky_cta.
+       SKIP: gallery (unless before/after), menu, integrations, pricing tiers.
+
+    H. PUBLIC / NONPROFIT / GOVT
+       Government services, public institutions, NGOs, mission organizations,
+       community programs.
+       Required: hero → mission / purpose → programs / initiatives → impact / stats
+       → press OR partners → contact / get involved.
+       Optional add-ons: events, news, leadership / board, annual_report,
+       volunteer, donate, newsletter.
+       SKIP: pricing, faq (unless lengthy), gallery (use stats + initiatives).
+
+  HARD CONSTRAINTS regardless of shape:
+   • Section count is driven by STRUCTURE_RESEARCH references — if the
+     references show 9-12 sections (very common for hospitality / SaaS /
+     education / e-commerce), MATCH that density. Do NOT truncate to a
+     small number to feel "tight". Optional add-ons listed above are the
+     right pool to pull from when extending past the REQUIRED list.
+   • NEVER pad with `mid_cta_banner` + `cta` + `newsletter` + `contact_form`
+     all together — pick ONE final-conversion section.
+   • NEVER include both `features` and `value_prop` and `benefits` — pick ONE.
+   • NEVER include both `how_it_works` and `process` — pick ONE.
+   • If the brand falls between two shapes (e.g. "education center with strong
+     hospitality feel"), choose the shape whose REQUIRED sections best match
+     the brand's primary conversion action.
 
   ── CONVERSION-COMPLETENESS CHECKLIST ──
   Read CONVERSION_RESEARCH ===CONCLUSION===. Anything marked REQUIRED there MUST appear in the
@@ -1497,6 +1615,39 @@ def _normalize_brief(brief: Any, description: str, domain: str) -> dict:
             seen_form = True
         deduped.append(s)
     sections = deduped
+
+    # ── FAMILY DEDUP — drop redundant feature/process duplicates only ──
+    # Pages with features + value_prop + benefits stacked together read as
+    # the "generic 10-section funnel" failure mode. Same for how_it_works +
+    # process. Drop the second one when both appear. No hard cap on TOTAL
+    # section count — that's Gemini's call based on category + references.
+    _FEATURES_FAMILY = ("features", "value_prop", "benefits", "capabilities")
+    _PROCESS_FAMILY = ("how_it_works", "process", "method", "approach")
+    seen_family: dict[str, str] = {}  # family_key → first kept section type
+    coherent: list[dict] = []
+    for s in sections:
+        t = _as_str(s.get("type")).lower()
+        family = None
+        if t in _FEATURES_FAMILY:
+            family = "features"
+        elif t in _PROCESS_FAMILY:
+            family = "process"
+        if family:
+            if family in seen_family:
+                logger.info(
+                    "normalize_brief: dropping redundant %s-family section %r (kept %r)",
+                    family, s.get("id"), seen_family[family],
+                )
+                continue
+            seen_family[family] = t
+        coherent.append(s)
+
+    if len(coherent) != len(sections):
+        logger.info(
+            "normalize_brief: family dedup — %d → %d sections",
+            len(sections), len(coherent),
+        )
+    sections = coherent
 
     out["sections"] = sections
     out["design_tokens"] = _build_design_tokens(out["design_system"])

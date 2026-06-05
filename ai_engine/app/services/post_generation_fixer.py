@@ -447,6 +447,74 @@ _DECORATIVE_ABSOLUTE_RE = re.compile(
 )
 
 
+_SCROLL_MT_RE = re.compile(r"\bscroll-mt-\d")
+_SECTION_HAS_ID_RE = re.compile(r'<section\b[^>]*\bid=(["\'])([^"\']+)\1', re.DOTALL)
+
+
+def fix_section_scroll_margin(workspace_path: str) -> list[str]:
+    """Add `scroll-mt-24 md:scroll-mt-28` to every section root that has an id.
+
+    Why: the layout's sticky `<header>` (h-16 → h-20) sits over the top of the
+    page on scroll. When the page jumps to `#section-id` (anchor link, deep
+    link, programmatic scroll), the section's top edge parks at the viewport
+    top — which puts the heading directly UNDER the nav. Hidden.
+
+    `scroll-mt-*` shifts the scroll target down by the nav height. This was
+    the #1 systemic visual bug on shipped pages: nav overlapping "07 — GALLERY",
+    "09 — FAQ", story image, seasonal frames, etc.
+
+    Only patches `<section id="...">` (anchor targets); skips sections without
+    an id and skips sections that already carry any `scroll-mt-*` class.
+    """
+    fixed: list[str] = []
+    sections_dir = os.path.join(workspace_path, "src", "components", "sections")
+    if not os.path.isdir(sections_dir):
+        return fixed
+
+    for root, _, files in os.walk(sections_dir):
+        for name in files:
+            if not name.endswith((".jsx", ".tsx", ".js", ".ts")):
+                continue
+            path = os.path.join(root, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except OSError:
+                continue
+
+            # Only patch sections that are anchor targets (have id=).
+            if not _SECTION_HAS_ID_RE.search(content):
+                continue
+
+            match = _SECTION_ROOT_RE.search(content)
+            if not match:
+                continue
+            classes = match.group(3)
+            if _SCROLL_MT_RE.search(classes):
+                continue  # already has scroll-mt — respect
+
+            new_classes = f"scroll-mt-24 md:scroll-mt-28 {classes.lstrip()}".strip()
+            new_content = (
+                content[: match.start()]
+                + f'<section{match.group(1)}className={match.group(2)}{new_classes}{match.group(2)}'
+                + content[match.end():]
+            )
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                fixed.append(path)
+                logger.info(
+                    "fix_section_scroll_margin: added scroll-mt to %s",
+                    os.path.relpath(path, workspace_path),
+                )
+            except OSError as exc:
+                logger.warning(
+                    "fix_section_scroll_margin: failed to write %s: %s",
+                    path, exc,
+                )
+    return fixed
+
+
 def fix_section_overflow_clip(workspace_path: str) -> list[str]:
     """Ensure sections containing decorative absolute elements clip overflow.
 
@@ -955,11 +1023,15 @@ def fix_banned_icons(workspace_path: str) -> list[str]:
             svg_components = []
             for icon_name, alias in banned_found.items():
                 svg_markup = _BANNED_ICONS[icon_name]
-                # Splice both className and ...props into the <svg> tag so
-                # callers' onClick / aria-label / data-* attributes survive.
+                # Splice className + width/height fallback + ...props into the
+                # <svg> tag. width/height="20" prevents 0×0 rendering when the
+                # caller passes a className without explicit `h-* w-*` sizing
+                # (a common cause of "invisible square" icons in dark footer
+                # social rows). React's prop merge means className from the
+                # caller still wins for sizing when provided.
                 spliced_svg = svg_markup.replace(
                     "<svg ",
-                    "<svg className={className} {...props} ",
+                    '<svg width="20" height="20" className={className} {...props} ',
                     1,
                 )
                 component = (
@@ -3802,21 +3874,76 @@ def fix_low_contrast_text_on_image(workspace_path: str) -> list[str]:
 _CLASSNAME_LITERAL_RE = re.compile(r'className="([^"\n]*)"')
 
 
+# Indicators that an absolute-positioned element is a dropdown panel
+# (open menu, listbox, suggestions, calendar popover) — at least one of
+# these must be in the className for the fixer to bump z-index.
+_DROPDOWN_HINTS = (
+    "top-full",       # classic dropdown anchor below the trigger
+    "mt-2",           # short gap below button (very common)
+    "mt-1",           # tight gap below button
+    "left-0",         # full-width below
+    "right-0",        # right-aligned below
+    "inset-x-0",      # spans the trigger width
+    "min-w-",         # menu width hint
+    "shadow-lg",      # popover surface
+    "shadow-xl",
+    "rounded-md",     # menu surface (paired with absolute)
+    "rounded-lg",
+    "rounded-xl",
+)
+
+
 def _classname_needs_dropdown_zindex(class_str: str) -> bool:
     classes = class_str.split()
     if "absolute" not in classes:
         return False
-    if "top-full" not in classes:
+    # Skip elements that are clearly not dropdowns (full-bleed overlays,
+    # decorative blobs, hero badges). These have positioning hints but
+    # belong to a different stacking context.
+    if any(c in classes for c in ("inset-0", "-z-10", "pointer-events-none")):
         return False
-    return not any(c.startswith("z-") for c in classes)
+    # Already has any z-* class — but check if it's high enough. z-10/z-20
+    # lose to sibling form CTAs that get their own stacking context from
+    # `transform`, `shadow-lg`, etc. Force z-[80] minimum.
+    existing_z = [c for c in classes if c.startswith("z-")]
+    if existing_z:
+        # If z-50 or higher is already there, leave it alone. Otherwise upgrade.
+        for z_class in existing_z:
+            # z-50 / z-[80] / z-[100] etc. → keep
+            tier = z_class[2:]  # strip "z-"
+            if tier.startswith("[") and tier.endswith("]"):
+                try:
+                    if int(tier[1:-1]) >= 50:
+                        return False
+                except ValueError:
+                    return False
+            elif tier in ("50", "40"):
+                return True  # z-50 still loses to floating hero cards / backdrop-blur stacking contexts → bump to z-[80]
+            elif tier in ("auto",):
+                return False
+            else:
+                # z-10, z-20, z-30 — definitely too low → bump
+                pass
+        # Existing z-* is too low → bump (caller will replace it)
+        return True
+    # No z class yet — require at least one dropdown hint so we don't
+    # accidentally bump decorative absolute elements.
+    return any(hint in class_str for hint in _DROPDOWN_HINTS)
 
 
 def fix_dropdown_zindex(workspace_path: str) -> list[str]:
-    """Add `z-50` to absolute/top-full dropdown panels missing a z-utility.
+    """Add `z-50` to absolute-positioned dropdown panels missing a z-utility.
 
-    Search-filter dropdowns and autocomplete panels render behind hero CTAs
-    when no z-index is set. This fixer is purely additive — it never touches
-    className blocks that already declare a z-* class.
+    Search-filter dropdowns, custom selects, and autocomplete panels render
+    behind hero CTAs, floating cards, and overlay badges when no z-index is
+    set. This fixer is additive — it never touches className blocks that
+    already declare a z-* class, and it skips decorative absolute elements
+    (inset-0 overlays, -z-10 blobs).
+
+    Detection: `absolute` + at least one dropdown hint (top-full, mt-2,
+    left-0, min-w-*, shadow-lg, rounded-md, etc.). This catches custom
+    selects that don't anchor with `top-full` — the dominant pattern in
+    generated forms.
 
     Only matches simple double-quoted className literals; cn(...) expressions
     are left untouched (codegen rarely splits dropdown classes that way).
@@ -3839,14 +3966,26 @@ def fix_dropdown_zindex(workspace_path: str) -> list[str]:
             except Exception:
                 continue
 
-            if "top-full" not in content or "absolute" not in content:
+            if "absolute" not in content:
                 continue
 
             def _replace(m: re.Match) -> str:
                 inner = m.group(1)
-                if _classname_needs_dropdown_zindex(inner):
-                    return f'className="{inner.rstrip()} z-50"'
-                return m.group(0)
+                if not _classname_needs_dropdown_zindex(inner):
+                    return m.group(0)
+                # Bump to z-[80] so it wins against sibling form CTAs and
+                # any z-50 hero overlay badges. Strip any existing low z-*
+                # so we don't end up with "z-10 z-[80]".
+                cleaned = " ".join(
+                    c for c in inner.split()
+                    if not (c.startswith("z-") and not (
+                        c.startswith("z-[") and
+                        c.endswith("]") and
+                        c[2:-1].isdigit() and
+                        int(c[2:-1]) >= 60
+                    ))
+                )
+                return f'className="{cleaned} z-[80]"'
 
             new_content = _CLASSNAME_LITERAL_RE.sub(_replace, content)
 
@@ -3863,6 +4002,118 @@ def fix_dropdown_zindex(workspace_path: str) -> list[str]:
                 )
             except Exception as exc:
                 logger.warning("fix_dropdown_zindex: write failed: %s", exc)
+
+    return fixed
+
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  FIXER — Forced card heights (min-h-[*])                   ║
+# ║    Strips min-h-[300px] / min-h-[400px] / etc. from card   ║
+# ║    containers. Forced heights create the #1 visual bug:    ║
+# ║    rivers of empty space inside cards that didn't fill.    ║
+# ║    Whitelist hero <section> and aspect-ratio containers.   ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+# Matches `min-h-[<value>]` and `h-[<value>px]` where <value> is e.g. 300px,
+# 400px, 480px, 32rem, etc. — anywhere inside a className string.
+_FORCED_HEIGHT_RE = re.compile(
+    r"\bmin-h-\[(?:[1-9]\d{2,}px|\d+(?:\.\d+)?(?:rem|em|vh)|[1-9]\d?xl)\](?:\s|$)"
+)
+_FORCED_FIXED_HEIGHT_RE = re.compile(
+    r"\bh-\[(?:[3-9]\d{2,}|\d{4,})px\](?:\s|$)"
+)
+# Skip elements that legitimately need a fixed height — true hero sections
+# (the OUTER <section>) and aspect-ratio image containers.
+# `relative isolate` is the canonical hero outer marker — the codegen prompt
+# mandates it on hero <section>, and basically no card uses it. Treating it as
+# a whitelist hint preserves the hero's `min-h-[640px]` floor even when the
+# pixel-pattern regex would otherwise strip it. Same goes for `min-h-screen`
+# / `min-h-[100svh]` — the new hero spec uses those for full-viewport behavior.
+_HEIGHT_OK_HINTS = (
+    "aspect-[",
+    "aspect-square",
+    "aspect-video",
+    "<section ",
+    "relative isolate",  # hero outer marker
+    "min-h-screen",
+    "min-h-[100svh]",
+    "min-h-[100dvh]",
+    "min-h-[100lvh]",
+)
+
+
+def fix_forced_card_heights(workspace_path: str) -> list[str]:
+    """Strip `min-h-[300px+]` and `h-[300px+]` from non-section card containers.
+
+    Forced heights inside a card produce empty rectangles whenever content
+    density is lower than the model assumed (item list shorter than 3,
+    description string shorter than expected, etc.). The fix: let cards
+    grow to fit content. Outer <section> tags and aspect-ratio containers
+    keep their heights.
+
+    Only modifies double-quoted className literals so cn(...) chains are
+    left intact. Additive removal — never inserts new classes.
+    """
+    src_dir = os.path.join(workspace_path, "src")
+    if not os.path.isdir(src_dir):
+        src_dir = workspace_path
+
+    fixed: list[str] = []
+
+    for root, dirs, files in os.walk(src_dir):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for fname in files:
+            if os.path.splitext(fname)[1].lower() not in {".jsx", ".tsx"}:
+                continue
+            fpath = os.path.join(root, fname)
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except Exception:
+                continue
+
+            if "min-h-[" not in content and "h-[" not in content:
+                continue
+
+            def _replace(m: re.Match) -> str:
+                inner = m.group(1)
+                # Skip section outer + aspect containers
+                if any(hint in inner for hint in _HEIGHT_OK_HINTS):
+                    return m.group(0)
+                cleaned = _FORCED_HEIGHT_RE.sub("", inner)
+                cleaned = _FORCED_FIXED_HEIGHT_RE.sub("", cleaned)
+                # Collapse double spaces left behind
+                cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+                if cleaned == inner:
+                    return m.group(0)
+                return f'className="{cleaned}"'
+
+            new_content = _CLASSNAME_LITERAL_RE.sub(_replace, content)
+
+            # Also scan immediate parent line for the same <section> guard:
+            # a card just inside `<section>` is what we're targeting, not the
+            # section itself. The hint check above handles `<section >` tags
+            # because the className string of a section won't contain
+            # `<section ` literal. For purely card-level uses, the strip
+            # proceeds. (Hero section's outer min-h is on the <section> tag
+            # itself, with the className typically including `relative isolate`
+            # — leave it alone; the regex above only strips ≥100px values
+            # from CARD-class strings, and hero outer is whitelisted by the
+            # presence of `<section ` in its surrounding code.)
+
+            if new_content == content:
+                continue
+
+            try:
+                with open(fpath, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                fixed.append(os.path.relpath(fpath, workspace_path))
+                logger.info(
+                    "fix_forced_card_heights: stripped fixed-height utilities in %s",
+                    os.path.relpath(fpath, workspace_path),
+                )
+            except Exception as exc:
+                logger.warning("fix_forced_card_heights: write failed: %s", exc)
 
     return fixed
 

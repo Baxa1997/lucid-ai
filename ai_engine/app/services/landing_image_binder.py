@@ -28,7 +28,119 @@ logger = logging.getLogger(__name__)
 # Number of Unsplash candidates to request per query so we can pick a
 # project-stable offset into the list. 5 is enough variety to avoid
 # collisions across briefs with the same query without burning rate budget.
-_CANDIDATE_POOL = 5
+# Bumped to 8 so the language/region filter below has headroom to reject
+# photos with foreign signage and still find a clean match.
+_CANDIDATE_POOL = 8
+
+
+# Photos whose metadata names one of these countries/cities are rejected when
+# the brief locks geography to a different country (the "Estonian storefront
+# in a Brooklyn gallery" failure mode). Soft filter — if every result clashes,
+# the binder falls back to the unfiltered pick instead of leaving the slot empty.
+_FOREIGN_TEXT_HINTS = (
+    "estonia", "tallinn", "russia", "moscow", "cyrillic", "russian",
+    "japan", "japanese", "tokyo", "kyoto", "korea", "korean", "seoul",
+    "china", "chinese", "beijing", "shanghai",
+    "thailand", "bangkok", "vietnam", "saigon",
+    "turkey", "istanbul", "arabic",
+    "poland", "warsaw", "czech", "prague", "hungarian", "budapest",
+    "german", "berlin", "munich",
+    "french", "paris",
+    "spanish", "madrid", "barcelona",
+    "italian", "milan", "rome",
+    "greek", "athens",
+)
+
+
+# Subject blocklist — these reject photos whose dominant subject is wrong for
+# a content-driven landing page section, regardless of geography. The classic
+# failures we shipped before this filter:
+#   • A "language classroom" query returning a country flag illustration.
+#   • A "courses" query returning a civic monument / statue.
+#   • A "restaurant exterior" query returning a packaged-product mockup with
+#     a foreign-language label.
+#   • A "team" query returning a stock-photo logo plate.
+# When the alt_description / tags name one of these subject types, we drop
+# the photo (soft filter — falls through to the unfiltered pool if every
+# candidate is rejected, so the slot is never empty).
+_SUBJECT_REJECT_HINTS = (
+    "flag", "national flag",
+    "monument", "statue", "memorial", "obelisk",
+    "landmark", "tourist attraction",
+    "logo", "brand logo", "wordmark", "trademark",
+    "packaging", "package design", "product label", "bottle label",
+    "billboard", "advertisement",
+    "magazine cover",
+    "screenshot", "ui mockup",
+    # Kitschy "literal text in image" stock tropes — the canonical "Learn
+    # Languages spelled in scrabble tiles" failure for a language brand.
+    # Generic "learn X" / "education" queries surface these constantly.
+    "scrabble", "scrabble tiles", "scrabble letters",
+    "letter tiles", "wooden letters", "wooden blocks",
+    "alphabet blocks", "letter blocks", "magnetic letters",
+    "wooden scrabble", "tiles spell", "tiles spelling",
+    "letter cube", "letter cubes",
+    "tile letters", "letter game",
+    # Generic motivational-poster tropes — almost always reads as a stock
+    # photo cliché for an editorial brand.
+    "motivational quote", "inspirational quote",
+    "chalkboard quote", "blackboard quote",
+)
+
+
+def _photo_subject_disallowed(photo: dict) -> bool:
+    """Reject photos whose dominant subject is a flag, landmark, logo, or
+    packaged product — none of which read as authentic content imagery.
+
+    Soft filter; binder falls back to the unfiltered candidate pool when every
+    photo is rejected (so a slot is never left empty).
+    """
+    if not photo:
+        return False
+    blob = " ".join([
+        photo.get("alt_description") or "",
+        photo.get("description") or "",
+        " ".join(photo.get("tags") or []),
+    ]).lower()
+    if not blob.strip():
+        return False
+    return any(h in blob for h in _SUBJECT_REJECT_HINTS)
+
+
+def _photo_clashes_with_geo(photo: dict, country_hint: str, cuisine_anchor: str) -> bool:
+    """Return True when this photo's metadata clashes with the brief geography.
+
+    Used to soft-filter Unsplash results so a US-locked brief doesn't pick up
+    a photo whose alt_description / tags name a different country (the actual
+    failure that shipped: Brooklyn gallery showing an Estonian storefront).
+
+    Cuisine anchor (e.g. "italian", "japanese") is allowed even when it would
+    name a foreign country, because that's intentional — a sushi shot SHOULD
+    surface Japanese context. Only NON-cuisine geographic mismatches get filtered.
+    """
+    if not photo:
+        return False
+    blob = " ".join([
+        photo.get("alt_description") or "",
+        photo.get("description") or "",
+        " ".join(photo.get("tags") or []),
+        photo.get("location_country") or "",
+        photo.get("location_city") or "",
+    ]).lower()
+    if not blob.strip():
+        return False
+    anchor_l = (cuisine_anchor or "").lower()
+    for hint in _FOREIGN_TEXT_HINTS:
+        # Skip hints that are part of the cuisine the brief is already
+        # targeting (e.g. don't reject "japanese" when cuisine_anchor is sushi).
+        if hint and hint in anchor_l:
+            continue
+        if hint and hint in blob:
+            # Country-hint mismatch only counts when the brief is locked to a
+            # different country. country_hint == "" → no lock → don't filter.
+            if not country_hint or hint != country_hint.lower():
+                return True
+    return False
 
 
 def _project_offset(seed: str, query: str, modulo: int) -> int:
@@ -300,6 +412,37 @@ async def bind_landing_images(
                 merged.append(t)
         return " ".join(merged).strip()
 
+    # Geography hint from the brief's locked address. Used to soft-filter
+    # Unsplash results so a US-locked brief doesn't pick a photo whose
+    # metadata names a different country.
+    address_str = ((brand_block.get("business_info") or {}).get("address") or "").lower()
+    country_hint = ""
+    for marker, ctry in [
+        (" tx ", "united states"), (" tx,", "united states"),
+        (" ny ", "united states"), (" ny,", "united states"),
+        (" ca ", "united states"), (" ca,", "united states"),
+        ("austin", "united states"), ("brooklyn", "united states"),
+        ("new york", "united states"), ("los angeles", "united states"),
+        ("chicago", "united states"), ("seattle", "united states"),
+        ("usa", "united states"), ("united states", "united states"),
+        ("london", "united kingdom"), ("uk", "united kingdom"),
+        ("toronto", "canada"), ("vancouver", "canada"),
+        ("sydney", "australia"), ("melbourne", "australia"),
+    ]:
+        if marker in address_str:
+            country_hint = ctry
+            break
+
+    # Per-binder telemetry counters — nonlocal-mutated inside _fetch so we can
+    # emit one summary event at the end with rejection rates by filter.
+    counters = {
+        "search_empty": 0,
+        "retry_used": 0,
+        "geo_rejected": 0,
+        "subject_rejected": 0,
+        "fallback_to_raw": 0,
+    }
+
     async def _fetch(query: str, is_hero: bool) -> str:
         from app.services.unsplash import search_photos
         async with sem:
@@ -310,11 +453,13 @@ async def bind_landing_images(
                 photos = []
             # Retry with a simpler / broader query when the first returns nothing.
             if not photos:
+                counters["search_empty"] += 1
                 fallback_q = _simplify(query)
                 if fallback_q and fallback_q.lower() != query.lower():
                     try:
                         photos = await search_photos(fallback_q, count=_CANDIDATE_POOL, orientation="landscape")
                         if photos:
+                            counters["retry_used"] += 1
                             logger.info(
                                 "bind_landing_images: retry '%s' -> '%s' succeeded",
                                 query, fallback_q,
@@ -326,8 +471,24 @@ async def bind_landing_images(
                         )
         if not photos:
             return ""
-        idx = _project_offset(project_seed, query, len(photos))
-        chosen = photos[idx]
+        # Soft geo-filter: drop photos whose metadata names a different
+        # country than the brief's locked geography.
+        geo_drops = sum(1 for p in photos if _photo_clashes_with_geo(p, country_hint, cuisine_anchor))
+        counters["geo_rejected"] += geo_drops
+        filtered = [p for p in photos if not _photo_clashes_with_geo(p, country_hint, cuisine_anchor)]
+        # Subject-filter: drop photos whose subject is a flag / landmark /
+        # logo / packaged product. These were the classic "Texas flag for an
+        # Arabic course" failures.
+        subj_drops = sum(1 for p in filtered if _photo_subject_disallowed(p))
+        counters["subject_rejected"] += subj_drops
+        filtered = [p for p in filtered if not _photo_subject_disallowed(p)]
+        if not filtered:
+            counters["fallback_to_raw"] += 1
+            # Fall back to subject-filtered originals (still better than the
+            # raw unfiltered pool), then to raw — so the slot is never empty.
+            filtered = [p for p in photos if not _photo_subject_disallowed(p)] or photos
+        idx = _project_offset(project_seed, query, len(filtered))
+        chosen = filtered[idx]
         return chosen["url_hero"] if is_hero else chosen["url_card"]
 
     fetched = await asyncio.gather(
@@ -336,8 +497,14 @@ async def bind_landing_images(
     )
 
     bound = 0
+    unbound: list[tuple[int, int]] = []
     for (s_idx, i_idx, query, _), url in zip(jobs, fetched):
         if not url:
+            # Track the failed slot so the post-pass can substitute a fallback
+            # query (we don't drop the URL — that leaves an empty `<Image src=""/>`
+            # which renders as a broken placeholder + reveals the hover-VIEW
+            # button underneath, the "broken image" failure mode).
+            unbound.append((s_idx, i_idx))
             continue
         try:
             sections[s_idx]["images"][i_idx]["url"] = url
@@ -345,6 +512,37 @@ async def bind_landing_images(
             bound += 1
         except (KeyError, IndexError):
             continue
+
+    # Last-resort fill for any image slot that still has no URL. Use a generic
+    # category-anchored query so even on a thin section we never ship an empty
+    # <Image src=""/>. Without this fallback, a missing Unsplash result in
+    # gallery #02 surfaces as a cream box with the hover-overlay "VIEW" button
+    # leaking through (because the image element is sized but the src is empty).
+    if unbound:
+        from app.services.unsplash import search_photos
+        _GENERIC_FALLBACKS = ["restaurant interior", "cafe ambient",
+                              "modern workspace", "city street",
+                              "lifestyle product", "architecture detail"]
+        for s_idx, i_idx in unbound:
+            for fb_query in _GENERIC_FALLBACKS:
+                try:
+                    photos = await search_photos(fb_query, count=4, orientation="landscape")
+                except Exception:
+                    photos = []
+                if photos:
+                    idx = _project_offset(project_seed, fb_query, len(photos))
+                    chosen = photos[idx]
+                    try:
+                        sections[s_idx]["images"][i_idx]["url"] = chosen.get("url_card") or chosen.get("url_hero", "")
+                        sections[s_idx]["images"][i_idx].setdefault("alt", fb_query)
+                        bound += 1
+                        logger.info(
+                            "bind_landing_images: filled missing slot s=%d i=%d via generic fallback '%s'",
+                            s_idx, i_idx, fb_query,
+                        )
+                    except (KeyError, IndexError):
+                        pass
+                    break
 
     try:
         with open(target, "w", encoding="utf-8") as fh:
@@ -354,6 +552,19 @@ async def bind_landing_images(
         return {"requested": len(jobs), "bound": 0}
 
     logger.info("bind_landing_images: bound %d/%d images", bound, len(jobs))
+    try:
+        from app.services.telemetry import emit as _emit
+        _emit(
+            "image_binder.summary",
+            requested=len(jobs),
+            bound=bound,
+            unbound=len(unbound),
+            country_hint=country_hint,
+            cuisine_anchor=cuisine_anchor,
+            **counters,
+        )
+    except Exception:
+        pass
     if websocket is not None:
         try:
             await websocket.send_json({

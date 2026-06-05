@@ -48,13 +48,66 @@ _SECTION_MAX_TOKENS = 24000
 _FALLBACK_SKELETONS: dict[str, str] = {
     "hero": (
         "STRUCTURAL FLOOR — hero section minimum:\n"
-        "  • Outer <section> is `relative isolate min-h-[600px] md:min-h-[720px] lg:min-h-[820px] overflow-hidden`.\n"
+        "  ⚠️ NON-NEGOTIABLE MINIMUM — every hero MUST ship ALL of these. A hero that\n"
+        "    omits any of them looks plain and generic and is a failure:\n"
+        "      1. EYEBROW tag above the headline (small uppercase tracked text, ≤32 chars,\n"
+        "         `text-xs md:text-sm uppercase tracking-[0.18em] text-primary font-semibold`,\n"
+        "         optionally prefixed with an em-dash flourish `— BRAND TAGLINE`). NEVER omit.\n"
+        "      2. HEADLINE with ONE ITALIC ACCENT WORD wrapped in\n"
+        "         `<span className=\"italic text-primary\">word</span>` — picks a load-bearing\n"
+        "         noun or verb (the brand's hook word). NEVER all-plain text.\n"
+        "      3. SUBHEAD — exactly 1 sentence, max 140 chars, max-w-xl, text-muted-foreground.\n"
+        "      4. AT LEAST 1 PRIMARY CTA + 1 SECONDARY CTA (secondary is outline / ghost).\n"
+        "         A lone single CTA in the hero reads as a blank-template prototype.\n"
+        "      5. ≥1 FLOATING DATA CARD overlaying the hero photo (patterns A/B/C/D) — see\n"
+        "         FLOATING DATA CARDS section below for size + position rules. NEVER skip\n"
+        "         on patterns A-D; pattern E is the ONLY exception.\n"
+        "      6. AT LEAST 1 DECORATIVE MOTIF from visual_dna.decorative_motifs rendered as\n"
+        "         either a corner SVG flourish, an eyebrow ornament, or a thin divider line\n"
+        "         under the headline. NEVER a plain hero with no decorative element.\n"
+        "      7. TRUST CHIPS ROW below the CTAs (3-5 inline chips with icon + 1-3 word label\n"
+        "         — \"CEFR Aligned\", \"James Beard 2024\", \"Open · Closes 11pm\", etc.) sourced\n"
+        "         from brand.business_info OR section.items OR domain-realistic facts.\n"
+        "         OPTIONAL only when pattern is E (Centered Editorial).\n"
+        "    Self-check before output: count items 1-7 in your JSX. If any is missing,\n"
+        "    rewrite. A minimal hero is the #1 cause of \"too plain / generic\" feedback.\n"
+        "  • Outer <section> is `relative isolate min-h-[640px] md:min-h-[100svh] lg:min-h-screen overflow-hidden`.\n"
+        "      Why full-viewport at md+: a hero that stops at 820px on a 1080p monitor reads as a half-finished\n"
+        "      banner — the user sees the next section's eyebrow peeking under the fold. `min-h-screen` at lg+\n"
+        "      (and `100svh` at md to account for iOS dynamic viewport) makes the hero command the entire first\n"
+        "      screen, which is the expected behavior for editorial, hospitality, education, and product brands.\n"
+        "      Keep `640px` floor at mobile so very short phone viewports don't collapse the hero into a strip.\n"
+        "      Inner content (headline + CTAs + floating cards + hero image) sits inside `flex flex-col justify-center`\n"
+        "      so it vertically centers when the section is taller than the content — never top-anchored with a\n"
+        "      400px gap below.\n"
         "  • THREE stacked layers when bg media exists: media (z-0) → readability overlay (z-10) → content (z-20).\n"
         "  • Foreground content includes (in order): eyebrow tag → headline (text-5xl md:text-6xl lg:text-7xl, leading-[1.05]) → 1-line subhead (text-lg md:text-xl, max-w-xl) → ≥1 CTA + 0-1 secondary.\n"
+        "  • HEADLINE TYPOGRAPHY — render the headline as ONE flowing inline `<h1>` with the full string as its child. NEVER split punctuation onto its own line. NEVER force a `<span className=\"block\">` per clause. Let CSS line-wrap decide breaks based on container width.\n"
+        "    HARD RULES (no exceptions):\n"
+        "      1. NO `<br/>` inside the headline.\n"
+        "      2. NO `<span className=\"block\">` wrapping a sub-clause unless the headline is a SINGLE long clause with ≤8 words AND visual_dna.layout_signature explicitly calls for centered-editorial-stacked. In ALL other cases the headline is a single `<h1>` with all text inline. The accent word may be wrapped in `<span className=\"italic text-primary\">` BUT THAT SPAN MUST NOT BE `block` OR `flex` — leave it as default inline.\n"
+        "      3. If the headline string contains MULTIPLE sentences (more than one `.`, `!`, or `?`), render them ALL INLINE inside one `<h1>`. The reader gets a 2-3 line natural wrap, not a fixed N-line stack. \"The Burger. The Bean. The Best of Both.\" is ONE inline `<h1>`, NOT four `<span className=\"block\">` lines.\n"
+        "      4. An em-dash (—) or en-dash (–) ALWAYS stays glued to the phrase on its left, never the first character of a new visual line. If you can't avoid it landing alone on a wrap, drop the dash entirely or replace with a period.\n"
+        "    The size tokens (`text-5xl md:text-6xl lg:text-7xl leading-[1.05]`) already give the headline its editorial impact. The model does NOT need to also force structure by stacking spans — that always produces the 4-line awkward-stack failure mode.\n"
         "  • Wrap content group in <Reveal variant=\"fade-up\">.\n"
         "  • FLOATING BADGES / CHIPS (Score Guarantee badge, status pill, callout card) MUST stay inside the section's content container — never use negative offsets that push them outside the viewport (`-top-4`, `-right-8`, etc.) and never position them with absolute coordinates that exceed the parent. Use `absolute top-4 right-4` AT MOST, and prefer placing them in the document flow inside the copy column instead of floating. A clipped or floating-off-edge badge is a hard fail — it reads as a layout bug.\n"
         "  • Hero copy column MUST sit on a grid (grid grid-cols-1 lg:grid-cols-2 gap-8 + relative z-20 on the copy block) — NEVER stack copy on top of the hero image with `position: absolute`. Absolute layered copy creates overlapping/unreadable text at every viewport unless the photo is intentionally darkened with the readability overlay.\n"
         "  • DECORATIVE WATERMARK TEXT (large background numerals, oversized initials, ghosted brand letters) is allowed but MUST be DIFFERENT content from the foreground label. NEVER render `{item.name}` or `{member.name}` or any prose interpolation twice — once as the watermark and once as the readable title — that creates a confusing double-vision ghost. Watermarks are for static decoration (an index number like `01`, a single Greek letter, a quote mark `&ldquo;`), not for repeating the title.\n"
+        "    WATERMARK CONTAINMENT — non-negotiable:\n"
+        "      • The OUTER `<section>` MUST carry `overflow-hidden` so a decorative\n"
+        "        watermark CANNOT bleed into the header above or the next section\n"
+        "        below. NEVER omit `overflow-hidden` on a hero that includes any\n"
+        "        absolute-positioned decorative element.\n"
+        "      • Watermark size is CAPPED at `text-[14rem]` (≈ 224px). NEVER\n"
+        "        `text-[20rem]` or larger — at that size a 2-character glyph spans\n"
+        "        300-400px and inevitably overlaps neighbors.\n"
+        "      • Watermark POSITION uses small offsets only: `top-8 right-8` /\n"
+        "        `bottom-8 right-8` etc. NEVER `-top-20`, `-right-32`, or any\n"
+        "        negative offset that exceeds the parent. A clipped or floating-off-\n"
+        "        edge watermark reads as a layout bug.\n"
+        "      • Watermark opacity ≤ `text-foreground/8` so it sits below the\n"
+        "        content visually AND uses `pointer-events-none z-0` so it never\n"
+        "        eats clicks meant for nav/CTA buttons that overlap it.\n"
         "  • COMPOSITION — pick ONE pattern from this catalog (driven by visual_dna.layout_signature + section_flavors.hero):\n"
         "      A. FULL-BLEED PHOTO — hero image covers entire section as <Image fill object-cover>; readability overlay `bg-foreground/40` (light bg) or `bg-foreground/60` (over busy photo); content left-aligned in a max-w-2xl block. Best for travel / hospitality / restaurants / lifestyle. Headline allowed to use ONE italic accent word: `<span className=\"italic text-primary\">Table</span>` (the Bella Luna pattern).\n"
         "      B. ASYMMETRIC SPLIT 60/40 — copy column (lg:col-span-3) on left with eyebrow + h1 + subhead + CTA; image column (lg:col-span-2) on right with a single large photo `aspect-[4/5]` + rounded-3xl + decorative motif overlay. No overlay on copy column. Best for editorial brands, architecture, premium product (the architecture-studio + Veloretti pattern).\n"
@@ -62,7 +115,7 @@ _FALLBACK_SKELETONS: dict[str, str] = {
         "      D. FLOATING COUNTER — main photo left or right at `aspect-[4/3]`, secondary photo card stacked at small size with a numbered indicator (`<span className=\"text-3xl font-bold\">03</span>` + `<ChevronLeft/>` `<ChevronRight/>` icons). Architecture / portfolio / gallery sites (the architecture-site pattern with `03→`).\n"
         "      E. CENTERED EDITORIAL — fully centered, oversized serif headline that spans 3 lines (text-6xl md:text-7xl lg:text-8xl), 1-line eyebrow above, single CTA below; minimal photo treatment OR a small framed photo card at the bottom. Best for boutique / wedding / ceremony / cultural-institution brands.\n"
         "    Default if visual_dna offers no signal: pick A for hospitality/travel, B for architecture/product, C for luxury/fragrance, E for ceremony/cultural.\n"
-        "  • FLOATING DATA CARDS (REQUIRED on patterns A, B, C, D when a hero photo is present): overlay 1-2 small UI cards on the hero image to make it feel like a live product, not just stock photography. Each card sits on the photo with backdrop-blur + subtle border + small shadow, NOT inside the copy column. Position ONE top-right (`absolute top-6 right-6 md:top-10 md:right-10`) and ONE bottom-left (`absolute bottom-6 left-6 md:bottom-10 md:left-10`) — never both on the same edge. Card surface: `inline-flex items-center gap-3 px-4 py-3 rounded-2xl bg-background/85 backdrop-blur-md border border-border/40 shadow-lg`. Content MUST be business-specific (read from brand.business_info or section.items when present, otherwise infer from the brief domain):\n"
+        "  • FLOATING DATA CARDS (REQUIRED on patterns A, B, C, D when a hero photo is present): overlay 1-2 SMALL UI chips on the hero image to make it feel like a live product, not stock photography. SIZE CAP: each card MUST fit on a single visual line, `max-w-[240px]` ABSOLUTE — they are CHIPS, not panels. NEVER render a multi-row form, a search widget, or anything wider than ~240px as a 'floating card'. If the brief gives course types / filter values, that goes into the section BODY below the hero copy, not as a hero overlay. Each card sits on the photo with backdrop-blur + subtle border + small shadow, NOT inside the copy column. POSITIONING — the header occupies the top of the section and almost always carries a primary CTA in its top-right corner. To avoid colliding with the header CTA, place floating cards in the LOWER HALF of the hero only: ONE bottom-right (`absolute bottom-6 right-6 md:bottom-10 md:right-10 max-w-[240px] z-20`) and at most ONE bottom-left (`absolute bottom-20 left-6 md:bottom-24 md:left-10 max-w-[240px] z-20`) — never in the top corners, never on the same edge as each other. NEVER one panel covering >25% of the hero area. Card surface: `inline-flex items-center gap-3 px-4 py-3 rounded-2xl bg-background/85 backdrop-blur-md border border-border/40 shadow-lg`. Content MUST be business-specific (read from brand.business_info or section.items when present, otherwise infer from the brief domain):\n"
         "      • Restaurant / café    → live stat (\"4.9 ★ — 2,340 reviews\"), status pill (\"Open · Closes 11pm\"), or menu badge (\"Tonight's special — Pici al Tartufo\").\n"
         "      • Hotel / travel       → progress bar (\"32 / 48 rooms booked tonight\"), location chip with map pin (\"Brooklyn Heights · 0.4 mi from Promenade\").\n"
         "      • SaaS / tech / dev    → metric card (\"+38% conversion · 7-day rollout\"), status row (\"All systems normal\" + green dot).\n"
@@ -80,7 +133,15 @@ _FALLBACK_SKELETONS: dict[str, str] = {
         "  • Each item shows: title (font-semibold), description (text-sm text-muted-foreground), price/value (when present, font-semibold text-primary).\n"
         "  • Photo-led grid when section.images[i] exists for items; editorial text-only rows when not.\n"
         "  • Cards in a row share aspect ratios + heights; mt-auto on price/CTA so footers align.\n"
-        "  • Decorative elements (category dividers, bullet markers, frame ornaments) come from visual_dna.decorative_motifs."
+        "  • Decorative elements (category dividers, bullet markers, frame ornaments) come from visual_dna.decorative_motifs.\n"
+        "  • FOR E-COMMERCE / PRODUCT BRANDS — when this section is rendering\n"
+        "    physical or digital products (not menu items / dishes):\n"
+        "      • EVERY item card MUST show a real `$NN.NN` or `$NN` price\n"
+        "        (NOT \"Inquire\" / \"Coming Soon\" placeholders).\n"
+        "      • EVERY item card MUST have a buy/shop CTA labeled with one of:\n"
+        "        \"Shop Now\", \"Add to Cart\", \"Buy Now\", \"View Details\".\n"
+        "        Quality-gate fails when product cards lack visible prices +\n"
+        "        these CTA tokens. \"Learn More\" doesn't qualify for products."
     ),
     "gallery": (
         "STRUCTURAL FLOOR — image grid section minimum:\n"
@@ -155,7 +216,7 @@ _FALLBACK_SKELETONS: dict[str, str] = {
     "pricing": (
         "STRUCTURAL FLOOR — pricing tiers:\n"
         "  • Heading group above + optional billing-period toggle (useState).\n"
-        "  • 2-3 plan cards: each with plan name, big price, billing-period note, feature list (check icons), CTA.\n"
+        "  • 2-3 plan cards: each with plan name, big price (REAL `$NN` or `$NN/mo` numbers, NEVER \"Contact us\" / \"Free\" placeholders for paid plans), billing-period note, feature list (check icons), CTA.\n"
         "  • Highlight the recommended tier via `ring-2 ring-primary` + small 'Recommended' pill.\n"
         "  • Cards equalize heights; CTAs align via mt-auto."
     ),
@@ -179,14 +240,28 @@ _FALLBACK_SKELETONS: dict[str, str] = {
     ),
     "reservation": (
         "STRUCTURAL FLOOR — booking / reservation form:\n"
+        "  • MUST use an actual `<form>` element wrapping the inputs (not a `<div>`).\n"
+        "  • Submit button label MUST contain one of: \"Book\", \"Reserve\", or \"Schedule\"\n"
+        "    (e.g. \"Book a Table\", \"Reserve Now\", \"Schedule Consultation\").\n"
+        "    Quality-gate scans for these tokens — a button labeled \"Submit\" or\n"
+        "    \"Send\" fails the booking-form check.\n"
+        "  • Heading copy MUST also include book/reserve/schedule intent\n"
+        "    (e.g. \"Reserve Your Table\", \"Book Your Stay\", \"Schedule a Visit\").\n"
         "  • Two-column layout: form (left or right), info panel with brand business_info (address/phone/hours).\n"
         "  • Form fields: name, email, phone, date (input type=date), party-size or quantity (input type=number), notes textarea, submit.\n"
         "  • Real validation (required + email regex) + success state on submit. Mark file 'use client'."
     ),
     "contact": (
         "STRUCTURAL FLOOR — contact form section:\n"
+        "  • MUST use an actual `<form>` element (not a `<div>` masquerading as one).\n"
+        "    Quality-gate scans for `<form>` tags — without one, the lead-gen\n"
+        "    gate fails for lead-generation-purpose pages.\n"
         "  • Two-column: form (name, email, message textarea, submit) + info panel (address, phone, email, hours).\n"
-        "  • Real validation + success state."
+        "  • For LEAD-GEN brands (agencies, consultancies, B2B services, professional\n"
+        "    services), submit button label should reflect lead intent: \"Get a Quote\",\n"
+        "    \"Request a Consultation\", \"Book a Call\", \"Contact Sales\". The generic\n"
+        "    \"Send Message\" / \"Submit\" works for general contact but reads weaker.\n"
+        "  • Real validation + success state. Mark file 'use client'."
     ),
     "newsletter": (
         "STRUCTURAL FLOOR — newsletter signup:\n"
@@ -1150,6 +1225,13 @@ OTHER SECTION RULES (sections without an archetype block fall back to these)
   stats — Big numbers band: 2-4 columns, each item.value in text-5xl sm:text-6xl font-bold text-primary, item.label below in uppercase tracking-widest text-muted-foreground.
 
   faq — Vertical accordion. `<details>` + `<summary>` pattern (no client JS). Plus icon rotates 45° on open via `[&[open]_.fa-icon]:rotate-45`.
+    LAYOUT: SINGLE COLUMN ONLY. FAQ NEVER uses a split layout with a side image panel.
+    Heading group goes at the top (centered or left-aligned, max-w-2xl), accordion list
+    fills the column below. Why: an FAQ section's value is the questions/answers, not a
+    decorative side image — splitting it in two leaves either an underpopulated side or
+    (worse) an empty fallback monogram panel that the binder couldn't fill. If you want
+    visual interest, use a one-line "Still curious? Contact us →" link at the bottom of
+    the accordion column. NO side panels. NO 2-column grids of question cards. ONE column.
 
   pricing — 2-3 plan cards. Highlight one via `ring-2 ring-primary` + small "Recommended" pill at top. Big price, feature list with check icons.
 
@@ -1195,7 +1277,12 @@ OTHER SECTION RULES (sections without an archetype block fall back to these)
     overlay with the title + body in `text-background` on the lower third.
 
 PIXEL-PRECISE LAYOUT TOKENS (use exactly these — they keep the whole page on one rhythm)
-  • Outer section: `<section id="..." className="<bg> py-20 md:py-28 lg:py-36">` — vertical rhythm is fixed.
+  • Outer section: `<section id="..." className="scroll-mt-24 md:scroll-mt-28 <bg> py-20 md:py-28 lg:py-36">` — vertical rhythm is fixed.
+      Why `scroll-mt-24 md:scroll-mt-28`: the sticky `<header>` is `h-16` (mobile) → `h-20` (desktop). When the page scrolls to
+      `#section-id`, the browser parks the section's top edge AT the viewport top — which puts the section heading directly
+      UNDER the sticky nav, hidden. `scroll-mt-*` shifts the scroll target down by that much (~96/112px), so the section
+      heading clears the nav. This is MANDATORY on every section — the page-wide sticky nav overlaps EVERY interior section
+      header without it. The hero section (index 0) doesn't need this in practice but include it for consistency.
   • Decorative bleed containment: if THIS section uses ANY absolute-positioned decorative element
     (oversized watermark word, decorative blob, motif shape, accent ring, gradient orb, image that
     extends past the section edge for editorial effect, rotated card, sticker badge offset with
@@ -1226,6 +1313,168 @@ PIXEL-PRECISE LAYOUT TOKENS (use exactly these — they keep the whole page on o
   • Button primary: `inline-flex items-center justify-center px-6 py-3 rounded-full bg-primary text-primary-foreground font-medium hover:opacity-90 transition`.
   • Button secondary: same but `bg-card border border-border text-foreground hover:bg-muted`.
   • Anti-stretching: NEVER let text run wider than `max-w-prose` (~65ch); NEVER let card columns exceed 4 on lg.
+
+DESIGN TOKEN DISCIPLINE (every spacing / radius / type / color value snaps to a scale — no drift)
+  Incoherence between sections — different paddings, different radii, different type sizes —
+  is what makes a page feel "mixed" instead of designed. The brief picks the SCALES; you snap
+  every value to them. Don't invent off-scale numbers.
+
+  • SPACING SCALE (Tailwind defaults, used for all margin / padding / gap):
+      Allowed: 1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 28, 32, 40, 48, 56, 64, 80, 96.
+      FORBIDDEN: arbitrary `p-[37px]`, `mt-[52px]`, `gap-[19px]` — that drift is exactly what
+      makes the page feel uneven. If you reach for an arbitrary px value, you picked the
+      wrong scale step.
+      Section vertical rhythm uses `py-16 md:py-24 lg:py-32` consistently across EVERY interior
+      section (hero excluded — hero uses min-h-screen). Every section breathes the same.
+
+  • TYPE SCALE — pick from this 6-step ramp, nothing in between:
+      display  → `text-5xl md:text-6xl lg:text-7xl` (hero headline only)
+      h1       → `text-4xl md:text-5xl lg:text-6xl` (rare — flagship feature section)
+      h2       → `text-3xl sm:text-4xl lg:text-5xl` (every section heading)
+      body-lg  → `text-lg md:text-xl` (subhead, intro lede)
+      body     → `text-base md:text-lg` (paragraph copy)
+      caption  → `text-xs md:text-sm` (eyebrow, micro labels, tabular meta)
+      Each step has a fixed line-height: display/h1/h2 → `leading-[1.05]` to `leading-tight`,
+      body-lg → `leading-relaxed`, body → `leading-relaxed`, caption → `leading-normal`.
+      DO NOT invent `text-[27px]` or `text-[42px]` — snap to the ramp step.
+
+  • RADIUS PAIR — exactly TWO values used across the page, picked from `theme.design_system.radius`:
+      CARD radius (cards, tiles, image containers, panels): rounded-2xl OR rounded-3xl
+        (pick ONE based on motif: soft brand → 3xl, editorial brand → 2xl, sharp brand → xl).
+      PILL radius (buttons, badges, chips, toggles): rounded-full.
+      No third radius value. NEVER mix rounded-lg + rounded-2xl + rounded-3xl on the same page —
+      the inconsistency reads as carelessness.
+
+  • COLOR ROLES — every surface, text, and accent pulls from a NAMED ROLE, never a literal color:
+      Surfaces  → `bg-background`, `bg-card`, `bg-muted`, `bg-primary` (for accent band only)
+      Text      → `text-foreground`, `text-muted-foreground`, `text-primary`, `text-primary-foreground`
+      Borders   → `border-border`, `border-primary/30` (hover only)
+      Accents   → `text-primary`, `bg-primary`, `ring-primary`
+      FORBIDDEN: `bg-white`, `bg-black`, `bg-gray-100`, `text-gray-600`, `border-zinc-300`,
+      `bg-[#fafafa]`, any hex / rgb literal. The shadcn token system already maps to the brief's
+      palette — using a Tailwind gray token bypasses the brand and produces the "every section
+      feels different" anti-pattern.
+
+SECTION LAYOUT ARCHETYPES (every section is ONE of 4 shapes — reuse breeds clean)
+  Inventing a fresh arrangement per section makes the page read as 12 stitched components.
+  Pick ONE archetype for THIS section from the four below, then alternate direction down the
+  page for rhythm. Internal structure inside each archetype stays IDENTICAL every time it's used.
+
+    ARCHETYPE 1 — SPLIT (text on one side, media on the other)
+      Use for: story, philosophy, about, method, featured-program, single-flagship.
+      Shape: `grid lg:grid-cols-2 gap-12 lg:gap-20 items-center`. Text column has eyebrow + h2
+      + body + ≤1 CTA. Media column has ONE image OR ONE card stack — never both.
+      Alternate direction across sections: 1st split text-left/media-right, next split flips.
+      A page that always splits text-left/media-right feels static.
+
+    ARCHETYPE 2 — CENTERED INTRO + GRID BELOW
+      Use for: programs, services, faculty, menu, features, gallery, press.
+      Shape: centered heading group (eyebrow + h2 + 1-line subhead, max-w-2xl mx-auto text-center),
+      then `grid sm:grid-cols-2 lg:grid-cols-3` (or 4 if exactly 4 items, or 2 if exactly 2 items).
+      Card grid count matches data count — never pad to fill 3-up when you have 2 items.
+
+    ARCHETYPE 3 — FULL-WIDTH BAND
+      Use for: cta, mid_cta_banner, trust_bar, stats, awards strip, single quote.
+      Shape: `bg-primary text-primary-foreground` OR `bg-foreground text-background`, no card chrome,
+      content centered with generous py-24 md:py-32, ONE primary message + ONE primary action.
+      Use 1-2 bands per page max — more turns the page into a marketing brochure.
+
+    ARCHETYPE 4 — FORM + INFO PANEL
+      Use for: contact, reservation, booking_form, newsletter, lead_form.
+      Shape: `grid lg:grid-cols-2 gap-8 lg:gap-12`. Form on one side, info panel (address /
+      hours / phone / map) on the other. Form has real `<form>` element with labeled inputs +
+      submit. Info panel uses brand.business_info exclusively.
+
+  PICKING THE ARCHETYPE: the section's `role` / `type` field decides — there is ONE correct
+  archetype per type. Don't reach for a fancier shape because it feels more original.
+  Repetition of the right archetype is what makes the page read as designed.
+
+ACCENT RESTRAINT (the brand color is a precious resource — spend it sparingly)
+  Most generated pages overuse the brand accent — every section gets a colored pill, a colored
+  eyebrow, a colored icon, AND a colored heading word. The result reads as noisy: when
+  everything is highlighted, nothing is.
+
+  Rule of thumb per VIEWPORT (not per section — per first-screen worth of content):
+    • ONE primary CTA in accent fill (`bg-primary text-primary-foreground`).
+    • Optionally ONE accent eyebrow (`text-primary uppercase tracking-[0.18em]`).
+    • Optionally ONE italic accent word inside a headline (`<span className="italic text-primary">`).
+    • Icon strokes in accent are fine when they're small (h-4 w-4) and grouped — they read as
+      brand color in aggregate, not as competing accents.
+
+  FORBIDDEN per section:
+    • TWO solid `bg-primary` blocks visible at once (e.g. eyebrow pill + CTA pill + sidebar tag).
+    • An accent-colored card border AND an accent-colored eyebrow AND an accent-colored CTA all
+      visible together — pick one of the three.
+    • The body paragraph carrying the accent color — body copy is `text-foreground` or
+      `text-muted-foreground`, never `text-primary`.
+
+  A calm, deliberate page uses the accent like punctuation, not paint.
+
+FEATURE RESTRAINT (one section should communicate ONE idea — restraint is the difference between 7 and 9)
+  Every section: ONE kicker (eyebrow), ONE h2, AT MOST ONE intro line (1-2 sentences), ONE
+  content block (cards / list / form / image), AT MOST ONE CTA. If the brief gave you a badge AND
+  a stat trio AND a quote AND two CTAs, the section is trying to be two sections — drop the
+  weaker half.
+
+  • Skip stuffing: if section.items has 3 items, render exactly 3 cards. Do NOT add a 4th
+    placeholder card. Do NOT add a "View all" trail when there's no more to view.
+  • Skip secondary CTAs: a primary CTA + a "Learn more" ghost button is fine; a primary + two
+    ghosts + a tertiary outline link is noise.
+  • Skip orphan elements: a single floating badge in the corner with no narrative role.
+
+  Restraint here is the difference between "understandable" (clean) and "trying too hard"
+  (busy). The reader should be able to summarize each section in ONE phrase. If they can't,
+  the section is doing too much.
+
+CONTENT-PRESENCE GATE (a section with empty data must be REMOVED, not rendered as a stub)
+  A render-it-anyway pattern is the canonical "broken" feel: filter tabs leading to "No courses
+  found", an empty image grid with hover overlays, a testimonials section with two placeholder
+  cards, a stat band with zeros.
+
+  Required-data thresholds per section type — if the brief / landing.json doesn't supply at
+  least the minimum, the section's render function MUST short-circuit:
+
+    pricing / plans          → ≥1 plan with a real $ figure (NOT "Custom — contact us" alone)
+    menu / products          → ≥3 items with name + price OR description
+    gallery / portfolio      → ≥3 images with non-empty url
+    testimonials             → ≥2 quotes with attribution
+    team / faculty           → ≥2 members with photo + role
+    locations                → ≥1 address (city minimum)
+    press / awards           → ≥3 logos OR ≥2 quotes
+    stats                    → ≥3 numbers (NOT zero)
+    faq                      → ≥4 questions
+    process / how_it_works   → ≥3 steps
+    reservation / contact    → form + at least 1 contact channel in info panel
+
+  Implementation pattern:
+      `if (!section.items || section.items.length < N) return null;`
+  at the top of the component. The page is the union of sections that actually have content,
+  not the union of every section the brief tried to draft.
+
+  A half-empty section reads as broken. A removed section reads as intentional.
+
+NO LIVE-RUNTIME DEFAULTS IN COPY (the "Tonight 7:15 PM" / "03:21" failure)
+  NEVER render a runtime-computed value as a default placeholder:
+    ✗ `new Date().toLocaleTimeString()` in a hero "Now open" badge.
+    ✗ A live countdown to "Tonight's special" with a hardcoded target.
+    ✗ Inline `Date.now()` formatted as "Updated 2 min ago".
+  Use STATIC plausible defaults:
+    ✓ "Open until 10pm" (static string from brand.business_info.hours).
+    ✓ "Today's special" (static label, no time).
+    ✓ "Updated weekly" (cadence, not timestamp).
+  A live clock that drifts as the user reads is a visible bug — it makes the page feel like a
+  WIP demo. Defaults should be sensible, stable, brand-info-derived strings.
+
+NAV ↔ FOOTER PARITY (same items, same order, one source)
+  The header nav and the footer's primary link column MUST consume the SAME data source
+  (typically `landing.nav` or a derived list) and render the items in the SAME order. Don't
+  let the header show [Programs, Method, Faculty, Contact] and the footer show
+  [About, Programs, Blog, Press]. That mismatch is the #1 "tell" that the page is generated.
+
+  Implementation: the nav array lives at `landing.nav` (or pulled from each section's
+  `nav_label`). Header maps over it in order; footer's primary column maps over the same array
+  in the same order. Footer may have ADDITIONAL columns (Visit / Legal / Social) but its
+  primary nav column matches header.
 
 CONTRAST & READABILITY (NON-NEGOTIABLE — every line of text must be plainly legible)
   • Body / paragraph text MUST use `text-foreground` or `text-muted-foreground` — NEVER `text-foreground/40`,
@@ -1483,6 +1732,25 @@ BRAND COLOR DISCIPLINE (the references' aesthetic — restrained, not rainbow)
   there should still be enough to ANCHOR the brand (CTA + eyebrow + icon + accent word),
   but not enough to overwhelm a calm, expensive-feeling page.
 
+GEOGRAPHY CONSISTENCY (one city across every section — entity-level coherence)
+  • The brief's `brand.business_info.address` names ONE metro (e.g. Austin TX, Brooklyn NY,
+    London UK). EVERY string in this section MUST stay inside that metro. NEVER mention a
+    different city, state, neighborhood, area code, or local landmark.
+    The failure mode you must NOT produce: footer says "Clarksville, Austin TX 78703" but the
+    catering blurb references "Carroll Gardens block parties" or testimonials say
+    "Brooklyn's best". Pick the metro from `brand.business_info.address`; every neighborhood,
+    venue, outlet, and area code you mention afterwards must be in that metro.
+  • If you can't infer a neighborhood within the locked metro confidently, write generic
+    in-metro phrasing instead ("a neighborhood spot", "an Austin staple") — never reach
+    for a famous-sounding neighborhood from another city.
+  • Trust bar / press logos: name outlets that actually cover that metro (Austin → "Texas
+    Monthly", "Eater Austin"; NYC → "Eater NY", "Time Out New York"; LA → "LA Times",
+    "Eater LA"). Don't sprinkle generic national magazines unless the brand actually
+    has that press.
+  • Phone numbers in copy match the city's area code: Austin 512, Brooklyn 718, LA 213/323,
+    Chicago 312, Houston 713, SF 415, Seattle 206. If `business_info.phone` is set, use that
+    exact value; never invent a different one.
+
 QUALITY BAR
   • Sections that are GENERIC (centered headline + 3 plain icon cards) are a FAILURE — every section must offer something visually distinct.
   • Hero must NOT be a centered text block on flat color — it must use a real background image with overlay.
@@ -1492,6 +1760,149 @@ QUALITY BAR
   • DO NOT produce a section that is purely a paragraph of text — every section earns its place visually.
   • DO NOT default to a 3-column icon-card grid for non-photo sections — pick a NO-PHOTO LAYOUT VARIANT from the user message.
   • DO ensure the brand color appears in every section (CTA / eyebrow / icon / accent word) — see BRAND COLOR DISCIPLINE above.
+
+CARD SIZING — CONTENT-FIT, NEVER FORCED HEIGHT
+  • NEVER write `min-h-[300px]`, `min-h-[400px]`, `min-h-[480px]`, `min-h-[600px]`,
+    `h-[400px]`, or any FIXED-HEIGHT utility on a CARD container (anything that
+    holds copy, an icon, a small image, or a stat). Forced heights produce the
+    #1 visual failure: cards with rivers of empty space because the content
+    didn't fill the box. Cards SIZE TO CONTENT — use `h-full` on grid items
+    ONLY to equalize neighbors that already have similar content density.
+  • Fixed heights are valid ONLY for:
+      - Hero `<section>` outer (`min-h-[640px] md:min-h-[100svh] lg:min-h-screen` is the spec — that's a section, not a card)
+      - Image containers with `aspect-[4/5]` / `aspect-square` etc. (aspect IS the height)
+      - True hero overlays / decorative SVG containers
+    Anywhere else, `min-h-[*]` and `h-[*px]` are BANNED.
+  • If you have an item without `description`, `image`, or any rich content,
+    DROP that item from the render. A 3-card grid with 1 well-filled card +
+    2 stub cards (just a title) is a FAILURE — make it a single hero card
+    or 2-up if the data only supports 1-2 items. Use `landing.json` item
+    count to decide grid shape, not a hardcoded `grid-cols-3`.
+  • Container blocks (`<article>`, `<div>` cards): padding `p-6` to `p-8`,
+    content-fit height. Title + ≥1 line of description + ≥1 visual hit
+    (icon, image, number) per card MINIMUM. If any card would have less,
+    drop it or restructure.
+  • Section vertical padding stays in the `py-16 md:py-24 lg:py-32` range
+    — that's the SECTION spacing, separate from card sizing.
+
+EMPTY-SPACE / WHITE-SPACE DISCIPLINE
+  • A section is FAILING if there's a noticeable rectangle of empty surface
+    (>200px tall × >300px wide) with no content, icon, or decorative motif
+    in it. That includes: card interiors with too few items, gradient
+    panels with one heading at the top and nothing below, hero overlays
+    sized for a search widget but holding only one button.
+  • If the content density is low (brief gave you 1-3 items), use a layout
+    matched to that density: a single editorial hero card, a 2-up split,
+    a centered pull-quote — NOT a 4-column grid with placeholder gaps.
+  • NEVER reserve a large image panel (≥40% of section width) just to render
+    a single decorative letter / oversized monogram / cream gradient with
+    nothing inside. If the section has no real photo from
+    `landing.json[*].images`, DO NOT render a blank framed area where the
+    photo would have gone — restructure the layout to text-led (e.g.
+    testimonials carousel without a side panel, story section without a
+    photo card). A giant single letter `I` floating in an empty gradient
+    panel is the canonical "missing image" failure — avoid it.
+  • Decorative whitespace (margins, breathing room) is intentional and
+    pixel-precise (the spacing tokens). Accidental empty rectangles are
+    not the same thing.
+
+SURFACE CONTRAST — CARDS MUST CONTRAST WITH SECTION BACKGROUND
+  • The page uses 3 neutral surface tones: `bg-background` (lightest),
+    `bg-muted/40` or `bg-muted` (mid), `bg-card` (slightly off, often warmer).
+    When the SECTION wrapper uses one of these, the CARDS inside MUST
+    use a DIFFERENT one — never same-on-same:
+      ✗ section `bg-muted` + card `bg-muted`            (invisible cards)
+      ✗ section `bg-muted/40` + card `bg-muted/40`      (invisible cards)
+      ✗ section `bg-card` + card `bg-card`              (invisible cards)
+      ✗ section `bg-background` + card `bg-background`  (cards disappear, only borders)
+      ✓ section `bg-muted/40` + card `bg-background` + border
+      ✓ section `bg-background` + card `bg-card` OR `bg-muted/40` + border
+      ✓ section `bg-card` + card `bg-background` + border
+      ✓ section `bg-foreground text-background` (inverse) + card `bg-background/10` + border `border-background/20`
+  • On INVERSE surfaces (`bg-foreground text-background`, dark hero, dark
+    band): NEVER use `text-foreground` or `text-muted-foreground` for body
+    copy — they're invisible against the inverted bg. Use `text-background`
+    and `text-background/70` for muted. (Same rule as the footer; applies
+    to every section that flips to dark.)
+  • Headings on muted backgrounds use `text-foreground` (full opacity).
+    Body copy on muted backgrounds uses `text-foreground/80` or
+    `text-muted-foreground` — they sit on a light surface so contrast is OK.
+
+DROPDOWN / POPOVER STACKING (custom selects, autocompletes, calendars)
+  • Any panel positioned with `absolute` that appears on click/hover/focus
+    (custom select dropdown, autocomplete suggestions, calendar popover,
+    multi-select menu, share menu) MUST include `z-[80]` in its className.
+    Why z-[80] and not z-50: floating hero data cards live at z-20, the sticky
+    nav at z-50, and the dropdown must beat BOTH of those plus any sibling
+    that creates its own stacking context (backdrop-blur, shadow-xl, transform).
+    z-50 loses to a sibling card with backdrop-blur — shipped failure where
+    a hero "Schedule" card rendered over the open select's option list.
+  • The form CTA button (`<button>Find Your Course</button>`) sitting
+    next to a custom select MUST NOT carry its own positive z-* class.
+    Let normal stacking apply; the dropdown's z-[80] wins.
+  • Floating hero data cards (the "Live wait time", "Schedule" overlay
+    chips) stay at `z-20` MAX — they exist to decorate the hero photo, not
+    to compete with form interactions in sections below the fold.
+  • If you're using a `<select>` native element, no z-index is needed —
+    browser handles it. Only custom-rolled dropdowns need this rule.
+
+IMAGE RENDERING — NEVER SHIP A BROKEN OR PARTIAL IMAGE
+  • EVERY `<Image>` / `<img>` MUST have a real URL coming from
+    `landing.json[*].images[i].url` or `section.images[i]` — NEVER hardcode
+    Unsplash URLs, NEVER use placeholder URLs like `/placeholder.jpg`,
+    NEVER write `src=""`.
+  • WRAP EVERY image in a sized container with this pattern:
+      <div className="relative aspect-[4/3] overflow-hidden rounded-2xl bg-muted">
+        <Image src={{img.url}} alt={{img.alt || section.headline}} fill
+               sizes="(min-width: 1024px) 33vw, 100vw"
+               className="object-cover" />
+      </div>
+    The `bg-muted` parent serves as a neutral placeholder while the image
+    loads. Without it, a slow / failed image renders as raw white.
+  • IF an image URL might be missing at runtime (the binder fills 95%+ but
+    not 100%) you have TWO valid responses, depending on the layout:
+      A. The image is ONE of N cards in a grid (gallery 3-up, team grid,
+         press logos): gate the render with a small brand-tinted gradient
+         tile (`bg-gradient-to-br from-muted to-card`) with the brand wordmark
+         centered in `font-[family-name:var(--font-heading)] text-3xl
+         text-muted-foreground/40`. The grid stays intact.
+      B. The image is the ENTIRE SIDE of a split-layout section (story split,
+         method split, FAQ split, contact split — anything where the image
+         takes ~40-50% of the section width): DO NOT render the giant
+         monogram fallback panel. INSTEAD, drop the side panel entirely
+         and let the text column span full width:
+            const hasHero = section?.images?.[0]?.url;
+            return (
+              <section ...>
+                <div className={{hasHero ? "grid lg:grid-cols-2 gap-12 items-center" : "max-w-3xl mx-auto"}}>
+                  <div>{{/* text */}}</div>
+                  {{hasHero && <div>{{/* image */}}</div>}}
+                </div>
+              </section>
+            );
+         A giant blank cream panel with a single decorative letter floating
+         in it is the canonical "missing image" failure — readers see a
+         broken layout. Collapsing the side to text-only reads as
+         intentional editorial.
+    NEVER render an empty rounded rectangle that exposes a hover-state
+    overlay button (e.g. "VIEW") sitting underneath — that reads as a
+    broken card.
+  • ASPECT RATIO discipline: photo cards in a grid SHARE one aspect ratio
+    so the grid lines up. Hero photo: `aspect-[4/5]` (portrait) or
+    `aspect-[5/4]` (landscape). Card images in a 3-up: `aspect-[4/3]`.
+    Bento mosaic: vary aspects intentionally (`aspect-[4/3]`, `aspect-square`,
+    `aspect-[3/4]`). NEVER leave an image with no aspect ratio — it will
+    render at 0×0 or full container height depending on parent.
+  • CSS: ALWAYS use `object-cover` (NEVER `object-fill`, NEVER `object-contain`
+    for editorial photo cards — only `object-contain` for logos / wordmarks
+    that must not crop). `object-cover` keeps the composition tight.
+  • For Next.js `<Image>`: ALWAYS pass `sizes` prop matching the layout
+    (`sizes="(min-width: 1024px) 33vw, 100vw"` for a 3-col grid that
+    stacks on mobile). Missing `sizes` triggers Next warnings AND ships
+    oversized images that hurt LCP.
+  • Image LOADING priority: only the HERO image gets `priority` — every
+    other image stays lazy-loaded (default). Multiple `priority` images
+    contend for bandwidth and hurt first paint.
 """
 
 
@@ -1505,6 +1916,7 @@ def _user_prompt(
     section_count: int = 1,
     voice_context: dict[str, Any] | None = None,
     visual_dna: dict | None = None,
+    header_archetype: str = "transparent-pill",
 ) -> str:
     """Per-section user prompt — section spec + 2 sibling specs for cohesion."""
     sib_summaries = []
@@ -1708,6 +2120,40 @@ def _user_prompt(
             f"{purpose_directive}"
         )
 
+    # ── HERO-HEADER COORDINATION (hero section only) ─────────────────
+    # The MarketingHeader is generated as a parallel Claude call so the hero
+    # section can't see its exact layout. Without this hint, the hero kept
+    # placing floating data cards in the SAME corner as the header CTA,
+    # producing visual collisions (e.g. "Order Online" pill button + "ORDER
+    # PICKUP" overlay card stacked on top of each other). The header
+    # archetype determines which corner the CTA lives in; pass that to the
+    # hero so it places floating cards in opposite zones.
+    header_block = ""
+    if section_index == 0:
+        _ha = (header_archetype or "transparent-pill").strip().lower()
+        if _ha == "side-rail":
+            cta_zone = "LEFT EDGE (vertical sidebar) — top corners of the hero are free"
+            safe_zones = "anywhere except the left edge `left-0` strip"
+            avoid_zones = "left-0 to left-24 vertical band"
+        elif _ha == "centered-logo":
+            cta_zone = "TOP-RIGHT (next to centered logo) AND sometimes TOP-LEFT — top edge is busy"
+            safe_zones = "bottom-left, bottom-right, bottom-center"
+            avoid_zones = "ALL top corners (top-0 to top-20)"
+        else:
+            # transparent-pill, solid-bar, mega-menu — all have CTA top-right
+            cta_zone = "TOP-RIGHT (header pill/bar CTA button lives here)"
+            safe_zones = "bottom-left, bottom-right (NEVER top-right, NEVER top-left if logo is wordmark on the right)"
+            avoid_zones = "top-right, anywhere within 80px of `top-0 right-0`"
+        header_block = (
+            f"\n\n── HERO-HEADER COORDINATION (hero section only) ──\n"
+            f"The MarketingHeader sits at the top of this section as a `{_ha}` archetype.\n"
+            f"  • Header CTA zone:  {cta_zone}\n"
+            f"  • Safe zones for floating data cards:  {safe_zones}\n"
+            f"  • AVOID these zones (header will overlap):  {avoid_zones}\n"
+            f"The hero `<section>` MUST add `pt-24 md:pt-28` so the header doesn't sit on top of the eyebrow/headline.\n"
+            f"Floating data cards (per the SYSTEM hero rules) MUST sit in the lower half of the hero — `bottom-6 right-6` / `bottom-6 left-6`.\n"
+        )
+
     return f"""Build ONE section component.
 
 FILE PATH:     {file_path}
@@ -1719,7 +2165,7 @@ ROLE:          {section.get('role','')}
 POSITION:      section {section_index + 1} of {section_count}.
 SECTION_INDEX: {section_index}  (zero-based; use for editorial-numbering eyebrow as `String({section_index}+1).padStart(2,"0")` → `"{section_index + 1:02d}"`)
 SECTION BG:    `{bg_hint}` — use this on the outer <section>. Previous section was `{prev_bg_hint}`, so DO NOT
-               repeat that surface. Pair the bg with inner-card surfaces per the SECTION SURFACE RHYTHM rules.
+               repeat that surface. Pair the bg with inner-card surfaces per the SECTION SURFACE RHYTHM rules.{header_block}
 
 SECTION SPEC (this is also what `landing.sections.find(s => s.id === {section.get('id')!r})` returns at runtime; use the FIELDS to know what to render, but read VALUES from the JSON at runtime):
 {json.dumps(section, indent=2, ensure_ascii=False)}
@@ -1758,6 +2204,8 @@ async def _generate_one_section(
     websocket: Any,
     voice_context: dict[str, Any] | None = None,
     visual_dna: dict | None = None,
+    header_archetype: str = "transparent-pill",
+    reference_images: list[bytes] | None = None,
 ) -> dict[str, str] | None:
     """Generate one section component. Returns {'path', 'content'} or None on failure."""
     from app.services.project_generator import call_claude_for_json
@@ -1777,6 +2225,7 @@ async def _generate_one_section(
         section_index=section_index, section_count=section_count,
         voice_context=voice_context,
         visual_dna=visual_dna,
+        header_archetype=header_archetype,
     )
 
     # One retry per section. The model-fallback inside call_claude_for_json
@@ -1788,6 +2237,21 @@ async def _generate_one_section(
     max_attempts = 2
     last_failure_reason = "unknown"
 
+    # When reference screenshots are available, prepend a guidance note so
+    # Claude knows the attached images are visual direction, not pixel-copy
+    # targets. Empty list of refs → omitted, leaving the prompt unchanged.
+    refs_for_call = list(reference_images or [])
+    if refs_for_call:
+        usr_p = (
+            "VISUAL REFERENCES (attached images): below are 2-3 real reference "
+            "sites in this brand's design family. They are DIRECTION, not "
+            "templates — match their composition rhythm, type pairing, spacing "
+            "discipline, and surface language for THIS brand. Do NOT pixel-copy. "
+            "Do NOT use their copy / brand names. Use them to inform your hero "
+            "composition choice (which pattern A-E fits this aesthetic), card "
+            "treatment, and overall page rhythm.\n\n"
+        ) + usr_p
+
     for attempt in range(1, max_attempts + 1):
         try:
             result = await asyncio.wait_for(
@@ -1797,6 +2261,7 @@ async def _generate_one_section(
                     api_key=api_key,
                     websocket=websocket,
                     max_tokens=_SECTION_MAX_TOKENS,
+                    image_refs=refs_for_call,
                 ),
                 # Was 90s — at 16K max_tokens that's borderline (~107s if Claude
                 # fills the budget at ~150 tok/s). Bumped to 240s so rich
@@ -1857,6 +2322,19 @@ async def _generate_one_section(
                     break
                 if attempt > 1:
                     logger.info("section %s: succeeded on retry (attempt %d)", section_id, attempt)
+                try:
+                    from app.services.telemetry import emit as _t_emit
+                    _t_emit(
+                        "section.generated",
+                        section_type=section.get("type") or section.get("role") or "",
+                        section_id=str(section_id or ""),
+                        index=section_index,
+                        attempts=attempt,
+                        char_count=len(content),
+                        used_image_refs=bool(refs_for_call),
+                    )
+                except Exception:
+                    pass
                 # Force the path to our canonical location so Claude can't pick a different folder
                 return {"path": file_path, "content": content}
 
@@ -1871,6 +2349,18 @@ async def _generate_one_section(
         "section %s: codegen FAILED after %d attempts — last failure: %s; writing deterministic fallback",
         section_id, max_attempts, last_failure_reason,
     )
+    try:
+        from app.services.telemetry import emit as _t_emit
+        _t_emit(
+            "section.fallback",
+            section_type=section.get("type") or section.get("role") or "",
+            section_id=str(section_id or ""),
+            index=section_index,
+            attempts=max_attempts,
+            reason=last_failure_reason[:200],
+        )
+    except Exception:
+        pass
     return _fallback_section_component(section, component, file_path)
 
 
@@ -1891,6 +2381,7 @@ async def generate_landing_sections(
     api_key: str,
     websocket: Any = None,
     concurrency: int = 3,
+    reference_images: list[bytes] | None = None,
 ) -> dict[str, Any]:
     """Generate all section components in parallel.
 
@@ -1942,6 +2433,22 @@ async def generate_landing_sections(
         "purpose_directive": brief.get("purpose_directive") or "",
     }
 
+    # Header context — surfaced to the HERO section so its floating cards
+    # don't collide with the header CTA. Sections are generated in parallel
+    # so the hero never sees the actual rendered MarketingHeader; passing
+    # the archetype + CTA-zone summary closes that cross-section gap.
+    header_archetype = (brief.get("header_archetype") or "transparent-pill").strip().lower()
+
+    # Reference screenshots — when present, attached to each Claude call as
+    # image input blocks for visual composition grounding. Empty list = the
+    # legacy text-only behavior. See landing_vision_refs.py.
+    _refs = list(reference_images or [])
+    if _refs:
+        logger.info(
+            "generate_landing_sections: attaching %d reference screenshots to each section call",
+            len(_refs),
+        )
+
     sem = asyncio.Semaphore(concurrency)
 
     total = len(sections)
@@ -1965,6 +2472,8 @@ async def generate_landing_sections(
                     websocket=websocket,
                     voice_context=voice_context,
                     visual_dna=visual_dna,
+                    header_archetype=header_archetype,
+                    reference_images=_refs,
                 )
             except Exception as exc:
                 logger.warning("section %s: unhandled exception in _bounded — %s", s.get("id"), exc)
@@ -2003,9 +2512,22 @@ async def generate_landing_sections(
         component = _component_name(filename)
         file_path = f"src/components/sections/{filename}"
         ok = bool(res)
+        used_fallback = False
 
         if ok:
             written_rel = write_text_file(workspace_path, file_path, res["content"])
+            if not written_rel:
+                # Safe writer rejected the generated content (typically unbalanced
+                # braces). Without this fallback, the section was silently dropped
+                # and the final page came up missing sections. Inject a deterministic
+                # skeleton so the page is always complete.
+                logger.warning(
+                    "section %s (%s): generated file rejected by safe writer — writing fallback skeleton",
+                    section.get("id"), section.get("type"),
+                )
+                fb = _fallback_section_component(section, component, file_path)
+                written_rel = write_text_file(workspace_path, file_path, fb["content"])
+                used_fallback = True
             if written_rel:
                 files_written.append(written_rel)
                 page_imports.append(
@@ -2014,7 +2536,10 @@ async def generate_landing_sections(
                 page_renders.append(f"<{component} />")
             else:
                 ok = False
-                logger.warning("section %s (%s): generated file rejected by safe writer", section.get("id"), section.get("type"))
+                logger.error(
+                    "section %s (%s): fallback skeleton ALSO rejected by safe writer — section dropped",
+                    section.get("id"), section.get("type"),
+                )
         else:
             logger.warning("section %s (%s): codegen FAILED — skipping", section.get("id"), section.get("type"))
 
@@ -2024,7 +2549,7 @@ async def generate_landing_sections(
             "file_path": file_path,
             "component": component,
             "ok": ok,
-            "fallback": bool(res and res.get("fallback")),
+            "fallback": bool(used_fallback or (res and res.get("fallback"))),
         })
 
     if websocket is not None:
@@ -2217,14 +2742,39 @@ MANDATORY RULES
    • NEVER render any placeholder ('—', '...', '(coming soon)', italicized
      blank) for an empty column. If a column has zero links, the column
      MUST NOT be rendered at all.
-   • The grid column count adjusts to actual data:
-       - 1 group  → single-column stack (or merge into the brand block).
-       - 2 groups → `grid-cols-1 sm:grid-cols-2`.
-       - 3 groups → `grid-cols-1 sm:grid-cols-2 md:grid-cols-3`.
-       - 4+ groups → `grid-cols-2 md:grid-cols-4`.
+   • The grid column count adjusts to actual data, AND when there's only
+     1 link group you MUST switch layout to avoid a single lonely column
+     of links floating with empty dark space beside it:
+       - 1 group  → render the links as a HORIZONTAL inline row above the
+         copyright bar (`flex flex-wrap gap-x-6 gap-y-2`), NOT as a 1-of-N
+         column. The brand block stays on top. No empty grid cells.
+       - 2 groups → `grid-cols-1 sm:grid-cols-2` paired with the brand
+         block (3-up overall: brand | group1 | group2).
+       - 3 groups → `grid-cols-1 sm:grid-cols-2 md:grid-cols-4` (brand
+         takes 1 col, 3 groups take 3 cols — fills the full row).
+       - 4+ groups → `grid-cols-2 md:grid-cols-4` for the groups; brand
+         block sits ABOVE on its own row at md+ (`md:col-span-full`).
    • The header labels above each list come from the actual `group` field
      in landing.footer.links (Title-Case it). Do not invent labels like
      "Languages", "Support", "Legal" if the data doesn't carry them.
+9. FOOTER BODY — NO ORPHAN CTA BUTTONS:
+   • The footer's PRIMARY purpose is wayfinding (links) + brand info +
+     newsletter sign-up. NEVER place a primary CTA button ("Book a Free
+     Trial", "Get Started", "Enroll Now", "Apply Today", "Buy Now") in
+     the footer body content area. A primary CTA in the footer reads as
+     a leftover orphan — the user has already chosen not to convert in
+     the page above; repeating it here is noise.
+   • Newsletter sign-up form IS allowed (email input + Subscribe button).
+     That's the ONE conversion affordance footers carry.
+   • Logos, social icon row, contact details (phone/email/address/hours),
+     and link columns are the body. Stick to those.
+10. FOOTER BOTTOM BAR — TIGHT, SINGLE ROW:
+    • Below the columns + separator line, render ONE row containing:
+      `© {year} {brand.name}. All rights reserved.` on the left, optional
+      legal-link row (Privacy, Terms) and/or short tagline on the right.
+    • NEVER spread the bottom bar across multiple rows with large gaps.
+      `flex flex-col gap-3 md:flex-row md:items-center md:justify-between`
+      with `py-6` padding. No extra blank space below.
 
 ANATOMY — {anatomy_intro}:
 {anatomy}

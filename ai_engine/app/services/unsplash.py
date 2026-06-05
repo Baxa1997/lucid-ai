@@ -69,6 +69,15 @@ async def search_photos(
     results = []
     for photo in data.get("results", []):
         raw = photo["urls"]["raw"]
+        # Tags + alt_description let the binder soft-filter results whose
+        # metadata clashes with the brief's geography (e.g. a "smash burger"
+        # query landing on a photo of an Estonian café front).
+        tags = [
+            (t.get("title") or "").lower().strip()
+            for t in (photo.get("tags") or [])
+            if isinstance(t, dict)
+        ]
+        location = (photo.get("location") or {}) if isinstance(photo.get("location"), dict) else {}
         results.append(
             {
                 "id": photo["id"],
@@ -77,6 +86,11 @@ async def search_photos(
                 "url_thumb": _imgix(raw, w=400, h=300),
                 "photographer": photo["user"]["name"],
                 "photo_page": photo["links"]["html"],
+                "alt_description": (photo.get("alt_description") or "").lower(),
+                "description": (photo.get("description") or "").lower(),
+                "tags": [t for t in tags if t],
+                "location_country": (location.get("country") or "").lower(),
+                "location_city": (location.get("city") or "").lower(),
             }
         )
 

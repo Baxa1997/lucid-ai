@@ -443,7 +443,11 @@ async def _start_local_preview_locked(
             if _attempt == 0:
                 await _emit(websocket, "preview_status", status="health_check",
                             message="Waiting for dev server to start…")
-            await _wait_for_server(port, proc=proc, timeout=90)
+            # 180s — Next.js dev "Ready" event fires after ~18s, then middleware
+            # compile (~9s) + first-page compile (~60-90s) before the server
+            # actually answers `/`. 90s was timing out legitimate boots after
+            # the "Ready in 18.2s" log line.
+            await _wait_for_server(port, proc=proc, timeout=180)
 
             preview_url = _build_url(port)
             _active_servers[conversation_id]["url"] = preview_url

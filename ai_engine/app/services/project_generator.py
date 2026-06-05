@@ -1452,6 +1452,7 @@ async def call_claude_for_json(
     max_tokens: int = MAX_TOKENS_PER_CALL,
     model: str = DEFAULT_MODEL,
     extended_output: bool = False,
+    image_refs: Optional[list] = None,
 ) -> Optional[dict]:
     """Call Claude Messages API and return parsed JSON dict.
 
@@ -1461,7 +1462,12 @@ async def call_claude_for_json(
 
     extended_output=True adds the output-128k beta header, allowing up to
     64K output tokens for complex admin/CRM projects with many pages/entities.
+
+    image_refs=[bytes, ...] attaches up to 3 reference screenshots as image
+    content blocks for visual grounding. When empty / None, the user message
+    is the plain text string (legacy behavior, byte-identical).
     """
+    import base64
     import httpx
 
     headers = {
@@ -1501,6 +1507,26 @@ async def call_claude_for_json(
         }
     }
 
+    # Build the user message content. When image_refs is provided, content
+    # is a list of [image, image, ..., text] blocks; otherwise it's a plain
+    # string (legacy behavior). Cap at 3 images to stay within token budget.
+    _imgs = [img for img in (image_refs or []) if isinstance(img, (bytes, bytearray)) and img][:3]
+    if _imgs:
+        content_blocks: list[dict] = []
+        for img_bytes in _imgs:
+            content_blocks.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": base64.b64encode(bytes(img_bytes)).decode("ascii"),
+                },
+            })
+        content_blocks.append({"type": "text", "text": user_prompt})
+        user_content: object = content_blocks
+    else:
+        user_content = user_prompt
+
     payload = {
         "model": model,
         "max_tokens": max_tokens,
@@ -1508,7 +1534,7 @@ async def call_claude_for_json(
         # variants reject it with a 400). Anthropic uses a sensible default;
         # we don't need to pin it here.
         "system": system_prompt,
-        "messages": [{"role": "user", "content": user_prompt}],
+        "messages": [{"role": "user", "content": user_content}],
         "tools": [write_files_tool],
         "tool_choice": {"type": "tool", "name": "write_project_files"},
     }

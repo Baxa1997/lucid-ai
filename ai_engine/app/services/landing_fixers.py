@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -43,18 +44,30 @@ async def run_landing_fixers(workspace_path: str, websocket: Any = None) -> dict
     the chain. Counts let the orchestrator emit a one-line summary.
     """
     from app.services import post_generation_fixer as F
+    from app.services.telemetry import emit as _emit
 
     counts: dict[str, int] = {}
 
     def _run(label: str, fn, *args, count_via_len: bool = True) -> int:
+        t0 = time.perf_counter()
         try:
             result = fn(*args)
         except Exception as exc:
             logger.warning("landing_fixer %s failed: %s", label, exc)
             counts[label] = 0
+            _emit("fixer.error", name=label, error=str(exc)[:200])
             return 0
         n = len(result) if (count_via_len and isinstance(result, list)) else int(bool(result))
         counts[label] = n
+        # Per-fixer telemetry — fired_count is the # of files modified (0 = the
+        # rule's prompt-side prevention worked, fixer was no-op). After enough
+        # generations, fixers stuck at 0 are candidates for prompt rule removal.
+        _emit(
+            "fixer.fire",
+            name=label,
+            files_modified=n,
+            duration_ms=round((time.perf_counter() - t0) * 1000, 1),
+        )
         return n
 
     if websocket is not None:
@@ -108,6 +121,14 @@ async def run_landing_fixers(workspace_path: str, websocket: Any = None) -> dict
     # carries any decorative absolute element (huge type, blob blur, big
     # negative offset).
     _run("fix_section_overflow_clip", F.fix_section_overflow_clip, workspace_path)
+    # Sticky nav overlaps section headings on scroll without `scroll-mt-*` on
+    # the section root. Backfill it for every `<section id="...">` that's an
+    # anchor target. Fixes the systemic "nav over '07 — GALLERY'" bug.
+    _run("fix_section_scroll_margin", F.fix_section_scroll_margin, workspace_path)
+    # Strip `min-h-[400px]` / `h-[480px]` from card containers — they create
+    # rivers of empty space when content density is lower than the model
+    # assumed. Hero <section> + aspect-* containers stay intact.
+    _run("fix_forced_card_heights", F.fix_forced_card_heights, workspace_path)
     # Telemetry only — log sections that hardcode data arrays despite the
     # prompt rule. Auto-fix isn't safe (would break the component) but the
     # counts let us measure how often Claude ignores the rule and prioritize

@@ -377,10 +377,23 @@ async def _cached_install(
     pm: str,
     websocket,
 ) -> None:
-    """Install node_modules with a symlink cache keyed by (pm, package.json hash).
+    """Install node_modules ON THE OVERLAY FS, symlink into the workspace.
+
+    Cache layout (under /tmp/lucid_nm_cache/<pm>_<pkg-hash>/):
+      package.json, lockfile, .npmrc   — copied from workspace
+      node_modules/                    — installed in place (hardlinks, fast)
+
+    Workspace just gets a symlink: workspace/node_modules → cache/node_modules.
+
+    Why this design: the workspace lives on `/app/storage/...` which is a macOS
+    Docker Desktop bind mount (fuse). Installing 730 packages there is 5–10×
+    slower than overlay FS because every syscall is RPC, and pnpm hardlinks
+    fail with errno -116 forcing the slower `copy` import method. Installing
+    in the cache dir (on overlay) sidesteps all of it — hardlinks work, IO is
+    native, install completes in 60–120s instead of 6–9 min.
 
     Cache hit  → symlink existing node_modules into workspace  (~0.1s)
-    Cache miss → run pm install, then store node_modules in cache (~60-120s)
+    Cache miss → install in cache_dir, then symlink                (~60-120s)
     Always non-fatal: any exception is logged and swallowed.
     """
     pkg_path = os.path.join(workspace_path, "package.json")
@@ -391,25 +404,57 @@ async def _cached_install(
         pkg_hash = hashlib.md5(open(pkg_path, "rb").read()).hexdigest()[:14]
         cache_key = f"{pm}_{pkg_hash}"
         cache_dir = os.path.join(_NM_CACHE_ROOT, cache_key)
+        cache_nm = os.path.join(cache_dir, "node_modules")
         ws_nm = os.path.join(workspace_path, "node_modules")
 
-        if os.path.isdir(cache_dir):
-            # ── Cache hit: symlink node_modules (~0.1s) ──────────
-            if not os.path.exists(ws_nm):
-                os.symlink(cache_dir, ws_nm)
-                logger.info("node_modules cache hit (%s) — symlinked in <1s", cache_key)
-            # Drop the .lucid_install_done marker so local_preview._ensure_node_modules
-            # skips its own install pass. Without this, every cache-hit run was
-            # still re-running pnpm (3-9 min) because local_preview only trusts
-            # the marker, not the symlinked node_modules. Bug: silent perf loss
-            # on every subsequent run of the same template.
+        from .package_manager import _pm_install_cmd, _pm_env
+
+        def _framework_binary_present(nm_root: str) -> bool:
+            return (
+                os.path.isfile(os.path.join(nm_root, ".bin", "next"))
+                or os.path.isfile(os.path.join(nm_root, ".bin", "vite"))
+                or os.path.isfile(os.path.join(nm_root, ".bin", "react-scripts"))
+            )
+
+        def _write_marker() -> None:
             try:
                 import time as _time
                 marker_path = os.path.join(workspace_path, ".lucid_install_done")
                 with open(marker_path, "w", encoding="utf-8") as mf:
                     mf.write(f"{pm}\n{int(_time.time())}\n")
             except OSError as mexc:
-                logger.debug("_cached_install: cache-hit marker write failed: %s", mexc)
+                logger.debug("_cached_install: marker write failed: %s", mexc)
+
+        def _symlink_cache_to_ws() -> bool:
+            try:
+                # Replace any pre-existing workspace node_modules with a symlink
+                # to the cache. shutil.rmtree() on a stale half-installed tree
+                # would be slow on the bind mount, so only rm if it's empty or
+                # already a symlink — otherwise leave it (let local_preview deal).
+                if os.path.islink(ws_nm):
+                    os.unlink(ws_nm)
+                elif os.path.isdir(ws_nm):
+                    try:
+                        if not os.listdir(ws_nm):
+                            os.rmdir(ws_nm)
+                        else:
+                            logger.info(
+                                "_cached_install: ws node_modules non-empty — skipping symlink"
+                            )
+                            return False
+                    except OSError:
+                        return False
+                os.symlink(cache_nm, ws_nm)
+                return True
+            except OSError as exc:
+                logger.warning("_cached_install: symlink failed: %s", exc)
+                return False
+
+        # ── Cache HIT ────────────────────────────────────────────
+        if os.path.isdir(cache_nm) and _framework_binary_present(cache_nm):
+            _symlink_cache_to_ws()
+            _write_marker()
+            logger.info("node_modules cache hit (%s) — symlinked in <1s", cache_key)
             try:
                 await websocket.send_json({
                     "type": "progress",
@@ -419,7 +464,7 @@ async def _cached_install(
                 pass
             return
 
-        # ── Cache miss: install then cache ───────────────────────
+        # ── Cache MISS: install IN cache_dir (overlay FS) ────────
         try:
             await websocket.send_json({
                 "type": "progress",
@@ -428,35 +473,66 @@ async def _cached_install(
         except Exception:
             pass
 
-        from .package_manager import _pm_install_cmd, _pm_env
+        os.makedirs(cache_dir, exist_ok=True)
+
+        # Copy package.json + lockfiles + .npmrc into cache_dir so pnpm
+        # has everything it needs to resolve from the workspace's lockfile.
+        for fname in ("package.json", "pnpm-lock.yaml", "package-lock.json",
+                      "yarn.lock", "bun.lockb", ".npmrc", ".nvmrc"):
+            src = os.path.join(workspace_path, fname)
+            if os.path.isfile(src):
+                try:
+                    shutil.copy2(src, os.path.join(cache_dir, fname))
+                except OSError as cexc:
+                    logger.debug("_cached_install: copy %s skipped: %s", fname, cexc)
+
+        # Override package_import_method to hardlink — cache_dir is on overlay,
+        # pnpm store is on overlay (/tmp/pnpm_store), so hardlinks work across
+        # the same FS and are ~5× faster than copy. The env's default `copy`
+        # is only needed when installing onto the bind mount (fallback paths).
+        cache_env = dict(_pm_env(pm))
+        cache_env["npm_config_package_import_method"] = "hardlink"
+
+        # Strip the explicit --package-import-method=copy flag from the install
+        # command so the hardlink env wins. Other flags (store-dir, prefer-offline)
+        # stay as-is.
+        install_cmd = [c for c in _pm_install_cmd(pm) if c != "--package-import-method=copy"]
+
         result = await asyncio.to_thread(
             subprocess.run,
-            _pm_install_cmd(pm),
-            cwd=workspace_path,
+            install_cmd,
+            cwd=cache_dir,
             capture_output=True,
             text=True,
-            timeout=180,
-            env=_pm_env(pm),
+            # 600s cap — overlay-FS hardlink install of 730 packages usually
+            # finishes in 60–120s, but cold downloads on a fresh container can
+            # push to 4-5 min. 600s leaves headroom without blocking forever.
+            timeout=600,
+            env=cache_env,
         )
 
-        if result.returncode == 0:
-            # Store node_modules in cache for next run
-            if os.path.isdir(ws_nm) and not os.path.islink(ws_nm):
-                os.makedirs(_NM_CACHE_ROOT, exist_ok=True)
-                try:
-                    await asyncio.to_thread(shutil.copytree, ws_nm, cache_dir, symlinks=True)
-                    logger.info("node_modules cached → %s", cache_key)
-                except Exception as _ce:
-                    logger.warning("Failed to cache node_modules (non-fatal): %s", _ce)
-            # Drop install marker so BuildValidator + local_preview skip their
-            # own install passes (same reason as the cache-hit branch above).
-            try:
-                import time as _time
-                marker_path = os.path.join(workspace_path, ".lucid_install_done")
-                with open(marker_path, "w", encoding="utf-8") as mf:
-                    mf.write(f"{pm}\n{int(_time.time())}\n")
-            except OSError as mexc:
-                logger.debug("_cached_install: cache-miss marker write failed: %s", mexc)
+        # pnpm advisory exits (rc=1) for things like "Lockfile is up to date,
+        # resolution step is skipped", ERR_PNPM_IGNORED_BUILDS, or peer-dep
+        # warnings — all benign. The structural truth is: did node_modules end
+        # up with the framework binary present? If yes, treat as success even
+        # when rc != 0. Without this rc-agnostic check, every cache install
+        # was being marked "failed" and local_preview was re-installing the
+        # ENTIRE tree (12+ minutes on macOS bind mount).
+        install_ok = os.path.isdir(cache_nm) and _framework_binary_present(cache_nm)
+        if install_ok:
+            _symlink_cache_to_ws()
+            _write_marker()
+            if result.returncode != 0:
+                tail = (result.stderr or result.stdout or "")[:200]
+                logger.info(
+                    "node_modules installed into cache → %s (rc=%d, advisory: %s)",
+                    cache_key, result.returncode, tail.strip()[:120],
+                )
+            else:
+                logger.info(
+                    "node_modules installed into cache → %s (symlinked to workspace)",
+                    cache_key,
+                )
             try:
                 await websocket.send_json({
                     "type": "progress",
@@ -465,12 +541,10 @@ async def _cached_install(
             except Exception:
                 pass
         else:
-            # Surface only to server logs — the build_validator step catches
-            # real install issues with full stderr context. Forwarding the
-            # truncated head-of-stderr to chat just looks scary (e.g. pnpm
-            # writes "Lockfile is up to date…" to stderr on success-ish runs).
+            # Genuine install failure — no binary landed. Leave cache_dir for
+            # inspection; local_preview will run its own install as a fallback.
             err = (result.stderr or result.stdout or "")[:400]
-            logger.warning("_cached_install: %s install non-zero (non-fatal): %s", pm, err)
+            logger.warning("_cached_install: %s install non-zero in cache, no binary (non-fatal): %s", pm, err)
 
     except Exception as exc:
         logger.warning("_cached_install error (non-fatal): %s", exc)
@@ -1308,6 +1382,21 @@ async def run_pipeline(
                 # Claude CLI/SDK remains as fallback so one provider failure
                 # does not strand the user's workspace.
                 preferred_agent = _edit_agent_provider()
+                # If Codex is the preferred edit agent but the CLI isn't
+                # installed (most local dev environments), demote to Claude
+                # up-front so the phase label and progress messaging reflect
+                # what will ACTUALLY run. Without this demotion the UI says
+                # "Codex is implementing…" then silently falls back to Claude
+                # with a "Falling back" message that confuses users.
+                if preferred_agent == "codex":
+                    try:
+                        from app.services.codex_cli import codex_cli_available as _codex_ok
+                        if not _codex_ok():
+                            logger.info("orchestrator: Codex CLI unavailable — using Claude for edit")
+                            preferred_agent = "claude"
+                    except Exception:
+                        preferred_agent = "claude"
+
                 await _send_phase(
                     5,
                     "Writing code",
@@ -1318,6 +1407,17 @@ async def run_pipeline(
                     ),
                     "active",
                 )
+                try:
+                    await websocket.send_json({
+                        "type": "progress",
+                        "message": (
+                            "🤖 Codex is editing the project…"
+                            if preferred_agent == "codex"
+                            else "✏️  Editing the project…"
+                        ),
+                    })
+                except Exception:
+                    pass
                 _user_id_for_billing = (
                     (session.user_id if session else None)
                     or (user.get("user_id") if isinstance(user, dict) else None)
@@ -1736,8 +1836,15 @@ async def run_pipeline(
 
             try:
                 from datetime import datetime as _dt
-                _ts = _dt.now().strftime("%m%d%H%M")
-                new_repo_name = f"{project_name}-{_ts}"[:60]
+                # Per-second + 3-char random suffix so two generations of the
+                # same prompt CANNOT collide on the same repo name. Earlier
+                # versions used %m%d%H%M (minute granularity) which let the
+                # second submit reuse the first's repo → reuse the same Vercel
+                # project → the user saw the OLD deploy URL even though the
+                # local preview rendered the new code.
+                _ts = _dt.now().strftime("%m%d%H%M%S")
+                _rand = os.urandom(2).hex()  # 4 hex chars, ~65k entropy
+                new_repo_name = f"{project_name}-{_ts}-{_rand}"[:60]
 
                 await websocket.send_json({
                     "type": "progress",
@@ -1747,11 +1854,32 @@ async def run_pipeline(
                 if not git_token:
                     raise RuntimeError("PLATFORM_GITHUB_TOKEN not available — cannot create repo")
 
-                new_repo = await _create_github_repo(
-                    repo_name=new_repo_name,
-                    token=git_token,
-                    description=f"Generated by Lucid AI — {project_desc[:120]}" if project_desc else "Generated by Lucid AI",
-                )
+                # Defensive retry: if the unique name STILL collides (extreme
+                # race, or GitHub had a transient duplicate), bump the random
+                # suffix and try once more. Without this, the orchestrator
+                # raises and the user loses the whole generation.
+                new_repo = None
+                for _retry in range(3):
+                    try:
+                        new_repo = await _create_github_repo(
+                            repo_name=new_repo_name,
+                            token=git_token,
+                            description=f"Generated by Lucid AI — {project_desc[:120]}" if project_desc else "Generated by Lucid AI",
+                        )
+                        break
+                    except RuntimeError as _exc:
+                        msg_l = str(_exc).lower()
+                        if "422" in msg_l and ("already exists" in msg_l or "name already" in msg_l):
+                            _rand = os.urandom(3).hex()
+                            new_repo_name = f"{project_name}-{_ts}-{_rand}"[:60]
+                            logger.info(
+                                "new_project_mode: repo name collision — retrying as %s",
+                                new_repo_name,
+                            )
+                            continue
+                        raise
+                if new_repo is None:
+                    raise RuntimeError("Could not create a unique repo name after 3 attempts")
                 new_repo_html_url  = new_repo.get("html_url", "")
                 new_repo_clone_url = (
                     new_repo.get("clone_url", "")

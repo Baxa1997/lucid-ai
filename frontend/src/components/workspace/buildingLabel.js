@@ -33,14 +33,21 @@ export function computeBuildLabel({
     label = "Connecting...";
     subtext = "Opening secure connection to AI Engine";
   } else if (status === "preparing") {
-    label = "Building your app...";
-    subtext = "Setting up the project foundation";
+    // Wizard mode: collapse "Building your app" into "Analyzing your request"
+    // so new generations show only Connecting → Analyzing. Existing projects
+    // keep the explicit prep label.
+    label = isWizardMode ? "Analyzing your request..." : "Building your app...";
+    subtext = isWizardMode
+      ? "Understanding what you want to build"
+      : "Setting up the project foundation";
   } else if (status === "cloning" && resolvingInfo?.path === "existing_repo") {
     label = `Cloning ${resolvingInfo.repoDisplay || "repository"}...`;
     subtext = `Fetching files · Branch: ${resolvingInfo.branch || "main"}`;
   } else if (status === "cloning") {
-    label = "Building your app...";
-    subtext = "Setting up the project foundation";
+    label = isWizardMode ? "Analyzing your request..." : "Building your app...";
+    subtext = isWizardMode
+      ? "Understanding what you want to build"
+      : "Setting up the project foundation";
   } else if (status === "installing") {
     label = "Installing dependencies...";
     subtext = "Running npm install — this takes up to 60 seconds";
@@ -51,8 +58,18 @@ export function computeBuildLabel({
     label = "Running the code for Preview...";
     subtext = "Waiting for dev server to respond";
   } else if (status === "ready" && phases.length === 0) {
-    label = "Workspace ready...";
-    subtext = "Ready for your task";
+    // Wizard mode = brand-new project with a pending prompt in sessionStorage.
+    // The 4-6s gap between "session ready" and "first task_phase" was reading
+    // as a UX bug ("Workspace ready" while the user is actively waiting on
+    // their prompt to be picked up). Jump straight to the analyzing copy so
+    // the status accurately reflects what's happening next.
+    if (isWizardMode) {
+      label = "Analyzing your request...";
+      subtext = "Understanding what you want to build";
+    } else {
+      label = "Workspace ready...";
+      subtext = "Ready for your task";
+    }
   }
 
   if (status === "running" && currentPhaseNum === 0) {
@@ -63,19 +80,23 @@ export function computeBuildLabel({
     label = "Analyzing your request...";
     subtext = "Understanding what you want to build";
   } else if (currentPhaseNum <= 1 && status === "running") {
-    label = "Building App...";
-    subtext = "Setting things up";
+    // Pre-research phases collapse to "Analyzing" for wizard mode so the
+    // status sequence stays Connecting → Analyzing → Researching.
+    label = isWizardMode ? "Analyzing your request..." : "Building App...";
+    subtext = isWizardMode ? "Understanding what you want to build" : "Setting things up";
   } else if (
     currentPhaseNum === 2 &&
     activePhase?.title?.toLowerCase().includes("clone")
   ) {
-    label = "Building your app...";
-    subtext =
-      activePhase?.description || "Setting up the project foundation";
+    label = isWizardMode ? "Analyzing your request..." : "Building your app...";
+    subtext = isWizardMode
+      ? "Understanding what you want to build"
+      : (activePhase?.description || "Setting up the project foundation");
   } else if (currentPhaseNum === 2) {
-    label = "Preparing workspace...";
-    subtext =
-      activePhase?.description || "Setting up your project environment";
+    label = isWizardMode ? "Analyzing your request..." : "Preparing workspace...";
+    subtext = isWizardMode
+      ? "Understanding what you want to build"
+      : (activePhase?.description || "Setting up your project environment");
   } else if (
     currentPhaseNum === 3 &&
     (activePhase?.title || "").toLowerCase().includes("understanding")

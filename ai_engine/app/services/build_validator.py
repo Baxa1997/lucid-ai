@@ -214,7 +214,10 @@ class BuildValidator:
         Returns:
             {"success": True} or {"success": False, "errors": str, "error_count": int}
         """
-        timeout = 180
+        # 360s — Next.js cold prod build with fresh node_modules + type-check
+        # + 56 generated files routinely hits 150-220s. 180s was timing out
+        # legitimate builds and pushing the UI to "SOME ISSUES REMAIN".
+        timeout = 360
         try:
             result = await asyncio.to_thread(
                 subprocess.run,

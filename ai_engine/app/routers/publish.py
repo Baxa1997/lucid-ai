@@ -214,8 +214,11 @@ async def bootstrap_publish(
         if m:
             base_name = m.group(1)
     base_name = base_name or f"imported-{project_id[:8]}"
-    ts = datetime.utcnow().strftime("%m%d%H%M")
-    repo_name = _sanitize_repo_name(f"{base_name}-{ts}", max_len=60)
+    # %m%d%H%M%S + random hex makes the suffix robust against same-minute
+    # re-publishes (which previously collided and let Vercel reuse the
+    # prior project, surfacing the stale deploy URL).
+    ts = datetime.utcnow().strftime("%m%d%H%M%S")
+    repo_name = _sanitize_repo_name(f"{base_name}-{ts}-{os.urandom(2).hex()}", max_len=60)
 
     # ── 1. Create the platform GitHub repo ──────────────────────
     try:

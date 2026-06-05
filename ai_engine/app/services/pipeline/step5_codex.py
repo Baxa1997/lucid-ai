@@ -67,7 +67,23 @@ async def execute_with_codex_cli(
 
     ``api_key`` is optional because Codex CLI may already be authenticated on
     the host. When present, it is passed as OPENAI_API_KEY.
+
+    Returns False (decline → orchestrator falls back to Claude) when:
+      • Codex CLI binary isn't installed in the container
+      • workspace is missing
+      • prompt is empty
+
+    Short-circuiting here keeps the user-facing chat clean: without this,
+    the caller hits `codex_cli_not_found` via run_codex_session AFTER a
+    "🤖 Codex is editing..." progress message + 3 retry attempts.
     """
+    # Pre-flight: skip ALL Codex work (and noisy progress messages) when the
+    # CLI isn't installed. Falls straight through to the Claude fallback.
+    from app.services.codex_cli import codex_cli_available
+    if not codex_cli_available():
+        logger.info("execute_with_codex_cli: codex CLI not installed — declining (Claude fallback will run)")
+        return False
+
     if await openhands_manager.is_active():
         logger.error("CRITICAL: OpenHands still active when Codex should run")
         await openhands_manager.destroy_all()
