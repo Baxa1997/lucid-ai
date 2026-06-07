@@ -40,11 +40,10 @@ def _run(coro):
 
 # ── 1. Flag default ───────────────────────────────────────────────────
 
-def test_flag_defaults_to_false() -> None:
+def test_flag_defaults_to_true() -> None:
     from app.config import settings
-    assert settings.USE_CLASSIFIER_AGENT is False, (
-        "USE_CLASSIFIER_AGENT must default to False so the new path is "
-        "opt-in and the old behavior ships unchanged."
+    assert settings.USE_CLASSIFIER_AGENT is True, (
+        "USE_CLASSIFIER_AGENT is the canonical prompt-entry router."
     )
 
 
@@ -97,18 +96,16 @@ def test_resolver_clarification_shape_matches_ws_event() -> None:
     reads exactly these keys."""
     from app.services.project_classifier_agent import resolve_classification
 
-    async def _fake_clarity(*a, **kw):
+    async def _fake_route(*a, **kw):
         return {
-            "key": "project_type",
-            "text": "What type of project do you need?",
-            "options": [
-                {"id": "landing_page", "label": "Landing page"},
-                {"id": "full_website", "label": "Full website"},
-            ],
+            "action": "clarify",
+            "clarify_key": "project_type",
+            "question": "What type of project do you need?",
+            "reasoning": "The domain is present but project type is missing.",
         }
 
-    with patch("app.services.clarity_agent.check_prompt_clarity",
-               side_effect=_fake_clarity):
+    with patch("app.services.project_classifier_agent.route_new_project_with_gemini",
+               side_effect=_fake_route):
         result = _run(resolve_classification(
             "italian restaurant in Brooklyn",
             extract_entities=False,
@@ -118,11 +115,7 @@ def test_resolver_clarification_shape_matches_ws_event() -> None:
     assert result["clarify_key"] == "project_type"
     assert result["question"]
     assert isinstance(result["options"], list)
-    assert len(result["options"]) >= 2
-    # Each option must have id + label so the existing UI renders it
-    for opt in result["options"]:
-        assert "id" in opt
-        assert "label" in opt
+    assert result["options"] == []
 
 
 # ── 4. Resolver fallback when extract_entities is enabled but fails ───

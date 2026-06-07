@@ -32,14 +32,10 @@ export async function POST(req) {
   // skips this gate.
   let body = {};
   try { body = await req.json(); } catch {}
-  // TEMP TESTING OVERRIDE — forced bypass so design iteration doesn't burn
-  // project slots. Revert to `body?.bypassLimits === true` before shipping.
-  const bypassLimits = true;
+  const bypassLimits = body?.bypassLimits === true;
 
   let gate = null;
-  if (bypassLimits) {
-    console.warn(`[projects/check-create] bypassLimits=true for user=${ctx.userId} (testing override via Skip)`);
-  } else {
+  if (!bypassLimits) {
     gate = await canCreateProject(ctx.userId);
     if (!gate.allowed) {
       return NextResponse.json(

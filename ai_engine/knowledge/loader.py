@@ -668,7 +668,7 @@ JSON:"""
         from app.services.gemini_http import gemini_post
 
         status, data, _ = await gemini_post(
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash",
             payload={"contents": [{"parts": [{"text": prompt}]}]},
             timeout_s=10.0,
             label="classifier",

@@ -2452,7 +2452,22 @@ async def generate_landing_sections(
     sem = asyncio.Semaphore(concurrency)
 
     total = len(sections)
+
+    # Per-section completion narration. The big silent window was the
+    # parallel Claude codegen — one progress event fired before gather()
+    # and another after, with ~30-90s of nothing in between. Emit one
+    # agent.status per finished section so the UI's narrator advances
+    # in real time instead of sitting on the same label for the whole run.
+    from app.services.agent_status import emit_agent_status
+    _completed = 0
+    _completed_lock = asyncio.Lock()
+
+    def _section_label(section: dict[str, Any]) -> str:
+        raw = (section.get("type") or section.get("id") or "section").strip()
+        return raw.replace("_", " ").replace("-", " ").title() or "Section"
+
     async def _bounded(idx: int, s: dict[str, Any]) -> tuple[int, dict[str, Any], dict[str, str] | None]:
+        nonlocal _completed
         async with sem:
             try:
                 res = await _generate_one_section(
@@ -2478,6 +2493,17 @@ async def generate_landing_sections(
             except Exception as exc:
                 logger.warning("section %s: unhandled exception in _bounded — %s", s.get("id"), exc)
                 res = None
+            async with _completed_lock:
+                _completed += 1
+                done_now = _completed
+            await emit_agent_status(
+                websocket,
+                key="writing_sections",
+                label=f"Writing sections… {done_now}/{total}",
+                description=f"{_section_label(s)} ready",
+                state="active",
+                source="landing_pipeline",
+            )
             return idx, s, res
 
     if websocket is not None:
@@ -2488,6 +2514,14 @@ async def generate_landing_sections(
             })
         except Exception:
             pass
+        await emit_agent_status(
+            websocket,
+            key="writing_sections",
+            label=f"Writing sections… 0/{total}",
+            description="Generating section components in parallel",
+            state="active",
+            source="landing_pipeline",
+        )
 
     results = await asyncio.gather(
         *(_bounded(i, s) for i, s in enumerate(sections)),
@@ -3011,6 +3045,15 @@ async def generate_layout_components(
             })
         except Exception:
             pass
+        from app.services.agent_status import emit_agent_status
+        await emit_agent_status(
+            websocket,
+            key="writing_layout",
+            label="Writing header + footer…",
+            description=f"Header ({header_source}) + footer ({footer_source})",
+            state="active",
+            source="landing_pipeline",
+        )
 
     header_task = _generate_layout_component(
         kind="header",

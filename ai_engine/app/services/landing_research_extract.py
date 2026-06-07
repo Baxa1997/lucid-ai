@@ -793,7 +793,7 @@ async def extract_research_signals(
                 label="visual_dna_backfill",
                 response_schema=backfill_schema,
                 max_tokens=1024,
-                model="gemini-2.5-flash",
+                model="gemini-3.5-flash",
             )
             backfill = _parse_json(backfill_raw, label="visual_dna_backfill") or {}
             merged_count = 0

@@ -154,7 +154,7 @@ async def _gemini_classify(description: str, timeout_s: float) -> StackKey | Non
             response_schema=schema,
             max_tokens=256,
             temperature=0.0,
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash",
         )
     except Exception as exc:
         logger.warning("quick_stack_classifier: gemini call failed — %s", exc)

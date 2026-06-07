@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useWorkspace } from '@/contexts/WorkspaceContext';
 import MessageBubble from '@/components/workspace/MessageBubble';
+import AgentActivityPill from '@/components/workspace/AgentActivityPill';
 import { computeBuildLabel } from '@/components/workspace/buildingLabel';
 import {
   addMessage as saveMessage,
@@ -38,6 +39,8 @@ export default function ChatPanel() {
     resolvingInfo,
     previewLoading,
     previewStatusMsg,
+    previewStage,
+    awaitingResponse,
     setRightPanel,
     panelOverrideRef,
     convLoading,
@@ -46,11 +49,19 @@ export default function ChatPanel() {
     // Click-to-edit (Base44) — chip + WS payload field
     editSelection,
     clearEditSelection,
-    // Lets us inject a clarify message when the Gemini guard rejects a prompt.
+    // Lets the workspace surface local project-gate messages.
     addLocalChatMessage,
-    // True while the mount guard runs its async intent-check/gate.
+    // True while the mount guard runs its project-limit gate.
     guardThinking,
+    // New-project handoff state before the backend router acknowledges it.
+    projectIntakeStatus,
+    submitProjectIntake,
+    // Phase 2 Step 5: live agent activity pill — decoupled from task_phase.
+    agentActivity,
+    agentStatus,
   } = useWorkspace();
+  const intakeBusy =
+    projectIntakeStatus === 'checking' || projectIntakeStatus === 'handoff';
 
   // ── Chat-local state ────────────────────────────────────
   const [chatInput, setChatInput] = useState('');
@@ -144,6 +155,7 @@ export default function ChatPanel() {
   const handleSend = async (e) => {
     e.preventDefault();
     if (!chatInput.trim() && attachedImages.length === 0) return;
+    if (intakeBusy) return;
     // Token-quota gate. Project-creation limit doesn't apply here because
     // we're already inside an existing project — only token consumption
     // can be exhausted by follow-up edits.
@@ -151,12 +163,15 @@ export default function ChatPanel() {
     panelOverrideRef.current = true;
     const text = chatInput.trim();
 
-    // No client-side Gemini guard here: this is a WebSocket-driven chat
-    // inside an existing project, so we want **immediate** send latency.
-    // The backend's step1_validate still catches obvious gibberish and
-    // emits a friendly clarify event (rescued in useAgentSession.js).
-    // For the dashboard composer (where junk would otherwise launch a
-    // whole workspace), Gemini still runs — see handleBuildFromPrompt.
+    if (projectIntakeStatus === 'clarifying') {
+      await submitProjectIntake?.(text);
+      setChatInput('');
+      setAttachedImages([]);
+      return;
+    }
+
+    // No client-side semantic guard here. The backend Gemini prompt router
+    // decides whether to edit, discuss, reply, or ask for clarification.
     const sendOptions = {
       mode: chatMode,
       webSearch: webSearchEnabled,
@@ -449,20 +464,22 @@ export default function ChatPanel() {
           "Waiting for your message…" pill so the user knows the agent has
           handed control back to them. */}
       {(() => {
-        // While the mount guard validates the first prompt, the typing
-        // bubble above is the sole activity indicator — suppress this bar.
-        if (guardThinking) return null;
         const ALL_ACTIVE = ['connecting', 'preparing', 'cloning', 'installing', 'starting', 'health_check', 'running'];
-        const isActive = ALL_ACTIVE.includes(status);
-        const isWaiting = status === 'ready' && (messages || []).length > 0;
-        if (!isActive && !isWaiting) return null;
+        const isActive = ALL_ACTIVE.includes(status) || agentStatus?.state === 'active';
+        const isWaitingForProjectDetails =
+          projectIntakeStatus === 'clarifying' ||
+          agentStatus?.key === 'waiting_for_details';
+        const isWaiting =
+          isWaitingForProjectDetails ||
+          (status === 'ready' && (messages || []).length > 0);
+        if (!isActive && !isWaiting && !awaitingResponse && !intakeBusy && !agentStatus?.label) return null;
 
         // Mirror BuildingScreen exactly so the right-panel headline and the
-        // chat status pill never disagree (e.g. "Researching…" on one side
-        // and "Building your app…" on the other). The two surfaces share
-        // computeBuildLabel as the source of truth — only the chat-only
-        // "Waiting for your message…" idle state is overridden here, since
-        // BuildingScreen hides itself entirely once the workspace is ready.
+        // chat status pill never disagree. computeBuildLabel is the source
+        // of truth; the chat-only overrides below replace the label for:
+        //   1. awaitingResponse — user just submitted, no backend reply yet
+        //   2. isWaiting        — agent has finished a turn, ball is in
+        //                         the user's court
         const {label: computed} = computeBuildLabel({
           status,
           phases,
@@ -471,8 +488,13 @@ export default function ChatPanel() {
           convLoading,
           previewLoading,
           previewStatusMsg,
+          previewStage,
+          projectIntakeStatus,
+          agentStatus,
         });
-        const primary = isWaiting ? 'Waiting for your message…' : computed;
+        const primary = awaitingResponse
+          ? 'Sending your message…'
+          : (isWaiting && !isWaitingForProjectDetails ? 'Waiting for your message…' : computed);
         return (
           <div className="shrink-0 flex items-center gap-2.5 px-4 py-2 border-t border-[#e3e5eb] dark:border-[#1c2128] bg-[#f8f9fc] dark:bg-[#0d1117] animate-in fade-in duration-300">
             <div className="w-5 h-5 rounded-full bg-gradient-to-br from-[#dc5426] to-orange-600 flex items-center justify-center shrink-0 shadow-sm shadow-orange-500/15">
@@ -596,6 +618,9 @@ export default function ChatPanel() {
           </div>
         )}
 
+        {/* Phase 2 Step 5 — live agent activity pill (decoupled from task_phase). */}
+        <AgentActivityPill activity={agentActivity} />
+
         <form onSubmit={handleSend} className="relative">
           <div
             className="rounded-2xl overflow-hidden bg-white dark:bg-[#1c2128] shadow-sm"
@@ -608,6 +633,8 @@ export default function ChatPanel() {
               placeholder={
                 quota.atTok
                   ? 'Token quota exhausted — upgrade or buy a credit pack to continue.'
+                  : projectIntakeStatus === 'clarifying'
+                    ? 'Add the missing project details...'
                   : 'What would you like to change? (paste or drop images)'
               }
               className="w-full px-4 pt-3.5 pb-8 min-h-[80px] max-h-[240px] outline-none text-[13px] text-[#1f2937] dark:text-slate-100 placeholder:text-[#9ca3af] dark:placeholder:text-slate-500 resize-none leading-relaxed break-words"
@@ -729,7 +756,7 @@ export default function ChatPanel() {
                 <Mic className="w-4 h-4" />
               </button>
 
-              {status === 'running' || isPreparing ? (
+              {!projectIntakeStatus && (status === 'running' || isPreparing) ? (
                 <button
                   type="button"
                   onClick={stopSession}
@@ -740,10 +767,16 @@ export default function ChatPanel() {
               ) : (
                 <button
                   type="submit"
-                  disabled={(!chatInput.trim() && attachedImages.length === 0) || quota.atTok}
+                  disabled={
+                    (!chatInput.trim() && attachedImages.length === 0) ||
+                    quota.atTok ||
+                    intakeBusy
+                  }
                   className={cn(
                     'w-8 h-8 rounded-lg transition-all flex items-center justify-center shrink-0',
-                    (chatInput.trim() || attachedImages.length > 0) && !quota.atTok
+                    (chatInput.trim() || attachedImages.length > 0) &&
+                      !quota.atTok &&
+                      !intakeBusy
                       ? 'bg-[#111827] text-white hover:bg-slate-900'
                       : 'bg-[#d1d5db] text-[#9ca3af] cursor-not-allowed',
                   )}>

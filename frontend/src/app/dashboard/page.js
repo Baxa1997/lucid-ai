@@ -628,8 +628,8 @@ export default function EngineerDashboardPage() {
   //
   // Navigate-first model (Base44-style): the prompt is launched UNVALIDATED.
   // We deliberately do NOT set `wizard_validated` — the workspace-mount guard
-  // runs the intent-check + project-count gate inside the workspace chat and
-  // either starts building or asks a clarifying question in-chat. `bypassLimits`
+  // runs the project-count gate inside the workspace chat, then hands the
+  // original prompt to the backend Gemini router. `bypassLimits`
   // (Skip-from-modal) is forwarded so the in-workspace gate honors the override.
   const launchWorkspaceWith = (projectDescription, { bypassLimits = false } = {}) => {
     const resolvedStack =
@@ -671,12 +671,11 @@ export default function EngineerDashboardPage() {
     //
     // Navigate-first (Base44-style): the dashboard does NO intent-check. It
     // navigates straight to the workspace with the prompt as pending; the
-    // workspace-mount guard runs the regex pre-filter, Gemini intent-check,
-    // and the project-count gate inside the chat, then either starts building
-    // or asks a clarifying question in-chat. The only dashboard-side guard is
-    // the cheap at-limit check below (a count read, no provisioning), so a
-    // user already at their cap sees the upgrade modal instead of bouncing
-    // into a dead-end workspace.
+    // workspace-mount guard runs the project-count gate, then the backend
+    // Gemini router decides whether to clarify or start a workflow. The only
+    // dashboard-side guard is the cheap at-limit check below (a count read, no
+    // provisioning), so a user already at their cap sees the upgrade modal
+    // instead of bouncing into a dead-end workspace.
     const text = (overrideText != null ? overrideText : promptText).trim();
     // At-limit gate runs FIRST so clicking Send with an empty textarea at
     // the limit still opens the upgrade modal. Skip in the modal calls

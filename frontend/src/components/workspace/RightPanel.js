@@ -509,6 +509,8 @@ export default function RightPanel() {
     isWizardMode,
     convLoading,
     buildingActive,
+    projectIntakeStatus,
+    agentStatus,
     files,
     conversation,
     terminalLogs,
@@ -875,8 +877,19 @@ export default function RightPanel() {
     }
     if (previewError) return "crashed";
     if (previewLoading) return "booting";
+    // Agent has handed control back to the user (asked a clarification,
+    // greeting, etc.) — show the "describe your project" canvas instead of
+    // the misleading "Preparing Preview" panel. Reuses the wizard-empty
+    // copy because the UX is identical: the agent is idle, the user must
+    // type something for anything to happen.
+    if (agentStatus?.state === "waiting") return "wizard-empty";
     if (isNewProject && files.length === 0) return "wizard-empty";
     if (previewEverReady) return "stopped";
+    // status=ready + no preview activity = workspace is idle, agent is
+    // idle, but the dev server hasn't been spun up yet. This is what the
+    // user sees right after a clarify response was sent — the previous
+    // "preparing" default lied that something was happening.
+    if (status === "ready") return "wizard-empty";
     return "preparing";
   })();
 
@@ -1167,6 +1180,9 @@ export default function RightPanel() {
             convLoading={convLoading}
             previewLoading={previewLoading}
             previewStatusMsg={previewStatusMsg}
+            previewStage={previewStage}
+            projectIntakeStatus={projectIntakeStatus}
+            agentStatus={agentStatus}
           />
         ) : (
           <>

@@ -610,6 +610,18 @@ Rules:
         # Ensure node_modules exist
         already_ready_pre_install = self._expected_binary_ready(workspace_path, pkg_data)
         if not already_ready_pre_install:
+            # Phase 2 Step 4: typed event for chart chip, legacy free-form kept
+            # one release for backward compat (suppressed by FE de-dup).
+            try:
+                from app.services.llm_retry import emit_build_start
+                await emit_build_start(
+                    self.websocket,
+                    package_manager=pm,
+                    command=" ".join(self._install_command(pm)),
+                    phase="install",
+                )
+            except Exception:
+                pass
             await self._send("build", "checking", f"📦 Installing dependencies ({pm})...")
             install_result = None
             try:
@@ -667,6 +679,17 @@ Rules:
         except OSError as mexc:
             logger.debug("BuildValidator: install marker write failed: %s", mexc)
 
+        # Phase 2 Step 4: typed event for chart chip + legacy free-form.
+        try:
+            from app.services.llm_retry import emit_build_start
+            await emit_build_start(
+                self.websocket,
+                package_manager=pm,
+                command=" ".join(build_cmd),
+                phase="build",
+            )
+        except Exception:
+            pass
         await self._send("build", "checking",
                          f"🔍 Running production build ({' '.join(build_cmd)})...")
 
@@ -682,6 +705,17 @@ Rules:
                 if self.attempt > 0:
                     s = "s" if self.attempt > 1 else ""
                     fixed_msg = f" (fixed in {self.attempt} attempt{s})"
+                # Phase 2 Step 4: typed terminal event + legacy free-form.
+                try:
+                    from app.services.llm_retry import emit_build_result
+                    await emit_build_result(
+                        self.websocket,
+                        success=True,
+                        attempts=self.attempt,
+                        fixed_count=len(self.fixed_files),
+                    )
+                except Exception:
+                    pass
                 await self._send("build", "passed",
                                  f"✅ Production build passed{fixed_msg} — ready for deployment")
                 logger.info("BuildValidator: build passed on attempt %d", self.attempt + 1)
@@ -700,6 +734,19 @@ Rules:
 
             # Timeout — no parseable error output for Claude to fix
             if result.get("timed_out"):
+                try:
+                    from app.services.llm_retry import emit_build_result
+                    await emit_build_result(
+                        self.websocket,
+                        success=False,
+                        attempts=self.attempt + 1,
+                        error_count=last_error_count,
+                        fixed_count=len(self.fixed_files),
+                        timed_out=True,
+                        needs_fix=True,
+                    )
+                except Exception:
+                    pass
                 await self._send("build", "warning",
                     "⚠️ Build timed out — skipping auto-fix (no error output to parse). "
                     "Project will be deployed as-is.")
@@ -742,6 +789,19 @@ Rules:
                 logger.warning(
                     "BuildValidator: detected install-time failure — skipping code-agent fix loop"
                 )
+                try:
+                    from app.services.llm_retry import emit_build_result
+                    await emit_build_result(
+                        self.websocket,
+                        success=False,
+                        attempts=self.attempt + 1,
+                        error_count=last_error_count,
+                        fixed_count=len(self.fixed_files),
+                        install_failed=True,
+                        needs_fix=True,
+                    )
+                except Exception:
+                    pass
                 await self._send("build", "warning",
                     f"⚠️ Build failed due to an install-time issue ({last_error_count} error(s)) — "
                     "skipping auto-fix because this isn't a code error. Project deploys to staging only.",
@@ -779,6 +839,18 @@ Rules:
             self.attempt += 1
 
         # All retries exhausted — graceful degradation
+        try:
+            from app.services.llm_retry import emit_build_result
+            await emit_build_result(
+                self.websocket,
+                success=False,
+                attempts=self.attempt,
+                error_count=last_error_count,
+                fixed_count=len(self.fixed_files),
+                needs_fix=True,
+            )
+        except Exception:
+            pass
         await self._send("build", "failed",
             f"⚠️ {last_error_count} build error(s) remain after "
             f"{self.max_retries} auto-fix attempts. Project will be deployed with warnings.",

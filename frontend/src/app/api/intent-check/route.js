@@ -20,9 +20,8 @@
 //     workspace, passing `summary` as the project description.
 //   • isProject:false + reply    → dashboard appends `reply` to the
 //     mini-chat history and waits for the user to type again.
-//   • API/auth error             → fail CLOSED: return isProject:false
-//     with a retry message so junk / unverified prompts never reach
-//     the build pipeline.
+//   • API/auth error             → conservatively approve only descriptions
+//     with an explicit project type + subject; otherwise ask for clarification.
 // ─────────────────────────────────────────────────────────
 
 import { NextResponse } from 'next/server';
@@ -31,6 +30,7 @@ import { requireAuth } from '@/lib/gatekeeper';
 import { canConsumeTokens } from '@/lib/subscription';
 import { recordTokenUsage } from '@/lib/usage';
 import { isTokenBypassActive } from '@/lib/devQuotaBypass';
+import { inferExplicitProjectIntent } from '@/lib/promptGuards';
 
 const MODEL = 'gemini-3-flash-preview';
 
@@ -154,7 +154,7 @@ Examples that need clarification:
 
 Always end clarifying replies with a real question. Keep replies under 30 words.`;
 
-function failClosed(reason) {
+function failClosed(reason, { mode = 'edit', prompt = '', history = [] } = {}) {
   // Helper for every fail path. The dashboard treats this exactly like
   // a real Gemini "needs clarification" response and shows the retry
   // message in the mini-chat. The workspace launches NEVER happen on
@@ -162,9 +162,25 @@ function failClosed(reason) {
   // rescue text so backend-rejected and frontend-rejected gibberish
   // read identically.
   if (reason) console.error('[intent-check] fail-closed:', reason);
+
+  // A verifier outage should not strand an obviously complete new-project
+  // prompt. This fallback is intentionally conservative: it only approves
+  // text where a project type and subject are both explicitly extractable.
+  if (mode === 'new') {
+    const explicitIntent = inferExplicitProjectIntent(prompt, history);
+    if (explicitIntent) {
+      return NextResponse.json({
+        ...explicitIntent,
+        verifierUnavailable: true,
+      });
+    }
+  }
+
   return NextResponse.json({
     isProject: false,
-    reply: "I couldn't quite read that. Could you describe what you'd like to build or change? For example: \"a landing page for my coffee shop\" or \"make the hero darker\".",
+    reply: mode === 'edit'
+      ? "I couldn't quite read that. What would you like to change?"
+      : "I couldn't quite read that. Could you describe what you'd like to build? For example: \"a landing page for my coffee shop\".",
     verifierUnavailable: true,
   });
 }
@@ -204,6 +220,13 @@ export async function POST(req) {
     }
   }
 
+  // Complete, explicit descriptions do not need a model round trip. Besides
+  // reducing latency, this keeps the intake flow usable during Vertex outages.
+  if (mode === 'new') {
+    const explicitIntent = inferExplicitProjectIntent(prompt, history);
+    if (explicitIntent) return NextResponse.json(explicitIntent);
+  }
+
   // Resolve Vertex URL + ADC token. Either missing project or ADC failure
   // is treated as a verifier outage — fail closed so junk never reaches
   // the workspace launch path.
@@ -213,7 +236,7 @@ export async function POST(req) {
     url = buildVertexUrl(MODEL);
     token = await getAdcToken();
   } catch (err) {
-    return failClosed(`vertex auth: ${err.message}`);
+    return failClosed(`vertex auth: ${err.message}`, { mode, prompt, history });
   }
 
   // Multi-turn contents: prior turns + the latest user message.
@@ -253,7 +276,7 @@ export async function POST(req) {
 
     if (!res.ok) {
       const t = await res.text();
-      return failClosed(`Vertex ${res.status}: ${t.slice(0, 300)}`);
+      return failClosed(`Vertex ${res.status}: ${t.slice(0, 300)}`, { mode, prompt, history });
     }
     const data = await res.json();
 
@@ -270,7 +293,7 @@ export async function POST(req) {
     try {
       parsed = JSON.parse(text);
     } catch {
-      return failClosed(`non-JSON model output: ${text.slice(0, 200)}`);
+      return failClosed(`non-JSON model output: ${text.slice(0, 200)}`, { mode, prompt, history });
     }
 
     if (parsed.isProject) {
@@ -284,6 +307,6 @@ export async function POST(req) {
       ).trim(),
     });
   } catch (err) {
-    return failClosed(`network: ${err.message}`);
+    return failClosed(`network: ${err.message}`, { mode, prompt, history });
   }
 }

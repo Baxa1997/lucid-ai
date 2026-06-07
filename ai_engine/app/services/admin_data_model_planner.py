@@ -351,7 +351,7 @@ Return ONLY the JSON. No markdown fences, no commentary.
 # ── Main entry point ──────────────────────────────────────────────────
 
 _GEMINI_MODEL_BY_VARIANT: dict[str, str] = {
-    "flash":    "gemini-2.5-flash",
+    "flash":    "gemini-3.5-flash",
     "pro":      "gemini-2.5-pro",
     "flash-3":  "gemini-3-flash-preview",
     "pro-3.1":  "gemini-3.1-pro-preview",

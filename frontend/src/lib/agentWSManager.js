@@ -239,9 +239,27 @@ class AgentWSManager {
         } catch {}
       }
 
+      // Phase 2 Step 6 — explicit continuation token.
+      // sessionStorage holds the chat_session_id from the previous run on
+      // this project; sending it back lets the backend skip its 4-tier
+      // heuristic lookup and resume the EXACT session deterministically.
+      // Empty string when this is a brand-new project (legacy auto-discovery
+      // kicks in on the backend). Stored under `ws_session_<projectId>`
+      // by useAgentSession when the backend returns msg.sessionId.
+      let continuationToken = '';
+      if (projectId && typeof window !== 'undefined') {
+        try {
+          continuationToken = window.sessionStorage.getItem(`ws_session_${projectId}`) || '';
+        } catch (_) {
+          // sessionStorage can throw under private-mode + ITP; treat as no
+          // token (heuristic fallback on the backend takes over).
+        }
+      }
+
       ws.send(JSON.stringify({
         token: token || '',
         projectId: projectId || '',
+        continuationToken: continuationToken,
         modelProvider: modelProvider,
         repoUrl: repoUrl || '',
         repoProvider: repoProvider || '',

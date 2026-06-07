@@ -374,7 +374,7 @@ def _summarize_anatomies(visual_dna: dict) -> str:
 # global timeout was consumed by a 90s research timeout, leaving the plan
 # call to race retry latency and fall through to the generic fallback.)
 _CONVERSION_RESEARCH_MAX_TIMEOUT_S = 50.0
-_PLAN_MODEL = "gemini-2.5-flash"
+_PLAN_MODEL = "gemini-3.5-flash"
 _PLAN_MAX_TOKENS = 2500
 
 # Free-form retry shape hint — used when the structured-schema call hits

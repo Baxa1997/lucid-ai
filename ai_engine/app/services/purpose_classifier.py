@@ -180,7 +180,7 @@ async def classify_purpose(
             label="purpose_classify",
             response_schema=_PURPOSE_SCHEMA,
             max_tokens=600,
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash",
         )
         data = json.loads(raw) if isinstance(raw, str) else raw
         if not isinstance(data, dict):

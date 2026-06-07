@@ -57,7 +57,7 @@ async def main():
     print("Testing shim → Vertex AI (Flash, JSON)")
     print("─" * 50)
     status, data, raw = await gemini_http.gemini_post(
-        model="gemini-2.5-flash",
+        model="gemini-3.5-flash",
         payload=payload,
         timeout_s=30.0,
         api_key="",

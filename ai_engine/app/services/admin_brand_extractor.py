@@ -32,9 +32,9 @@ from app.services.landing_gemini import structured_distill
 logger = logging.getLogger(__name__)
 
 
-# Picked to match the data_model_planner default (gemini-2.5-flash). It's
+# Picked to match the data_model_planner default (gemini-3.5-flash). It's
 # cheap, stable, and we don't need Pro reasoning for a 6-field extraction.
-_GEMINI_MODEL = "gemini-2.5-flash"
+_GEMINI_MODEL = "gemini-3.5-flash"
 _TIMEOUT_S = 30.0
 
 # Fallback fixture used when Gemini errors, returns non-JSON, or returns

@@ -177,7 +177,7 @@ async def refine_anatomies_for_page(
                 label=f"page_anatomy_refiner[{page_route}]",
                 response_schema=_refine_schema(unique_types),
                 max_tokens=_REFINER_MAX_TOKENS,
-                model="gemini-2.5-flash",
+                model="gemini-3.5-flash",
             ),
             timeout=timeout_s + 5.0,
         )

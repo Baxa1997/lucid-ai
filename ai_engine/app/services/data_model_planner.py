@@ -268,7 +268,7 @@ Return ONLY the JSON. No markdown fences, no commentary.
 # ── Main entry point ──────────────────────────────────────────────────
 
 _GEMINI_MODEL_BY_VARIANT: dict[str, str] = {
-    "flash":    "gemini-2.5-flash",        # default production model
+    "flash":    "gemini-3.5-flash",        # default production model
     "pro":      "gemini-2.5-pro",          # current Pro tier
     "flash-3":  "gemini-3-flash-preview",  # Gemini 3 family — cheaper sibling
     "pro-3.1":  "gemini-3.1-pro-preview",  # Gemini 3 family — reasoning tier
@@ -299,7 +299,7 @@ async def plan_data_model(
     project_images, contact_inquiries, faqs) that the others missed.
     At ~$0.025 per project on a one-shot per-project call the cost is
     negligible.
-      • `"flash"`    → `gemini-2.5-flash` (~$0.0003/call, last-gen)
+      • `"flash"`    → `gemini-3.5-flash` (~$0.0003/call, last-gen)
       • `"flash-3"`  → `gemini-3-flash-preview` (~$0.003/call, fast)
       • `"pro"`      → `gemini-2.5-pro` (last-gen Pro, ~2× slower than 3.1)
       • `"pro-3.1"`  → `gemini-3.1-pro-preview` (default; production)

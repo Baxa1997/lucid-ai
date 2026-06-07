@@ -567,10 +567,16 @@ async def bind_landing_images(
         pass
     if websocket is not None:
         try:
-            await websocket.send_json({
-                "type": "progress",
-                "message": f"✅ Bound {bound}/{len(jobs)} images",
-            })
+            from app.services.llm_retry import emit_image_binder_summary
+            await emit_image_binder_summary(
+                websocket,
+                requested=len(jobs),
+                bound=bound,
+                unbound=len(unbound),
+                geo_rejected=counters.get("geo_rejected", 0),
+                subject_rejected=counters.get("subject_rejected", 0),
+                retry_used=counters.get("retry_used", 0),
+            )
         except Exception:
             pass
 

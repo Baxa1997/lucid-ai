@@ -13,9 +13,11 @@ or:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -29,7 +31,8 @@ os.environ.setdefault("INTERNAL_API_KEY", "x")
 os.environ.setdefault("ANTHROPIC_API_KEY", "dummy")
 
 from app.services.project_classifier_agent import (
-    resolve_classification, _build_resolved, _stage_for_key,
+    resolve_classification, route_new_project_with_gemini,
+    _build_resolved, _stage_for_key, workflow_for_archetype,
     STAGE_RESOLVED, STAGE_ASK_PRODUCT_TYPE, STAGE_ASK_SITE_DEPTH,
 )
 from knowledge.loader import (
@@ -104,6 +107,8 @@ def test_build_resolved_marks_admin_followup() -> None:
     assert out["status"] == "resolved"
     assert out["needs_admin_followup"] is True
     assert out["stage"] == STAGE_RESOLVED
+    assert out["next_action"] == "start_workflow"
+    assert out["workflow_id"] == "website_with_admin_generation"
     assert "entities" not in out  # entity extraction disabled
 
 
@@ -116,6 +121,104 @@ def test_build_resolved_does_not_mark_pure_admin_as_followup() -> None:
         reasoning="t",
     )
     assert out["needs_admin_followup"] is False
+    assert out["workflow_id"] == "admin_generation"
+
+
+def test_workflow_selection_is_explicit_per_archetype() -> None:
+    assert workflow_for_archetype("single_page_landing") == "landing_generation"
+    assert workflow_for_archetype("consumer_website") == "website_generation"
+    assert workflow_for_archetype("admin_dashboard") == "admin_generation"
+
+
+def test_clear_prompt_workflow_is_selected_by_gemini_flash() -> None:
+    async def _gemini_route(_description):
+        return {
+            "action": "start_workflow",
+            "archetype": "single_page_landing",
+            "reasoning": "Explicit landing page and domain requested",
+        }
+
+    with patch(
+        "app.services.project_classifier_agent.route_new_project_with_gemini",
+        side_effect=_gemini_route,
+    ):
+        result = _run(resolve_classification(
+            "landing page for education center",
+            extract_entities=False,
+        ))
+
+    assert result["workflow_id"] == "landing_generation"
+    assert result["reasoning"].startswith("Gemini Flash selected")
+
+
+def test_direct_gemini_router_clarification_controls_next_action() -> None:
+    async def _gemini_route(_description):
+        return {
+            "action": "clarify",
+            "clarify_key": "project_type",
+            "question": "What kind of project should I build for the education center?",
+            "reasoning": "The domain is present but project type is missing.",
+        }
+
+    with patch(
+        "app.services.project_classifier_agent.route_new_project_with_gemini",
+        side_effect=_gemini_route,
+    ):
+        result = _run(resolve_classification(
+            "education center",
+            extract_entities=False,
+        ))
+
+    assert result["status"] == "needs_clarification"
+    assert result["next_action"] == "clarify"
+    assert result["workflow_id"] == "project_clarification"
+    assert result["clarify_key"] == "project_type"
+
+
+def _gemini_response(payload: dict) -> dict:
+    return {
+        "candidates": [{
+            "content": {
+                "parts": [{"text": json.dumps(payload)}],
+            },
+        }],
+    }
+
+
+def test_gemini_router_requires_exact_start_evidence() -> None:
+    async def _fake_post(**_kwargs):
+        return 200, _gemini_response({
+            "action": "start_workflow",
+            "archetype": "consumer_website",
+            "project_type_evidence": "",
+            "domain_evidence": "education center",
+            "reasoning": "Inferred a website from the business.",
+        }), ""
+
+    with patch("app.services.gemini_http.gemini_post", side_effect=_fake_post):
+        result = _run(route_new_project_with_gemini("education center"))
+
+    assert result["action"] == "clarify"
+    assert result["clarify_key"] == "project_type"
+
+
+def test_gemini_router_accepts_cited_type_and_domain() -> None:
+    async def _fake_post(**_kwargs):
+        return 200, _gemini_response({
+            "action": "start_workflow",
+            "archetype": "single_page_landing",
+            "project_type_evidence": "landing page",
+            "domain_evidence": "education center",
+            "reasoning": "Both are explicit.",
+        }), ""
+
+    with patch("app.services.gemini_http.gemini_post", side_effect=_fake_post):
+        result = _run(route_new_project_with_gemini(
+            "landing page for education center",
+        ))
+
+    assert result["action"] == "start_workflow"
+    assert result["archetype"] == "single_page_landing"
 
 
 # ── Resolver path tests (extract_entities disabled so no Gemini calls) ──

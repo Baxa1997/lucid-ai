@@ -34,7 +34,7 @@ import re
 from typing import Any
 
 # Flash is enough — no tools, no grounding. Distillation only.
-_BRIEF_MODEL = os.environ.get("PROJECT_BRIEF_MODEL", "gemini-2.5-flash")
+_BRIEF_MODEL = os.environ.get("PROJECT_BRIEF_MODEL", "gemini-3.5-flash")
 
 logger = logging.getLogger(__name__)
 

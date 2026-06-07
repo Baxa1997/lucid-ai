@@ -46,15 +46,17 @@ def resolve_llm(model_or_provider: str, user_api_key: str | None = None):
         ProviderError: if the model/provider is not supported.
         APIKeyMissingError: only for Anthropic (Vertex uses ADC, not keys).
     """
-    # Map legacy / deprecated model IDs to their active equivalents. Old
-    # ``gemini/...`` ids predate the Vertex migration; rewrite them so any
-    # caller that still passes the AI Studio prefix transparently lands on
-    # Vertex routing.
+    # Map legacy / deprecated model IDs to their active equivalents. The
+    # LEFT side is what legacy callers may still pass; the RIGHT side is
+    # what we route to today. Old `gemini/...` ids predate the Vertex
+    # migration; rewrite them so any caller that still passes the AI
+    # Studio prefix transparently lands on Vertex routing.
     legacy_mappings = {
-        "gemini/gemini-2.5-flash-preview":  "vertex_ai/gemini-3-flash-preview",
+        "gemini/gemini-2.5-flash-preview":  "vertex_ai/gemini-3.5-flash",
         "gemini/gemini-2.5-pro-preview":    "vertex_ai/gemini-3.1-pro-preview",
-        "gemini/gemini-3-flash-preview":    "vertex_ai/gemini-3-flash-preview",
+        "gemini/gemini-3-flash-preview":    "vertex_ai/gemini-3.5-flash",
         "gemini/gemini-3.1-pro-preview":    "vertex_ai/gemini-3.1-pro-preview",
+        "gemini/gemini-3.5-flash":          "vertex_ai/gemini-3.5-flash",
     }
     model_or_provider = legacy_mappings.get(model_or_provider, model_or_provider)
 

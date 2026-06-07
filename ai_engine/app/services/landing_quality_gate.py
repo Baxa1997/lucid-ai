@@ -358,21 +358,24 @@ async def run_quality_gate(
 
     if websocket is not None:
         try:
+            from app.services.llm_retry import emit_quality_summary
+
             await websocket.send_json({"type": "quality_report", "report": report})
+
+            # Phase 2 Step 4: typed event carries the summary counters.
+            await emit_quality_summary(
+                websocket,
+                passed=s["passed"],
+                total=s["total"],
+                blockers=s["blockers"],
+                warnings=s["warnings"],
+                purpose=report.get("purpose", "") or "",
+            )
+
             if s["blockers"]:
                 await websocket.send_json({
                     "type": "warning",
                     "message": f"⚠️  Quality gate: {s['blockers']} blocker(s), {s['warnings']} warning(s).",
-                })
-            elif s["warnings"]:
-                await websocket.send_json({
-                    "type": "progress",
-                    "message": f"✓ Quality gate: {s['passed']}/{s['total']} checks passed ({s['warnings']} warning).",
-                })
-            else:
-                await websocket.send_json({
-                    "type": "progress",
-                    "message": f"✅ Quality gate: {s['passed']}/{s['total']} checks passed.",
                 })
         except Exception:
             pass

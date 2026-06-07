@@ -18,6 +18,8 @@ import sys
 import traceback
 from urllib.parse import urlparse
 
+import pytest
+
 sys.path.insert(0, "/app")
 
 from app.services.image_binding import (
@@ -27,6 +29,19 @@ from app.services.image_binding import (
     clear_image_cache,
     search_unsplash,
 )
+
+
+# All tests here hit live Unsplash (or skip when UNSPLASH_ACCESS_KEY is unset)
+# AND use a script-style runner pattern that pytest can collect but not run
+# cleanly. Mark live so they're excluded from the default `pytest` run; the
+# script-runner at the bottom of the file still works via `python <file>`.
+pytestmark = [
+    pytest.mark.live,
+    pytest.mark.skipif(
+        not os.environ.get("UNSPLASH_ACCESS_KEY"),
+        reason="UNSPLASH_ACCESS_KEY not set — image binder needs live Unsplash to run",
+    ),
+]
 
 
 def _valid_unsplash_url(url: str) -> bool:

@@ -51,7 +51,6 @@ import QualityReportPanel from "@/components/workspace/QualityReportPanel";
 import RightPanel from "@/components/workspace/RightPanel";
 import InviteDialog from "@/components/members/InviteDialog";
 import {isTokenBypassActive} from "@/lib/devQuotaBypass";
-import {validatePromptShape} from "@/lib/promptGuards";
 
 // ── Main Page Component ────────────────────────────────────
 export default function ConversationPage({params}) {
@@ -73,8 +72,10 @@ function ConversationPageInner({params}) {
   // connect the WebSocket immediately.
   const [isWizardMode] = useState(() => {
     try {
-      return !!sessionStorage.getItem(
-        `wizard_prompt_${decodeURIComponent(projectId || "unknown")}`,
+      const cid = decodeURIComponent(projectId || "unknown");
+      return !!(
+        sessionStorage.getItem(`wizard_prompt_${cid}`) ||
+        sessionStorage.getItem(`wizard_pending_validation_${cid}`)
       );
     } catch {
       return false;
@@ -85,8 +86,12 @@ function ConversationPageInner({params}) {
   // Also store the user-visible description (without [LUCID_PROJECT] header)
   const [wizardDesc] = useState(() => {
     try {
-      const descKey = `wizard_desc_${decodeURIComponent(projectId || "unknown")}`;
-      return sessionStorage.getItem(descKey) || "";
+      const cid = decodeURIComponent(projectId || "unknown");
+      return (
+        sessionStorage.getItem(`wizard_desc_${cid}`) ||
+        sessionStorage.getItem(`wizard_pending_validation_${cid}`) ||
+        ""
+      );
     } catch {
       return "";
     }
@@ -95,17 +100,14 @@ function ConversationPageInner({params}) {
   // Wizard-prompt extraction with a verification guard.
   //
   // The dashboard normally tags every prompt it launches with the
-  // `wizard_validated_<cid>` flag after Gemini approves it. If we see a
+  // `wizard_validated_<cid>` flag after the workspace project gate approves
+  // it. If we see a
   // wizard_prompt WITHOUT that flag, it means the prompt arrived via an
-  // unvetted path — deep link, manual sessionStorage, tab restore — and
-  // we must NOT ship it to the WebSocket handshake. We move it into a
-  // pending slot and return "" so the handshake fires with no initial
-  // task. The effect below then runs /api/intent-check against the
-  // pending prompt and either:
-  //   • valid → rebuilds the backend wizard envelope and starts the pipeline
-  //   • invalid → pushes a friendly clarify message into the chat,
-  //               leaving the user in an idle workspace where they can
-  //               type a real description.
+  // unvetted path — deep link, manual sessionStorage, or tab restore. We move
+  // it into a pending slot and return "" so the handshake fires with no
+  // initial task. The effect below enforces the project-count gate, then hands
+  // the original prompt to the backend Gemini router. That router alone
+  // decides whether to clarify or start a workflow.
   const [wizardTask] = useState(() => {
     try {
       const cid = decodeURIComponent(projectId || "unknown");
@@ -482,7 +484,9 @@ function ConversationPageInner({params}) {
     previewError,
     retryCount,
     retry,
+    agentActivity,
     agentStatus,
+    awaitingResponse,
     planAwaiting,
     currentPlanData,
     planConfirmed,
@@ -663,10 +667,10 @@ function ConversationPageInner({params}) {
   // ── Workspace-mount intent guard (navigate-first / Base44-style) ──
   // The dashboard navigates here WITHOUT validating — every prompt arrives
   // as `wizard_pending_validation` (the wizardTask initializer stashed it and
-  // fired the WS handshake with no task). This guard runs the whole gate
-  // inside the chat: it echoes the user's prompt, runs the regex pre-filter
-  // + Gemini intent-check, then the project-count gate, and finally either
-  // starts building or posts a clarifying question in-chat.
+  // fired the WS handshake with no task). This guard runs the project-count
+  // check inside the chat, then sends the original prompt to the backend.
+  // Prompt classification, clarification, workflow selection, and statuses
+  // are all owned by the backend Gemini router.
   //
   // StrictMode note: in dev, effects mount→cleanup→mount. We must run exactly
   // once and RUN TO COMPLETION, so we dedupe with `guardRanRef` (survives the
@@ -675,12 +679,26 @@ function ConversationPageInner({params}) {
   // first pass would strand the prompt (shown but never sent), since the
   // second pass short-circuits on the ref.
   // Drives the chat "typing…" indicator while the mount guard runs its
-  // async intent-check + project gate (the regex pre-filter is instant, so
-  // it's excluded). Cleared the moment a clarification is posted or building
-  // starts (sendMessage then drives the normal running-state indicator).
-  const [guardThinking, setGuardThinking] = useState(false);
+  // project gate. Cleared when the backend emits its first canonical status.
+  // New-project intake remains active across as many clarification turns as
+  // necessary. It is separate from the WebSocket workspace state: the socket
+  // may be connected/preparing while the builder is intentionally blocked
+  // waiting for a usable project description.
+  const [projectIntakeStatus, setProjectIntakeStatus] = useState(() => {
+    try {
+      const cid = decodeURIComponent(projectId || "unknown");
+      return sessionStorage.getItem(`wizard_pending_validation_${cid}`)
+        ? "checking"
+        : null;
+    } catch {
+      return null;
+    }
+  });
+  const guardThinking =
+    projectIntakeStatus === "checking" || projectIntakeStatus === "handoff";
   const [guardKick, setGuardKick] = useState(0);
   const guardRanRef = useRef(false);
+  const projectIntakeBypassRef = useRef(false);
 
   const buildWizardBackendTask = useCallback((cid, prompt) => {
     try {
@@ -706,11 +724,114 @@ function ConversationPageInner({params}) {
     }
   }, []);
 
+  const rememberPendingProjectIntake = useCallback((prompt) => {
+    try {
+      const cid = decodeURIComponent(projectId || "unknown");
+      sessionStorage.setItem(`wizard_pending_validation_${cid}`, prompt);
+    } catch {}
+  }, [projectId]);
+
+  const clearPendingProjectIntake = useCallback(() => {
+    try {
+      const cid = decodeURIComponent(projectId || "unknown");
+      sessionStorage.removeItem(`wizard_pending_validation_${cid}`);
+    } catch {}
+  }, [projectId]);
+
+  const runProjectIntakeGate = useCallback(async (
+    prompt,
+    {echoUser = false, bypassLimits = projectIntakeBypassRef.current} = {},
+  ) => {
+    const text = (prompt || "").trim();
+    if (!text) return false;
+
+    if (echoUser) addLocalChatMessage("user", text);
+    setProjectIntakeStatus("checking");
+
+    // Project-count gate. This does not classify or rewrite the prompt; the
+    // backend Gemini router receives the user's original text verbatim.
+    try {
+      const gateRes = await fetch("/api/projects/check-create", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({bypassLimits}),
+      });
+      if (gateRes.status === 402) {
+        addLocalChatMessage(
+          "assistant",
+          "You've reached your project limit on your current plan. Upgrade in Billing to start a new project — your message above is saved.",
+        );
+        rememberPendingProjectIntake(text);
+        setProjectIntakeStatus("clarifying");
+        return false;
+      }
+      if (!gateRes.ok) {
+        addLocalChatMessage(
+          "assistant",
+          "Something went wrong starting your project. Please try again in a moment.",
+        );
+        rememberPendingProjectIntake(text);
+        setProjectIntakeStatus("clarifying");
+        return false;
+      }
+    } catch (err) {
+      console.warn("[workspace guard] check-create threw:", err);
+      addLocalChatMessage(
+        "assistant",
+        "Couldn't reach our server to start your project. Check your connection and try again.",
+      );
+      rememberPendingProjectIntake(text);
+      setProjectIntakeStatus("clarifying");
+      return false;
+    }
+
+    // Approved. Hand the original prompt to the canonical backend router.
+    clearPendingProjectIntake();
+    setProjectIntakeStatus("handoff");
+    try {
+      const cid = decodeURIComponent(projectId || "unknown");
+      sessionStorage.setItem(`wizard_validated_${cid}`, "1");
+      sessionStorage.setItem(`wizard_prompt_${cid}`, text);
+      sessionStorage.setItem(`wizard_desc_${cid}`, text);
+      const backendTask = buildWizardBackendTask(cid, text);
+      sendMessage(backendTask, [], {suppressEcho: true});
+      return true;
+    } catch {}
+    sendMessage(text, [], {suppressEcho: true});
+    return true;
+  }, [
+    addLocalChatMessage,
+    buildWizardBackendTask,
+    clearPendingProjectIntake,
+    projectId,
+    rememberPendingProjectIntake,
+    sendMessage,
+  ]);
+
+  const submitProjectIntake = useCallback((prompt) => {
+    return runProjectIntakeGate(prompt, {echoUser: true});
+  }, [runProjectIntakeGate]);
+
+  // Keep the client-side analyzing state visible between intent approval and
+  // the backend's first acknowledgement. Once a real task state or phase
+  // arrives, the shared status label follows backend events exclusively.
+  useEffect(() => {
+    if (projectIntakeStatus !== "handoff") return;
+    if (
+      agentStatus?.state === "active" ||
+      status === "running" ||
+      phases.some((phase) => phase.status === "active")
+    ) {
+      setProjectIntakeStatus(null);
+    }
+  }, [agentStatus, phases, projectIntakeStatus, status]);
+
   useEffect(() => {
     const onPendingValidation = (event) => {
       const incoming = event?.detail?.projectId;
       const current = decodeURIComponent(projectId || "unknown");
       if (!incoming || incoming === current) {
+        setProjectIntakeStatus("checking");
         setGuardKick((n) => n + 1);
       }
     };
@@ -742,115 +863,14 @@ function ConversationPageInner({params}) {
       return;
     }
     guardRanRef.current = true;
+    projectIntakeBypassRef.current = bypassLimits;
 
     // Echo the user's prompt immediately so the chat isn't blank while we
     // validate. The valid path re-sends this same text to the WS with
     // suppressEcho, so this stays the only user bubble.
     addLocalChatMessage("user", pending);
-
-    (async () => {
-      const CLARIFY_FALLBACK =
-        "I couldn't quite read that. Could you describe what you'd like to build? For example: \"a landing page for my coffee shop\".";
-
-      // 1. Cheap regex pre-filter — obvious gibberish ("32123213", "asdf")
-      //    is caught here with no Vertex call (instant, no typing indicator).
-      const shape = validatePromptShape(pending);
-      if (!shape.ok) {
-        addLocalChatMessage("assistant", shape.message);
-        return;
-      }
-
-      // Everything past here is a network round trip — show the typing
-      // indicator until we post a clarification or hand off to sendMessage.
-      setGuardThinking(true);
-      try {
-        // 2. Gemini intent-check. We only need its isProject verdict — the
-        //    prompt we send to the WS is the user's ORIGINAL text (see below),
-        //    not the rewritten summary, so the chat bubble, the WS message,
-        //    and the backend's re-emitted echo all match and dedupe to one.
-        let intentOk = false;
-        let clarifyReply = null;
-        try {
-          const res = await fetch("/api/intent-check", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ prompt: pending, mode: "new" }),
-          });
-          const data = await res.json().catch(() => null);
-          if (res.ok && data?.isProject === true) {
-            intentOk = true;
-          } else if (
-            res.ok &&
-            data?.isProject === false &&
-            !data.verifierUnavailable
-          ) {
-            clarifyReply = data.reply || "Could you describe what you'd like to build?";
-          } else {
-            // Verifier down / 5xx / parse error: the regex pre-filter already
-            // vouched for the shape, so proceed rather than block on an outage.
-            console.warn("[workspace guard] intent-check unavailable — proceeding");
-            intentOk = true;
-          }
-        } catch (err) {
-          console.warn("[workspace guard] intent-check threw — proceeding:", err);
-          intentOk = true;
-        }
-        if (!intentOk) {
-          addLocalChatMessage("assistant", clarifyReply || CLARIFY_FALLBACK);
-          return;
-        }
-
-        // 3. Project-count gate — authoritative server check + counter bump.
-        //    Only now, after intent passed, do we consume a project slot.
-        try {
-          const gateRes = await fetch("/api/projects/check-create", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ bypassLimits }),
-          });
-          if (gateRes.status === 402) {
-            addLocalChatMessage(
-              "assistant",
-              "You've reached your project limit on your current plan. Upgrade in Billing to start a new project — your message above is saved.",
-            );
-            return;
-          }
-          if (!gateRes.ok) {
-            addLocalChatMessage(
-              "assistant",
-              "Something went wrong starting your project. Please try again in a moment.",
-            );
-            return;
-          }
-        } catch (err) {
-          console.warn("[workspace guard] check-create threw:", err);
-          addLocalChatMessage(
-            "assistant",
-            "Couldn't reach our server to start your project. Check your connection and try again.",
-          );
-          return;
-        }
-
-        // 4. Approved — persist the validated flag (so a reload before the
-        //    backend session exists doesn't re-gate) and start building. The
-        //    user's prompt is already shown, so suppress the echo.
-        try {
-          const cid = decodeURIComponent(projectId || "unknown");
-          sessionStorage.setItem(`wizard_validated_${cid}`, "1");
-          sessionStorage.setItem(`wizard_prompt_${cid}`, pending);
-          sessionStorage.setItem(`wizard_desc_${cid}`, pending);
-          const backendTask = buildWizardBackendTask(cid, pending);
-          sendMessage(backendTask, [], { suppressEcho: true });
-          return;
-        } catch {}
-        sendMessage(pending, [], { suppressEcho: true });
-      } finally {
-        // Cleared on every exit: clarification posted, gate blocked, or
-        // building started (sendMessage's running state takes over).
-        setGuardThinking(false);
-      }
-    })();
-  }, [projectId, sendMessage, addLocalChatMessage, guardKick, buildWizardBackendTask]);
+    runProjectIntakeGate(pending, {bypassLimits});
+  }, [projectId, addLocalChatMessage, guardKick, runProjectIntakeGate]);
 
   // so the user can click further items.
   const handleQualityRegenerate = useCallback((check) => {
@@ -1082,92 +1102,38 @@ function ConversationPageInner({params}) {
     return "preview";
   });
 
-  // ── Building screen latch ─────────────────────────────────
-  // Prevents two flicker bugs:
-  //   1. "Building" shown during `idle` for existing projects (cold reconnect)
-  //   2. Flash to "Preview Not Available" during the brief `ready` window
-  //      between workspace init and first `running` state for wizard projects.
+  // ── Building screen visibility (Phase 2 honest-status refactor) ──
   //
-  // Rules:
-  //   - Always starts true — the workspace is always connecting on page load
-  //   - Debounce 1.2s before hiding — absorbs the preparing→ready→running gap
-  //   - For wizard: stays true through the whole build
-  //   - For existing: clears ~1.2s after status reaches 'ready' with no active task
-  // Initialize buildingActive from manager snapshot — avoids the 1.2s building screen
-  // flash when returning to a workspace that is already in a ready/running state.
-  const [buildingActive, setBuildingActive] = useState(() => {
-    if (typeof window === "undefined") return true;
-    const mgr = agentWSManager;
-    if (
-      mgr?.projectId === conversationId &&
-      mgr._statusSnapshot &&
-      mgr._statusSnapshot !== "idle" &&
-      mgr._statusSnapshot !== "connecting" &&
-      mgr._chatSnapshot?.length > 0
-    ) {
-      // Keep building screen only if agent is actively running
-      return mgr._statusSnapshot === "running";
-    }
-    return true;
-  });
-  const buildingTimerRef = useRef(null);
-
-  useEffect(() => {
-    if (buildingTimerRef.current) {
-      clearTimeout(buildingTimerRef.current);
-      buildingTimerRef.current = null;
-    }
-
+  // Pure event-driven derivation: the BuildingScreen is shown only when
+  // the backend says the workspace is mid-setup or the agent is actively
+  // running a task. No 1.2s debounce, no wizard-mode latch, no
+  // "absorb the brief ready window" timer. If the backend ever emits
+  // ready→running→ready in rapid succession and the screen flickers,
+  // the right place to fix that is the EVENT EMITTER (so it emits a
+  // single coherent transition), not a UI sleep.
+  //
+  // Initial value: the workspace is always either connecting fresh or
+  // resuming an in-flight session. We honour the manager snapshot if
+  // we're returning to a workspace that's already past the connect
+  // phase, otherwise we start true (showing the connecting screen).
+  const buildingActive = (() => {
     const hasActivePhase = phases.some((p) => p.status === "active");
-    const isActivelyBuilding =
-      status === "running" ||
-      hasActivePhase ||
+    return (
+      projectIntakeStatus !== null ||
+      agentStatus?.state === "active" ||
       status === "connecting" ||
+      status === "preparing" ||
       status === "cloning" ||
       status === "installing" ||
       status === "starting" ||
       status === "health_check" ||
-      status === "preparing";
-
-    // Keep building screen active while background preview is setting up
-    // (cloning repo, installing deps, waiting for dev server health check).
-    // Do NOT gate on !repoInfo.vercelUrl — the DB may have a stale/broken URL
-    // stored from a previous session. We must show BuildingScreen until the
-    // fresh WS-provided URL arrives, overwriting the stale one.
-    const isBgPreviewRunning = previewLoading;
-
-    if (isActivelyBuilding || isBgPreviewRunning) {
-      setBuildingActive(true);
-    } else if (
-      // Don't start the debounce-hide during initial idle — wait for at least
-      // one real connection attempt before hiding the building screen.
-      status !== "idle"
-    ) {
-      if (
-        isWizardMode &&
-        !repoInfo.vercelUrl &&
-        !previewError &&
-        status === "ready"
-      ) {
-        setBuildingActive(true);
-        return;
-      }
-      // Debounce: absorbs the brief `ready` window between workspace init and task start
-      buildingTimerRef.current = setTimeout(() => {
-        setBuildingActive(false);
-        buildingTimerRef.current = null;
-      }, 1200);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, phases, isWizardMode, repoInfo.vercelUrl, previewError, previewLoading]);
-
-  // Cleanup latch timer on unmount
-  useEffect(
-    () => () => {
-      if (buildingTimerRef.current) clearTimeout(buildingTimerRef.current);
-    },
-    [],
-  );
+      status === "running" ||
+      hasActivePhase ||
+      // Background preview pipeline (template clone / dep install) still
+      // counts as workspace setup, even when the agent itself is idle.
+      previewLoading
+    );
+  })();
 
   // ── HMR failure detection ───────────────────────────────
   // When the agent finishes writing files, check if any written file is a config
@@ -1338,8 +1304,13 @@ function ConversationPageInner({params}) {
     panelOverrideRef,
     // Modal trigger
     setShowExportModal,
-    // Live agent status — shown in chat panel during generation
+    // Phase 2 Step 5: live activity pill (decoupled from task_phase)
+    agentActivity,
     agentStatus,
+    // Honest-status refactor: "Sending…" feedback released by any
+    // backend response in the dispatcher. Replaces the prior optimistic
+    // setState('running') that lied about workspace state.
+    awaitingResponse,
     // Plan confirmation
     planAwaiting,
     currentPlanData,
@@ -1366,9 +1337,13 @@ function ConversationPageInner({params}) {
     clearEditSelection,
     // Lets ChatPanel inject local clarify messages from the Gemini guard.
     addLocalChatMessage,
-    // True while the mount guard is running its async intent-check/gate —
+    // True while the mount guard is running its project-limit gate —
     // ChatPanel renders a "typing…" bubble so the chat isn't silent.
     guardThinking,
+    // Multi-turn new-project intake. While active, ChatPanel routes every
+    // reply back through the intent gate and both panels show the same status.
+    projectIntakeStatus,
+    submitProjectIntake,
   };
 
   return (

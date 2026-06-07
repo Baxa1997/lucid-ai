@@ -1,0 +1,32 @@
+....................................EEEEEE............F..............F..F...................................... [ 28%]
+.........................................EEEEEEEEEEEE...........F.F....................................................................... [ 62%]
+........................................................................ [ 81%]
+.............................................................FF.FF.........                                                               [100%]
+=========================== short test summary info ============================
+FAILED tests/test_admin_foundation_builder.py::TestEntityPages::test_paths_match_admin_plan_routes
+FAILED tests/test_admin_plan.py::TestAdminPlanGeneration::test_each_table_gets_three_pages
+FAILED tests/test_admin_plan.py::TestAdminPlanGeneration::test_empty_data_model_produces_minimal_plan
+FAILED tests/test_get_tenant_collection_authenticated.py::TestLinkedProject::test_linked_admin_reads_parent_tenant
+FAILED tests/test_get_tenant_collection_authenticated.py::TestLinkedProject::test_linked_admin_membership_checked_on_admin_not_parent
+FAILED tests/test_tenant_sql_generator.py::TestLiveApply::test_restaurant_sql_applies_cleanly
+FAILED tests/test_tenant_sql_generator.py::TestLiveApply::test_applied_tables_exist_with_expected_columns
+FAILED tests/test_tenant_sql_generator.py::TestLiveApply::test_idempotent_double_apply
+FAILED tests/test_tenant_sql_generator.py::TestLiveApply::test_updated_at_trigger_fires
+ERROR tests/test_admin_data_model_planner.py::TestAdminPlannerLive::test_crm_prompt_returns_crm_entities
+ERROR tests/test_admin_data_model_planner.py::TestAdminPlannerLive::test_restaurant_ops_prompt
+ERROR tests/test_admin_data_model_planner.py::TestAdminPlannerLive::test_property_management_prompt
+ERROR tests/test_admin_data_model_planner.py::TestAdminPlannerLive::test_helpdesk_prompt
+ERROR tests/test_admin_data_model_planner.py::TestAdminPlannerLive::test_returns_empty_singletons_for_admin
+ERROR tests/test_admin_data_model_planner.py::TestAdminPlannerLive::test_all_tables_have_public_read_false
+ERROR tests/test_data_model_planner.py::TestRestaurantDataModel::test_restaurant_includes_menu_items
+ERROR tests/test_data_model_planner.py::TestRestaurantDataModel::test_restaurant_includes_gallery_or_testimonials
+ERROR tests/test_data_model_planner.py::TestRestaurantDataModel::test_restaurant_singletons_include_hero
+ERROR tests/test_data_model_planner.py::TestRestaurantDataModel::test_restaurant_no_table_for_about
+ERROR tests/test_data_model_planner.py::TestEcommerceDataModel::test_ecommerce_includes_products
+ERROR tests/test_data_model_planner.py::TestEcommerceDataModel::test_products_have_price_and_image
+ERROR tests/test_data_model_planner.py::TestEcommerceDataModel::test_products_is_public_read
+ERROR tests/test_data_model_planner.py::TestBlogDataModel::test_blog_includes_posts
+ERROR tests/test_data_model_planner.py::TestBlogDataModel::test_posts_have_slug_field
+ERROR tests/test_data_model_planner.py::TestBlogDataModel::test_posts_has_published_date
+ERROR tests/test_data_model_planner.py::TestPortfolioDataModel::test_portfolio_has_projects_or_works_table
+ERROR tests/test_data_model_planner.py::TestSaasLandingDataModel::test_minimal_or_empty_tables

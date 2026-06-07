@@ -445,10 +445,12 @@ async def gemini_research(
     Returns the spec text. NEVER raises.
     """
     try:
-        await websocket.send_json({
-            "type": "progress",
-            "message": "🔬 Researching project requirements...",
-        })
+        from app.services.llm_retry import emit_research_started
+        await emit_research_started(
+            websocket,
+            kind="requirements",
+            label="Researching project requirements",
+        )
     except Exception:
         pass
 

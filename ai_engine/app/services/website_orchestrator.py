@@ -111,49 +111,87 @@ async def generate_website(
 
     page_images = page_images or {}
 
+    # Per-page completion narration for the longest silent window
+    # (parallel page Claude codegen). Counts pages, header, footer in
+    # a single bucket so the FE narrator advances on every finished
+    # subtask, not just on the final aggregate.
+    from app.services.agent_status import emit_agent_status
+    _completed_units = 0
+    _completed_lock = asyncio.Lock()
+    _total_units = len(pages) + (0 if skip_header else 1) + (0 if skip_footer else 1)
+
+    def _route_label(route: str) -> str:
+        cleaned = (route or "/").lstrip("/")
+        return cleaned.replace("-", " ").replace("/", " · ").title() or "Home"
+
+    async def _narrate(label_done: str) -> None:
+        nonlocal _completed_units
+        async with _completed_lock:
+            _completed_units += 1
+            done_now = _completed_units
+        await emit_agent_status(
+            websocket,
+            key="writing_pages",
+            label=f"Writing pages… {done_now}/{_total_units}",
+            description=f"{label_done} ready",
+            state="active",
+            source="website_pipeline",
+        )
+
     async def _bounded_page(page: dict) -> list[dict] | None:
         route = (page.get("route") or page.get("path") or "/").strip()
         images_for_page = page_images.get(route) or {}
         async with sem:
-            if per_section:
-                # Each page becomes N parallel Claude calls (one per section).
-                # The outer semaphore still limits OVERALL in-flight pages,
-                # but generate_page_per_section has its own internal sem for
-                # sections so a single page doesn't hog all of Anthropic.
-                return await generate_page_per_section(
-                    page=page, visual_dna=visual_dna,
-                    brand_name=brand_name, tagline=tagline, domain=domain,
-                    api_key=api_key, websocket=websocket,
-                    page_images=images_for_page,
-                    data_model=data_model,
-                    voice_context=section_voice_context,
-                    design_system=section_design_system,
-                    design_tokens=section_design_tokens,
-                    personality=section_personality,
-                )
-            return await generate_one_page(
-                page=page, visual_dna=visual_dna,
-                brand_name=brand_name, tagline=tagline, domain=domain,
-                api_key=api_key, websocket=websocket,
-                page_images=images_for_page,
-                data_model=data_model,
-            )
+            try:
+                if per_section:
+                    # Each page becomes N parallel Claude calls (one per section).
+                    # The outer semaphore still limits OVERALL in-flight pages,
+                    # but generate_page_per_section has its own internal sem for
+                    # sections so a single page doesn't hog all of Anthropic.
+                    res = await generate_page_per_section(
+                        page=page, visual_dna=visual_dna,
+                        brand_name=brand_name, tagline=tagline, domain=domain,
+                        api_key=api_key, websocket=websocket,
+                        page_images=images_for_page,
+                        data_model=data_model,
+                        voice_context=section_voice_context,
+                        design_system=section_design_system,
+                        design_tokens=section_design_tokens,
+                        personality=section_personality,
+                    )
+                else:
+                    res = await generate_one_page(
+                        page=page, visual_dna=visual_dna,
+                        brand_name=brand_name, tagline=tagline, domain=domain,
+                        api_key=api_key, websocket=websocket,
+                        page_images=images_for_page,
+                        data_model=data_model,
+                    )
+            finally:
+                await _narrate(_route_label(route))
+            return res
 
     async def _bounded_header() -> dict | None:
         async with sem:
-            return await generate_header(
-                brand_name=brand_name, tagline=tagline,
-                domain=domain, visual_dna=visual_dna,
-                api_key=api_key, websocket=websocket,
-            )
+            try:
+                return await generate_header(
+                    brand_name=brand_name, tagline=tagline,
+                    domain=domain, visual_dna=visual_dna,
+                    api_key=api_key, websocket=websocket,
+                )
+            finally:
+                await _narrate("Header")
 
     async def _bounded_footer() -> dict | None:
         async with sem:
-            return await generate_footer(
-                brand_name=brand_name, tagline=tagline,
-                domain=domain, visual_dna=visual_dna,
-                api_key=api_key, websocket=websocket,
-            )
+            try:
+                return await generate_footer(
+                    brand_name=brand_name, tagline=tagline,
+                    domain=domain, visual_dna=visual_dna,
+                    api_key=api_key, websocket=websocket,
+                )
+            finally:
+                await _narrate("Footer")
 
     page_tasks: list[tuple[str, Any]] = []
     for page in pages:
@@ -172,6 +210,18 @@ async def generate_website(
     logger.info(
         "website_orchestrator: launching %d parallel calls (%d pages + %d chrome) concurrency=%d",
         len(all_tasks), len(page_tasks), len(chrome_tasks), concurrency,
+    )
+
+    # Seed the narrator so the FE flips from "Planning code" to
+    # "Writing pages… 0/N" the instant gather() kicks off, instead of
+    # sitting on the previous label until the first page returns.
+    await emit_agent_status(
+        websocket,
+        key="writing_pages",
+        label=f"Writing pages… 0/{_total_units}",
+        description=f"Generating {len(page_tasks)} pages + chrome in parallel",
+        state="active",
+        source="website_pipeline",
     )
 
     # ── Execute all in parallel ──────────────────────────────────────

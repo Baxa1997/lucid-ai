@@ -74,8 +74,8 @@ class Settings(BaseSettings):
     # ``clarification_needed``) and additionally resolves the prompt to
     # a concrete archetype + entity list, injecting a
     # ``[LUCID_FORCE_ARCHETYPE::...]`` marker so the downstream
-    # classifier short-circuits. Default OFF for safe rollout.
-    USE_CLASSIFIER_AGENT: bool = False
+    # classifier short-circuits. This is the canonical prompt-entry router.
+    USE_CLASSIFIER_AGENT: bool = True
 
     # ── Agent / sandbox ──────────────────────────────────────
     # MAX_ITERATIONS caps how many steps the agent takes per task.
@@ -228,6 +228,11 @@ MODEL_CONFIGS: dict[str, dict] = {
         "provider": "google",
         "env_key":  "",  # no API key — Vertex uses ADC
         "label":    "Gemini 3 Flash Preview (Vertex)",
+    },
+    "vertex_ai/gemini-3.5-flash": {
+        "provider": "google",
+        "env_key":  "",
+        "label":    "Gemini 3.5 Flash (Vertex)",
     },
     "vertex_ai/gemini-3.1-pro-preview": {
         "provider": "google",

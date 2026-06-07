@@ -283,7 +283,7 @@ async def structured_distill(
     `responseSchema` + `application/json` outputs where it fills the
     entire maxOutputTokens budget without producing parseable text
     (finishReason=MAX_TOKENS, candidates=N, text=""). Pinning visual_dna
-    to gemini-2.5-flash sidesteps the bug at the cost of slightly older
+    to gemini-3.5-flash sidesteps the bug at the cost of slightly older
     model quality on that one call.
 
     `thinking_budget` overrides the auto-picked reasoning budget. Pro

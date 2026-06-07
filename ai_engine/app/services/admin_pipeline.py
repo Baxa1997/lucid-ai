@@ -113,17 +113,32 @@ async def _send(websocket: Any, kind: str, message: str) -> None:
         pass
 
 
-async def _phase(websocket: Any, phase: int, title: str, desc: str, status: str) -> None:
-    if websocket is None:
-        return
-    try:
-        await websocket.send_json({
-            "type": "task_phase",
-            "phase": phase, "title": title,
-            "description": desc, "status": status,
-        })
-    except Exception:
-        pass
+async def _phase(
+    websocket: Any,
+    phase: int,
+    title: str,
+    desc: str,
+    status: str,
+    *,
+    mode: str = "admin_generation",
+) -> None:
+    """Emit a structured phase event.
+
+    ``mode`` (Phase 2 Step 3): "new" for fresh admin-panel generation,
+    "edit" for follow-up changes. Default "new" — admin pipeline is
+    currently only invoked from new-project flows. The frontend reads
+    this to choose mode-aware status copy without re-deriving from
+    sessionStorage flags.
+    """
+    from app.services.agent_status import emit_task_phase
+    await emit_task_phase(
+        websocket,
+        phase=phase,
+        title=title,
+        description=desc,
+        status=status,
+        mode=mode,
+    )
 
 
 # ── Stage 3 stub: minimal "visual DNA" for admins ────────────────────
@@ -380,7 +395,9 @@ async def run_admin_pipeline(
 
     # ── Stage 0.5: Purpose classification ───────────────────────────
     logger.info("[%s] Admin Stage 0.5 ENTRY: purpose classification", project_id)
-    await _phase(websocket, 1, "Preparing workspace", "Workspace ready", "done")
+    # Phase 1 title kept in sync with orchestrator.py — see landing_pipeline.py
+    # for the rationale (Phase 1 + Phase 2 used to both say "Preparing workspace").
+    await _phase(websocket, 1, "Validating inputs", "Inputs validated", "done")
     await _send(websocket, "progress", "Understanding what you want to build…")
 
     from app.services.purpose_classifier import classify_purpose
@@ -1041,12 +1058,20 @@ async def run_admin_pipeline(
     by_entity = {t.name: t for t in data_model.tables}
     remaining = {t.name: 3 for t in data_model.tables}
 
+    # Per-page completion narration so the FE's narrator advances on
+    # every finished CRUD page, not just on the final aggregate.
+    from app.services.agent_status import emit_agent_status as _emit_admin_status
+    _admin_completed = 0
+    _admin_lock = asyncio.Lock()
+    _admin_total = len(data_model.tables) * 3
+
     async def _bounded_page(
         entity: TableDefinition,
         page_type: str,
         rel_path: str,
         prompt: dict,
     ) -> dict[str, Any]:
+        nonlocal _admin_completed
         async with sem:
             page_result = await generate_one_admin_page(
                 entity=entity,
@@ -1067,6 +1092,17 @@ async def run_admin_pipeline(
                 websocket, "progress",
                 f"{label} pages ready.",
             )
+        async with _admin_lock:
+            _admin_completed += 1
+            done_now = _admin_completed
+        await _emit_admin_status(
+            websocket,
+            key="writing_admin_pages",
+            label=f"Writing admin pages… {done_now}/{_admin_total}",
+            description=f"{entity.plural_label or entity.name} · {page_type}",
+            state="active",
+            source="admin_pipeline",
+        )
         return page_result
 
     all_tasks = []
@@ -1077,6 +1113,14 @@ async def run_admin_pipeline(
     logger.info(
         "[%s] Admin Stage 6: launching %d parallel calls (concurrency=%d)",
         project_id, len(all_tasks), concurrency,
+    )
+    await _emit_admin_status(
+        websocket,
+        key="writing_admin_pages",
+        label=f"Writing admin pages… 0/{_admin_total}",
+        description=f"Generating CRUD pages for {len(data_model.tables)} entities",
+        state="active",
+        source="admin_pipeline",
     )
     page_results = await asyncio.gather(*all_tasks, return_exceptions=True)
 

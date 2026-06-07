@@ -527,17 +527,31 @@ async def _send(websocket, kind: str, message: str) -> None:
 
 
 
-async def _phase(websocket, phase: int, title: str, desc: str, status: str) -> None:
-    if websocket is None:
-        return
-    try:
-        await websocket.send_json({
-            "type": "task_phase",
-            "phase": phase, "title": title,
-            "description": desc, "status": status,
-        })
-    except Exception:
-        pass
+async def _phase(
+    websocket,
+    phase: int,
+    title: str,
+    desc: str,
+    status: str,
+    *,
+    mode: str = "website_generation",
+) -> None:
+    """Emit a structured phase event.
+
+    ``mode`` (Phase 2 Step 3): "new" / "edit" / "regenerate" — surfaced to
+    the frontend so it can pick mode-aware copy. Defaults to "new" because
+    website_pipeline is primarily invoked from new-project flows; existing
+    follow-up edits go through the legacy orchestrator path.
+    """
+    from app.services.agent_status import emit_task_phase
+    await emit_task_phase(
+        websocket,
+        phase=phase,
+        title=title,
+        description=desc,
+        status=status,
+        mode=mode,
+    )
 
 
 async def _emit_website_plan_and_wait(
@@ -732,7 +746,9 @@ async def run_website_pipeline(
     # Runs BEFORE intent so downstream stages know what the site is FOR
     # (recruitment vs ecommerce vs lead-gen), not just what industry it's
     # in. Pure additive — does not modify any existing stage's inputs.
-    await _phase(websocket, 1, "Preparing workspace", "Workspace ready", "done")
+    # Phase 1 title kept in sync with orchestrator.py — Phase 1 + Phase 2
+    # used to both say "Preparing workspace", which read as broken on the chart.
+    await _phase(websocket, 1, "Validating inputs", "Inputs validated", "done")
 
     from app.services.purpose_classifier import classify_purpose
     from knowledge.loader import extract_clarify_context

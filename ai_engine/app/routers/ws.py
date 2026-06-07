@@ -33,6 +33,11 @@ from app.services.pipeline.constants import _PLATFORM_ORG
 from app.services.event_bus import WebSocketProxy
 from app.services.workspace_manager import workspace_manager
 from app.services.local_preview import stop_local_preview
+from app.services.agent_status import (
+    emit_agent_status,
+    emit_task_phase,
+    emit_workflow_selected,
+)
 
 from app.services.local_preview import start_local_preview
 from app.paths import preview_workspace_path
@@ -184,6 +189,13 @@ async def websocket_agent(websocket: WebSocket):
     4. On disconnect the workspace is cleaned up
     """
     await websocket.accept()
+    # Wrap the socket with the trace capture proxy if WS_TRACE_FILE is set.
+    # No-op when the env var is unset; production paths see zero overhead.
+    # IDs (project_id, conversation_id) are backfilled below once the
+    # handshake reveals them (the trace's first events will have empty IDs —
+    # that's expected and acceptable).
+    from app.services.ws_trace import maybe_wrap, update_trace_ids
+    websocket = maybe_wrap(websocket)
     logger.info("WebSocket connection accepted")
 
     # Authenticate from query param (if present)
@@ -260,6 +272,10 @@ async def websocket_agent(websocket: WebSocket):
         user_id = ws_user.user_id
         user_jwt = ws_user.raw_jwt
         project_id = raw.get("projectId", "")
+        # Backfill trace identifiers now that the handshake gave us project_id
+        # and we have the per-connection conversation_id. No-op when tracing
+        # is disabled.
+        update_trace_ids(websocket, project_id=project_id, session_id=conversation_id)
         explicit_stop = False  # track if user explicitly stopped
 
         # ── 1.5 Resolve LLM Settings (Handshake > Supabase > Default) ──
@@ -687,23 +703,71 @@ async def websocket_agent(websocket: WebSocket):
                 _shared = await MembershipService.resolve_shared_session(project_id, user_id)
                 _lookup_uid = _shared["owner_user_id"] if _shared else user_id
                 prev_sid: str | None = None
+
+                # ── Phase 2 Step 6: Explicit continuation token ──
+                # Clients that survived to here on a prior connection know the
+                # exact chat_session_id they want to resume. When they send
+                # `continuationToken` in the handshake we look it up directly
+                # — no 4-tier guessing, no race against newer sessions. This
+                # is the deterministic path; the heuristic 1a-1d below stays
+                # in place as the fallback for legacy clients and for the
+                # never-seen-this-project-before case.
+                _continuation_token = (raw.get("continuationToken") or "").strip()
+                if _continuation_token:
+                    try:
+                        async with managed_admin_client() as _ct_client:
+                            ct_row = await (
+                                _ct_client.table("chat_sessions")
+                                .select("id, user_id")
+                                .eq("id", _continuation_token)
+                                .eq("user_id", _lookup_uid)
+                                .maybe_single()
+                                .execute()
+                            )
+                        if ct_row and ct_row.data:
+                            prev_sid = ct_row.data["id"]
+                            logger.info(
+                                "ws handshake: resumed via continuationToken=%s (project=%s)",
+                                _continuation_token[:8], project_id,
+                            )
+                        else:
+                            # Explicit token didn't match anything for this
+                            # user — treat as a fresh start. Don't fall
+                            # through to the heuristic; the client is
+                            # explicitly telling us "this session is gone".
+                            logger.info(
+                                "ws handshake: continuationToken=%s did not match any session for user — fresh start",
+                                _continuation_token[:8],
+                            )
+                    except Exception as _ct_exc:
+                        # Lookup failure ≠ missing token. Fall through to the
+                        # heuristic so a flaky DB doesn't strand the user.
+                        logger.warning(
+                            "ws handshake: continuationToken lookup failed (%s) — falling back to heuristic",
+                            _ct_exc,
+                        )
+
                 async with managed_admin_client() as client:
                     # 1a. Most recent session with generation_complete=True
-                    try:
-                        completed_r = await (
-                            client.table("chat_sessions")
-                            .select("id")
-                            .eq("user_id", _lookup_uid)
-                            .eq("project_id", project_id)
-                            .eq("generation_complete", True)
-                            .order("created_at", desc=True)
-                            .limit(1)
-                            .execute()
-                        )
-                        if completed_r.data:
-                            prev_sid = completed_r.data[0]["id"]
-                    except Exception:
-                        pass  # column may not exist yet
+                    # Guarded by `if not prev_sid` (Phase 2 Step 6): an explicit
+                    # continuation token from the handshake takes precedence;
+                    # the heuristic tiers run only as a fallback.
+                    if not prev_sid:
+                        try:
+                            completed_r = await (
+                                client.table("chat_sessions")
+                                .select("id")
+                                .eq("user_id", _lookup_uid)
+                                .eq("project_id", project_id)
+                                .eq("generation_complete", True)
+                                .order("created_at", desc=True)
+                                .limit(1)
+                                .execute()
+                            )
+                            if completed_r.data:
+                                prev_sid = completed_r.data[0]["id"]
+                        except Exception:
+                            pass  # column may not exist yet
 
                     # 1b. Most recent session with platform_repo_url set
                     if not prev_sid:
@@ -1720,13 +1784,22 @@ async def websocket_agent(websocket: WebSocket):
                 except Exception as exc:
                     logger.warning("Failed to persist user message: %s", exc)
 
+            await emit_agent_status(
+                websocket,
+                key="analyzing_prompt",
+                label="Analyzing your prompt...",
+                description="Gemini Flash is deciding what to do next",
+                source="gemini_flash",
+            )
+
             # ── Ambiguity gate: ask before generating if prompt is vague ──
             # Stage 0: Gemini-powered clarity check — generates a targeted
             # question when key context is missing (location, project type,
             # audience). Falls back to the keyword-based conflict detector
             # for known archetype conflicts (landing vs ecommerce, etc.).
-            # Max 5 clarification rounds (richer per-type intake); after that we
-            # proceed regardless. Kept in sync with clarity_agent._MAX_ROUNDS.
+            # The canonical classifier runs on every intake turn and remains
+            # in clarification until Gemini identifies enough explicit scope.
+            # The legacy fallback keeps its historical round cap.
             #
             # When ``settings.USE_CLASSIFIER_AGENT`` is True, the new
             # ``project_classifier_agent.resolve_classification`` is used
@@ -1747,8 +1820,10 @@ async def websocket_agent(websocket: WebSocket):
 
             _existing_clarify, _ = extract_clarify_context(task)
             _clarify_question: dict | None = None
+            _selected_workflow = "new_project_generation"
+            _classifier_decided = False
 
-            if _settings.USE_CLASSIFIER_AGENT and len(_existing_clarify) < 5:
+            if _settings.USE_CLASSIFIER_AGENT:
                 # New path — let the resolver return either a clarification
                 # question or a fully-resolved archetype. On any exception
                 # we fall through to the legacy check_prompt_clarity path
@@ -1758,6 +1833,18 @@ async def websocket_agent(websocket: WebSocket):
                         resolve_classification,
                     )
                     _resolution = await resolve_classification(task)
+                    _classifier_decided = True
+                    _selected_workflow = str(
+                        _resolution.get("workflow_id") or _selected_workflow
+                    )
+                    await emit_workflow_selected(
+                        websocket,
+                        workflow_id=_selected_workflow,
+                        next_action=str(_resolution.get("next_action") or "clarify"),
+                        decided_by=str(_resolution.get("decided_by") or "agent"),
+                        archetype=str(_resolution.get("archetype") or ""),
+                        reasoning=str(_resolution.get("reasoning") or ""),
+                    )
                     if _resolution.get("status") == "needs_clarification":
                         _clarify_question = {
                             "key": _resolution.get("clarify_key", "") or "",
@@ -1800,10 +1887,11 @@ async def websocket_agent(websocket: WebSocket):
                     task=task,
                     already_clarified=_existing_clarify,
                     timeout_s=22.0,
+                    websocket=websocket,
                 )
 
             # If AI clarity check passed (or skipped), fall back to keyword detector
-            if _clarify_question is None:
+            if _clarify_question is None and not _classifier_decided:
                 _kw_conflict = detect_classification_conflict(task)
                 if _kw_conflict:
                     _clarify_question = {
@@ -1838,6 +1926,15 @@ async def websocket_agent(websocket: WebSocket):
                     })
                 except Exception:
                     pass
+                await emit_agent_status(
+                    websocket,
+                    key="waiting_for_details",
+                    label="Waiting for project details...",
+                    description="Answer the question in chat to continue",
+                    state="waiting",
+                    source="gemini_flash",
+                    workflow_id="project_clarification",
+                )
                 await ws_transition(
                     session, websocket, WorkspaceState.READY,
                     "Awaiting your choice…",
@@ -1869,13 +1966,16 @@ async def websocket_agent(websocket: WebSocket):
                 # template, classifying the project, and analysing intent.
                 # Holding it as ACTIVE prevents the UI from flickering through
                 # 5+ short status messages before research begins.
-                await websocket.send_json({
-                    "type": "task_phase",
-                    "phase": 1,
-                    "title": "Preparing workspace",
-                    "description": "Understanding the prompt, cloning template, classifying project…",
-                    "status": "active",
-                })
+                await emit_task_phase(
+                    websocket,
+                    phase=1,
+                    title="Preparing workspace",
+                    description="Understanding the prompt, cloning template, classifying project…",
+                    status="active",
+                    mode=str(
+                        _selected_workflow
+                    ),
+                )
 
                 # ── Build enriched task + run pipeline via orchestrator ──
                 enriched_task = await build_enriched_task(task, session, project_id, user_id, user_jwt)
@@ -2113,6 +2213,14 @@ async def websocket_agent(websocket: WebSocket):
                     _clarify_key or "archetype", _option_id,
                 )
 
+                await emit_agent_status(
+                    websocket,
+                    key="analyzing_clarification",
+                    label="Analyzing your clarification...",
+                    description="Choosing the project workflow",
+                    source="gemini_flash",
+                    workflow_id="project_clarification",
+                )
                 await ws_transition(
                     session, websocket, WorkspaceState.UPDATING,
                     "Agent starting task...",
@@ -2365,15 +2473,23 @@ async def websocket_agent(websocket: WebSocket):
                     })
                 continue
 
+            await emit_agent_status(
+                websocket,
+                key="analyzing_prompt",
+                label="Analyzing your prompt...",
+                description="Gemini Flash is deciding what to do next",
+                source="gemini_flash",
+            )
+
             # ── Follow-up intent guard ─────────────────────────────
             # Existing-workspace chat is not the same as new-project intake:
             # users can ask questions, greet the agent, or type vague edits.
             # Catch the obvious non-actionable cases before running the full
             # edit pipeline. Real edits still pass through to Gemini/Claude.
             try:
-                from app.services.followup_intent import classify_followup_message
+                from app.services.followup_intent import classify_followup_with_gemini
 
-                _followup_guard = classify_followup_message(
+                _followup_guard = await classify_followup_with_gemini(
                     content,
                     mode=chat_mode,
                     has_images=bool(followup_images),
@@ -2384,6 +2500,13 @@ async def websocket_agent(websocket: WebSocket):
                 _followup_guard = {"action": "proceed"}
 
             _guard_action = _followup_guard.get("action", "proceed")
+            await emit_workflow_selected(
+                websocket,
+                workflow_id=str(_followup_guard.get("workflow_id") or _guard_action),
+                next_action=str(_guard_action),
+                decided_by=str(_followup_guard.get("decided_by") or "agent"),
+                reasoning=str(_followup_guard.get("reasoning") or ""),
+            )
             if _guard_action in ("reply", "clarify"):
                 _guard_message = (
                     _followup_guard.get("message")
@@ -2414,8 +2537,27 @@ async def websocket_agent(websocket: WebSocket):
                         "role": "agent",
                         "content": _guard_message,
                     })
+                    # The guard short-circuits the pipeline (no task is
+                    # actually running), so the FE's optimistic state=
+                    # 'running' must be released — otherwise "Analyzing
+                    # your request…" sticks forever and the user can't
+                    # send the next prompt.
+                    await websocket.send_json({"type": "status", "status": "ready"})
                 except Exception:
                     pass
+                await emit_agent_status(
+                    websocket,
+                    key="waiting_for_details" if _guard_action == "clarify" else "ready_for_prompt",
+                    label=(
+                        "Waiting for project details..."
+                        if _guard_action == "clarify"
+                        else "Ready for your next instruction..."
+                    ),
+                    description=_guard_message,
+                    state="waiting",
+                    source="prompt_router",
+                    workflow_id=_guard_action,
+                )
                 continue
 
             if _guard_action == "discuss":

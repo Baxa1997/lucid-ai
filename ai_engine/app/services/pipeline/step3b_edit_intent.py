@@ -26,7 +26,7 @@ through to legacy behaviour.
 
 Cost
 ----
-~$0.001 per edit (gemini-2.5-flash, ~1 KB in, ~300 tokens out, ~1s).
+~$0.001 per edit (gemini-3.5-flash, ~1 KB in, ~300 tokens out, ~1s).
 """
 from __future__ import annotations
 
@@ -428,7 +428,7 @@ async def extract_edit_intent(
             response_schema=_RESPONSE_SCHEMA,
             max_tokens=512,
             temperature=0.1,
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash",
         )
     except Exception as exc:
         logger.warning("step3b_edit_intent: extractor call failed (%s)", exc)

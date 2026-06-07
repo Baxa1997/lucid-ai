@@ -19,7 +19,13 @@ from fastapi import WebSocket
 
 from app.services.openhands_manager import openhands_manager
 from app.services.workspace_manager import workspace_manager
-from app.services.llm_retry import emit_pipeline_failure, failure_code_from_exception
+from app.services.agent_status import emit_task_phase, emit_workflow_selected
+from app.services.llm_retry import (
+    emit_pipeline_failure,
+    emit_repo_create_done,
+    emit_repo_create_started,
+    failure_code_from_exception,
+)
 
 from .constants import PLATFORM_GITHUB_TOKEN, _PLATFORM_ORG
 from .ws_utils import _send_file_tree
@@ -575,28 +581,59 @@ async def run_pipeline(
     model = "sonnet"
     _npm_install_task = None  # background install task — awaited before build verify
 
+    # ── Pipeline mode (Phase 2 Step 3) ──
+    # "new"  — first generation of a new project (wizard / dashboard composer)
+    # "edit" — follow-up change on an existing project (chat in workspace)
+    # "regenerate" — full re-generation triggered from an existing project
+    #
+    # Defaults to "new"; updated after `validate_inputs` returns when we
+    # can read `validated.new_project_mode` / scratch_mode flags. The frontend
+    # uses this to choose mode-aware copy without re-deriving it from
+    # sessionStorage flags. Pre-Phase-2 clients ignore the field, so this
+    # is purely additive.
+    pipeline_mode: str = "new"
+
     # ── Helper: send structured phase events ──────────────
     async def _send_phase(phase: int, title: str, description: str, status: str):
-        try:
-            await websocket.send_json({
-                "type": "task_phase",
-                "phase": phase,
-                "title": title,
-                "description": description,
-                "status": status,
-            })
-        except Exception:
-            pass
+        await emit_task_phase(
+            websocket,
+            phase=phase,
+            title=title,
+            description=description,
+            status=status,
+            mode=pipeline_mode,
+        )
 
     try:
         # ── Phase 1: Validate ─────────────────────────────
-        await _send_phase(1, "Preparing workspace", "Checking API keys and repository settings…", "active")
+        await _send_phase(1, "Validating inputs", "Checking API keys and repository settings…", "active")
         validated = await validate_inputs(task, user, websocket, chat_session_id=chat_session_id)
         if validated is None:
-            await _send_phase(1, "Preparing workspace", "Validation failed", "error")
+            await _send_phase(1, "Validating inputs", "Validation failed", "error")
             return
-        await _send_phase(1, "Preparing workspace", "All inputs validated", "done")
+        await _send_phase(1, "Validating inputs", "All inputs validated", "done")
         await asyncio.sleep(0.8)
+
+        # Update pipeline_mode now that validate_inputs has classified the run.
+        # Closure-captured by _send_phase above — every subsequent emit carries
+        # the correct mode without extra plumbing.
+        if validated.get("new_project_mode") or validated.get("scratch_mode"):
+            try:
+                from knowledge.loader import force_archetype_from_task
+                from app.services.project_classifier_agent import workflow_for_archetype
+                _forced_archetype, _ = force_archetype_from_task(task)
+                pipeline_mode = workflow_for_archetype(_forced_archetype or "")
+            except Exception:
+                pipeline_mode = "new_project_generation"
+        else:
+            pipeline_mode = "edit"
+
+        # Phase 2 Step 2: Declare the full phase list to the frontend BEFORE
+        # the next task_phase event. The chart renders against this list
+        # instead of assuming 1-8. Fail-soft — older frontends ignore the
+        # event entirely and fall back to numeric phases.
+        from app.services.llm_retry import declare_pipeline_phases
+        await declare_pipeline_phases(websocket, pipeline_id=pipeline_mode)
 
         # Save original task (with [LUCID_PROJECT] header) for naming in Phase 7
         task_original = task
@@ -606,7 +643,7 @@ async def run_pipeline(
             task = task.split("\n\n", 1)[-1]
 
         # ── Phase 2: Clone / prepare workspace ────────────
-        await _send_phase(2, "Preparing workspace", "Setting up workspace…", "active")
+        await _send_phase(2, "Setting up workspace", "Setting up workspace…", "active")
 
         # Scratch mode: create workspace + copy skeleton (NO repo creation here)
         # Repo creation happens in Phase 7 AFTER code is generated and committed.
@@ -660,7 +697,7 @@ async def run_pipeline(
                 logger.info("Skeleton detection: stack=%s, is_admin=%s, task=%s",
                             detected_stack, is_admin, (task_original or task)[:60])
 
-                await _send_phase(2, "Preparing workspace", f"Loading {detected_stack or 'project'} template…", "active")
+                await _send_phase(2, "Setting up workspace", f"Loading {detected_stack or 'project'} template…", "active")
 
                 skeleton_path = get_skeleton_for_stack(detected_stack, is_admin, task=task_original or task)
                 if skeleton_path:
@@ -675,10 +712,10 @@ async def run_pipeline(
                     validated["skeleton_stack"] = detected_stack
                     validated["is_admin"] = is_admin
                     await asyncio.sleep(1.0)
-                    await _send_phase(2, "Preparing workspace", f"Template ready: {skeleton_name}", "done")
+                    await _send_phase(2, "Setting up workspace", f"Template ready: {skeleton_name}", "done")
                 else:
                     logger.warning("No skeleton found for stack: %s", detected_stack)
-                    await _send_phase(2, "Preparing workspace", "Using default structure", "done")
+                    await _send_phase(2, "Setting up workspace", "Using default structure", "done")
             except Exception as skel_err:
                 logger.warning("Skeleton copy failed (non-fatal): %s", skel_err)
 
@@ -705,7 +742,7 @@ async def run_pipeline(
                     message="The platform's GitHub token isn't valid for creating repos. An admin needs to update PLATFORM_GITHUB_TOKEN to a Classic PAT with repo scope.",
                     retriable=False,
                 )
-                await _send_phase(2, "Preparing workspace", "Invalid GitHub token", "error")
+                await _send_phase(2, "Setting up workspace", "Invalid GitHub token", "error")
                 return
 
             # ── Step 2c: Install dependencies (background, cached) ────────────
@@ -969,9 +1006,9 @@ async def run_pipeline(
                 validated, task_id, websocket,
             )
         if not workspace_path:
-            await _send_phase(2, "Preparing workspace", "Workspace setup failed", "error")
+            await _send_phase(2, "Setting up workspace", "Workspace setup failed", "error")
             return
-        await _send_phase(2, "Preparing workspace", "Repository ready", "done")
+        await _send_phase(2, "Setting up workspace", "Repository ready", "done")
 
         # ── Set session workspace_dir EARLY ───────────────
         if session and workspace_path:
@@ -1048,6 +1085,13 @@ async def run_pipeline(
                 websocket,
             )
             model = classification.get("model", "sonnet")
+            await emit_workflow_selected(
+                websocket,
+                workflow_id="discuss" if _is_discuss_mode_task(task) else "edit",
+                next_action="answer" if _is_discuss_mode_task(task) else "edit",
+                decided_by="gemini_flash",
+                reasoning=str(classification.get("why") or ""),
+            )
             await _send_phase(3, "Classifying task", f"Assigned to {model} ({classification.get('complexity', 'medium')})", "done")
             await asyncio.sleep(0.8)
 
@@ -1666,12 +1710,14 @@ async def run_pipeline(
                 )
                 await _send_phase(7, "Publishing project", "Invalid token type", "error")
             else:
-                await websocket.send_json({
-                    "type": "progress",
-                    "message": "📦 Creating GitHub repository...",
-                })
-
                 repo_name, project_desc, _, _ = derive_repo_name(task_original, chat_session_id)
+
+                await emit_repo_create_started(
+                    websocket,
+                    provider="github",
+                    repo_name=repo_name,
+                    platform_owned=False,
+                )
 
                 repo_result = await create_github_repo(
                     project_name=repo_name,
@@ -1682,6 +1728,14 @@ async def run_pipeline(
                 )
 
                 if repo_result is None:
+                    await emit_repo_create_done(
+                        websocket,
+                        success=False,
+                        provider="github",
+                        repo_name=repo_name,
+                        platform_owned=False,
+                        error="create_github_repo returned no result",
+                    )
                     await websocket.send_json({
                         "type": "warning",
                         "message": f"⚠️ Could not create GitHub repo. Your project is saved at: {workspace_path}\nYou can manually push later.",
@@ -1690,10 +1744,14 @@ async def run_pipeline(
                 else:
                     auth_url, html_url = repo_result
 
-                    await websocket.send_json({
-                        "type": "progress",
-                        "message": f"✅ Repository created: {html_url}",
-                    })
+                    await emit_repo_create_done(
+                        websocket,
+                        success=True,
+                        provider="github",
+                        repo_url=html_url,
+                        repo_name=repo_name,
+                        platform_owned=False,
+                    )
                     await websocket.send_json({
                         "type": "repo_created",
                         "repoUrl": html_url,
@@ -1846,10 +1904,13 @@ async def run_pipeline(
                 _rand = os.urandom(2).hex()  # 4 hex chars, ~65k entropy
                 new_repo_name = f"{project_name}-{_ts}-{_rand}"[:60]
 
-                await websocket.send_json({
-                    "type": "progress",
-                    "message": f"📦 Creating new repo: {_PLATFORM_ORG}/{new_repo_name}…",
-                })
+                await emit_repo_create_started(
+                    websocket,
+                    provider="github",
+                    repo_name=new_repo_name,
+                    owner=_PLATFORM_ORG,
+                    platform_owned=True,
+                )
 
                 if not git_token:
                     raise RuntimeError("PLATFORM_GITHUB_TOKEN not available — cannot create repo")
@@ -1888,10 +1949,14 @@ async def run_pipeline(
                 logger.info("new_project_mode: repo created: %s", new_repo_html_url)
                 validated["auto_created_repo_id"] = new_repo.get("id", 0)
 
-                await websocket.send_json({
-                    "type": "progress",
-                    "message": f"✅ Repo created: {new_repo_html_url}",
-                })
+                await emit_repo_create_done(
+                    websocket,
+                    success=True,
+                    provider="github",
+                    repo_url=new_repo_html_url,
+                    repo_name=new_repo_name,
+                    platform_owned=True,
+                )
 
                 # Re-init git (detach from template remote)
                 _git_dir = os.path.join(workspace_path, ".git")

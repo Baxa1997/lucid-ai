@@ -27,7 +27,7 @@ from typing import Any
 import httpx
 
 # Flash is plenty for an interpretation task — no tools, just JSON.
-_INTENT_MODEL = os.environ.get("LANDING_INTENT_MODEL", "gemini-2.5-flash")
+_INTENT_MODEL = os.environ.get("LANDING_INTENT_MODEL", "gemini-3.5-flash")
 
 logger = logging.getLogger(__name__)
 

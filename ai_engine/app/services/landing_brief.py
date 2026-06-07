@@ -9,7 +9,7 @@ Three Gemini calls per Brief:
        From the same domain, extracts the visual design language
        (palette HSL, typography, motif, motion, image treatment) used
        by best-in-class real sites. Output: free-text dump.
-  3. DISTILL              (gemini-2.5-flash, structured JSON output)
+  3. DISTILL              (gemini-3.5-flash, structured JSON output)
        Fuses both research dumps + user prompt into the Brief schema.
 
 Calls 1 + 2 run in parallel (asyncio.gather). Total wall time ~40-60s.
@@ -929,10 +929,8 @@ async def build_landing_brief(
     # ── Stage 4: distill into structured Brief ───────────────────────
     if websocket is not None:
         try:
-            await websocket.send_json({
-                "type": "progress",
-                "message": "📋 Distilling research into landing brief...",
-            })
+            from app.services.llm_retry import emit_brief_distill_started
+            await emit_brief_distill_started(websocket)
         except Exception:
             pass
 

@@ -55,6 +55,25 @@ STAGE_RESOLVED         = "RESOLVED"
 # Admin-flavoured archetypes that should trigger entity confirmation.
 _ADMIN_ARCHETYPES = {"admin_dashboard", "crm", "tms", "saas_dashboard", "ecommerce"}
 
+_WORKFLOW_BY_ARCHETYPE = {
+    "single_page_landing": "landing_generation",
+    "consumer_website": "website_generation",
+    "portfolio": "website_generation",
+    "blog": "website_generation",
+    "marketplace": "website_generation",
+    "consumer_website_with_admin": "website_with_admin_generation",
+    "admin_dashboard": "admin_generation",
+    "crm": "admin_generation",
+    "tms": "admin_generation",
+    "saas_dashboard": "admin_generation",
+    "ecommerce": "admin_generation",
+}
+
+
+def workflow_for_archetype(archetype: str) -> str:
+    """Return the execution workflow selected for a resolved archetype."""
+    return _WORKFLOW_BY_ARCHETYPE.get(archetype, "new_project_generation")
+
 
 # ── Entity extraction ─────────────────────────────────────────────────
 
@@ -119,7 +138,7 @@ async def extract_admin_entities(
             label="admin_entities",
             response_schema=response_schema,
             max_tokens=300,
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash",
         )
         result = json.loads(raw) if isinstance(raw, str) else raw
         if not isinstance(result, dict):
@@ -159,6 +178,183 @@ async def extract_admin_entities(
 _PRODUCT_TYPE_KEY = "project_type"
 
 
+async def route_new_project_with_gemini(description: str) -> dict[str, Any]:
+    """Let Gemini Flash decide whether to clarify or start a workflow.
+
+    A start decision must cite the exact prompt text that supplied both the
+    project type and domain. This keeps the router agent-owned while preventing
+    it from silently inventing a website, admin panel, or other missing scope.
+    """
+    from app.services.gemini_http import gemini_post
+    from knowledge.loader import LAYOUT_ARCHETYPES, safe_gemini_text
+
+    allowed = sorted(LAYOUT_ARCHETYPES.keys())
+    prompt = f"""You are Lucid AI's prompt-identification agent.
+Decide whether this description is sufficient to start building, and choose
+the execution archetype when it is sufficient.
+
+Description: {description}
+
+A prompt is sufficient when BOTH are known:
+1. project type/structure, such as landing page, website, app, dashboard, store
+2. subject/domain, such as education center, coffee shop, photographer, CRM
+
+Type + domain is enough to start. Do NOT require audience, colors, style,
+location, page count, features, or content; downstream agents decide those.
+Random words, gibberish, type-only, and domain-only prompts require clarification.
+
+STRICT NO-GUESS RULES:
+- Project type must be explicitly written in the description. Never infer
+  "website", "app", "dashboard", or "admin" from a business/domain alone.
+- Domain must be explicitly written in the description. Never invent one from
+  a project type alone.
+- Choose consumer_website_with_admin only when BOTH a public website and an
+  admin/internal surface are explicitly requested.
+- Choose an admin archetype only when an admin/dashboard/internal/management
+  product surface is explicitly requested.
+- For start_workflow, copy the exact phrases from Description that prove the
+  project type and domain into project_type_evidence and domain_evidence.
+- If either exact evidence phrase is missing, action MUST be clarify.
+
+Examples:
+- "landing page for education center" -> start_workflow, single_page_landing
+- "education center" -> clarify project_type; do not assume website
+- "landing page" -> clarify domain
+- "website for a coffee shop" -> start_workflow, consumer_website
+- "website and admin panel for a school" -> start_workflow,
+  consumer_website_with_admin
+- "hhhh" -> clarify intent
+
+Allowed archetypes:
+{json.dumps(allowed)}
+
+Return ONLY JSON:
+{{
+  "action": "start_workflow" or "clarify",
+  "archetype": "one allowed value, only for start_workflow",
+  "project_type_evidence": "exact phrase copied from Description, only for start_workflow",
+  "domain_evidence": "exact phrase copied from Description, only for start_workflow",
+  "clarify_key": "project_type|domain|intent, only for clarify",
+  "question": "short question, only for clarify",
+  "reasoning": "short routing reason"
+}}"""
+
+    status, data, raw = await gemini_post(
+        model="gemini-3.5-flash",
+        payload={
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0,
+                "maxOutputTokens": 800,
+                "responseMimeType": "application/json",
+                "thinkingConfig": {"thinkingBudget": 0},
+            },
+        },
+        timeout_s=15.0,
+        label="new_project_prompt_router",
+    )
+    if status != 200 or data is None:
+        raise RuntimeError(raw or f"HTTP {status}")
+
+    parsed = json.loads(safe_gemini_text(data).strip())
+    action = str(parsed.get("action") or "").strip()
+    if action == "start_workflow":
+        archetype = str(parsed.get("archetype") or "").strip()
+        if archetype not in LAYOUT_ARCHETYPES:
+            raise ValueError(f"Gemini returned unknown archetype: {archetype}")
+        type_evidence = str(parsed.get("project_type_evidence") or "").strip()
+        domain_evidence = str(parsed.get("domain_evidence") or "").strip()
+        description_folded = description.casefold()
+        has_type_evidence = bool(
+            type_evidence and type_evidence.casefold() in description_folded
+        )
+        has_domain_evidence = bool(
+            domain_evidence and domain_evidence.casefold() in description_folded
+        )
+        if not has_type_evidence or not has_domain_evidence:
+            missing_key = "project_type" if not has_type_evidence else "domain"
+            question = (
+                "What kind of project should I build for this?"
+                if missing_key == "project_type"
+                else "What business, product, or topic is this project for?"
+            )
+            logger.warning(
+                "Gemini start decision lacked prompt evidence "
+                "(type=%r domain=%r); requesting %s",
+                type_evidence,
+                domain_evidence,
+                missing_key,
+            )
+            return {
+                "action": "clarify",
+                "clarify_key": missing_key,
+                "question": question,
+                "reasoning": "The prompt did not explicitly state both project type and domain.",
+            }
+        return {
+            "action": action,
+            "archetype": archetype,
+            "project_type_evidence": type_evidence,
+            "domain_evidence": domain_evidence,
+            "reasoning": str(parsed.get("reasoning") or "").strip(),
+        }
+    if action == "clarify":
+        return {
+            "action": action,
+            "clarify_key": str(parsed.get("clarify_key") or "intent").strip(),
+            "question": str(
+                parsed.get("question")
+                or "Could you describe what you would like to build?"
+            ).strip(),
+            "reasoning": str(parsed.get("reasoning") or "").strip(),
+        }
+    raise ValueError(f"Gemini returned invalid action: {action}")
+
+
+async def classify_archetype_with_gemini(description: str) -> tuple[str, str]:
+    """Use Gemini Flash to choose the new-project execution archetype.
+
+    Static classification is retained only as outage recovery.
+    """
+    from app.services.gemini_http import gemini_post
+    from knowledge.loader import LAYOUT_ARCHETYPES, safe_gemini_text
+
+    allowed = sorted(LAYOUT_ARCHETYPES.keys())
+    prompt = f"""You are Lucid AI's new-project workflow router.
+Choose the single best layout archetype for this project description.
+
+Description: {description}
+
+Allowed archetypes:
+{json.dumps(allowed)}
+
+Return ONLY JSON:
+{{"archetype": "one allowed value", "reasoning": "short routing reason"}}"""
+
+    status, data, raw = await gemini_post(
+        model="gemini-3.5-flash",
+        payload={
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0,
+                "maxOutputTokens": 500,
+                "responseMimeType": "application/json",
+                "thinkingConfig": {"thinkingBudget": 0},
+            },
+        },
+        timeout_s=15.0,
+        label="project_workflow_router",
+    )
+    if status != 200 or data is None:
+        raise RuntimeError(raw or f"HTTP {status}")
+
+    parsed = json.loads(safe_gemini_text(data).strip())
+    archetype = str(parsed.get("archetype") or "").strip()
+    if archetype not in LAYOUT_ARCHETYPES:
+        raise ValueError(f"Gemini returned unknown archetype: {archetype}")
+    return archetype, str(parsed.get("reasoning") or "").strip()
+
+
 async def resolve_classification(
     task: str,
     *,
@@ -170,7 +366,8 @@ async def resolve_classification(
     Single entry point for the orchestrator. Idempotent — call it once
     per turn. When the user answers, the orchestrator prepends a new
     ``[LUCID_CLARIFY::key=value]`` marker to the task and calls this
-    function again; resolution converges within ``_MAX_ROUNDS`` (3).
+    function again. The canonical Gemini router continues asking until it
+    identifies enough explicit scope to select a workflow.
 
     Args:
         task: Raw user prompt, possibly containing one or more
@@ -227,6 +424,7 @@ async def resolve_classification(
             description=_strip_lucid_project_header(task_after_force).strip(),
             extract_entities=extract_entities,
             reasoning="archetype forced by UI marker",
+            decided_by="user_marker",
         )
 
     answers, clean_task = extract_clarify_context(task_after_force)
@@ -244,13 +442,45 @@ async def resolve_classification(
                 description=clean_task,
                 extract_entities=extract_entities,
                 reasoning=f"user answered project_type={pt!r}",
+                decided_by="clarification_answer",
             )
 
+    # Canonical path: Gemini Flash identifies whether this prompt should ask a
+    # question or start a specific project workflow.
+    try:
+        route = await route_new_project_with_gemini(clean_task or task or "")
+        if route.get("action") == "clarify":
+            clarify_key = route.get("clarify_key", "intent")
+            return {
+                "status": "needs_clarification",
+                "next_action": "clarify",
+                "workflow_id": "project_clarification",
+                "question": route.get("question", ""),
+                "options": [],
+                "clarify_key": clarify_key,
+                "stage": _stage_for_key(clarify_key, answers),
+                "answers": answers,
+                "reasoning": route.get("reasoning", ""),
+                "decided_by": "gemini_flash",
+            }
+        archetype = str(route.get("archetype") or "")
+        if archetype:
+            return await _build_resolved_async(
+                archetype=archetype,
+                answers=answers,
+                description=clean_task,
+                extract_entities=extract_entities,
+                reasoning=(
+                    f"Gemini Flash selected {archetype!r}: "
+                    f"{route.get('reasoning', '')}"
+                ),
+                decided_by="gemini_flash",
+            )
+    except Exception as exc:
+        logger.warning("Gemini new-project prompt router failed: %s — using fallback", exc)
+
     # No project_type yet → defer to clarity_agent for a Gemini-driven
-    # question. The agent returns ``None`` when the prompt is already
-    # clear (e.g. "landing page for X"), in which case we still want to
-    # convert that clarity into an archetype — fall back to the keyword
-    # detector + Gemini classifier inside the *static* classify path.
+    # question only when the canonical prompt router is unavailable.
     question = await check_prompt_clarity(
         task=clean_task,
         already_clarified=answers,
@@ -261,26 +491,40 @@ async def resolve_classification(
         stage = _stage_for_key(question.get("key", ""), answers)
         return {
             "status": "needs_clarification",
+            "next_action": "clarify",
+            "workflow_id": "project_clarification",
             "question": question.get("text", ""),
             "options": question.get("options", []),
             "clarify_key": question.get("key", ""),
             "stage": stage,
             "answers": answers,
+            "decided_by": "fallback_clarity_router",
         }
 
-    # Clarity says "clear" but we still don't have a project_type. Use
-    # the existing static classifier as a fallback so the resolver always
-    # returns a real archetype.
+    # Clarity says "clear" but we still don't have a project_type. Gemini
+    # Flash now makes the explicit workflow decision. The static classifier
+    # is outage recovery only.
     from knowledge.loader import _classify_static  # type: ignore[attr-defined]
-    static = _classify_static(clean_task or task or "")
-    fallback_archetype = static.get("layout_archetype", "consumer_website")
+    try:
+        fallback_archetype, route_reason = await classify_archetype_with_gemini(
+            clean_task or task or "",
+        )
+        route_reason = f"Gemini Flash selected {fallback_archetype!r}: {route_reason}"
+        decided_by = "gemini_flash_fallback"
+    except Exception as exc:
+        logger.warning("Gemini project workflow router failed: %s — using static fallback", exc)
+        static = _classify_static(clean_task or task or "")
+        fallback_archetype = static.get("layout_archetype", "consumer_website")
+        route_reason = f"static outage fallback selected {fallback_archetype!r}"
+        decided_by = "static_outage_fallback"
 
     return await _build_resolved_async(
         archetype=fallback_archetype,
         answers=answers,
         description=clean_task,
         extract_entities=extract_entities,
-        reasoning=f"clarity passed-through; static classifier picked {fallback_archetype!r}",
+        reasoning=route_reason,
+        decided_by=decided_by,
     )
 
 
@@ -306,6 +550,7 @@ def _build_resolved(
     description: str,
     extract_entities: bool,
     reasoning: str,
+    decided_by: str = "agent",
     entities: Optional[list[str]] = None,
     entity_confidence: int = 0,
 ) -> dict[str, Any]:
@@ -313,11 +558,14 @@ def _build_resolved(
     needs_admin_followup = archetype == "consumer_website_with_admin"
     payload: dict[str, Any] = {
         "status": "resolved",
+        "next_action": "start_workflow",
+        "workflow_id": workflow_for_archetype(archetype),
         "archetype": archetype,
         "needs_admin_followup": needs_admin_followup,
         "answers": answers,
         "stage": STAGE_RESOLVED,
         "reasoning": reasoning,
+        "decided_by": decided_by,
     }
     if entities is not None:
         payload["entities"] = entities
@@ -332,6 +580,7 @@ async def _build_resolved_async(
     description: str,
     extract_entities: bool,
     reasoning: str,
+    decided_by: str = "agent",
 ) -> dict[str, Any]:
     """Build a resolved payload, firing entity extraction for admin paths."""
     entities: Optional[list[str]] = None
@@ -351,6 +600,7 @@ async def _build_resolved_async(
         description=description,
         extract_entities=extract_entities,
         reasoning=reasoning,
+        decided_by=decided_by,
         entities=entities,
         entity_confidence=confidence,
     )

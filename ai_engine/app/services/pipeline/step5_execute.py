@@ -85,16 +85,18 @@ async def execute_with_claude(
         await openhands_manager.destroy_all()
         await asyncio.sleep(1)
 
-    try:
-        await websocket.send_json({
-            "type": "progress",
-            "message": "🤖 Writing code...",
-        })
-    except Exception:
-        pass
-
     task_type = classification.get("task_type", "feature_simple")
     model_name = classification.get("model", "sonnet")
+
+    try:
+        from app.services.llm_retry import emit_code_write_started
+        await emit_code_write_started(
+            websocket,
+            task_type=str(task_type or ""),
+            model=str(model_name or ""),
+        )
+    except Exception:
+        pass
 
     # ── Build task-type-specific system + focused prompt ───
     if task_type == "ui_simple":

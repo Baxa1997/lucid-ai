@@ -1408,7 +1408,7 @@ def validate_design_system(design: dict, layout_archetype: str = "") -> list[str
 # Cost: one Gemini Flash call (~5-10s, cheap). Skipped silently when no
 # key is provided.
 
-_GEMINI_CRITIC_MODEL = "gemini-2.5-flash"
+_GEMINI_CRITIC_MODEL = "gemini-3.5-flash"
 _GEMINI_CRITIC_TIMEOUT = 30.0
 
 

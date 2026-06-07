@@ -277,8 +277,26 @@ def _strip_lucid_project_header(text: str) -> str:
 _SYSTEM_PROMPT = """\
 You are a smart project intake agent for an AI web design platform. Talk like a sharp designer scoping a project: ask dynamic, specific questions — ONE per round — to genuinely understand what the user wants, before generation starts.
 
+══ STEP 0 — INCOHERENT-INPUT GUARD (CHECK BEFORE EVERY OTHER STEP) ══
+Users can write in ANY language — handle them all (English, Russian, Spanish, Arabic, Chinese, Uzbek, Vietnamese, etc.). The OUTPUT question text must be written in the SAME language the user wrote in (mirror it).
+If the prompt does NOT describe a coherent project intent — i.e. random words, lyrics, pseudo-sentences, keyboard mash, pasted unrelated text, or vague exclamations — DO NOT try to guess. Return a `field`-keyed open question asking what they want to build, in their language.
+REJECT (these are incoherent, ask field OPEN):
+  • "tree apple banana keyboard sunshine"   ← random English nouns
+  • "дом стол окно компьютер"               ← random Russian nouns
+  • "lorem ipsum dolor sit amet"            ← placeholder text
+  • "asdf qwerty xcvbn"                     ← keyboard mash
+  • "hello how are you"                     ← greeting, no project signal
+  • A list of disconnected nouns in any language with no project-type or business word
+ACCEPT (these are legitimate, even if terse — proceed to STEP 1):
+  • "italian restaurant in florence"        ← field=italian restaurant, ask project_type
+  • "сайт для кафе" (Russian: "website for café") ← field=café, ask project_type
+  • "kino website"                          ← cinema/movie site; ask field for what kind
+  • "yoga studio"                           ← field=yoga; ask project_type
+  • "blog about plants"                     ← field=plants blog; ask style
+RULE OF THUMB: if you cannot name in one short phrase what business/product/topic the project would be FOR after reading the prompt, treat it as incoherent — return a field question, do not assume an interpretation.
+
 ══ GOAL ══
-First nail the project CORE, then ask a few smart follow-ups that would change the design. Ask one question per round, phrased naturally for THIS prompt (not generic). Return {{"clear": true}} once the core is set and you understand the audience / style / key features (or when ROUNDS hits the max).
+After the STEP 0 guard passes, nail the project CORE, then ask a few smart follow-ups that would change the design. Ask one question per round, phrased naturally for THIS prompt (not generic). Return {{"clear": true}} once the core is set and you understand the audience / style / key features (or when ROUNDS hits the max).
 NEVER ask about pages, sections, navigation, or site structure — the platform generates those automatically.
 
 ══ OPEN QUESTIONS vs OPTIONS ══
@@ -344,13 +362,19 @@ async def check_prompt_clarity(
     task: str,
     already_clarified: dict,
     timeout_s: float = 22.0,
+    websocket=None,
 ) -> Optional[dict]:
     """Return a question dict if clarification needed, else None.
 
     Returned dict: {key, text, options: [{id, label}]}.
     Returns None when prompt is clear or on any error (fail-open).
+
+    `websocket` is optional — when present, we emit `agent.status` events
+    around the Gemini call so the FE can show "Understanding your
+    prompt…" instead of a misleading preview-pipeline label.
     """
     from app.services.landing_gemini import structured_distill
+    from app.services.agent_status import emit_agent_status
     from knowledge.loader import extract_clarify_context, force_archetype_from_task
 
     rounds_used = len(already_clarified)
@@ -449,18 +473,35 @@ async def check_prompt_clarity(
     }
 
     try:
-        # gemini-3.1-pro-preview gives noticeably better intent inference on
-        # short / ambiguous prompts ("acca website", "agency") and produces
-        # tighter, more relevant follow-up questions than 2.5-flash. The
-        # latency cost (~1–2s extra) is worth it because clarification is
-        # gated on a real Q&A — happens once at the start of a session.
+        # Switched from gemini-3.1-pro-preview to gemini-3.5-flash. The 3.5
+        # Flash release on Vertex is the latest stable Flash (faster than
+        # 3-flash-preview, no schema-bug like 3-flash-preview has on JSON
+        # outputs). The STEP-0 multilingual incoherence guard in
+        # _SYSTEM_PROMPT carries the heavy lifting now, so the model's
+        # marginal intent-inference advantage over Flash isn't worth the
+        # latency. Verified available on Vertex AI publisher catalog
+        # (us-central1, publishers/google/models/gemini-3.5-flash).
+        await emit_agent_status(
+            websocket,
+            key="understanding_prompt",
+            label="Understanding your prompt...",
+            description="Checking what you'd like to build",
+            state="active",
+            source="gemini_flash",
+            workflow_id="prompt_intake",
+        )
         raw = await structured_distill(
             prompt,
             timeout_s,
             label="clarity_check",
             response_schema=response_schema,
             max_tokens=480,
-            model="gemini-3.1-pro-preview",
+            model="gemini-3.5-flash",
+            # Drop to near-zero temperature so the STEP-0 incoherence guard
+            # behaves deterministically across reruns. The default 0.2
+            # produced the "sometimes proceeds, sometimes asks" flakiness
+            # the user reported on identical random-word inputs.
+            temperature=0.05,
         )
         result = json.loads(raw) if isinstance(raw, str) else raw
         if not isinstance(result, dict):
@@ -478,7 +519,28 @@ async def check_prompt_clarity(
                     "clarity_agent: Gemini returned clear=True but %r is bare — overriding",
                     clean_task[:60],
                 )
+                await emit_agent_status(
+                    websocket,
+                    key="waiting_for_details",
+                    label="Waiting for your answer",
+                    description="The agent needs the project domain before generating",
+                    state="waiting",
+                    source="clarity_agent",
+                    workflow_id="prompt_intake",
+                )
                 return _bare_type_clarification(clean_task)
+            # Clear → pipeline takes over. Flip status to done so the FE
+            # doesn't stick on "Understanding your prompt…" during the
+            # gap before the first task_phase event fires.
+            await emit_agent_status(
+                websocket,
+                key="understanding_done",
+                label="",
+                description="",
+                state="done",
+                source="clarity_agent",
+                workflow_id="prompt_intake",
+            )
             return None
         q = result.get("question")
         if not isinstance(q, dict):
@@ -510,8 +572,32 @@ async def check_prompt_clarity(
         logger.info("clarity_agent: round %d — asking %r (%s)",
                     rounds_used + 1, key,
                     f"{len(opts)} options" if opts else "open-ended")
+        # Flip the FE status to "waiting" — the agent has done its work and
+        # is now waiting for the user's answer. Without this the
+        # understanding_prompt status sticks until the next backend event,
+        # which makes the right panel look like it's still processing.
+        await emit_agent_status(
+            websocket,
+            key="waiting_for_details",
+            label="Waiting for your answer",
+            description="The agent needs a bit more detail before generating",
+            state="waiting",
+            source="clarity_agent",
+            workflow_id="prompt_intake",
+        )
         return q
 
     except Exception as exc:
         logger.warning("clarity_agent: check failed (%s) — passing through", exc)
+        # Failed Gemini call also clears the in-flight status so the FE
+        # doesn't get stuck at "Understanding your prompt…".
+        await emit_agent_status(
+            websocket,
+            key="understanding_done",
+            label="",
+            description="",
+            state="done",
+            source="clarity_agent",
+            workflow_id="prompt_intake",
+        )
         return None

@@ -84,6 +84,9 @@ export default function BuildingScreen({
   convLoading,
   previewLoading = false,
   previewStatusMsg = "",
+  previewStage = "",
+  projectIntakeStatus = null,
+  agentStatus = null,
 }) {
   const {label: buildLabel, subtext: buildSubtext} = computeBuildLabel({
     status,
@@ -93,6 +96,9 @@ export default function BuildingScreen({
     convLoading,
     previewLoading,
     previewStatusMsg,
+    previewStage,
+    projectIntakeStatus,
+    agentStatus,
   });
 
   return (
@@ -166,7 +172,8 @@ export default function BuildingScreen({
       </p>
 
       {/* Animated dots — visible until workspace is ready */}
-      {status !== "ready" && (
+      {(status !== "ready" || projectIntakeStatus === "checking" || projectIntakeStatus === "handoff") &&
+        projectIntakeStatus !== "clarifying" && (
         <div className="relative z-10 flex items-center gap-1.5 mt-5">
           {[0, 1, 2].map((i) => (
             <div

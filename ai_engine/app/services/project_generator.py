@@ -815,20 +815,31 @@ def _generate_design_system_name(
 
 
 
-async def _send_phase(websocket, phase: int, title: str, description: str, status: str) -> None:
-    """Send a structured phase event to the frontend for TaskProgress UI."""
-    if not websocket:
-        return
-    try:
-        await websocket.send_json({
-            "type": "task_phase",
-            "phase": phase,
-            "title": title,
-            "description": description,
-            "status": status,
-        })
-    except Exception:
-        pass
+async def _send_phase(
+    websocket,
+    phase: int,
+    title: str,
+    description: str,
+    status: str,
+    *,
+    mode: str = "new_project_generation",
+) -> None:
+    """Send a structured phase event to the frontend for TaskProgress UI.
+
+    ``mode`` (Phase 2 Step 3): "new" / "edit" / "regenerate" surfaced to
+    the frontend's status renderer. Default "new" because project_generator
+    is invoked from new-project flows. Callers in existing-project edit
+    paths should pass ``mode="edit"`` explicitly.
+    """
+    from app.services.agent_status import emit_task_phase
+    await emit_task_phase(
+        websocket,
+        phase=phase,
+        title=title,
+        description=description,
+        status=status,
+        mode=mode,
+    )
 
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -2213,7 +2224,7 @@ Return ONLY this JSON, no markdown:
         from app.services.gemini_http import gemini_post
 
         _status, _resp_json, _ = await gemini_post(
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash",
             payload={"contents": [{"parts": [{"text": prompt}]}]},
             timeout_s=10.0,
             label="intent_gate",
@@ -2299,7 +2310,7 @@ async def _expand_short_prompt(
 
     try:
         # Flash is plenty for prompt expansion; thinkingBudget=0 keeps it sub-second.
-        _model = "gemini-2.5-flash"
+        _model = "gemini-3.5-flash"
         prompt = (
             f"The user gave a very short product brief: \"{_clean}\".\n"
             f"Project type: {layout_archetype.replace('_', ' ')} in the {domain} domain.\n\n"
@@ -7800,10 +7811,12 @@ async def _generate_new_project_inner(
     await _ws_send(websocket, "progress", "📚 Loading component skills...")
     
     # ── Step 3: Gemini research (all project types) ──
-    # Close out Phase 1 (Preparing workspace) and flip to Phase 3 (research)
+    # Close out Phase 1 (Validating inputs) and flip to Phase 3 (research)
     # — keeps the UI on a stable status instead of flickering through
     # interim progress messages between classifier and research start.
-    await _send_phase(websocket, 1, "Preparing workspace", "Workspace ready", "done")
+    # Title kept in sync with orchestrator.py rename (Phase 1 + 2 used to
+    # both say "Preparing workspace", which read as a broken chart).
+    await _send_phase(websocket, 1, "Validating inputs", "Inputs validated", "done")
     await _send_phase(websocket, 3, "Researching project", "Researching real products in this domain…", "active")
     await _ws_send(websocket, "progress", "🔬 Researching real products in this domain...")
     research_quality = "full"

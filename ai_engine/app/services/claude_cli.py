@@ -265,10 +265,14 @@ async def run_claude_session(
 
                 # ─── system/init: announce model & tools ───
                 if evt_type == "system" and evt.get("subtype") == "init":
-                    await _safe_send(websocket, {
-                        "type": "progress",
-                        "message": f"🤖 Claude Code session started ({evt.get('model', model)})",
-                    })
+                    try:
+                        from app.services.llm_retry import emit_cli_session_started
+                        await emit_cli_session_started(
+                            websocket,
+                            model=str(evt.get("model", model) or ""),
+                        )
+                    except Exception:
+                        pass
                     continue
 
                 # ─── assistant messages ───

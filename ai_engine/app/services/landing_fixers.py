@@ -72,7 +72,8 @@ async def run_landing_fixers(workspace_path: str, websocket: Any = None) -> dict
 
     if websocket is not None:
         try:
-            await websocket.send_json({"type": "progress", "message": "🔧 Running landing fixers..."})
+            from app.services.llm_retry import emit_fixers_run_started
+            await emit_fixers_run_started(websocket)
         except Exception:
             pass
 

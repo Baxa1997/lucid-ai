@@ -30,6 +30,7 @@ from typing import Any
 
 from app.services.generation_build import run_generation_build_check
 from app.services.generation_contract import GenerationResult
+from app.services.agent_status import emit_task_phase, emit_agent_status
 
 logger = logging.getLogger(__name__)
 
@@ -69,23 +70,26 @@ async def run_landing_pipeline(
         stack=(classification or {}).get("stack") or "",
     )
 
+    # Pipeline mode (Phase 2 Step 3) — landing pipeline runs in "new" or
+    # "edit" depending on whether the orchestrator handed us a fresh project
+    # or a follow-up. Mirrors the same field on orchestrator's _send_phase
+    # so the frontend can choose mode-aware copy without re-deriving from
+    # sessionStorage.
+    _landing_mode = "landing_generation" if (validated.get("new_project_mode") or validated.get("scratch_mode")) else "edit"
+
     # Drive the UI's task-phase indicator from inside this pipeline.
     # The orchestrator only emits Phase 3 "active" before calling us, so
     # without these the indicator stays stuck on RESEARCHING for the
     # entire run — which is what the user just reported.
     async def _phase(phase: int, title: str, desc: str, status: str) -> None:
-        if websocket is None:
-            return
-        try:
-            await websocket.send_json({
-                "type": "task_phase",
-                "phase": phase,
-                "title": title,
-                "description": desc,
-                "status": status,
-            })
-        except Exception:
-            pass
+        await emit_task_phase(
+            websocket,
+            phase=phase,
+            title=title,
+            description=desc,
+            status=status,
+            mode=_landing_mode,
+        )
 
     # ── Step 1: Brief + grounded research (parallel) ─────────────────
     # The legacy brief is the hard requirement; research is best-effort
@@ -106,7 +110,10 @@ async def run_landing_pipeline(
     # active yet: Stage 0 can still stop and ask a clarification question.
     # Showing "Researching..." before that question lands made the flow look
     # like it had started work and then changed its mind.
-    await _phase(1, "Preparing workspace", "Workspace ready", "done")
+    # Phase 1 title kept in sync with orchestrator.py — renamed from
+    # "Preparing workspace" (which collided with Phase 2's same title) to
+    # "Validating inputs" so the progress chart shows distinct steps.
+    await _phase(1, "Validating inputs", "Inputs validated", "done")
     await _send(websocket, "progress", "Checking whether I have enough detail…")
 
     # ── Stage 0: intent + clarifier gate ─────────────────────────────
@@ -147,7 +154,12 @@ async def run_landing_pipeline(
         except Exception as exc:
             logger.warning("landing_pipeline: gibberish persist failed — %s", exc)
         try:
-            await websocket.send_json({"type": "gibberish_detected", **gibberish_payload})
+            # Canonical `clarify` shape — matches step1_validate.py so the FE
+            # dispatcher's single handler covers both paths and resets state
+            # to 'ready'. Previously this emitted a one-off `gibberish_detected`
+            # type with no FE handler, leaving the UI stuck on "Analyzing your
+            # request…" until the user reloaded.
+            await websocket.send_json({"type": "clarify", "message": gibberish_payload["message"]})
         except Exception:
             pass
         logger.info(
@@ -493,6 +505,14 @@ async def run_landing_pipeline(
     await _phase(4, "Planning code", "Writing runtime content + setup…", "active")
 
     # ── Step 2: Runtime content JSON ─────────────────────────────────
+    await emit_agent_status(
+        websocket,
+        key="writing_content",
+        label="Saving your content…",
+        description="Writing brief into src/content/landing.json",
+        state="active",
+        source="landing_pipeline",
+    )
     from app.services.landing_content import write_landing_content
     try:
         content_path, _content = write_landing_content(workspace_path, brief)
@@ -503,6 +523,14 @@ async def run_landing_pipeline(
         return False
 
     # ── Step 3: Image binding (Unsplash) ─────────────────────────────
+    await emit_agent_status(
+        websocket,
+        key="binding_images",
+        label="Finding photography…",
+        description="Searching Unsplash for hero + section imagery",
+        state="active",
+        source="landing_pipeline",
+    )
     from app.services.landing_image_binder import bind_landing_images
     fallback_keywords = list((brief.get("domain_keywords") or []))[:3]
     try:
@@ -548,6 +576,14 @@ async def run_landing_pipeline(
         logger.warning("landing_pipeline: image flatten failed (non-fatal) — %s", _exc)
 
     # ── Step 4: Phase-0 deterministic builders ───────────────────────
+    await emit_agent_status(
+        websocket,
+        key="setting_up_theme",
+        label="Setting up theme + layout…",
+        description="globals.css, layout.jsx, design-system.js",
+        state="active",
+        source="landing_pipeline",
+    )
     from app.services.landing_phase0 import run_landing_phase0
     try:
         run_landing_phase0(workspace_path, brief)

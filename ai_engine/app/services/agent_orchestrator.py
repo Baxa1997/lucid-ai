@@ -906,6 +906,11 @@ class AgentOrchestrator:
                                             "What would you like to change or ask about this project?"
                                         ),
                                     })
+                                    # Same reason as ws.py — the guard
+                                    # short-circuits the pipeline and the
+                                    # FE's optimistic state=running must
+                                    # be released so "Analyzing…" clears.
+                                    await out_ws.send_json({"type": "status", "status": "ready"})
                                 except Exception:
                                     pass
                                 continue
@@ -1080,7 +1085,7 @@ class AgentOrchestrator:
                 raw = await structured_distill(
                     prompt, 12.0, label="inflight_status",
                     response_schema=None, max_tokens=180,
-                    temperature=0.3, model="gemini-2.5-flash",
+                    temperature=0.3, model="gemini-3.5-flash",
                 )
                 reply = (raw or "").strip()
                 # structured_distill returns JSON-mode text — strip wrapping
