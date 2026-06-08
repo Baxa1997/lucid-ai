@@ -780,9 +780,16 @@ async def _ensure_node_modules(workspace_path: str, websocket) -> None:
     # mount — without it, pnpm tries hardlink/reflink first and intermittently
     # fails with errno -116 (EREMOTE). See _pm_env() in package_manager.py for
     # the full root-cause writeup.
+    # --no-frozen-lockfile is required because the env below sets CI=1
+    # (to suppress interactive prompts), and pnpm auto-flips to
+    # --frozen-lockfile=true under CI. Claude can add a dep to
+    # package.json mid-generation without touching pnpm-lock.yaml, so a
+    # frozen install fails with ERR_PNPM_OUTDATED_LOCKFILE the moment
+    # the two drift. Every other install path in the codebase already
+    # passes this flag (build_validator, package_manager, project_generator).
     install_cmd = (
-        "pnpm install --prefer-offline --store-dir /tmp/pnpm_store "
-        "--package-import-method=copy "
+        "pnpm install --no-frozen-lockfile --prefer-offline "
+        "--store-dir /tmp/pnpm_store --package-import-method=copy "
         "|| npm install --prefer-offline "
         "|| yarn install"
     )
