@@ -92,12 +92,20 @@ async def create_vercel_project(
                 repo_id = (_proj.get("link") or {}).get("repoId")
                 logger.info("Vercel project %s already exists (id=%s)", project_slug, project_id)
             else:
+                # Set installCommand at create time so every deploy uses it,
+                # regardless of whether vercel.json made it into the repo.
+                # Claude routinely adds deps to package.json without
+                # regenerating pnpm-lock.yaml, so Vercel's default
+                # `pnpm install --frozen-lockfile` blows up with
+                # ERR_PNPM_OUTDATED_LOCKFILE on the first deploy. The
+                # `--no-frozen-lockfile` override tolerates the drift.
                 create = await client.post(
                     f"{_VERCEL_API}/v10/projects{qs}",
                     headers=headers,
                     json={
                         "name": project_slug,
                         "framework": framework,
+                        "installCommand": "pnpm install --no-frozen-lockfile",
                         "gitRepository": {
                             "type": "github",
                             "repo": f"{owner}/{repo}",
@@ -129,6 +137,27 @@ async def create_vercel_project(
             if not project_id:
                 logger.warning("Vercel project_id missing after create — skipping deploy")
                 return predicted_url
+
+            # ── 1b. Force installCommand on every deploy (idempotent) ──
+            # Pre-existing projects that were created before the create-time
+            # installCommand fix still have Vercel's default
+            # `pnpm install --frozen-lockfile`. PATCH the project on every
+            # publish so the next deploy succeeds even when Claude added a
+            # dep without regenerating pnpm-lock.yaml. Fail-soft: a PATCH
+            # error just falls through to whatever the project already has.
+            try:
+                patch = await client.patch(
+                    f"{_VERCEL_API}/v9/projects/{project_id}{qs}",
+                    headers=headers,
+                    json={"installCommand": "pnpm install --no-frozen-lockfile"},
+                )
+                if patch.status_code not in (200, 201, 204):
+                    logger.warning(
+                        "Vercel installCommand PATCH non-2xx (%d): %s",
+                        patch.status_code, patch.text[:200],
+                    )
+            except Exception as patch_exc:
+                logger.debug("Vercel installCommand PATCH failed (non-fatal): %s", patch_exc)
 
             # ── 2. Resolve numeric GitHub repo ID for the deploy ──
             # Vercel's POST /v13/deployments requires gitSource.repoId
