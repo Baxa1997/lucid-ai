@@ -553,7 +553,11 @@ def fix_section_overflow_clip(workspace_path: str) -> list[str]:
             if "overflow-" in classes:
                 continue  # already clipping (visible|hidden|clip|auto) — respect
 
-            new_classes = f"{classes.rstrip()} overflow-hidden".strip()
+            # Sections with interactive dropdown panels get the x-only clip:
+            # `overflow-hidden` would decapitate a panel opening past the
+            # section's bottom edge (see fix_popover_overflow_clip).
+            clip = "overflow-x-clip" if _DROPDOWN_PANEL_RE.search(content) else "overflow-hidden"
+            new_classes = f"{classes.rstrip()} {clip}".strip()
             new_content = (
                 content[: match.start()]
                 + f'<section{match.group(1)}className={match.group(2)}{new_classes}{match.group(2)}'
@@ -564,12 +568,132 @@ def fix_section_overflow_clip(workspace_path: str) -> list[str]:
                     f.write(new_content)
                 fixed.append(path)
                 logger.info(
-                    "fix_section_overflow_clip: added overflow-hidden to %s",
-                    os.path.relpath(path, workspace_path),
+                    "fix_section_overflow_clip: added %s to %s",
+                    clip, os.path.relpath(path, workspace_path),
                 )
             except OSError as exc:
                 logger.warning(
                     "fix_section_overflow_clip: failed to write %s: %s",
+                    path, exc,
+                )
+    return fixed
+
+
+# Interactive dropdown/popover panel signature: an absolutely-positioned panel
+# anchored to its trigger with `top-full` / `bottom-full` (custom selects,
+# guest steppers, calendar popovers). z-index never beats ANCESTOR overflow
+# clipping, so these are the elements section-root clipping must not catch.
+_DROPDOWN_PANEL_RE = re.compile(r"\b(?:top|bottom)-full\b")
+
+
+def fix_popover_overflow_clip(workspace_path: str) -> list[str]:
+    """Downgrade section-root `overflow-hidden` → `overflow-x-clip` when the
+    section contains an interactive dropdown panel.
+
+    Roots carry `overflow-hidden` to contain decorative bleed, but it also
+    clips dropdown panels that open past the section's bottom edge — a
+    booking bar in the lower half of a min-h-screen hero gets its guests/date
+    panel cut in half at the section boundary (Saint Cecilia hero,
+    2026-06-12). `overflow-x-clip` still prevents decor from causing
+    horizontal page scroll; vertical decor bleed is painted over by the next
+    section's opaque background, while panels escape vertically intact.
+    """
+    fixed: list[str] = []
+    sections_dir = os.path.join(workspace_path, "src", "components", "sections")
+    if not os.path.isdir(sections_dir):
+        return fixed
+
+    for root, _, files in os.walk(sections_dir):
+        for name in files:
+            if not name.endswith((".jsx", ".tsx", ".js", ".ts")):
+                continue
+            path = os.path.join(root, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except OSError:
+                continue
+            if not _DROPDOWN_PANEL_RE.search(content):
+                continue
+
+            match = _SECTION_ROOT_RE.search(content)
+            if not match:
+                continue
+            classes = match.group(3)
+            if "overflow-hidden" not in classes:
+                continue
+
+            new_classes = classes.replace("overflow-hidden", "overflow-x-clip")
+            new_content = (
+                content[: match.start()]
+                + f'<section{match.group(1)}className={match.group(2)}{new_classes}{match.group(2)}'
+                + content[match.end():]
+            )
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                fixed.append(path)
+                logger.info(
+                    "fix_popover_overflow_clip: overflow-hidden → overflow-x-clip in %s",
+                    os.path.relpath(path, workspace_path),
+                )
+            except OSError as exc:
+                logger.warning(
+                    "fix_popover_overflow_clip: failed to write %s: %s",
+                    path, exc,
+                )
+    return fixed
+
+
+# <h1>/<h2> block (no nesting of same tag inside) + any <br> variant.
+_HEADING_BLOCK_RE = re.compile(r"<h([12])\b[^>]*>.*?</h\1>", re.DOTALL)
+_BR_TAG_RE = re.compile(r"\s*<br\b[^>]*/?>\s*")
+
+
+def fix_br_in_headings(workspace_path: str) -> list[str]:
+    """Strip `<br>` from inside <h1>/<h2> headings (JSX-safe `{" "}` instead).
+
+    The codegen rules ban manual line breaks in headlines: at text-6xl+ a
+    forced `<br>` PLUS natural wrapping scatters the headline across 3-4
+    sparse lines with orphan words and dangling accent glyphs (the
+    "A storied retreat / — / in the heart of" hero, 2026-06-12). CSS
+    line-wrap alone produces the intended 2-3 line editorial block.
+    """
+    fixed: list[str] = []
+    sections_dir = os.path.join(workspace_path, "src", "components", "sections")
+    if not os.path.isdir(sections_dir):
+        return fixed
+
+    for root, _, files in os.walk(sections_dir):
+        for name in files:
+            if not name.endswith((".jsx", ".tsx", ".js", ".ts")):
+                continue
+            path = os.path.join(root, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except OSError:
+                continue
+            if "<br" not in content:
+                continue
+
+            def _strip_brs(m: "re.Match[str]") -> str:
+                return _BR_TAG_RE.sub('{" "}', m.group(0))
+
+            new_content = _HEADING_BLOCK_RE.sub(_strip_brs, content)
+            if new_content == content:
+                continue
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                fixed.append(path)
+                logger.info(
+                    "fix_br_in_headings: stripped <br> from headings in %s",
+                    os.path.relpath(path, workspace_path),
+                )
+            except OSError as exc:
+                logger.warning(
+                    "fix_br_in_headings: failed to write %s: %s",
                     path, exc,
                 )
     return fixed

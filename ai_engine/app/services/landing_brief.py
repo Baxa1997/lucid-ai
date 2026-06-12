@@ -408,7 +408,10 @@ NOW produce the Brief as a JSON object matching the response schema EXACTLY. No 
 REQUIREMENTS — every string field has a character limit, OBEY THEM.
 
 brand: name (real, ≤30 chars); tagline (≤60 chars); description (≤140 chars); domain (≤30 chars).
-  business_info (encouraged for local businesses): address ≤80, phone ≤24, email ≤60, hours ≤200 (multi-line ok).
+  business_info (encouraged for local businesses): address ≤80, phone ≤24, email ≤60, hours ≤200.
+    hours format: when listing MULTIPLE venues/schedules, separate entries with " · "
+    (e.g. "Front Desk: 24/7 · Lounge: 7am–11pm · Pool: sunrise–sunset") — renderers split on
+    '·' to put each on its own line. NEVER run schedules together without a separator.
   social (0-5 entries): each {{label: "instagram"|"facebook"|"twitter"|"linkedin"|"youtube", href: URL}}.
 
   ── GEOGRAPHY LOCK (single source of truth for ALL location text) ──

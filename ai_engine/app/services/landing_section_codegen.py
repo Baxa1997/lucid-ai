@@ -71,7 +71,8 @@ _FALLBACK_SKELETONS: dict[str, str] = {
         "         OPTIONAL only when pattern is E (Centered Editorial).\n"
         "    Self-check before output: count items 1-7 in your JSX. If any is missing,\n"
         "    rewrite. A minimal hero is the #1 cause of \"too plain / generic\" feedback.\n"
-        "  • Outer <section> is `relative isolate min-h-[640px] md:min-h-[100svh] lg:min-h-screen overflow-hidden`.\n"
+        "  • Outer <section> is `relative isolate min-h-[640px] md:min-h-[100svh] lg:min-h-screen overflow-x-clip`\n"
+        "    (`overflow-x-clip`, NOT `overflow-hidden` — see WATERMARK CONTAINMENT below for why).\n"
         "      Why full-viewport at md+: a hero that stops at 820px on a 1080p monitor reads as a half-finished\n"
         "      banner — the user sees the next section's eyebrow peeking under the fold. `min-h-screen` at lg+\n"
         "      (and `100svh` at md to account for iOS dynamic viewport) makes the hero command the entire first\n"
@@ -87,17 +88,31 @@ _FALLBACK_SKELETONS: dict[str, str] = {
         "      1. NO `<br/>` inside the headline.\n"
         "      2. NO `<span className=\"block\">` wrapping a sub-clause unless the headline is a SINGLE long clause with ≤8 words AND visual_dna.layout_signature explicitly calls for centered-editorial-stacked. In ALL other cases the headline is a single `<h1>` with all text inline. The accent word may be wrapped in `<span className=\"italic text-primary\">` BUT THAT SPAN MUST NOT BE `block` OR `flex` — leave it as default inline.\n"
         "      3. If the headline string contains MULTIPLE sentences (more than one `.`, `!`, or `?`), render them ALL INLINE inside one `<h1>`. The reader gets a 2-3 line natural wrap, not a fixed N-line stack. \"The Burger. The Bean. The Best of Both.\" is ONE inline `<h1>`, NOT four `<span className=\"block\">` lines.\n"
-        "      4. An em-dash (—) or en-dash (–) ALWAYS stays glued to the phrase on its left, never the first character of a new visual line. If you can't avoid it landing alone on a wrap, drop the dash entirely or replace with a period.\n"
+        "      4. An em-dash (—) or en-dash (–) ALWAYS stays glued to the phrase on its left, never the first character of a new visual line. If you can't avoid it landing alone on a wrap, drop the dash entirely or replace with a period. NEVER insert a decorative standalone glyph (`—`, `&`, `·`) as its own `<span>` BETWEEN clauses — at text-6xl+ it wraps onto its own line and reads as a rendering bug.\n"
+        "      5. CONTENT BINDING — the headline TEXT comes from `section.headline` at RUNTIME, never retyped into JSX (retyped copy breaks the content editor). To add the italic accent while keeping the binding, split the string in JS:\n"
+        "           const hl = section.headline || \"\";\n"
+        "           const hlWords = hl.split(\" \");\n"
+        "           const hlAccent = hlWords.length > 2 ? hlWords.slice(-2).join(\" \") : \"\";\n"
+        "           const hlLead = hlAccent ? hlWords.slice(0, -2).join(\" \") : hl;\n"
+        "           <h1 ...>{hlLead}{hlAccent && <>{\" \"}<span className=\"italic text-primary\">{hlAccent}</span></>}</h1>\n"
+        "         (accent = last 1-2 words; adjust the slice count to land on the brand's hook phrase). Same rule for `section.subheadline` — interpolate, never retype.\n"
         "    The size tokens (`text-5xl md:text-6xl lg:text-7xl leading-[1.05]`) already give the headline its editorial impact. The model does NOT need to also force structure by stacking spans — that always produces the 4-line awkward-stack failure mode.\n"
         "  • Wrap content group in <Reveal variant=\"fade-up\">.\n"
         "  • FLOATING BADGES / CHIPS (Score Guarantee badge, status pill, callout card) MUST stay inside the section's content container — never use negative offsets that push them outside the viewport (`-top-4`, `-right-8`, etc.) and never position them with absolute coordinates that exceed the parent. Use `absolute top-4 right-4` AT MOST, and prefer placing them in the document flow inside the copy column instead of floating. A clipped or floating-off-edge badge is a hard fail — it reads as a layout bug.\n"
         "  • Hero copy column MUST sit on a grid (grid grid-cols-1 lg:grid-cols-2 gap-8 + relative z-20 on the copy block) — NEVER stack copy on top of the hero image with `position: absolute`. Absolute layered copy creates overlapping/unreadable text at every viewport unless the photo is intentionally darkened with the readability overlay.\n"
         "  • DECORATIVE WATERMARK TEXT (large background numerals, oversized initials, ghosted brand letters) is allowed but MUST be DIFFERENT content from the foreground label. NEVER render `{item.name}` or `{member.name}` or any prose interpolation twice — once as the watermark and once as the readable title — that creates a confusing double-vision ghost. Watermarks are for static decoration (an index number like `01`, a single Greek letter, a quote mark `&ldquo;`), not for repeating the title.\n"
         "    WATERMARK CONTAINMENT — non-negotiable:\n"
-        "      • The OUTER `<section>` MUST carry `overflow-hidden` so a decorative\n"
-        "        watermark CANNOT bleed into the header above or the next section\n"
-        "        below. NEVER omit `overflow-hidden` on a hero that includes any\n"
-        "        absolute-positioned decorative element.\n"
+        "      • ALL decorative bleed elements (watermark glyphs, blur blobs, oversized\n"
+        "        numerals, gradient accents with negative offsets) live inside ONE\n"
+        "        dedicated isolation layer:\n"
+        "          <div aria-hidden=\"true\" className=\"pointer-events-none absolute inset-0 overflow-hidden z-0\"> ...decor... </div>\n"
+        "        The layer clips the bleed; the `<section>` ROOT carries `overflow-x-clip`\n"
+        "        (NEVER `overflow-hidden`). Why: a hero with a booking widget / guest\n"
+        "        selector / date field opens dropdown panels near the section's BOTTOM\n"
+        "        edge — `overflow-hidden` on the root DECAPITATES those panels at the\n"
+        "        section boundary (shipped failure: guests stepper cut in half by the\n"
+        "        next section). `overflow-x-clip` still prevents horizontal page scroll\n"
+        "        from decor while letting interactive panels escape vertically.\n"
         "      • Watermark size is CAPPED at `text-[14rem]` (≈ 224px). NEVER\n"
         "        `text-[20rem]` or larger — at that size a 2-character glyph spans\n"
         "        300-400px and inevitably overlaps neighbors.\n"
@@ -1867,6 +1882,36 @@ DROPDOWN / POPOVER STACKING (custom selects, autocompletes, calendars)
     to compete with form interactions in sections below the fold.
   • If you're using a `<select>` native element, no z-index is needed —
     browser handles it. Only custom-rolled dropdowns need this rule.
+  • CLIPPING — z-index does NOT beat `overflow-hidden`: a panel inside a
+    section whose root carries `overflow-hidden` gets CUT OFF at the section
+    boundary regardless of z-[80]. Sections containing ANY interactive
+    dropdown use `overflow-x-clip` on the root and keep decorative bleed in
+    the dedicated `absolute inset-0 overflow-hidden pointer-events-none`
+    layer (see hero rules). Additionally, when the trigger sits in the LOWER
+    HALF of a min-h-screen section (booking bar at the bottom of a hero),
+    open the panel UPWARD: `absolute bottom-full mb-2` instead of
+    `top-full mt-2` — a downward panel there hangs over the section edge.
+
+DATE INPUTS (booking bars, reservation/contact forms) — LOCALE-PROOF PATTERN
+  • NEVER show the raw text of a native `<input type="date">`: browsers
+    render its value in the OS locale (\"12.06.2026\", Cyrillic/Arabic month
+    names in the popup) with segment styling you can't control — it clashes
+    with the site typography and reads as a foreign widget.
+  • Use the overlay pattern (native picker still works, display is yours):
+      <label className="relative flex items-center gap-2 cursor-pointer">
+        <CalendarIcon className="h-4 w-4 text-primary" aria-hidden="true" />
+        <span className="text-sm font-medium text-foreground">
+          {{dayjs(checkIn).format("DD MMM YYYY")}}
+        </span>
+        <input type="date" value={{checkIn}} onChange={{...}}
+               aria-label="Check-in date"
+               className="absolute inset-0 h-full w-full opacity-0 cursor-pointer" />
+      </label>
+    `import dayjs from "dayjs"` — dayjs IS preinstalled in the template.
+    The invisible input keeps the native calendar + keyboard + mobile UX;
+    the visible `<span>` keeps the typography consistent in every locale.
+  • Exactly ONE calendar icon per field (yours). The native indicator is
+    invisible along with the input — never render a second icon.
 
 IMAGE RENDERING — NEVER SHIP A BROKEN OR PARTIAL IMAGE
   • EVERY `<Image>` / `<img>` MUST have a real URL coming from
@@ -2848,14 +2893,18 @@ MANDATORY RULES
    • NEVER render any placeholder ('—', '...', '(coming soon)', italicized
      blank) for an empty column. If a column has zero links, the column
      MUST NOT be rendered at all.
-   • The grid column count adjusts to actual data, AND when there's only
-     1 link group you MUST switch layout to avoid a single lonely column
-     of links floating with empty dark space beside it:
-       - 1 group  → render the links as a HORIZONTAL inline row above the
-         copyright bar (`flex flex-wrap gap-x-6 gap-y-2`), NOT as a 1-of-N
-         column. The brand block stays on top. No empty grid cells.
-       - 2 groups → `grid-cols-1 sm:grid-cols-2` paired with the brand
-         block (3-up overall: brand | group1 | group2).
+   • The grid column count adjusts to actual data — the footer BODY is a
+     multi-column grid at md+ in EVERY case. NEVER stack brand block,
+     contact details, newsletter, and link list in ONE full-width vertical
+     column — that ships a footer taller than the viewport with a
+     mile-wide email input (shipped failure mode):
+       - 1 group  → `grid grid-cols-1 md:grid-cols-3 gap-10 lg:gap-14`:
+         col 1 = brand block (wordmark + tagline + short description +
+         social icon row); col 2 = the link group as a vertical column;
+         col 3 = contact details (address / phone / email / hours) +
+         newsletter form. Three balanced columns, NOT a stack.
+       - 2 groups → `grid-cols-1 sm:grid-cols-2 md:grid-cols-4` (brand |
+         group1 | group2 | newsletter+contact).
        - 3 groups → `grid-cols-1 sm:grid-cols-2 md:grid-cols-4` (brand
          takes 1 col, 3 groups take 3 cols — fills the full row).
        - 4+ groups → `grid-cols-2 md:grid-cols-4` for the groups; brand
@@ -2863,6 +2912,15 @@ MANDATORY RULES
    • The header labels above each list come from the actual `group` field
      in landing.footer.links (Title-Case it). Do not invent labels like
      "Languages", "Support", "Legal" if the data doesn't carry them.
+   • WIDTH / HEIGHT CAPS (the footer is a footer, not a landing section):
+       - Newsletter `<form>` (input + button row): `max-w-sm` — NEVER let
+         the email input stretch the full container width.
+       - Brand description: `max-w-xs`, ≤2 lines of text-sm.
+       - Footer body vertical padding: `py-12 md:py-16` MAX. The whole
+         footer must fit well under one viewport.
+       - `business_info.hours`: render each schedule entry on its OWN line
+         (split the string on '·' or '|' when present) — never one long
+         run-together line of three venues' hours.
 9. FOOTER BODY — NO ORPHAN CTA BUTTONS:
    • The footer's PRIMARY purpose is wayfinding (links) + brand info +
      newsletter sign-up. NEVER place a primary CTA button ("Book a Free

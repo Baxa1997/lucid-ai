@@ -122,6 +122,15 @@ async def run_landing_fixers(workspace_path: str, websocket: Any = None) -> dict
     # carries any decorative absolute element (huge type, blob blur, big
     # negative offset).
     _run("fix_section_overflow_clip", F.fix_section_overflow_clip, workspace_path)
+    # overflow-hidden on a section root decapitates dropdown panels (guest
+    # stepper / calendar popover) at the section boundary. Downgrade to
+    # overflow-x-clip when the section contains a top-full/bottom-full panel.
+    # Runs AFTER fix_section_overflow_clip so a freshly added clip is also
+    # downgraded when needed.
+    _run("fix_popover_overflow_clip", F.fix_popover_overflow_clip, workspace_path)
+    # Manual <br> inside h1/h2 + natural wrapping scatters headlines across
+    # 3-4 sparse lines (orphan dash lines). Strip them; CSS wrap decides.
+    _run("fix_br_in_headings", F.fix_br_in_headings, workspace_path)
     # Sticky nav overlaps section headings on scroll without `scroll-mt-*` on
     # the section root. Backfill it for every `<section id="...">` that's an
     # anchor target. Fixes the systemic "nav over '07 — GALLERY'" bug.
