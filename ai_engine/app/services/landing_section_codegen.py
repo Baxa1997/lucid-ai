@@ -598,6 +598,28 @@ def _layout_content_looks_valid(content: str, kind: str, component_name: str) ->
     return True, "ok"
 
 
+# Sections whose ABSENCE breaks the page rather than just thinning it:
+# the hero (page opens on emptiness without it), header/footer chrome
+# (navigation dies), and form-bearing sections (nav anchors + CTAs point
+# at them — a missing contact/booking form kills the conversion flow).
+# Only these earn a deterministic fallback skeleton when codegen fails;
+# every other failed section is skipped so the page never ships a
+# generic-looking placeholder block where rich content was planned.
+_CRITICAL_SECTION_TYPES = frozenset({
+    "hero", "header", "footer",
+    "contact", "reservation", "newsletter",
+})
+
+
+def _is_critical_section(section: dict[str, Any]) -> bool:
+    """True when a failed section must fall back to a skeleton instead of
+    being dropped — its absence would break navigation or core flows."""
+    raw = (section.get("type") or section.get("role") or "").strip().lower()
+    if raw in _CRITICAL_SECTION_TYPES:
+        return True
+    return _canonical_section_type(raw) in _CRITICAL_SECTION_TYPES
+
+
 def _fallback_section_component(section: dict[str, Any], component_name: str, file_path: str) -> dict[str, Any]:
     """Deterministic, data-driven section fallback.
 
@@ -2345,8 +2367,29 @@ async def _generate_one_section(
             section_id, attempt, max_attempts, last_failure_reason,
         )
 
+    if not _is_critical_section(section):
+        logger.error(
+            "section %s: codegen FAILED after %d attempts — last failure: %s; "
+            "non-critical section — skipped (no skeleton)",
+            section_id, max_attempts, last_failure_reason,
+        )
+        try:
+            from app.services.telemetry import emit as _t_emit
+            _t_emit(
+                "section.skipped",
+                section_type=section.get("type") or section.get("role") or "",
+                section_id=str(section_id or ""),
+                index=section_index,
+                attempts=max_attempts,
+                reason=last_failure_reason[:200],
+            )
+        except Exception:
+            pass
+        return None
+
     logger.error(
-        "section %s: codegen FAILED after %d attempts — last failure: %s; writing deterministic fallback",
+        "section %s: codegen FAILED after %d attempts — last failure: %s; "
+        "critical section — writing deterministic fallback",
         section_id, max_attempts, last_failure_reason,
     )
     try:
@@ -2550,13 +2593,14 @@ async def generate_landing_sections(
 
         if ok:
             written_rel = write_text_file(workspace_path, file_path, res["content"])
-            if not written_rel:
+            if not written_rel and _is_critical_section(section):
                 # Safe writer rejected the generated content (typically unbalanced
-                # braces). Without this fallback, the section was silently dropped
-                # and the final page came up missing sections. Inject a deterministic
-                # skeleton so the page is always complete.
+                # braces). For critical sections (hero / chrome / forms) inject the
+                # deterministic skeleton — their absence breaks the page. Everything
+                # else is dropped below and the page composes without it.
                 logger.warning(
-                    "section %s (%s): generated file rejected by safe writer — writing fallback skeleton",
+                    "section %s (%s): generated file rejected by safe writer — "
+                    "critical section, writing fallback skeleton",
                     section.get("id"), section.get("type"),
                 )
                 fb = _fallback_section_component(section, component, file_path)
@@ -2571,17 +2615,15 @@ async def generate_landing_sections(
             else:
                 ok = False
                 logger.error(
-                    "section %s (%s): fallback skeleton ALSO rejected by safe writer — section dropped",
+                    "section %s (%s): content rejected by safe writer — section dropped",
                     section.get("id"), section.get("type"),
                 )
-        else:
-            # Codegen failed outright (timeout, overload, empty result). This
-            # used to skip the section entirely, leaving a hole in the page —
-            # the fallback machinery only fired on writer-rejection. Write the
-            # deterministic skeleton instead so the page is always complete;
-            # the "(N fallback)" counter and the artifact audit keep it visible.
+        elif _is_critical_section(section):
+            # Codegen failed outright (timeout, overload, empty result) on a
+            # section the page cannot live without — write the deterministic
+            # skeleton; the "(N fallback)" counter and audit keep it visible.
             logger.warning(
-                "section %s (%s): codegen FAILED — writing fallback skeleton",
+                "section %s (%s): codegen FAILED — critical section, writing fallback skeleton",
                 section.get("id"), section.get("type"),
             )
             fb = _fallback_section_component(section, component, file_path)
@@ -2599,6 +2641,13 @@ async def generate_landing_sections(
                     "section %s (%s): fallback skeleton ALSO rejected by safe writer — section dropped",
                     section.get("id"), section.get("type"),
                 )
+        else:
+            # Non-critical section failed after its retries — skip it. The
+            # composed page simply omits this block; no generic skeleton.
+            logger.warning(
+                "section %s (%s): codegen FAILED — non-critical section skipped",
+                section.get("id"), section.get("type"),
+            )
 
         sections_meta.append({
             "id": section.get("id"),
