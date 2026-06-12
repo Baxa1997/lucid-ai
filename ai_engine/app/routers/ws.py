@@ -344,10 +344,10 @@ async def websocket_agent(websocket: WebSocket):
                 logger.info("Using server fallback ANTHROPIC_API_KEY for user %s", user_id)
         
         logger.info(
-            "[%s] Using model: %s, anthropic_key prefix: %s (len=%d), openai_key=%s",
+            "[%s] Using model: %s, anthropic_key=%s (len=%d), openai_key=%s",
             project_id or "new-session",
             model_provider,
-            str(api_key or "")[:15],
+            "set" if api_key else "missing",
             len(str(api_key or "")),
             "yes" if openai_api_key else "no",
         )
@@ -806,7 +806,12 @@ async def websocket_agent(websocket: WebSocket):
                     # set it. The frontend's /api/platform-repos route falls back
                     # to using `chat_sessions.id` as the URL projectId in that case.
                     # So when the project_id-keyed lookups all miss, try the row id.
-                    if not prev_sid:
+                    # Only when project_id is UUID-shaped: `id` is a UUID column,
+                    # and comparing it against a text slug makes PostgREST throw —
+                    # which aborted this whole previous-session lookup via the
+                    # outer except instead of just skipping this tier.
+                    from app.services.pipeline_tenant import UUID_RE as _UUID_RE
+                    if not prev_sid and _UUID_RE.match(project_id or ""):
                         id_r = await (
                             client.table("chat_sessions")
                             .select("id, project_id")
@@ -957,12 +962,17 @@ async def websocket_agent(websocket: WebSocket):
                     logger.warning("Failed to send chat_history (new session): %s", _hist_err)
 
             # ── Skip pipeline if project was already fully generated ──
-            # Conditions to skip:
-            #   • platform_repo_url is set  → project was published to GitHub
+            # Conditions to skip (all are EVIDENCE of a finished generation):
+            #   • platform_repo_url / user_repo_url → project was pushed to a repo
             #   • generation_complete flag  → set by project_generator when done
-            #   • wizard re-entry: [LUCID_PROJECT] header + previous messages exist
-            #     → generation was attempted before (even if it failed mid-way);
-            #     never restart research from scratch on re-entry.
+            #   • real workspace on disk    → generated files survive in PREVIEW_WS_ROOT
+            #
+            # Wizard re-entry ([LUCID_PROJECT] header + previous messages) is
+            # deliberately NOT sufficient on its own: it only proves a
+            # generation was *attempted*. If it failed mid-way and left no
+            # repo, no complete-flag and no workspace, skipping here strands
+            # the user on "Project loaded" with nothing generated — instead
+            # we keep the task and let the pipeline resume below.
             _wizard_reentry = (
                 task
                 and "[LUCID_PROJECT]" in task[:500]
@@ -1001,17 +1011,43 @@ async def websocket_agent(websocket: WebSocket):
                 _has_real_workspace,
             )
 
-            if _prev_session_data and (
-                _prev_session_data.get("platform_repo_url")
-                or _prev_session_data.get("user_repo_url")
-                or _prev_session_data.get("generation_complete")
-                or _wizard_reentry
-                or _has_real_workspace
-            ):
+            _generation_evidence = bool(
+                _prev_session_data
+                and (
+                    _prev_session_data.get("platform_repo_url")
+                    or _prev_session_data.get("user_repo_url")
+                    or _prev_session_data.get("generation_complete")
+                    or _has_real_workspace
+                )
+            )
+
+            if _wizard_reentry and not _generation_evidence:
+                # Resume path: a generation was started for this project but
+                # left no repo, no complete-flag and no workspace — it died
+                # mid-way (server restart, crash, push failure with no
+                # backup). Keep the task so the pipeline re-runs; research is
+                # cached so the re-run does not start from scratch.
+                logger.info(
+                    "Resuming failed generation for project %s — wizard "
+                    "re-entry with no completion evidence; pipeline will re-run.",
+                    project_id,
+                )
+                try:
+                    await websocket.send_json({
+                        "type": "chat_message",
+                        "role": "agent",
+                        "content": (
+                            "Your previous generation didn't finish — "
+                            "picking it back up now."
+                        ),
+                    })
+                except Exception:
+                    pass
+
+            if _prev_session_data and _generation_evidence:
                 _skip_reason = (
                     "published" if _prev_session_data.get("platform_repo_url")
                     else "generation_complete flag" if _prev_session_data.get("generation_complete")
-                    else "wizard re-entry with previous messages" if _wizard_reentry
                     else "workspace files on disk (package.json + src/app)"
                 )
                 logger.info(

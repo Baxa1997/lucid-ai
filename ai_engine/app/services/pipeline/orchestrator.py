@@ -1812,6 +1812,11 @@ async def run_pipeline(
                             retriable=True,
                         )
                         await _send_phase(7, "Publishing project", "Push failed", "error")
+                        # The repo got nothing — /tmp is now the only copy of
+                        # the generated project. Persist it so a restart
+                        # doesn't destroy the user's work.
+                        from app.services.workspace_backup import backup_workspace_durably
+                        await backup_workspace_durably(workspace_path, _conv_id, websocket)
                     else:
                         db_session_id = chat_session_id
                         if db_session_id and html_url:
@@ -2041,6 +2046,11 @@ async def run_pipeline(
                         retriable=True,
                     )
                     await _send_phase(7, "Publishing project", "Push failed", "error")
+                    # The repo got nothing — /tmp is now the only copy of the
+                    # generated project. Persist it so a restart doesn't
+                    # destroy the user's work.
+                    from app.services.workspace_backup import backup_workspace_durably
+                    await backup_workspace_durably(workspace_path, _conv_id, websocket)
                 else:
                     logger.info("new_project_mode: successfully pushed to %s", new_repo_html_url)
 
