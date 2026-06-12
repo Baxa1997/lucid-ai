@@ -1425,12 +1425,29 @@ async def run_website_pipeline(
         result.get("header_ok"), result.get("footer_ok"), failed_routes,
     )
 
-    if failed_routes:
-        _failed_names = ", ".join(r.lstrip("/") or "Home" for r in failed_routes)
-        await _send(
-            websocket, "warning",
-            f"Some pages didn't generate cleanly: {_failed_names}",
+    # ── Artifact-coverage audit ────────────────────────────────────
+    # Names the missing pages in chat, emits a structured generation_audit
+    # event, and records coverage on the GenerationResult — a partial site
+    # must never be a silent success. Never blocks the pipeline.
+    try:
+        from app.services.generation_audit import report_artifact_coverage
+
+        def _route_name(route: str) -> str:
+            return (route or "").strip().lstrip("/") or "Home"
+
+        await report_artifact_coverage(
+            pipeline="website",
+            websocket=websocket,
+            planned=[_route_name(r) for r in page_results.keys()],
+            missing=[_route_name(r) for r in failed_routes],
+            artifact_label="page",
+            generation=generation,
+            recovery_hint=(
+                "Ask me to finish the missing pages and I'll generate just those."
+            ),
         )
+    except Exception as exc:
+        logger.warning("website_pipeline: artifact audit failed (non-fatal) — %s", exc)
 
     # ── Stage 6.5: Derive content schema (editor metadata) ─────────
     # Walks src/content/pages/*.json that Claude just wrote and

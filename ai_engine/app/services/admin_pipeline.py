@@ -1106,9 +1106,11 @@ async def run_admin_pipeline(
         return page_result
 
     all_tasks = []
+    planned_per_entity: dict[str, int] = {name: 0 for name in by_entity}
     for entity in data_model.tables:
         for page_type, rel_path, prompt in pages_for_entity(entity, plan):
             all_tasks.append(_bounded_page(entity, page_type, rel_path, prompt))
+            planned_per_entity[entity.name] += 1
 
     logger.info(
         "[%s] Admin Stage 6: launching %d parallel calls (concurrency=%d)",
@@ -1162,15 +1164,54 @@ async def run_admin_pipeline(
         project_id, total_files, total_errors,
         total_actual, total_est, mock_codegen,
     )
+    # ── Artifact-coverage audit (per-entity) ────────────────────────
+    # The aggregate file count below can mask per-entity gaps (entity A
+    # writing 4 files while entity B wrote 2 still sums to "complete").
+    # Audit each entity against ITS planned page count and report the
+    # incomplete ones by name — structured event + chat warning + metadata.
+    def _entity_label(name: str) -> str:
+        ent = by_entity.get(name)
+        return str(getattr(ent, "plural_label", "") or getattr(ent, "name", "") or name)
+
+    incomplete_entities = [
+        name for name, bucket in codegen_results.items()
+        if len(bucket["files_written"]) < planned_per_entity.get(name, 0)
+    ]
+    try:
+        from app.services.generation_audit import report_artifact_coverage
+        await report_artifact_coverage(
+            pipeline="admin",
+            websocket=websocket,
+            planned=[_entity_label(n) for n in codegen_results],
+            missing=[_entity_label(n) for n in incomplete_entities],
+            artifact_label="entity",
+            generation=generation,
+            recovery_hint=(
+                "Ask me to finish the incomplete sections and I'll regenerate just those."
+            ),
+        )
+    except Exception as exc:
+        logger.warning(
+            "[%s] Admin artifact audit failed (non-fatal): %s", project_id, exc,
+        )
+
     expected_files = len(data_model.tables) * 3
     if not mock_codegen and (total_files < expected_files or total_errors > 0):
+        _missing_names = ", ".join(_entity_label(n) for n in incomplete_entities[:8])
         logger.error(
-            "[%s] Admin Stage 6 FAILED: files=%d/%d validator_errors=%d",
+            "[%s] Admin Stage 6 FAILED: files=%d/%d validator_errors=%d incomplete=%s",
             project_id, total_files, expected_files, total_errors,
+            incomplete_entities,
         )
         await _send(
             websocket, "error",
-            "The dashboard pages did not pass code validation. Please retry when credits are available.",
+            (
+                f"The dashboard pages for {_missing_names} did not generate cleanly. "
+                "Please retry when credits are available."
+                if _missing_names else
+                "The dashboard pages did not pass code validation. "
+                "Please retry when credits are available."
+            ),
         )
         return False
 

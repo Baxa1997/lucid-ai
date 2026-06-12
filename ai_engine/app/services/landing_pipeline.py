@@ -677,6 +677,32 @@ async def run_landing_pipeline(
         "done",
     )
 
+    # ── Step 6.5: Artifact-coverage audit ────────────────────────────
+    # Parallel section codegen can lose individual sections (stream stall,
+    # token cap, safe-writer rejection of BOTH the section and its fallback
+    # skeleton). Report planned-vs-written loudly so an incomplete page is
+    # never a silent success — names the gaps in chat + emits a structured
+    # generation_audit event. Never blocks: a partial page is still usable.
+    try:
+        from app.services.generation_audit import report_artifact_coverage
+        _sections_meta = result.get("sections") or []
+        await report_artifact_coverage(
+            pipeline="landing",
+            websocket=websocket,
+            planned=[
+                str(m.get("id") or m.get("type") or "section")
+                for m in _sections_meta
+            ],
+            missing=[
+                str(m.get("id") or m.get("type") or "section")
+                for m in _sections_meta if not m.get("ok")
+            ],
+            artifact_label="section",
+            generation=generation,
+        )
+    except Exception as exc:
+        logger.warning("landing_pipeline: artifact audit failed (non-fatal) — %s", exc)
+
     # ── Step 7: Lean fixer chain ─────────────────────────────────────
     from app.services.landing_fixers import run_landing_fixers
     try:
