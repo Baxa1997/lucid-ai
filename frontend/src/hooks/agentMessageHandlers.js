@@ -1163,11 +1163,27 @@ export function createMessageDispatcher(getDeps) {
             }];
           });
 
-          if (hydrated.length > 0) {
+          // Collapse adjacent duplicates WITHIN the history batch itself.
+          // A re-sent handshake task (page refresh mid-generation) used to
+          // persist the same UserTask row twice; the livePrev dedup below
+          // can't see intra-batch pairs, so both rendered as a doubled user
+          // bubble. Adjacent-only so a legitimately repeated prompt with
+          // agent activity between is untouched.
+          const dedupedHydrated = hydrated.filter((h, idx) => {
+            if (idx === 0) return true;
+            const p = hydrated[idx - 1];
+            return !(
+              p.role === h.role &&
+              typeof h.content === 'string' && h.content.trim() &&
+              p.content === h.content
+            );
+          });
+
+          if (dedupedHydrated.length > 0) {
             setChatMessages(prev => {
               // Drop init_msg_0 placeholder — WS history is authoritative ordering
               const livePrev = prev.filter(p => p.id !== 'init_msg_0');
-              if (livePrev.length === 0) return hydrated;
+              if (livePrev.length === 0) return dedupedHydrated;
               // Dedup on TWO axes:
               //   1) id — matches re-replays where the backend sent the
               //      same DB row twice.
@@ -1192,7 +1208,7 @@ export function createMessageDispatcher(getDeps) {
                   .filter(p => typeof p.content === 'string' && p.content.trim())
                   .map(p => `${roleKey(p.role)}::${norm(p.content)}`)
               );
-              const toAdd = hydrated.filter(h => {
+              const toAdd = dedupedHydrated.filter(h => {
                 if (existingById.has(h.id)) return false;
                 if (typeof h.content === 'string' && h.content.trim()) {
                   const key = `${roleKey(h.role)}::${norm(h.content)}`;

@@ -1703,13 +1703,33 @@ async def websocket_agent(websocket: WebSocket):
                     return
 
             # ── Step 1: Save user task to DB ──────────────────
+            # Dedup guard: the SAME handshake task arrives again whenever the
+            # page is refreshed mid-generation (sessionStorage re-sends the
+            # wizard prompt) or the failed-generation resume path keeps the
+            # task. Persisting it again creates a second identical UserTask
+            # row, which the chat_history replay then renders as a doubled
+            # user bubble.
             if chat_session_id:
                 try:
-                    await ChatService.add_message(
+                    _last_user = await ChatService.last_message(
                         session_id=chat_session_id, role="user",
-                        content=task, event_type="UserTask",
                         user_jwt=user_jwt,
                     )
+                    if (
+                        _last_user
+                        and (_last_user.get("content") or "").strip() == task.strip()
+                    ):
+                        logger.info(
+                            "Skipping duplicate UserTask persist for chat %s "
+                            "(handshake re-sent the same task)",
+                            chat_session_id,
+                        )
+                    else:
+                        await ChatService.add_message(
+                            session_id=chat_session_id, role="user",
+                            content=task, event_type="UserTask",
+                            user_jwt=user_jwt,
+                        )
                 except Exception as exc:
                     logger.warning("Failed to persist user message: %s", exc)
 

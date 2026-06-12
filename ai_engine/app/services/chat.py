@@ -226,6 +226,33 @@ class ChatService:
             raise HTTPException(status_code=500, detail="Internal server error") from exc
 
     @staticmethod
+    async def last_message(
+        *,
+        session_id: str,
+        user_jwt: str | None,
+        role: str | None = None,
+    ) -> Optional[dict]:
+        """Return the most recent message row for a session (optionally
+        filtered by role), or None. Used to dedup re-sent handshake tasks
+        before persisting."""
+        try:
+            async def _select():
+                async with db_client(user_jwt) as client:
+                    q = (
+                        client.table("chat_messages")
+                        .select("id, role, content, event_type, created_at")
+                        .eq("session_id", session_id)
+                    )
+                    if role:
+                        q = q.eq("role", role)
+                    result = await q.order("created_at", desc=True).limit(1).execute()
+                return result.data[0] if result.data else None
+            return await _with_retry(_select)
+        except Exception as exc:
+            logger.warning("last_message lookup failed (treating as none): %s", exc)
+            return None
+
+    @staticmethod
     async def add_messages(
         events: list[dict],
         session_id: str,

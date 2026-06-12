@@ -487,6 +487,50 @@ describe('dispatcher — chat_history', () => {
     const result = updater([]);
     expect(result[0].content).toBe('Real user prompt');
   });
+
+  it('collapses adjacent duplicate UserTask rows (re-sent handshake task)', () => {
+    // Regression: a page refresh mid-generation re-sent the wizard task,
+    // the backend persisted it twice, and the replay rendered the user's
+    // prompt as a doubled bubble. Intra-batch adjacent dedup collapses it.
+    const deps = makeDeps();
+    dispatch({
+      type: 'chat_history',
+      messages: [
+        {
+          id: 'u1', role: 'user', event_type: 'UserTask',
+          content: '[LUCID_PROJECT] meta\n\nBuild admin panel for crm system',
+          created_at: '2026-06-12T00:00:00Z',
+        },
+        {
+          id: 'u2', role: 'user', event_type: 'UserTask',
+          content: '[LUCID_PROJECT] meta\n\nBuild admin panel for crm system',
+          created_at: '2026-06-12T00:00:07Z',
+        },
+      ],
+    }, deps);
+    const updater = deps.setChatMessages.mock.calls[0][0];
+    const result = updater([
+      { id: 'init_msg_0', role: 'user', content: 'Build admin panel for crm system' },
+    ]);
+    const userBubbles = result.filter(m => m.role === 'user');
+    expect(userBubbles).toHaveLength(1);
+    expect(userBubbles[0].content).toBe('Build admin panel for crm system');
+  });
+
+  it('keeps identical user prompts when agent activity sits between them', () => {
+    const deps = makeDeps();
+    dispatch({
+      type: 'chat_history',
+      messages: [
+        { id: 'u1', role: 'user', content: 'try again', created_at: '2026-06-12T00:00:00Z' },
+        { id: 'a1', role: 'assistant', content: 'Something failed', created_at: '2026-06-12T00:00:05Z' },
+        { id: 'u2', role: 'user', content: 'try again', created_at: '2026-06-12T00:00:10Z' },
+      ],
+    }, deps);
+    const updater = deps.setChatMessages.mock.calls[0][0];
+    const result = updater([]);
+    expect(result.filter(m => m.role === 'user')).toHaveLength(2);
+  });
 });
 
 // ─── chat_message dedup ────────────────────────────────────
