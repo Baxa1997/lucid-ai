@@ -452,21 +452,33 @@ async def generate_pages_many(
         sections = page_input.get("sections") or []
         voice_context = page_input.get("voice_context")
         async with sem:
-            return await generate_page(
-                page_meta=page_meta,
-                sections=sections,
-                brand_name=brand_name,
-                motif=motif,
-                palette=palette,
-                typography=typography,
-                design_system=design_system,
-                personality=personality,
-                references=references,
-                design_tokens=design_tokens,
-                voice_context=voice_context,
-                api_key=api_key,
-                websocket=websocket,
-            )
+            # generate_page catches its own Claude-call errors, but its
+            # prompt builders run before that try block — a malformed
+            # page_meta used to raise straight through gather() and lose
+            # EVERY page. The documented contract is "None for pages that
+            # failed", so enforce it here.
+            try:
+                return await generate_page(
+                    page_meta=page_meta,
+                    sections=sections,
+                    brand_name=brand_name,
+                    motif=motif,
+                    palette=palette,
+                    typography=typography,
+                    design_system=design_system,
+                    personality=personality,
+                    references=references,
+                    design_tokens=design_tokens,
+                    voice_context=voice_context,
+                    api_key=api_key,
+                    websocket=websocket,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "page_codegen[%s]: unhandled exception — %s",
+                    (page_meta.get("slug") or "home"), exc,
+                )
+                return None
 
     tasks = [_one(i, p) for i, p in enumerate(pages)]
     return await asyncio.gather(*tasks, return_exceptions=False)

@@ -275,6 +275,58 @@ async def generate_website(
             failed_routes.append(label)
             page_results[label] = False
 
+    # ── Retry round: every failed unit gets exactly one more shot ────
+    # Most page failures are transient (Anthropic overload, timeout, one
+    # truncated stream). Without this, a single bad call permanently
+    # 404s that route in the generated site.
+    _retry_units: list[tuple[str, Any]] = []
+    if failed_routes:
+        _page_by_route: dict[str, dict] = {}
+        for page in pages:
+            if isinstance(page, dict):
+                _r = (page.get("route") or page.get("path") or "/").strip()
+                _page_by_route.setdefault(_r, page)
+        for route in failed_routes:
+            if route in _page_by_route:
+                _retry_units.append((route, _bounded_page(_page_by_route[route])))
+    if not skip_header and not header_ok:
+        _retry_units.append(("__header__", _bounded_header()))
+    if not skip_footer and not footer_ok:
+        _retry_units.append(("__footer__", _bounded_footer()))
+
+    if _retry_units:
+        logger.info(
+            "website_orchestrator: retrying %d failed unit(s) once: %s",
+            len(_retry_units), [u for u, _ in _retry_units],
+        )
+        _total_units += len(_retry_units)  # keep the narrator's N/M honest
+        retry_results = await asyncio.gather(
+            *(t for _, t in _retry_units), return_exceptions=True,
+        )
+        _recovered: set[str] = set()
+        for (label, _), res in zip(_retry_units, retry_results):
+            if isinstance(res, BaseException):
+                logger.error("website_orchestrator: retry %s raised — %s", label, res)
+                continue
+            if label == "__header__":
+                if isinstance(res, dict) and res.get("path") and res.get("content"):
+                    all_files.append(res)
+                    header_ok = True
+            elif label == "__footer__":
+                if isinstance(res, dict) and res.get("path") and res.get("content"):
+                    all_files.append(res)
+                    footer_ok = True
+            elif isinstance(res, list) and res:
+                all_files.extend(res)
+                page_results[label] = True
+                _recovered.add(label)
+        if _recovered:
+            failed_routes = [r for r in failed_routes if r not in _recovered]
+            logger.info(
+                "website_orchestrator: retry recovered %d route(s): %s",
+                len(_recovered), sorted(_recovered),
+            )
+
     logger.info(
         "website_orchestrator: done — %d files, %d/%d pages ok, header=%s footer=%s",
         len(all_files), sum(1 for v in page_results.values() if v),

@@ -855,10 +855,36 @@ async def generate_page_per_section(
                     visual_dna=visual_dna_for_page,
                 )
             except Exception as exc:
+                # _generate_one_section already falls back internally after
+                # its retries, so reaching here means prompt-building itself
+                # raised (deterministic — a page-level retry won't fix it).
+                # Write the same deterministic fallback skeleton landing uses
+                # instead of silently dropping the section from the page.
                 logger.warning(
-                    "%s: section %d (%s) threw — %s",
+                    "%s: section %d (%s) threw — writing fallback — %s",
                     label, idx, section.get("type"), exc,
                 )
+                try:
+                    from app.services.landing_section_codegen import (
+                        _component_name, _fallback_section_component,
+                        _section_filename,
+                    )
+                    fb_filename = _section_filename(section)
+                    fb = _fallback_section_component(
+                        section,
+                        _component_name(fb_filename),
+                        f"src/components/sections/{fb_filename}",
+                    )
+                    if fb and fb.get("content"):
+                        return {
+                            "path": f"src/components/pages/{slug}/{fb_filename}",
+                            "content": fb["content"],
+                        }
+                except Exception as fb_exc:
+                    logger.error(
+                        "%s: section %d fallback also failed — %s",
+                        label, idx, fb_exc,
+                    )
                 return None
             if not result:
                 return None

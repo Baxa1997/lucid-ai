@@ -2575,7 +2575,30 @@ async def generate_landing_sections(
                     section.get("id"), section.get("type"),
                 )
         else:
-            logger.warning("section %s (%s): codegen FAILED — skipping", section.get("id"), section.get("type"))
+            # Codegen failed outright (timeout, overload, empty result). This
+            # used to skip the section entirely, leaving a hole in the page —
+            # the fallback machinery only fired on writer-rejection. Write the
+            # deterministic skeleton instead so the page is always complete;
+            # the "(N fallback)" counter and the artifact audit keep it visible.
+            logger.warning(
+                "section %s (%s): codegen FAILED — writing fallback skeleton",
+                section.get("id"), section.get("type"),
+            )
+            fb = _fallback_section_component(section, component, file_path)
+            written_rel = write_text_file(workspace_path, file_path, fb["content"])
+            if written_rel:
+                ok = True
+                used_fallback = True
+                files_written.append(written_rel)
+                page_imports.append(
+                    f'import {component} from "@/components/sections/{component}";'
+                )
+                page_renders.append(f"<{component} />")
+            else:
+                logger.error(
+                    "section %s (%s): fallback skeleton ALSO rejected by safe writer — section dropped",
+                    section.get("id"), section.get("type"),
+                )
 
         sections_meta.append({
             "id": section.get("id"),

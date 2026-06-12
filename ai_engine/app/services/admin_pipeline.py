@@ -1106,10 +1106,15 @@ async def run_admin_pipeline(
         return page_result
 
     all_tasks = []
+    # Parallel list of (entity, page_type, rel_path, prompt) aligned with
+    # all_tasks — used by the retry round and the deterministic fallback
+    # below to identify exactly which pages still need work.
+    task_specs: list[tuple[TableDefinition, str, str, dict]] = []
     planned_per_entity: dict[str, int] = {name: 0 for name in by_entity}
     for entity in data_model.tables:
         for page_type, rel_path, prompt in pages_for_entity(entity, plan):
             all_tasks.append(_bounded_page(entity, page_type, rel_path, prompt))
+            task_specs.append((entity, page_type, rel_path, prompt))
             planned_per_entity[entity.name] += 1
 
     logger.info(
@@ -1126,13 +1131,41 @@ async def run_admin_pipeline(
     )
     page_results = await asyncio.gather(*all_tasks, return_exceptions=True)
 
+    # ── Retry round: failed pages get exactly one more shot ─────────
+    # A single transient Claude failure (overload, timeout) used to leave
+    # the page missing, which the gate below turned into a FULL pipeline
+    # restart via the legacy generator. Retry the failed pages once before
+    # judging the stage.
+    _retry_specs = [
+        spec
+        for spec, r in zip(task_specs, page_results)
+        if isinstance(r, BaseException) or not r.get("written")
+    ]
+    if _retry_specs and not mock_codegen:
+        logger.info(
+            "[%s] Admin Stage 6: retrying %d failed page(s) once: %s",
+            project_id, len(_retry_specs),
+            [f"{e.name}/{pt}" for e, pt, _, _ in _retry_specs],
+        )
+        _admin_total += len(_retry_specs)  # keep the narrator's N/M honest
+        _retry_results = await asyncio.gather(
+            *[
+                _bounded_page(entity, page_type, rel_path, prompt)
+                for entity, page_type, rel_path, prompt in _retry_specs
+            ],
+            return_exceptions=True,
+        )
+        # Append: failed originals contribute nothing in the grouping below,
+        # retry successes add their file — per-entity counts stay correct.
+        page_results = list(page_results) + list(_retry_results)
+
     # Group page results back per-entity for the post-stage gate.
     codegen_results: dict[str, dict[str, Any]] = {
         name: {"files_written": [], "validation_errors": [], "page_cost": 0.0}
         for name in by_entity
     }
     for r in page_results:
-        if isinstance(r, Exception):
+        if isinstance(r, BaseException):
             logger.error(
                 "[%s] Admin Stage 6 task raised — %s",
                 project_id, r, exc_info=r,
@@ -1147,6 +1180,44 @@ async def run_admin_pipeline(
                 {"file": r["rel_path"], "issues": r["issues"]}
             )
 
+    # ── Deterministic fallback for pages still missing after retry ──
+    # _mock_page_jsx produces a contract-valid placeholder (correct
+    # imports, passes the validator, compiles). A placeholder page the
+    # user can ask to regenerate beats restarting the entire pipeline
+    # through the legacy generator because one page failed twice.
+    _written_paths = {
+        r["rel_path"]
+        for r in page_results
+        if not isinstance(r, BaseException) and r.get("written")
+    }
+    _fallback_pages: list[str] = []
+    _fallback_entities: set[str] = set()
+    if not mock_codegen:
+        from app.services.admin_codegen import _mock_page_jsx
+        from app.services.project_writer import write_text_file as _write_text
+        for entity, page_type, rel_path, _prompt in task_specs:
+            if rel_path in _written_paths:
+                continue
+            try:
+                placeholder = _mock_page_jsx(entity, page_type, plan)
+                written_rel = _write_text(workspace_path, rel_path, placeholder)
+            except Exception as _fb_exc:
+                logger.error(
+                    "[%s] Admin Stage 6: fallback write for %s/%s failed — %s",
+                    project_id, entity.name, page_type, _fb_exc,
+                )
+                continue
+            if written_rel:
+                codegen_results[entity.name]["files_written"].append(written_rel)
+                _fallback_pages.append(written_rel)
+                _fallback_entities.add(entity.name)
+        if _fallback_pages:
+            logger.warning(
+                "[%s] Admin Stage 6: wrote %d placeholder page(s) after retry "
+                "exhausted: %s",
+                project_id, len(_fallback_pages), _fallback_pages,
+            )
+
     total_actual = sum(b["page_cost"]                    for b in codegen_results.values())
     total_est    = len(all_tasks) * _EST_PAGE_COST_USD
     total_files  = sum(len(b["files_written"])           for b in codegen_results.values())
@@ -1156,6 +1227,7 @@ async def run_admin_pipeline(
     generation.metadata.update({
         "crud_files_written": total_files,
         "crud_validation_errors": total_errors,
+        "crud_fallback_pages": len(_fallback_pages),
         "mock_codegen": mock_codegen,
     })
     logger.info(
@@ -1177,13 +1249,16 @@ async def run_admin_pipeline(
         name for name, bucket in codegen_results.items()
         if len(bucket["files_written"]) < planned_per_entity.get(name, 0)
     ]
+    # Degraded = incomplete after fallback (should be rare) OR served by a
+    # placeholder page. Both are user-visible quality gaps worth naming.
+    _degraded_entities = sorted(set(incomplete_entities) | _fallback_entities)
     try:
         from app.services.generation_audit import report_artifact_coverage
         await report_artifact_coverage(
             pipeline="admin",
             websocket=websocket,
             planned=[_entity_label(n) for n in codegen_results],
-            missing=[_entity_label(n) for n in incomplete_entities],
+            missing=[_entity_label(n) for n in _degraded_entities],
             artifact_label="entity",
             generation=generation,
             recovery_hint=(
@@ -1195,8 +1270,14 @@ async def run_admin_pipeline(
             "[%s] Admin artifact audit failed (non-fatal): %s", project_id, exc,
         )
 
+    # Hard gate: only when files are genuinely missing AFTER the retry and
+    # the placeholder fallback. Validator warnings alone no longer abort —
+    # the files exist, the audit reports them, and Stage 7's build check
+    # catches anything that actually breaks the app. The old gate failed
+    # the WHOLE pipeline (restarting via the legacy generator) on a single
+    # missing page or one validator warning.
     expected_files = len(data_model.tables) * 3
-    if not mock_codegen and (total_files < expected_files or total_errors > 0):
+    if not mock_codegen and total_files < expected_files:
         _missing_names = ", ".join(_entity_label(n) for n in incomplete_entities[:8])
         logger.error(
             "[%s] Admin Stage 6 FAILED: files=%d/%d validator_errors=%d incomplete=%s",
@@ -1209,7 +1290,7 @@ async def run_admin_pipeline(
                 f"The dashboard pages for {_missing_names} did not generate cleanly. "
                 "Please retry when credits are available."
                 if _missing_names else
-                "The dashboard pages did not pass code validation. "
+                "The dashboard pages did not generate cleanly. "
                 "Please retry when credits are available."
             ),
         )
