@@ -834,6 +834,16 @@ For EVERY section, populate:
      returns generic Western chefs). Same for "italian chef pizza", etc.
   5. Press / logos sections — image_queries should be empty []; the section
      renders text/logo placeholders, not photos.
+  6. HERO image subject = THE VENUE / PRODUCT / EXPERIENCE, never the city.
+     "austin skyline dusk" on a garden-estate hotel hero ships downtown
+     towers behind copy about a secluded courtyard — a subject mismatch the
+     user reads instantly as wrong. NEVER use "skyline", "downtown",
+     "cityscape", "aerial city" in a hero query unless the brand itself is
+     ABOUT the city (city tours, real-estate towers). The city name may
+     appear only as a TRAILING modifier after the venue subject:
+       BAD  → "austin skyline at dusk", "downtown austin aerial"
+       GOOD → "boutique hotel courtyard pool dusk", "garden estate hotel
+              exterior austin"
 
 DESIGN_SEED: {design_seed} — if unsure between two equally-good choices, let this seed nudge you toward the less-common one.
 

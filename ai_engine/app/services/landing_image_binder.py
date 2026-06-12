@@ -305,13 +305,32 @@ async def bind_landing_images(
             tokens = []
         return " ".join(tokens).strip()
 
+    # City-skyline tokens hijack hero searches: "austin skyline dusk" ships
+    # downtown towers behind copy about a secluded garden estate (Saint
+    # Cecilia run, 2026-06-12). Strip them from hero queries and re-anchor
+    # on the venue subject — unless the brand itself is city-centric (its
+    # own domain terms mention the city/skyline).
+    _SKYLINE_TOKENS = {"skyline", "downtown", "cityscape", "aerial"}
+    _domain_is_city_centric = any(
+        "skyline" in t or "city" in t or "tour" in t for t in domain_terms
+    )
+
     def _enrich(q: str, is_hero: bool, stype: str) -> str:
         """Sanitise the query, apply per-section template, then append domain anchors.
 
         Hero queries are usually already specific (the Brief writes them with
-        full subject context), so we don't double-enrich them — only sanitise.
+        full subject context), so we don't double-enrich them — only sanitise
+        plus the skyline-hijack guard above.
         """
         cleaned = _sanitise(q) or q
+        if is_hero and not _domain_is_city_centric:
+            toks = cleaned.split()
+            if any(t.lower() in _SKYLINE_TOKENS for t in toks):
+                toks = [t for t in toks if t.lower() not in _SKYLINE_TOKENS]
+                cleaned = " ".join(toks).strip()
+                ql = cleaned.lower()
+                if domain_suffix and not any(t and t in ql for t in domain_terms):
+                    cleaned = f"{cleaned} {domain_suffix}".strip()
         if not is_hero:
             cleaned = _apply_template(stype, cleaned, cuisine_anchor)
         if is_hero or not domain_suffix:

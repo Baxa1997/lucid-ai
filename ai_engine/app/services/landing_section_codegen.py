@@ -161,7 +161,7 @@ _FALLBACK_SKELETONS: dict[str, str] = {
     "gallery": (
         "STRUCTURAL FLOOR — image grid section minimum:\n"
         "  • Heading group above (eyebrow + h2 + subhead, max-w-2xl).\n"
-        "  • Section root needs `overflow-hidden` to contain decorative blobs.\n"
+        "  • Decorative blobs live in a dedicated `absolute inset-0 overflow-hidden pointer-events-none` layer; the section root carries `overflow-x-clip` (never `overflow-hidden` — it clips lightbox/dropdown panels at the section boundary).\n"
         "  • PATTERN — pick ONE from this catalog (driven by visual_dna.layout_signature + section_flavors.gallery):\n"
         "      A. BENTO MOSAIC — `grid grid-cols-12 gap-3 md:gap-4` with 1 feature image at `col-span-7 row-span-2 aspect-[4/3]` + 2 stacked at `col-span-5 aspect-[3/2]` + 3-4 smaller `col-span-3 aspect-square` to fill. Editorial / architecture / portfolio brands (the architecture-site bottom-row pattern).\n"
         "      B. SCROLL-SNAP HORIZONTAL — outer `flex gap-4 overflow-x-auto snap-x snap-mandatory pb-4 -mx-4 px-4` with each tile `min-w-[280px] md:min-w-[360px] snap-start aspect-[3/4] rounded-2xl`. Add a `text-xs text-muted-foreground` hint below: `← Scroll to explore`. Best for travel / destination / restaurant / story-led brands.\n"
@@ -176,8 +176,18 @@ _FALLBACK_SKELETONS: dict[str, str] = {
         "STRUCTURAL FLOOR — testimonial cards minimum:\n"
         "  • Heading group above.\n"
         "  • ≥3 quote cards (grid or carousel — pick from visual_dna.section_flavors.testimonials).\n"
+        "  • GRID COLUMNS ARE COUNT-DRIVEN — the column count MUST match the actual\n"
+        "    item count so no row ships with a lonely card + empty cells:\n"
+        "      2 items → `grid md:grid-cols-2 gap-6` (NEVER 3-col with a hole)\n"
+        "      3 items → `grid md:grid-cols-3 gap-6`\n"
+        "      4 items → `md:grid-cols-2 lg:grid-cols-4` OR 2x2\n"
+        "      5-6 items → `md:grid-cols-2 lg:grid-cols-3` (balanced rows)\n"
+        "      7+ items → switch to carousel; never a 4-row wall of cards.\n"
         "  • Each card: optional star row (lucide Star, fill-primary), quote body (italic or display serif when quote is hero-level), attribution row (avatar circle with initials OR <Image>, name font-semibold, role/location text-sm muted).\n"
-        "  • Cards in a row share heights via h-full + items-stretch.\n"
+        "  • QUOTE LENGTH DISCIPLINE — quote body `text-base md:text-lg` with\n"
+        "    `line-clamp-5` when quotes vary in length; cards in a row share\n"
+        "    heights via h-full + items-stretch so mixed-length quotes don't\n"
+        "    produce a ragged skyline.\n"
         "  • Decorative quote-mark glyph or culturally-resonant frame element from visual_dna.decorative_motifs."
     ),
     "features": (
@@ -226,7 +236,11 @@ _FALLBACK_SKELETONS: dict[str, str] = {
         "STRUCTURAL FLOOR — FAQ accordion:\n"
         "  • Heading group above (eyebrow + h2).\n"
         "  • Vertical accordion using <details>+<summary> OR useState. Each row: question (font-semibold), answer (text-muted-foreground) revealed on toggle.\n"
-        "  • Plus icon rotates 45° on open. max-w-3xl mx-auto for readability."
+        "  • Plus icon rotates 45° on open. max-w-3xl mx-auto for readability.\n"
+        "  • >6 items at lg+ → split into TWO columns (`lg:grid lg:grid-cols-2 lg:gap-x-10`,\n"
+        "    items split evenly by index) so the page doesn't grow a 1500px single-column rail.\n"
+        "  • Decorative numerals/glyphs stay in the clipped decor layer (small, ≤text-[10rem],\n"
+        "    never overlapping the accordion rows)."
     ),
     "pricing": (
         "STRUCTURAL FLOOR — pricing tiers:\n"
@@ -263,7 +277,11 @@ _FALLBACK_SKELETONS: dict[str, str] = {
         "  • Heading copy MUST also include book/reserve/schedule intent\n"
         "    (e.g. \"Reserve Your Table\", \"Book Your Stay\", \"Schedule a Visit\").\n"
         "  • Two-column layout: form (left or right), info panel with brand business_info (address/phone/hours).\n"
-        "  • Form fields: name, email, phone, date (input type=date), party-size or quantity (input type=number), notes textarea, submit.\n"
+        "  • Form fields: name, email, phone, date, party-size or quantity (input type=number), notes textarea, submit.\n"
+        "  • DATE FIELDS use the locale-proof overlay pattern from the DATE INPUTS\n"
+        "    system rules (visible dayjs-formatted span + invisible native input on\n"
+        "    top) — NEVER a bare visible `<input type=\"date\">`, its display text\n"
+        "    follows the OS locale and clashes with the site typography.\n"
         "  • Real validation (required + email regex) + success state on submit. Mark file 'use client'."
     ),
     "contact": (
@@ -1166,7 +1184,7 @@ GALLERY SECTIONS — render section.images as a real responsive grid:
 
 FORM SECTIONS (type contact_form | reservation | booking_form | contact | newsletter)
   • Render an actual `<form>` with proper labels, focus rings, and a submit button.
-  • Reservation fields: name, email, phone, date (input type="date"), party size (input type="number"), special requests (textarea).
+  • Reservation fields: name, email, phone, date (using the DATE INPUTS overlay pattern below — never a bare visible native date input), party size (input type="number"), special requests (textarea).
   • Newsletter: just email + submit.
   • Form panel: `bg-card border border-border` plus the corner-radius implied by design_system.accent_shape (see DESIGN SYSTEM below).
   • Submit button: full primary CTA styling, full width on mobile.
@@ -2319,12 +2337,17 @@ async def _generate_one_section(
             "treatment, and overall page rhythm.\n\n"
         ) + usr_p
 
+    # Attempt 2 is a GUIDED retry when attempt 1 produced lintable contract
+    # violations: the violation list is appended to the user prompt so the
+    # model fixes specific failures instead of re-rolling the dice.
+    usr_p_active = usr_p
+
     for attempt in range(1, max_attempts + 1):
         try:
             result = await asyncio.wait_for(
                 call_claude_for_json(
                     system_prompt=sys_p,
-                    user_prompt=usr_p,
+                    user_prompt=usr_p_active,
                     api_key=api_key,
                     websocket=websocket,
                     max_tokens=_SECTION_MAX_TOKENS,
@@ -2387,6 +2410,52 @@ async def _generate_one_section(
                         section_id, attempt, max_attempts, reason,
                     )
                     break
+
+                # Structural lint. "regen" violations (hardcoded copy, raw
+                # hex, inline style colors) can't be auto-repaired — burn the
+                # remaining attempt as a guided retry. "fixable" violations
+                # never cost an API call: post_generation_fixer repairs them.
+                from app.services.landing_section_lint import (
+                    lint_section_source, regen_feedback,
+                )
+                violations = lint_section_source(
+                    content, section=section, filename=filename,
+                )
+                regen_violations = [v for v in violations if v["severity"] == "regen"]
+                if regen_violations and attempt < max_attempts:
+                    codes = ", ".join(v["code"] for v in regen_violations)
+                    last_failure_reason = f"lint violations: {codes}"
+                    usr_p_active = usr_p + regen_feedback(violations)
+                    logger.warning(
+                        "section %s: attempt %d/%d lint-rejected (%s) — guided retry",
+                        section_id, attempt, max_attempts, codes,
+                    )
+                    try:
+                        from app.services.telemetry import emit as _t_emit
+                        _t_emit(
+                            "section.lint_retry",
+                            section_id=str(section_id or ""),
+                            codes=codes,
+                        )
+                    except Exception:
+                        pass
+                    break
+                if violations:
+                    # Accepted with violations: regen-class on the final
+                    # attempt (better a real section than a skip) and/or
+                    # fixable-class (fixers repair downstream). Telemetry
+                    # tracks which rules the model keeps violating.
+                    try:
+                        from app.services.telemetry import emit as _t_emit
+                        _t_emit(
+                            "section.lint_accepted",
+                            section_id=str(section_id or ""),
+                            attempt=attempt,
+                            codes=", ".join(v["code"] for v in violations),
+                        )
+                    except Exception:
+                        pass
+
                 if attempt > 1:
                     logger.info("section %s: succeeded on retry (attempt %d)", section_id, attempt)
                 try:
@@ -3063,13 +3132,16 @@ async def _generate_layout_component(
     # than the user seeing a generic stub.
     max_attempts = 2
     last_failure_reason = "unknown"
+    # Guided retry: lint violations from attempt 1 are appended to the
+    # user prompt for attempt 2 (same mechanism as _generate_one_section).
+    usr_p_active = usr_p
 
     for attempt in range(1, max_attempts + 1):
         try:
             result = await asyncio.wait_for(
                 call_claude_for_json(
                     system_prompt=sys_p,
-                    user_prompt=usr_p,
+                    user_prompt=usr_p_active,
                     api_key=api_key,
                     websocket=websocket,
                     max_tokens=_SECTION_MAX_TOKENS,
@@ -3113,6 +3185,33 @@ async def _generate_layout_component(
                         kind, attempt, max_attempts, reason,
                     )
                     break
+
+                from app.services.landing_section_lint import (
+                    lint_section_source, regen_feedback,
+                )
+                violations = lint_section_source(content, filename=component)
+                regen_violations = [v for v in violations if v["severity"] == "regen"]
+                if regen_violations and attempt < max_attempts:
+                    codes = ", ".join(v["code"] for v in regen_violations)
+                    last_failure_reason = f"lint violations: {codes}"
+                    usr_p_active = usr_p + regen_feedback(violations)
+                    logger.warning(
+                        "layout %s: attempt %d/%d lint-rejected (%s) — guided retry",
+                        kind, attempt, max_attempts, codes,
+                    )
+                    break
+                if violations:
+                    try:
+                        from app.services.telemetry import emit as _t_emit
+                        _t_emit(
+                            "layout.lint_accepted",
+                            kind=kind,
+                            attempt=attempt,
+                            codes=", ".join(v["code"] for v in violations),
+                        )
+                    except Exception:
+                        pass
+
                 if attempt > 1:
                     logger.info("layout %s: succeeded on retry (attempt %d)", kind, attempt)
                 return {"path": file_path, "content": content}

@@ -131,6 +131,13 @@ async def run_landing_fixers(workspace_path: str, websocket: Any = None) -> dict
     # Manual <br> inside h1/h2 + natural wrapping scatters headlines across
     # 3-4 sparse lines (orphan dash lines). Strip them; CSS wrap decides.
     _run("fix_br_in_headings", F.fix_br_in_headings, workspace_path)
+    # Invisible same-element pairs (bg-foreground + text-foreground, …) —
+    # the #1 dark-surface contrast failure. Pair table shared with the
+    # section lint so detection and repair never drift.
+    _run("fix_same_element_contrast", F.fix_same_element_contrast, workspace_path)
+    # Only the hero commands the viewport: strip min-h-screen/h-screen from
+    # non-hero section roots and cap runaway root padding at py-24.
+    _run("fix_nonhero_viewport_heights", F.fix_nonhero_viewport_heights, workspace_path)
     # Sticky nav overlaps section headings on scroll without `scroll-mt-*` on
     # the section root. Backfill it for every `<section id="...">` that's an
     # anchor target. Fixes the systemic "nav over '07 — GALLERY'" bug.

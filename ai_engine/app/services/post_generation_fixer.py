@@ -699,6 +699,127 @@ def fix_br_in_headings(workspace_path: str) -> list[str]:
     return fixed
 
 
+def fix_same_element_contrast(workspace_path: str) -> list[str]:
+    """Swap invisible same-element color pairs in className strings.
+
+    The #1 dark-surface failure: `bg-foreground` + `text-foreground` (or
+    `bg-primary` + `text-primary`, `bg-muted` + `text-muted`) on ONE element
+    — same hue on itself, text invisible. The pair table lives in
+    landing_section_lint.CONTRAST_PAIRS so detection (lint) and repair
+    (this fixer) cannot drift. Opacity suffixes survive the swap
+    (`text-foreground/70` on bg-foreground → `text-background/70`).
+    """
+    from app.services.landing_section_lint import CLASSNAME_RE, CONTRAST_PAIRS
+
+    fixed: list[str] = []
+    for sub in ("sections", "layout"):
+        target = os.path.join(workspace_path, "src", "components", sub)
+        if not os.path.isdir(target):
+            continue
+        for root, _, files in os.walk(target):
+            for name in files:
+                if not name.endswith((".jsx", ".tsx", ".js", ".ts")):
+                    continue
+                path = os.path.join(root, name)
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                except OSError:
+                    continue
+
+                def _repair(m: "re.Match[str]") -> str:
+                    classes = m.group(2)
+                    for bg_re, text_re, replacement, _msg in CONTRAST_PAIRS:
+                        if bg_re.search(classes) and text_re.search(classes):
+                            def _swap(tm: "re.Match[str]") -> str:
+                                suffix = tm.group(1) or ""
+                                if "/" in replacement:
+                                    return replacement
+                                return replacement + suffix
+                            classes = text_re.sub(_swap, classes)
+                    return f"className={m.group(1)}{classes}{m.group(1)}"
+
+                new_content = CLASSNAME_RE.sub(_repair, content)
+                if new_content == content:
+                    continue
+                try:
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(new_content)
+                    fixed.append(path)
+                    logger.info(
+                        "fix_same_element_contrast: repaired invisible pairs in %s",
+                        os.path.relpath(path, workspace_path),
+                    )
+                except OSError as exc:
+                    logger.warning(
+                        "fix_same_element_contrast: failed to write %s: %s",
+                        path, exc,
+                    )
+    return fixed
+
+
+def fix_nonhero_viewport_heights(workspace_path: str) -> list[str]:
+    """Size discipline on section ROOTS: only the hero commands the viewport.
+
+    • Strips `min-h-screen` / `min-h-[100svh]` / `h-screen` from the section
+      root of NON-hero files (a min-h-screen testimonials band reads as a
+      broken page with a river of empty space).
+    • Caps runaway root padding (`py-32`+ → `py-24`) on ALL sections —
+      the layout contract tops out at py-24.
+    """
+    from app.services.landing_section_lint import (
+        OVERSIZED_PY_RE, VIEWPORT_HEIGHT_RE,
+    )
+
+    fixed: list[str] = []
+    sections_dir = os.path.join(workspace_path, "src", "components", "sections")
+    if not os.path.isdir(sections_dir):
+        return fixed
+
+    for root, _, files in os.walk(sections_dir):
+        for name in files:
+            if not name.endswith((".jsx", ".tsx", ".js", ".ts")):
+                continue
+            path = os.path.join(root, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except OSError:
+                continue
+
+            match = _SECTION_ROOT_RE.search(content)
+            if not match:
+                continue
+            classes = match.group(3)
+            new_classes = classes
+            if "hero" not in name.lower():
+                new_classes = VIEWPORT_HEIGHT_RE.sub("", new_classes)
+            new_classes = OVERSIZED_PY_RE.sub("py-24", new_classes)
+            new_classes = re.sub(r"\s{2,}", " ", new_classes).strip()
+            if new_classes == classes:
+                continue
+
+            new_content = (
+                content[: match.start()]
+                + f'<section{match.group(1)}className={match.group(2)}{new_classes}{match.group(2)}'
+                + content[match.end():]
+            )
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                fixed.append(path)
+                logger.info(
+                    "fix_nonhero_viewport_heights: %s → %s in %s",
+                    classes, new_classes, os.path.relpath(path, workspace_path),
+                )
+            except OSError as exc:
+                logger.warning(
+                    "fix_nonhero_viewport_heights: failed to write %s: %s",
+                    path, exc,
+                )
+    return fixed
+
+
 # Detect duplicate-text watermark pattern: same JSX interpolation appears
 # inside a huge-text absolute element AND a normal label element within the
 # same card. Renders as a "ghost" name behind the readable name (saw this on
