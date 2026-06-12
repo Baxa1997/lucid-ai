@@ -25,6 +25,41 @@ import { useAgentActions } from './useAgentActions';
 // deps and threads them in via a ref so handleMessage stays identity-
 // stable across renders (no re-subscribe churn).
 
+// Normalize for the user-bubble dedup: the [LUCID_PROJECT] routing header
+// is stripped because a headered backend echo and the raw local echo of
+// the same prompt render identically in the chat.
+export function normUserContent(s) {
+  if (typeof s !== 'string') return '';
+  let v = s.trim();
+  if (v.startsWith('[LUCID_PROJECT]')) {
+    const sep = v.indexOf('\n\n');
+    if (sep !== -1) v = v.slice(sep + 2);
+  }
+  return v.trim().replace(/\s+/g, ' ').toLowerCase().slice(0, 200);
+}
+
+// One prompt must never render twice. Every user-bubble path funnels
+// through pushChat (local echo, backend echo, intake guard, reconnect
+// paths). Drop the append when the nearest previous USER row carries the
+// same normalized text, was added moments ago, and only system rows
+// (error banners, notices) sit between — that's an echo of the same
+// send, not the user repeating themselves. Any agent row in between
+// breaks the adjacency, so deliberate repeats still render.
+export function isDuplicateUserEcho(prev, role, content, now = Date.now()) {
+  if (role !== 'user') return false;
+  const incoming = normUserContent(content);
+  if (!incoming) return false;
+  for (let i = prev.length - 1; i >= 0; i--) {
+    const m = prev[i];
+    if (m.role === 'user') {
+      const recent = now - (m.ts || 0) < 30000;
+      return recent && normUserContent(m.content) === incoming;
+    }
+    if (m.role !== 'system') return false;
+  }
+  return false;
+}
+
 /**
  * useAgentSession — manages the full lifecycle of an AI agent session.
  */
@@ -277,10 +312,13 @@ export function useAgentSession({ projectId, task = '', token = '', repoUrl = ''
 
   const pushChat = useCallback((role, content, meta = {}) => {
     if (!content || !content.trim()) return;
-    setChatMessages((prev) => [
-      ...prev,
-      { id: uid(), role, content, ts: Date.now(), ...meta },
-    ]);
+    setChatMessages((prev) => {
+      if (isDuplicateUserEcho(prev, role, content)) return prev;
+      return [
+        ...prev,
+        { id: uid(), role, content, ts: Date.now(), ...meta },
+      ];
+    });
   }, []);
 
   const pushLog = useCallback((content, type = 'system') => {
