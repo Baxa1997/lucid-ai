@@ -17,7 +17,7 @@
 //  starts/ends, and keeps the hook file focused on state.
 // ─────────────────────────────────────────────────────────
 
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import manager from '@/lib/agentWSManager';
 
 /**
@@ -75,6 +75,13 @@ export function useAgentConnection({
   getFreshToken,
   handleMessage,
 }) {
+  // Live mirror of `state` for effects that intentionally key off [token]
+  // only. Reading `state` directly inside them sees the value frozen at the
+  // last token change (stale closure) — if the token arrives while state is
+  // transiently non-idle, the auto-connect below would be skipped forever.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
   // ── Subscribe to global manager events ──────────────────
   useEffect(() => {
     if (!manager) return;
@@ -187,7 +194,7 @@ export function useAgentConnection({
     }
 
     // Fresh connection (new project or cold start)
-    if (state === 'idle' || (manager.isOpen && manager.projectId !== projectIdRef.current)) {
+    if (stateRef.current === 'idle' || (manager.isOpen && manager.projectId !== projectIdRef.current)) {
       const taskToSend = initialTaskRef.current || '';
       if (taskToSend) {
         // Show user message in chat ONCE. Strip the [LUCID_PROJECT] header for display.

@@ -134,6 +134,45 @@ class AgentSession:
 _KEY_SESSION = "lucid:session:{}"       # hash → JSON metadata
 _KEY_USER_SESSIONS = "lucid:user:{}:sessions"  # set → session_ids
 
+# Tag for encrypted token values in the Redis session blob. Git PATs are
+# AES-encrypted at rest in the DB (integrations table) — the Redis copy must
+# not be the one place they sit in plaintext.
+_ENC_TOKEN_PREFIX = "enc:v1:"
+
+
+def _encrypt_token(token: str | None) -> str | None:
+    """Encrypt a git token for Redis persistence.
+
+    Fail-closed: if encryption isn't possible (e.g. ENCRYPTION_KEY unset),
+    the token is NOT persisted — losing a token on process restart is
+    recoverable (it's re-resolved from integrations on reconnect), leaking
+    it is not.
+    """
+    if not token:
+        return token
+    try:
+        from app.services.crypto import encrypt
+        enc = encrypt(token)
+        return f"{_ENC_TOKEN_PREFIX}{enc.iv}:{enc.encrypted}"
+    except Exception as exc:
+        logger.warning("Session git_token encryption failed — token not persisted: %s", exc)
+        return None
+
+
+def _decrypt_token(value: str | None) -> str | None:
+    """Reverse _encrypt_token(). Legacy plaintext values pass through."""
+    if not value or not isinstance(value, str):
+        return value
+    if not value.startswith(_ENC_TOKEN_PREFIX):
+        return value  # pre-encryption session blob — accept as-is
+    try:
+        from app.services.crypto import decrypt
+        iv_hex, ct_hex = value[len(_ENC_TOKEN_PREFIX):].split(":", 1)
+        return decrypt(ct_hex, iv_hex)
+    except Exception as exc:
+        logger.warning("Session git_token decryption failed — dropping token: %s", exc)
+        return None
+
 
 def _serialize(session: AgentSession) -> dict:
     """Return a JSON-serializable dict of the session's persistent metadata."""
@@ -147,7 +186,7 @@ def _serialize(session: AgentSession) -> dict:
         "repo_url": session.repo_url,
         "repo_provider": session.repo_provider,
         "branch": session.branch,
-        "git_token": session.git_token,
+        "git_token": _encrypt_token(session.git_token),
         "created_at": session.created_at.isoformat(),
         "last_active_wall": last_active_wall,
         "is_alive": session.is_alive,
@@ -169,7 +208,7 @@ def _deserialize(data: dict) -> AgentSession:
         repo_url=data.get("repo_url"),
         repo_provider=data.get("repo_provider"),
         branch=data.get("branch", "main"),
-        git_token=data.get("git_token"),
+        git_token=_decrypt_token(data.get("git_token")),
     )
     session.created_at = datetime.fromisoformat(data["created_at"])
     # Restore last_active as a monotonic value with the correct elapsed time.
@@ -511,18 +550,7 @@ async def create_session(
                 "(WS detached, started %s)",
                 user_id, victim.session_id, victim.created_at.isoformat(),
             )
-            # Cancel the running pipeline (if any) before destroying.
-            pt = victim.pipeline_task
-            if pt is not None and not pt.done():
-                pt.cancel()
-                try:
-                    await asyncio.wait_for(pt, timeout=5)
-                except (asyncio.CancelledError, asyncio.TimeoutError):
-                    pass
-                except Exception as exc:
-                    logger.warning(
-                        "Reclaim: pipeline_task cancellation raised: %s", exc,
-                    )
+            # destroy_session cancels the running pipeline (if any) first.
             try:
                 await destroy_session(victim.session_id)
             except Exception as exc:
@@ -636,6 +664,23 @@ async def destroy_session(session_id: str) -> None:
 
     session.is_alive = False
     logger.info("Destroying session %s", session_id)
+
+    # Cancel any still-running pipeline BEFORE tearing down the sandbox or
+    # workspace. Every destroy path (reaper, reclaim, explicit stop) goes
+    # through here — without this, the TTL reaper could rip the filesystem
+    # out from under an in-flight generation that keeps writing into it.
+    pipeline_task = session.pipeline_task
+    if pipeline_task is not None and not pipeline_task.done():
+        pipeline_task.cancel()
+        try:
+            await asyncio.wait_for(pipeline_task, timeout=5)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+        except Exception as exc:
+            logger.warning(
+                "destroy_session: pipeline cancellation for %s raised: %s",
+                session_id, exc,
+            )
 
     # Teardown the sandbox runner (no-op for LocalRunner, stops container for Docker)
     if session.sandbox_runner is not None:

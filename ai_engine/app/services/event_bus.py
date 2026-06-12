@@ -36,6 +36,12 @@ _STREAM_PREFIX = "lucid:events:"
 _STREAM_MAX_LEN = 500   # keep last 500 events per session (MAXLEN ~)
 _STREAM_TTL = 3600      # expire stream after 1 hour of no activity
 
+# Strong references to in-flight chat-persistence tasks. The event loop only
+# keeps WEAK references to tasks — a fire-and-forget create_task() with no
+# other reference can be garbage-collected mid-flight, silently dropping the
+# chat message it was persisting. Tasks remove themselves on completion.
+_persist_tasks: set[asyncio.Task] = set()
+
 
 class WebSocketProxy:
     """Drop-in WebSocket replacement — only ``send_json()`` is required.
@@ -140,7 +146,9 @@ class WebSocketProxy:
         # Only fires when bound (after the chat_sessions row exists).
         if self._chat_session_id:
             try:
-                asyncio.create_task(self._persist_chat_event(data))
+                task = asyncio.create_task(self._persist_chat_event(data))
+                _persist_tasks.add(task)
+                task.add_done_callback(_persist_tasks.discard)
             except RuntimeError:
                 # No running loop (shouldn't happen in WS context, but defensive)
                 pass

@@ -479,10 +479,10 @@ Stop when fully done.
     )
 
     logger.info(
-        "execute_with_claude: model=%s task_type=%s max_turns=%s api_key_prefix=%s",
+        "execute_with_claude: model=%s task_type=%s max_turns=%s api_key=%s",
         model_name, task_type,
         classification.get("max_turns", 10),
-        str(api_key)[:15],
+        "set" if api_key else "missing",
     )
 
     try:
