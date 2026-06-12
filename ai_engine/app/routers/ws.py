@@ -581,7 +581,7 @@ async def websocket_agent(websocket: WebSocket):
             # has lost the plan card. Re-send it so they can confirm
             # without re-typing the task.
             try:
-                from app.services.project_generator import get_persisted_plan
+                from app.services.plan_store import get_persisted_plan
                 _pending = await get_persisted_plan(chat_session_id or "")
                 if _pending and _pending.get("plan_data"):
                     await websocket.send_json({
@@ -2089,7 +2089,7 @@ async def websocket_agent(websocket: WebSocket):
 
             # ── Plan confirmation — user approves or rejects the plan ───
             if msg_type == "plan_confirm":
-                from app.services.project_generator import (
+                from app.services.plan_store import (
                     resolve_plan_confirmation, _confirmation_key,
                     pending_plan_confirmations, clear_persisted_plan,
                 )
@@ -2124,7 +2124,7 @@ async def websocket_agent(websocket: WebSocket):
                 continue
 
             if msg_type == "plan_reject":
-                from app.services.project_generator import (
+                from app.services.plan_store import (
                     resolve_plan_confirmation, _confirmation_key,
                     pending_plan_confirmations, clear_persisted_plan,
                 )
@@ -2881,7 +2881,7 @@ async def websocket_agent(websocket: WebSocket):
             # workspace alive above), leave the future intact so a reconnected
             # websocket can still resolve it via plan_confirm / plan_reject.
             try:
-                from app.services.project_generator import (
+                from app.services.plan_store import (
                     pending_plan_confirmations, _confirmation_key,
                 )
                 _key = _confirmation_key(websocket, chat_session_id or "")

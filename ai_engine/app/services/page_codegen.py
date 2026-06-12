@@ -333,7 +333,7 @@ async def generate_page(
 
     The first file in `files` is the route; the rest are section components.
     """
-    from app.services.project_generator import call_claude_for_json
+    from app.services.llm_json_client import call_claude_for_json
 
     slug = (page_meta.get("slug") or "").strip("/")
 

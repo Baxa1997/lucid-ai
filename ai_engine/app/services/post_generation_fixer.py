@@ -4431,7 +4431,7 @@ async def run_all_fixers(
         "total_fixes": int,
     }
     """
-    from app.services.project_generator import _ws_send
+    from app.services.ws_emit import _ws_send
     
     results = {
         "use_client_fixed": [],

@@ -1380,7 +1380,7 @@ async def build_project_schema(
 
     Returns the canonical schema dict, or a fallback if parsing fails.
     """
-    from app.services.project_generator import _ws_send
+    from app.services.ws_emit import _ws_send
 
     await _ws_send(websocket, "progress", "📐 Building project schema...")
 

@@ -527,7 +527,7 @@ async def generate_one_page(
         ],
       }
     """
-    from app.services.project_generator import call_claude_for_json
+    from app.services.llm_json_client import call_claude_for_json
 
     route = (page.get("route") or page.get("path") or "/").strip()
     slug = _slug_from_route(route)

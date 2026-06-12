@@ -160,7 +160,7 @@ async def _call_claude_for_one_page(
     """
     # Lazy import — keeps mock-mode test imports cheap and avoids a
     # circular import via project_generator.
-    from app.services.project_generator import call_claude_for_json
+    from app.services.llm_json_client import call_claude_for_json
 
     try:
         result = await call_claude_for_json(

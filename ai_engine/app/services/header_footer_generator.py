@@ -368,7 +368,7 @@ async def _generate_one(
     websocket: Any,
 ) -> dict | None:
     """Run the Claude call with retry. Returns {path, content} or None."""
-    from app.services.project_generator import call_claude_for_json
+    from app.services.llm_json_client import call_claude_for_json
 
     last_failure = "unknown"
     for attempt in range(1, _HF_MAX_ATTEMPTS + 1):

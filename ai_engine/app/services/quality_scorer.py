@@ -541,7 +541,7 @@ async def score_project(
     checks that don't apply (e.g. mock_data on a single-page landing has no
     db.json by design — counting it as 0/100 is misleading).
     """
-    from app.services.project_generator import _ws_send
+    from app.services.ws_emit import _ws_send
 
     await _ws_send(websocket, "progress", "📊 Scoring project quality...")
 

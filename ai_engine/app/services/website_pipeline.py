@@ -580,7 +580,7 @@ async def _emit_website_plan_and_wait(
         return True
 
     import asyncio
-    from app.services.project_generator import (
+    from app.services.plan_store import (
         register_plan_confirmation,
         pending_plan_confirmations,
         save_persisted_plan,

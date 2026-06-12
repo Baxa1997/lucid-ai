@@ -776,7 +776,7 @@ async def run_admin_pipeline(
         # Persist so a ws reconnect during the confirmation window can
         # re-emit the same envelope — mirrors website pipeline behavior.
         try:
-            from app.services.project_generator import save_persisted_plan
+            from app.services.plan_store import save_persisted_plan
             await save_persisted_plan(project_id, plan_data, task=description)
         except Exception as _persist_exc:
             logger.warning(
@@ -795,7 +795,7 @@ async def run_admin_pipeline(
     # ONLY when the plan card actually went out — otherwise we'd block
     # forever on a future the user can never resolve.
     if _plan_emitted_ok:
-        from app.services.project_generator import (
+        from app.services.plan_store import (
             _confirmation_key,
             register_plan_confirmation,
             clear_persisted_plan,

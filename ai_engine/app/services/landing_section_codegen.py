@@ -2208,7 +2208,7 @@ async def _generate_one_section(
     reference_images: list[bytes] | None = None,
 ) -> dict[str, str] | None:
     """Generate one section component. Returns {'path', 'content'} or None on failure."""
-    from app.services.project_generator import call_claude_for_json
+    from app.services.llm_json_client import call_claude_for_json
 
     filename = _section_filename(section)
     component = _component_name(filename)
@@ -2912,7 +2912,7 @@ async def _generate_layout_component(
     brand: dict | None = None,
     category: str = "",
 ) -> dict[str, str] | None:
-    from app.services.project_generator import call_claude_for_json
+    from app.services.llm_json_client import call_claude_for_json
 
     component = "MarketingHeader" if kind == "header" else "MarketingFooter"
     file_path = f"src/components/layout/{component}.jsx"

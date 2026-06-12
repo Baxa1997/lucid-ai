@@ -742,7 +742,7 @@ class AgentOrchestrator:
                         # and silently discarded, the gate hangs for 30 min,
                         # and the user sees a frozen "researching" UI.
                         try:
-                            from app.services.project_generator import (
+                            from app.services.plan_store import (
                                 resolve_plan_confirmation, _confirmation_key,
                                 pending_plan_confirmations, clear_persisted_plan,
                             )
