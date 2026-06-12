@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import WebSocket, WebSocketDisconnect
 

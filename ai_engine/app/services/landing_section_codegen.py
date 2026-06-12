@@ -2876,7 +2876,7 @@ MANDATORY RULES
      and link columns are the body. Stick to those.
 10. FOOTER BOTTOM BAR — TIGHT, SINGLE ROW:
     • Below the columns + separator line, render ONE row containing:
-      `© {year} {brand.name}. All rights reserved.` on the left, optional
+      `© {{new Date().getFullYear()}} {{landing.brand.name}}. All rights reserved.` on the left, optional
       legal-link row (Privacy, Terms) and/or short tagline on the right.
     • NEVER spread the bottom bar across multiple rows with large gaps.
       `flex flex-col gap-3 md:flex-row md:items-center md:justify-between`
