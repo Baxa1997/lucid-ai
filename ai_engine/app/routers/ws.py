@@ -58,9 +58,11 @@ router = APIRouter()
 
 # Standalone helpers moved to app.routers.ws_helpers (god-module split).
 from app.routers.ws_helpers import (  # noqa: F401
+    PREV_LOOKUP_JWT_EXPIRED,
     _auto_push_if_needed,
     _insert_marker_preserving_lucid_project,
     background_preview,
+    load_previous_session_data,
     _is_jwt_expired_error,
     _provider_from_repo_url,
     _resolve_git_token_from_integrations,
@@ -571,234 +573,13 @@ async def websocket_agent(websocket: WebSocket):
         _skip_workspace_setup = False  # set True when re-entering a completed project
 
         if not existing and project_id:
-            try:
-                # Step 1: find the best previous session for this project.
-                # PRIORITY: completed sessions > sessions with platform_repo > plain latest.
-                # Without this, an empty reconnect-session created AFTER the real generation
-                # gets picked first → _prev_session_data looks empty → no preview started.
-                #
-                # Use the admin client for this lookup. RLS-enforced queries (via the user
-                # JWT) were silently returning empty for legitimate rows whenever the JWT
-                # context didn't satisfy the policy (e.g. JWT minted with a kid the policy
-                # didn't trust, refreshed token, etc). We still gate on user_id explicitly
-                # so this remains per-project — admin only bypasses RLS, not access control.
-                #
-                # Member access: when a project_members member who is NOT the owner
-                # connects, ``user_id`` is the member's id and a per-user filter would
-                # miss the owner's completed session — leaving the member stuck on
-                # "Preparing preview" forever AND spawning a fresh "New workspace
-                # session" row under the member's user_id. Resolve the owner's id
-                # by joining chat_sessions on the URL slug (project_id) against
-                # project_members (keyed on chat_sessions.id UUID PK). For the owner
-                # themselves resolve_shared_session returns None and we fall through
-                # to the per-user lookup, so behavior is unchanged.
-                from app.supabase_client import managed_admin_client
-                from app.services.members import MembershipService
-                _shared = await MembershipService.resolve_shared_session(project_id, user_id)
-                _lookup_uid = _shared["owner_user_id"] if _shared else user_id
-                prev_sid: str | None = None
-
-                # ── Phase 2 Step 6: Explicit continuation token ──
-                # Clients that survived to here on a prior connection know the
-                # exact chat_session_id they want to resume. When they send
-                # `continuationToken` in the handshake we look it up directly
-                # — no 4-tier guessing, no race against newer sessions. This
-                # is the deterministic path; the heuristic 1a-1d below stays
-                # in place as the fallback for legacy clients and for the
-                # never-seen-this-project-before case.
-                _continuation_token = (raw.get("continuationToken") or "").strip()
-                if _continuation_token:
-                    try:
-                        async with managed_admin_client() as _ct_client:
-                            ct_row = await (
-                                _ct_client.table("chat_sessions")
-                                .select("id, user_id")
-                                .eq("id", _continuation_token)
-                                .eq("user_id", _lookup_uid)
-                                .maybe_single()
-                                .execute()
-                            )
-                        if ct_row and ct_row.data:
-                            prev_sid = ct_row.data["id"]
-                            logger.info(
-                                "ws handshake: resumed via continuationToken=%s (project=%s)",
-                                _continuation_token[:8], project_id,
-                            )
-                        else:
-                            # Explicit token didn't match anything for this
-                            # user — treat as a fresh start. Don't fall
-                            # through to the heuristic; the client is
-                            # explicitly telling us "this session is gone".
-                            logger.info(
-                                "ws handshake: continuationToken=%s did not match any session for user — fresh start",
-                                _continuation_token[:8],
-                            )
-                    except Exception as _ct_exc:
-                        # Lookup failure ≠ missing token. Fall through to the
-                        # heuristic so a flaky DB doesn't strand the user.
-                        logger.warning(
-                            "ws handshake: continuationToken lookup failed (%s) — falling back to heuristic",
-                            _ct_exc,
-                        )
-
-                async with managed_admin_client() as client:
-                    # 1a. Most recent session with generation_complete=True
-                    # Guarded by `if not prev_sid` (Phase 2 Step 6): an explicit
-                    # continuation token from the handshake takes precedence;
-                    # the heuristic tiers run only as a fallback.
-                    if not prev_sid:
-                        try:
-                            completed_r = await (
-                                client.table("chat_sessions")
-                                .select("id")
-                                .eq("user_id", _lookup_uid)
-                                .eq("project_id", project_id)
-                                .eq("generation_complete", True)
-                                .order("created_at", desc=True)
-                                .limit(1)
-                                .execute()
-                            )
-                            if completed_r.data:
-                                prev_sid = completed_r.data[0]["id"]
-                        except Exception:
-                            pass  # column may not exist yet
-
-                    # 1b. Most recent session with platform_repo_url set
-                    if not prev_sid:
-                        try:
-                            repo_r = await (
-                                client.table("chat_sessions")
-                                .select("id")
-                                .eq("user_id", _lookup_uid)
-                                .eq("project_id", project_id)
-                                .not_.is_("platform_repo_url", "null")
-                                .order("created_at", desc=True)
-                                .limit(1)
-                                .execute()
-                            )
-                            if repo_r.data:
-                                prev_sid = repo_r.data[0]["id"]
-                        except Exception:
-                            pass
-
-                    # 1c. Last resort: plain latest session
-                    if not prev_sid:
-                        plain_r = await (
-                            client.table("chat_sessions")
-                            .select("id")
-                            .eq("user_id", _lookup_uid)
-                            .eq("project_id", project_id)
-                            .order("created_at", desc=True)
-                            .limit(1)
-                            .execute()
-                        )
-                        if plain_r.data:
-                            prev_sid = plain_r.data[0]["id"]
-
-                    # 1d. Legacy fallback — chat_sessions.project_id may be NULL on
-                    # rows generated before the landing-pipeline finalisation patch
-                    # set it. The frontend's /api/platform-repos route falls back
-                    # to using `chat_sessions.id` as the URL projectId in that case.
-                    # So when the project_id-keyed lookups all miss, try the row id.
-                    # Only when project_id is UUID-shaped: `id` is a UUID column,
-                    # and comparing it against a text slug makes PostgREST throw —
-                    # which aborted this whole previous-session lookup via the
-                    # outer except instead of just skipping this tier.
-                    from app.services.pipeline_tenant import UUID_RE as _UUID_RE
-                    if not prev_sid and _UUID_RE.match(project_id or ""):
-                        id_r = await (
-                            client.table("chat_sessions")
-                            .select("id, project_id")
-                            .eq("user_id", _lookup_uid)
-                            .eq("id", project_id)
-                            .maybe_single()
-                            .execute()
-                        )
-                        if id_r and id_r.data:
-                            prev_sid = id_r.data["id"]
-                            # Backfill project_id so future lookups hit 1a-1c
-                            # cheaply and the row appears in Recent Projects.
-                            if not id_r.data.get("project_id"):
-                                try:
-                                    await (
-                                        client.table("chat_sessions")
-                                        .update({"project_id": project_id})
-                                        .eq("id", prev_sid)
-                                        .execute()
-                                    )
-                                    logger.info(
-                                        "Backfilled project_id=%s on legacy session %s",
-                                        project_id, prev_sid,
-                                    )
-                                except Exception as _bf_err:
-                                    logger.debug(
-                                        "project_id backfill skipped (%s)", _bf_err,
-                                    )
-
-                if prev_sid:
-
-                    # Step 2: try to read optional flag columns (added in later migrations).
-                    # Fail silently — if the columns don't exist the flags just stay False/None.
-                    platform_repo_url = None
-                    generation_complete = False
-                    user_repo_url = None
-                    user_repo_provider = None
-                    try:
-                        async with managed_admin_client() as client:
-                            flags_r = await (
-                                client.table("chat_sessions")
-                                .select("platform_repo_url, user_repo_url, user_repo_provider, generation_complete")
-                                .eq("id", prev_sid)
-                                .maybe_single()
-                                .execute()
-                            )
-                        if flags_r and flags_r.data:
-                            platform_repo_url = flags_r.data.get("platform_repo_url")
-                            user_repo_url = flags_r.data.get("user_repo_url")
-                            user_repo_provider = flags_r.data.get("user_repo_provider")
-                            generation_complete = flags_r.data.get("generation_complete", False)
-                    except Exception as _flags_err:
-                        logger.debug(
-                            "Optional flag columns not available for session %s "
-                            "(migrations 009/014 may not be applied): %s",
-                            prev_sid, _flags_err,
-                        )
-
-                    # Step 3: load messages for chat history replay + wizard re-entry detection
-                    async with managed_admin_client() as client:
-                        prev_msgs = await (
-                            client.table("chat_messages")
-                            .select("id, role, content, created_at, event_type")
-                            .eq("session_id", prev_sid)
-                            .order("created_at", desc=False)
-                            .limit(60)
-                            .execute()
-                        )
-                    _prev_session_data = {
-                        "session_id":          prev_sid,
-                        "platform_repo_url":   platform_repo_url,
-                        "user_repo_url":       user_repo_url,
-                        "user_repo_provider":  user_repo_provider,
-                        "generation_complete": generation_complete,
-                        "messages":            prev_msgs.data or [],
-                    }
-                    logger.info(
-                        "Found previous session %s for project %s "
-                        "(complete=%s, msgs=%d, repo=%s)",
-                        prev_sid, project_id,
-                        generation_complete,
-                        len(_prev_session_data["messages"]),
-                        bool(platform_repo_url),
-                    )
-            except Exception as _prev_err:
-                if _is_jwt_expired_error(_prev_err):
-                    logger.info("[%s] JWT expired during previous-session lookup — closing WS for re-auth", user_id)
-                    try:
-                        await websocket.close(code=4010, reason="Authentication expired")
-                    except Exception:
-                        pass
-                    return
-                logger.warning("Failed to load previous session for project %s: %s", project_id, _prev_err)
+            _prev_lookup = await load_previous_session_data(
+                project_id=project_id, user_id=user_id,
+                raw=raw, websocket=websocket,
+            )
+            if _prev_lookup is PREV_LOOKUP_JWT_EXPIRED:
+                return
+            _prev_session_data = _prev_lookup
 
         if not existing:
             try:
