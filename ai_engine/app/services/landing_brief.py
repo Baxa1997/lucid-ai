@@ -506,8 +506,9 @@ sections: ARRAY of OBJECT items, FIRST type "hero", in order. The COUNT and SHAP
   Each shape lists the REQUIRED section types and which to AVOID — but the
   COUNT is driven by STRUCTURE_RESEARCH references, not by the shape. Real
   conversion-optimized landings (hospitality, SaaS, education) commonly ship
-  9-12 sections. Lean LONGER when references support it; only go shorter for
-  pure boutique editorial brands that explicitly want a magazine-spread feel.
+  9-12 sections and many run longer — there is NO upper cap. Lean LONGER
+  whenever references support it; only go shorter for pure boutique editorial
+  brands that explicitly want a magazine-spread feel.
 
     A. BOUTIQUE EDITORIAL
        Fine dining, boutique hotel, luxury fashion, cultural institution, art
@@ -591,9 +592,10 @@ sections: ARRAY of OBJECT items, FIRST type "hero", in order. The COUNT and SHAP
   HARD CONSTRAINTS regardless of shape:
    • Section count is driven by STRUCTURE_RESEARCH references — if the
      references show 9-12 sections (very common for hospitality / SaaS /
-     education / e-commerce), MATCH that density. Do NOT truncate to a
-     small number to feel "tight". Optional add-ons listed above are the
-     right pool to pull from when extending past the REQUIRED list.
+     education / e-commerce), MATCH that density; if they show 14+, match
+     THAT. NO upper cap exists. Do NOT truncate to a small number to feel
+     "tight". Optional add-ons listed above are the right pool to pull
+     from when extending past the REQUIRED list.
    • NEVER pad with `mid_cta_banner` + `cta` + `newsletter` + `contact_form`
      all together — pick ONE final-conversion section.
    • NEVER include both `features` and `value_prop` and `benefits` — pick ONE.
@@ -730,6 +732,21 @@ For EVERY section, populate:
 
     locations / contact / hours →
       Use brand.business_info — no pill-cluster prose.
+
+  ── ATMOSPHERE & VOICE (the difference between a brand page and a label sheet) ──
+  • NARRATIVE `body` PROSE: story / experience / about / philosophy / neighborhood /
+    amenities sections MUST fill `body` with 1-2 sentences of SENSORY, domain-specific
+    prose — what a guest sees, hears, tastes, or feels ("Mornings start with cortados in
+    the courtyard; by dusk the pool glows under string lights and vinyl hums from the
+    lounge."). A page where every section has `body: ""` renders as headline-label-card
+    wallpaper with no voice — the #1 "feels generic" complaint. Functional sections
+    (faq, stats, forms, trust strips) keep `body` empty.
+  • PHYSICAL-PLACE / EXPERIENCE BRANDS (hotel, restaurant, venue, spa, studio, campus,
+    tour): the page MUST include ≥2 image-led ATMOSPHERE sections beyond the hero —
+    story/spaces/amenities/dining/experience/gallery/neighborhood with image_queries
+    filled for each. Booking widgets, trust strips, and FAQ sell the transaction;
+    atmosphere sections sell the PLACE. A hotel page with no interior/amenity imagery
+    between the hero and the footer is a travel-agency form, not a hotel.
 
     ── HIRING / RECRUITMENT SECTIONS (when primary_purpose is hiring) ──
     These section types appear when the page recruits candidates. Treat

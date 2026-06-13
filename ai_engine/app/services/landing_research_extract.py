@@ -263,6 +263,15 @@ _VISUAL_DNA_SCHEMA: dict[str, Any] = {
         "layout_signature":          {"type": "STRING", "maxLength": 250},
         "cultural_palette_emphasis": {"type": "STRING", "maxLength": 250},
         "typography_voice":          {"type": "STRING", "maxLength": 250},
+        # ── Page-rhythm seeds (consumed by compose_page_rhythm — the
+        # deterministic composer that assigns per-section surfaces/density
+        # BEFORE parallel codegen so the page reads as one designed arc).
+        "surface_rhythm":            {"type": "STRING", "maxLength": 20},
+        "flagship_sections": {
+            "type": "ARRAY",
+            "items": {"type": "STRING", "maxLength": 30},
+            "maxItems": 2,
+        },
         "section_flavors": {
             "type": "OBJECT",
             "properties": {
@@ -448,6 +457,16 @@ EXTRACT into JSON matching the schema. Every string must be CONCRETE and ACTIONA
     Example (Chinese): "Brush-stroke serifs evoking calligraphy in headings, paired with confident clean sans for body. Eyebrow tags use uppercase tracking-widest for ceremonial precision."
     Example (Italian trattoria): "Warm humanist serifs for headings (Cormorant or Crimson Pro), italic accent words for menu names, hand-drawn script eyebrows."
 
+• surface_rhythm: ONE word — "light" | "alternating" | "dark-editorial". How section
+  backgrounds flow down the page: "light" = continuous light surfaces with tinted breaks
+  (clinics, B2B SaaS, minimal editorial); "alternating" = light/tint alternation with 1-2
+  dark accent bands (most brands); "dark-editorial" = dark-dominant canvas with light
+  breathing sections (luxury, fine dining, nightlife, premium audio, fashion).
+
+• flagship_sections: 1-2 section types from THIS brief's section list that deserve the
+  SHOWCASE treatment — largest scale, deepest decorative investment (e.g. ["menu","gallery"]
+  for a restaurant, ["rooms_showcase"] for a hotel, ["selected_work"] for a portfolio).
+
 • section_flavors: per-section concrete cultural notes Claude should apply when generating that section. Each is 1 sentence describing how to flavor that specific section type.
     hero:         "...specific hero treatment for this brand..."
     menu:         "...how the menu should feel culturally..."
@@ -456,7 +475,7 @@ EXTRACT into JSON matching the schema. Every string must be CONCRETE and ACTIONA
   Skip section types not relevant to this brand's archetype.
 
 • section_anatomies: per-section STRUCTURAL anatomy spec — ONE PARAGRAPH per section, MAX 25 words / 150 characters. Describe WHERE things go, what shapes, what scale tokens, and which decorative cues land where. Format like a tight developer note. NEVER repeat sentences or pad with rationale. Each anatomy MUST include:
-    1. Outer <section> structural rules (overflow-hidden when decorative bleeds present, min-h, padding tokens).
+    1. Outer <section> structural rules (root uses overflow-x-clip; decorative bleeds live in an absolute inset-0 overflow-hidden pointer-events-none layer; min-h, padding tokens).
     2. Composition: column count / grid shape / asymmetry / where copy and media land.
     3. Concrete decorative integration: which 1-2 motifs / textures / iconography_anchors from above appear, and exactly where (eyebrow ornament, divider, image-frame border, hero overlay, card edge, etc.).
     4. Typography scale (e.g. text-5xl md:text-6xl lg:text-7xl on h1) tied to typography_voice.
@@ -484,6 +503,7 @@ OUTPUT BUDGET — be COMPACT but section_anatomies needs room. Whole JSON should
   • decorative_motifs: 3-5 items. Each item ≤80 chars.
   • signature_textures: 2-3 items. Each item ≤80 chars.
   • iconography_anchors: 4-6 items. Each item is a SHORT noun (≤25 chars: "lantern", "tea cup", "olive branch") — no descriptions.
+  • surface_rhythm: ONE word. flagship_sections: 1-2 items.
   • section_flavors: 1 sentence per section type, MAX ~150 chars each. Skip section types not relevant.
   • section_anatomies: 20-25 words PER section, ~150 chars MAX each. 5-7 entries total. THREE MANDATORY KEYS — `hero`, `header`, `footer`. Pick footer variant: minimalist-row | mega-columns | cta-band | centered-stack. Other 2-4 entries from: menu, gallery, story, testimonials, features, pricing, cta, value_prop.
 

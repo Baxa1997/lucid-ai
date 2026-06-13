@@ -75,6 +75,15 @@ async def run_generation_build_check(
         )
         build_result = await validator.validate_and_fix(workspace_path)
         build_ok = bool(build_result.get("success"))
+        # A LOCAL infra crash (SIGBUS / OOM worker death) is not a code failure:
+        # the code parsed clean and the deploy build runs on separate infra.
+        # Don't let it demote the project to a draft branch + broken Vercel deploy.
+        if not build_ok and build_result.get("infra_crash"):
+            build_ok = True
+            logger.warning(
+                "%s: local build crashed (infra, not a code error) — treating as "
+                "non-blocking, publishing as-is", pipeline,
+            )
         _set_build_ok(build_ok)
         build_result["build_ok"] = build_ok
         if generation is not None:

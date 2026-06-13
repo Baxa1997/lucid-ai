@@ -46,8 +46,12 @@ def emit(event: str, **fields: Any) -> None:
     try:
         record = {"ts": time.time(), "event": event, **fields}
         line = json.dumps(record, default=str, ensure_ascii=False)
+        path = _path()
+        parent = os.path.dirname(path)
         with _LOCK:
-            with open(_path(), "a", encoding="utf-8") as fh:
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as fh:
                 fh.write(line)
                 fh.write("\n")
     except Exception as exc:

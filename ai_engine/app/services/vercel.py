@@ -8,6 +8,7 @@ Fire-and-forget by design — failures here NEVER block project generation.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -106,6 +107,16 @@ async def create_vercel_project(
                         "name": project_slug,
                         "framework": framework,
                         "installCommand": "pnpm install --no-frozen-lockfile",
+                        # Vercel ignores the package.json `packageManager` pin
+                        # unless corepack is enabled — without this it uses a
+                        # stale bundled pnpm that dies with ERR_INVALID_THIS
+                        # (undici) on Node 20+, failing every install.
+                        "environmentVariables": [{
+                            "key": "ENABLE_EXPERIMENTAL_COREPACK",
+                            "value": "1",
+                            "type": "plain",
+                            "target": ["production", "preview", "development"],
+                        }],
                         "gitRepository": {
                             "type": "github",
                             "repo": f"{owner}/{repo}",
@@ -138,26 +149,52 @@ async def create_vercel_project(
                 logger.warning("Vercel project_id missing after create — skipping deploy")
                 return predicted_url
 
-            # ── 1b. Force installCommand on every deploy (idempotent) ──
-            # Pre-existing projects that were created before the create-time
-            # installCommand fix still have Vercel's default
-            # `pnpm install --frozen-lockfile`. PATCH the project on every
-            # publish so the next deploy succeeds even when Claude added a
-            # dep without regenerating pnpm-lock.yaml. Fail-soft: a PATCH
-            # error just falls through to whatever the project already has.
+            # ── 1b. Force install/framework on every deploy (idempotent) ──
+            # Pre-existing projects (created before these fixes) can have
+            # Vercel's default `pnpm install --frozen-lockfile` AND a missing
+            # framework preset (framework=None → Vercel expects a static
+            # `public/` dir and fails Next.js builds with "No Output Directory").
+            # PATCH both on every publish. Fail-soft: a PATCH error just falls
+            # through to whatever the project already has.
             try:
                 patch = await client.patch(
                     f"{_VERCEL_API}/v9/projects/{project_id}{qs}",
                     headers=headers,
-                    json={"installCommand": "pnpm install --no-frozen-lockfile"},
+                    json={
+                        "installCommand": "pnpm install --no-frozen-lockfile",
+                        "framework": framework,
+                    },
                 )
                 if patch.status_code not in (200, 201, 204):
                     logger.warning(
-                        "Vercel installCommand PATCH non-2xx (%d): %s",
+                        "Vercel project PATCH non-2xx (%d): %s",
                         patch.status_code, patch.text[:200],
                     )
             except Exception as patch_exc:
-                logger.debug("Vercel installCommand PATCH failed (non-fatal): %s", patch_exc)
+                logger.debug("Vercel project PATCH failed (non-fatal): %s", patch_exc)
+
+            # Ensure corepack is enabled so the package.json `packageManager`
+            # pin (pnpm@9) is honored — Vercel's bundled pnpm otherwise crashes
+            # with ERR_INVALID_THIS (undici) on Node 20+. Upsert is idempotent
+            # for pre-existing projects that never had this env var.
+            try:
+                env_qs = f"{qs}&upsert=true" if qs else "?upsert=true"
+                cp = await client.post(
+                    f"{_VERCEL_API}/v10/projects/{project_id}/env{env_qs}",
+                    headers=headers,
+                    json={
+                        "key": "ENABLE_EXPERIMENTAL_COREPACK", "value": "1",
+                        "type": "plain",
+                        "target": ["production", "preview", "development"],
+                    },
+                )
+                if cp.status_code not in (200, 201):
+                    logger.debug(
+                        "Vercel corepack env upsert non-2xx (%d): %s",
+                        cp.status_code, cp.text[:160],
+                    )
+            except Exception as env_exc:
+                logger.debug("Vercel corepack env upsert failed (non-fatal): %s", env_exc)
 
             # ── 2. Resolve numeric GitHub repo ID for the deploy ──
             # Vercel's POST /v13/deployments requires gitSource.repoId
@@ -185,6 +222,41 @@ async def create_vercel_project(
                     owner, repo,
                 )
                 return predicted_url
+
+            # ── 2b. Verify the deploy branch actually has a commit ────────
+            # Deploying `ref: <branch>` when that branch is empty returns
+            # Vercel 400 incorrect_git_source_info and a broken preview. This
+            # happens (a) on a draft-only publish — code is on `staging`, `main`
+            # is empty — and (b) in the brief window after a push before GitHub
+            # propagates the ref. Check the branch (with a short retry for the
+            # race); skip cleanly if it has no commit instead of 400-ing.
+            gh_token = os.environ.get("PLATFORM_GITHUB_TOKEN", "").strip()
+            if gh_token:
+                branch_has_commit = False
+                for _attempt in range(3):
+                    try:
+                        br = await client.get(
+                            f"https://api.github.com/repos/{owner}/{repo}/branches/{branch}",
+                            headers={
+                                "Authorization": f"Bearer {gh_token}",
+                                "Accept": "application/vnd.github+json",
+                            },
+                        )
+                        if br.status_code == 200 and (br.json().get("commit") or {}).get("sha"):
+                            branch_has_commit = True
+                            break
+                    except Exception as br_exc:
+                        logger.debug("Vercel: branch ref check error: %s", br_exc)
+                        break
+                    if _attempt < 2:
+                        await asyncio.sleep(1.5)  # GitHub propagation lag after push
+                if not branch_has_commit:
+                    logger.warning(
+                        "Vercel: branch '%s' has no commit on %s/%s — skipping deploy "
+                        "(draft-only publish, or push not yet propagated). User can Republish.",
+                        branch, owner, repo,
+                    )
+                    return predicted_url
 
             # ── 3. Trigger first deployment ───────────────────────
             # Vercel won't auto-build because our push to main happened

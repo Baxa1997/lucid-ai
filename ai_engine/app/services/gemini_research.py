@@ -423,7 +423,7 @@ async def _expand_short_prompt(
             "1. The actual organization or concept (e.g. \"ACCA\" → "
             "\"Association of Chartered Certified Accountants — global professional accounting body\").\n"
             "2. The audience and what they want from the site/app.\n"
-            "3. The most likely 5-7 pages or sections (use real, domain-specific names).\n"
+            "3. The pages or sections this domain actually needs — at least 5, no upper cap (use real, domain-specific names).\n"
             "4. One or two visual/tone qualities (e.g. \"authoritative and trustworthy\", "
             "\"playful and energetic\").\n\n"
             "STRICT FORMAT — the FIRST WORD must be the brand or concept name itself.\n"
@@ -1397,10 +1397,22 @@ sticky: yes | blur_bg: yes
 ===SECTIONS===
 Invent the section list that THIS domain actually needs — do NOT default to the
 generic "hero / features / pricing / faq / cta" stack. Study what real top
-{domain} sites put on their landing page and pick 7-12 sections that flow in a
-domain-appropriate order. The list below is a menu of POSSIBLE sections; pick
-what fits this domain, skip what doesn't, and INVENT sections unique to the
-domain if needed.
+{domain} sites put on their landing page and pick the section count THE
+EVIDENCE SUPPORTS — minimum 7, NO UPPER CAP: if the strongest reference sites
+in this domain run 14-16 sections, plan 14-16. The count is a research
+finding, not a style preference. The list below is a menu of POSSIBLE
+sections; pick what fits this domain, skip what doesn't, and INVENT sections
+unique to the domain if needed.
+
+FLOOR ≠ TARGET. Plans keep landing on exactly 7-8 sections — that is
+anchoring on the minimum, not research. Real reference sites in
+atmosphere-led domains (hotels, restaurants, venues, spas, travel) typically
+run 10-14 distinct sections: a hotel carries hero, trust strip, suites,
+amenities, dining/café, story, experiences, neighborhood, gallery, reviews,
+offers/rates, FAQ, booking, events/private-hire — and skips only what THIS
+property genuinely lacks. When a domain-relevant section is debatable,
+INCLUDE it; thin pages read as unfinished, and the composer handles long
+pages fine.
 
 Possible section types (not all apply — pick what THIS domain needs):
   Universal: hero, social_proof (logos / ratings / user count), cta_final, footer
@@ -1415,6 +1427,16 @@ Possible section types (not all apply — pick what THIS domain needs):
   Event/Wedding: venue_gallery, packages, couple_story, guest_book, rsvp
   INVENT NEW ones if THIS domain calls for it (e.g. "coffee_of_the_month_feature",
   "live_cam_of_the_roastery", "farm_partners_map", "seasonal_ritual_calendar").
+
+ATMOSPHERE REQUIREMENT — when the brand is a PLACE people visit or an EXPERIENCE
+they book (hotel, restaurant, venue, spa, studio, campus, tour): the plan MUST
+include at least 2 image-led atmosphere sections beyond the hero (story, spaces,
+amenities, dining, experience, gallery, neighborhood). Booking widgets, trust
+strips, and FAQ sell the transaction; atmosphere sections sell the PLACE — the
+top sites in these domains are photo essays with a booking bar, not forms with
+a hero image. A hotel plan of hero/trust/rooms/loyalty/reviews/faq/booking has
+the skeleton but no skin — add the spaces/dining/neighborhood essay sections
+the reference sites carry.
 
 For EACH section you pick, specify:
 
@@ -1496,9 +1518,12 @@ sections:
     ...
 
 PAGE-LEVEL REQUIREMENTS:
-  • Home (/) MUST have 6-9 sections — same depth as a landing page; this is
-    where most visitors land. Do NOT make Home thinner than the rest of the site.
-  • Every NON-HOME page must have 4-6 distinct sections — never just hero + cta.
+  • Home (/) MUST have AT LEAST 6 sections — same depth as a landing page; this
+    is where most visitors land. NO upper cap: match the depth the reference
+    sites show. Do NOT make Home thinner than the rest of the site.
+  • Every NON-HOME page must have AT LEAST 4 distinct sections — never just
+    hero + cta. No upper cap — page depth follows what real sites in this
+    domain ship.
   • Section TYPES across pages must NOT all be the same. Do not put a generic
     "hero / features-grid / testimonials / cta" stack on every single page —
     each page exists for a different reason and needs a section list that
@@ -1508,22 +1533,25 @@ PAGE-LEVEL REQUIREMENTS:
     real role names + bios; on /services it does NOT appear at all.
 
 REQUIRED PAGES BY ARCHETYPE (build EVERY page listed for your archetype, plus
-any additional ones the domain calls for):
+any additional ones the domain calls for — these are FLOORS, there is NO upper
+cap on page count; when the research shows real sites shipping more pages,
+plan more):
 
-  consumer_website (5-7 pages):
+  consumer_website (minimum 5 pages):
     /, /about, /services (or /menu, /rooms, /classes — domain noun for the offering),
     /contact, plus any of: /pricing, /locations, /gallery, /testimonials, /faq,
-    /careers, /press. Pick what THIS domain truly needs.
+    /careers, /press. Pick what THIS domain truly needs — all of them if the
+    references support it.
 
-  portfolio (5-6 pages):
+  portfolio (minimum 5 pages):
     /, /work, /work/:slug, /about, /contact, plus optional: /journal, /services,
     /process, /clients.
 
-  blog (6-8 pages):
+  blog (minimum 6 pages):
     /, /articles, /articles/:slug, /categories, /categories/:slug, /authors/:username,
     /about, /search.
 
-  marketplace (6-8 pages):
+  marketplace (minimum 6 pages):
     /, /browse (or /listings), /listings/:id, /sell (or /list-your-X), /categories/:slug,
     /profile/:id, /about, /how-it-works.
 

@@ -67,6 +67,10 @@ services:
     build:
       context: ./ai_engine
     pull_policy: missing
+    # Next.js 15 (SWC/webpack) build + dev workers mmap shared memory; Docker's
+    # default 64MB /dev/shm exhausts and the worker dies with SIGBUS
+    # ("build worker exited with code: null and signal: SIGBUS"). 1GB clears it.
+    shm_size: "1gb"
     ports:
       - "8000:8000"
       - "6080:6080"
@@ -94,6 +98,12 @@ services:
       # container loses the warm cache and installs blow past 5 min.
       - pnpm_store:/tmp/pnpm_store
       - npm_cache:/tmp/npm_cache
+      # node_modules cache on a NAMED VOLUME (VM-local ext4), NOT the macOS
+      # bind mount. Large native binaries (@next/swc ≈ 135 MB) truncate when
+      # copied onto the FUSE bind mount, producing a corrupt .node that
+      # SIGBUSes on dlopen ("Dev server crashed on startup"). ext4 writes are
+      # reliable + mmap works. See app/paths.py NODE_MODULES_CACHE_ROOT.
+      - nm_cache:/var/lib/lucid_nm_cache
     env_file:
       - ./.env
     environment:
@@ -105,6 +115,15 @@ services:
       # the host at ./workspaces/. Without this, runs land in container-only
       # /tmp and are lost on reaper sweep or restart.
       - LUCID_TMP_ROOT=/app/storage
+      # node_modules cache root → the nm_cache named volume (ext4), off the
+      # bind mount. Prevents truncated @next/swc binaries (SIGBUS on preview).
+      - LUCID_NM_CACHE_ROOT=/var/lib/lucid_nm_cache
+      # Persist generation telemetry (lint retries, fixer fires, rhythm
+      # mismatches) the same way — the default /tmp/lucid_telemetry.jsonl
+      # dies with every container recreate, losing the data needed to tell
+      # which prompt rules the model actually violates across runs.
+      # Host-side: ./workspaces/_telemetry/lucid_telemetry.jsonl
+      - TELEMETRY_FILE=/app/storage/_telemetry/lucid_telemetry.jsonl
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
       # JWT secret from Supabase Dashboard → Settings → API → JWT Settings
@@ -196,3 +215,4 @@ volumes:
   frontend_next:
   pnpm_store:
   npm_cache:
+  nm_cache:

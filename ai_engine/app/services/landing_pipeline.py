@@ -445,6 +445,59 @@ async def run_landing_pipeline(
         "done",
     )
 
+    # ── Design Director: lock a bespoke, contrast-validated design system ──
+    # The landing brief's palette/typography were Gemini-typed and globals.css
+    # DERIVED shadcn foregrounds by mirroring bg/fg (lossy → low-contrast
+    # buttons). The Director (design_system_builder, already used by the
+    # multi-page path) produces one locked, validated system; apply_locked_design
+    # maps it onto the brief so every parallel section shares ONE source of
+    # truth. Fail-soft + flagged: LANDING_LOCKED_DESIGN=0 or any error leaves
+    # the legacy flow exactly as it was.
+    if os.environ.get("LANDING_LOCKED_DESIGN", "1") not in ("0", "false", "False"):
+        try:
+            from app.services.design_system_builder import build_design_system
+            from app.services.landing_locked_design import apply_locked_design
+
+            _ds_intent = _intent or {}
+            _ds_domain = (_ds_intent.get("business_category") or "").strip() or (
+                (brief.get("domain_keywords") or ["general"])[0]
+            )
+            _ds_tone = (_ds_intent.get("tone") or (brief.get("personality") or {}).get("tone") or "")
+            _ds_vibe = ", ".join(
+                _ds_intent.get("brand_personality")
+                or (brief.get("personality") or {}).get("vibe_keywords")
+                or []
+            )
+            # No light/dark bias — the Director chooses the palette direction
+            # that fits THIS domain (dark suits athletic / luxury / nightlife;
+            # light suits wellness / editorial / SaaS) and commits to it. The
+            # bar is SOLID + cohesive, not a fixed colour scheme; the Director's
+            # own domain→archetype→palette logic decides the direction.
+
+            _locked = await build_design_system(
+                description=clean_description,
+                domain=_ds_domain,
+                brand_name=brand_name,
+                copy_tone=_ds_tone,
+                layout_archetype="landing_page",
+                api_key=anthropic_key,
+                vibe=_ds_vibe,
+                websocket=websocket,
+            )
+            if apply_locked_design(brief, _locked):
+                logger.info(
+                    "landing_pipeline: locked design applied — name=%s archetype=%s "
+                    "heading=%s primary=%s",
+                    (_locked or {}).get("design_system_name"),
+                    (_locked or {}).get("archetype"),
+                    (brief.get("typography") or {}).get("heading_font"),
+                    (brief.get("palette") or {}).get("primary"),
+                )
+        except Exception as _ds_exc:
+            logger.warning(
+                "landing_pipeline: locked design skipped (non-fatal) — %s", _ds_exc,
+            )
+
     # ── OPT-IN: Reference screenshots for multimodal grounding ───────
     # Fetches 2-3 screenshots of brief.references[*].url and stashes them
     # under /tmp/lucid_screenshots/<project_id>/ for downstream Claude

@@ -1,5 +1,9 @@
 # Dependencies
-node_modules/
+# No trailing slash: also ignores a `node_modules` *symlink* (the preview
+# step symlinks node_modules to a shared cache; `node_modules/` matches only
+# real directories, so the symlink leaked into git and broke Vercel installs
+# with `ENOTDIR: mkdir node_modules`).
+node_modules
 .pnp
 .pnp.js
 

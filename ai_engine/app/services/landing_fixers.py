@@ -113,6 +113,19 @@ async def run_landing_fixers(workspace_path: str, websocket: Any = None) -> dict
     # one group. Strip the placeholder branch + filter empty groups before
     # render so the footer scales to actual data.
     _run("fix_footer_empty_columns", F.fix_footer_empty_columns, workspace_path)
+    # Header file co-locating a full footer (rendered above the hero +
+    # duplicated at the page end). Strip cross-embedded layout components.
+    _run("fix_layout_cross_embed", F.fix_layout_cross_embed, workspace_path)
+    # (Header readability is enforced via the codegen prompt + the
+    # header_overfrosted regen lint — no deterministic fixer: a muddy
+    # translucent bar was worse than the clean transparent/solid the prompt
+    # now produces.)
+    # section.role (internal design rationale) rendered as eyebrow copy —
+    # "02 — SUBTLE SOCIAL PROOF TO REDUCE FRICTION IMMEDIATELY".
+    _run("fix_section_role_leak", F.fix_section_role_leak, workspace_path)
+    # Lucide icon NAME rendered as a visible text label ("BATTERYCHARGING"
+    # next to the battery icon) — strip the redundant text element.
+    _run("fix_icon_name_as_text", F.fix_icon_name_as_text, workspace_path)
     # Hero "Score Guarantee" / score-badge clipping — negative top/right
     # offsets push the badge above the section while overflow-hidden clips
     # it. Clamp the offset back inside the section.
@@ -138,6 +151,9 @@ async def run_landing_fixers(workspace_path: str, websocket: Any = None) -> dict
     # Only the hero commands the viewport: strip min-h-screen/h-screen from
     # non-hero section roots and cap runaway root padding at py-24.
     _run("fix_nonhero_viewport_heights", F.fix_nonhero_viewport_heights, workspace_path)
+    # Strip sections (trust bars, logo strips, tickers) are slim seams, not
+    # destinations — cap their root padding at py-10/md:py-12.
+    _run("fix_strip_section_scale", F.fix_strip_section_scale, workspace_path)
     # Sticky nav overlaps section headings on scroll without `scroll-mt-*` on
     # the section root. Backfill it for every `<section id="...">` that's an
     # anchor target. Fixes the systemic "nav over '07 — GALLERY'" bug.

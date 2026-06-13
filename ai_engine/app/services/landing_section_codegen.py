@@ -139,6 +139,32 @@ _FALLBACK_SKELETONS: dict[str, str] = {
         "      • Education / kids     → enrollment bar (\"82% full — Fall 2026 cohort\"), badge (\"Accredited K-8 · est. 1972\").\n"
         "      • Agency / studio      → metric (\"24 launches · 9 awards · 2025\"), status (\"Now booking Q3\").\n"
         "    These cards are STATIC display elements — no React state needed, no functional widget. Use real lucide icons (Star, MapPin, Clock, TrendingUp, CheckCircle2, Truck, GraduationCap) sized `h-4 w-4` with `text-primary` stroke. NEVER render generic placeholder data (\"100+\", \"Awesome\", \"Trusted\") — derive numbers from brand.business_info, section.items, or domain-realistic numbers. Pattern E (Centered Editorial) is the ONE exception and may skip these cards.\n"
+        "  • BOOKING/SEARCH BAR ZONE (heroes with a functional search, booking, or availability\n"
+        "    widget — hero-search type): the bar OWNS the hero's bottom zone, full stop. Floating\n"
+        "    data cards must NOT use bottom-left or bottom-right anchors in this case — they WILL\n"
+        "    collide with the bar (shipped failure: location chip half-buried under the search\n"
+        "    pill). Place at most ONE chip at mid-height (`absolute top-1/3 right-6`) or fold the\n"
+        "    fact INTO the bar as a caption line. Nothing except the bar within 120px of the\n"
+        "    section's bottom edge.\n"
+        "  • SIGNATURE MOVE (REQUIRED — this is what separates a designed hero from a stock\n"
+        "    banner). The ART DIRECTION block gives `Variety #N`; execute the matching move on\n"
+        "    top of your chosen composition pattern:\n"
+        "      #1 CLIPPED DISPLAY TYPE — headline at text-7xl/8xl with its accent word partially\n"
+        "         layered BEHIND the hero subject (z-index sandwich: media z-0 → accent span\n"
+        "         z-[5] → rest of content z-20), or overlapping the section's edge crop.\n"
+        "      #2 FRAMED INSET MEDIA — the photo does NOT bleed to the edges: inset it in a\n"
+        "         rounded-3xl frame with `p-2 ring-1 ring-border` and an offset accent border\n"
+        "         (`absolute -inset-2 border border-primary/30 rounded-[2rem]`), page surface\n"
+        "         visible around it. Turns the stock photo into a gallery object.\n"
+        "      #3 VERTICAL RAIL — a rotated tagline or index rail along the hero's left or right\n"
+        "         edge (`absolute left-6 top-1/2 -rotate-90 origin-left text-xs uppercase\n"
+        "         tracking-[0.3em] text-foreground/60` on light or `/70` inverse) + a thin\n"
+        "         vertical divider line. Editorial print energy.\n"
+        "      #4 STACKED STAT COLUMN — a slim vertical column of 2-3 oversized stats\n"
+        "         (`text-3xl font-bold` + tiny uppercase labels) pinned to the hero's right edge\n"
+        "         at mid-height, separated by thin rules — NOT chips, typographic objects.\n"
+        "    The move must coexist with the booking-bar zone rule above (none of the four touch\n"
+        "    the bottom zone).\n"
         "  • Apply ≥2 motifs/textures from visual_dna in concrete accent positions (eyebrow ornament, divider, decorative SVG in a corner — small, not loud)."
     ),
     "menu": (
@@ -278,9 +304,9 @@ _FALLBACK_SKELETONS: dict[str, str] = {
         "    (e.g. \"Reserve Your Table\", \"Book Your Stay\", \"Schedule a Visit\").\n"
         "  • Two-column layout: form (left or right), info panel with brand business_info (address/phone/hours).\n"
         "  • Form fields: name, email, phone, date, party-size or quantity (input type=number), notes textarea, submit.\n"
-        "  • DATE FIELDS use the locale-proof overlay pattern from the DATE INPUTS\n"
-        "    system rules (visible dayjs-formatted span + invisible native input on\n"
-        "    top) — NEVER a bare visible `<input type=\"date\">`, its display text\n"
+        "  • DATE FIELDS use the custom dayjs calendar from the DATE FIELDS\n"
+        "    system rules (brand-styled month grid in a top-full panel) —\n"
+        "    NEVER any `<input type=\"date\">`; its native popup\n"
         "    follows the OS locale and clashes with the site typography.\n"
         "  • Real validation (required + email regex) + success state on submit. Mark file 'use client'."
     ),
@@ -796,6 +822,7 @@ def _system_prompt(
     references: list[dict] | None = None,
     design_tokens: dict | None = None,
     visual_dna: dict | None = None,
+    locked_design: dict | None = None,
 ) -> str:
     """Per-call system prompt — small, focused, no rules unrelated to a single section."""
     palette_lines = _format_palette_table(palette)
@@ -803,6 +830,8 @@ def _system_prompt(
     dt = design_tokens or {}
     pers = personality or {}
     vd = visual_dna or {}
+    from app.services.landing_locked_design import locked_design_prompt_block
+    locked_block = locked_design_prompt_block(locked_design)
     pers_block = ""
     if pers:
         vibe = ", ".join(pers.get("vibe_keywords") or [])
@@ -1036,6 +1065,11 @@ MANDATORY RULES
 5. The outermost element MUST be `<section id="<section-id>" className="...">` so anchor links work.
 6. Use lucide-react icons ONLY when section.items[i].icon is set. Map the string to an import,
    e.g. `import {{ Zap, ShieldCheck }} from "lucide-react"` and resolve via a small map.
+   `item.icon` is a COMPONENT NAME used to render `<IconComp/>` — it is NEVER visible text.
+   NEVER write `{{item.icon}}` (or any `.icon`) as a JSX text child / label: it ships the raw
+   PascalCase identifier ("BatteryCharging") on the page next to the icon. For a category/badge
+   LABEL, read a real copy field (`item.label`, `item.tag`, `item.category`) or write a short
+   literal — never the icon name.
 7. Mark files that use React hooks, onClick, or `<Reveal>` with `'use client';` as the first line.
 8. NO CSS modules, NO styled-components, NO dynamic Tailwind class strings via template literals
    that Tailwind can't parse. All Tailwind classes must be statically present in the JSX.
@@ -1184,7 +1218,7 @@ GALLERY SECTIONS — render section.images as a real responsive grid:
 
 FORM SECTIONS (type contact_form | reservation | booking_form | contact | newsletter)
   • Render an actual `<form>` with proper labels, focus rings, and a submit button.
-  • Reservation fields: name, email, phone, date (using the DATE INPUTS overlay pattern below — never a bare visible native date input), party size (input type="number"), special requests (textarea).
+  • Reservation fields: name, email, phone, date (using the custom dayjs calendar from the DATE FIELDS rules below — never any `<input type="date">`), party size (input type="number"), special requests (textarea).
   • Newsletter: just email + submit.
   • Form panel: `bg-card border border-border` plus the corner-radius implied by design_system.accent_shape (see DESIGN SYSTEM below).
   • Submit button: full primary CTA styling, full width on mobile.
@@ -1250,7 +1284,7 @@ DESIGN CONTEXT
   Body font:    {typography.get("body_font", "Inter")}
   Palette (already wired as CSS vars in globals.css):
 {palette_lines}
-{visual_dna_block}{pers_block}{ref_block}
+{locked_block}{visual_dna_block}{pers_block}{ref_block}
 
 SECTION ANATOMY (driven by VISUAL DNA + the user message)
   Every section's user message includes ONE of:
@@ -1351,9 +1385,14 @@ PIXEL-PRECISE LAYOUT TOKENS (use exactly these — they keep the whole page on o
   • Eyebrow:    `text-[11px] tracking-[0.18em] uppercase text-primary font-semibold mb-3`
       EDITORIAL NUMBERING (REQUIRED on every non-hero, non-cta section). Prefix the eyebrow
       with the section's two-digit index + an em-dash:
-        `<p className="..."><span className="tabular-nums">{{indexStr}}</span> &mdash; {{section.nav_label || section.role}}</p>`
+        `<p className="..."><span className="tabular-nums">{{indexStr}}</span> &mdash; {{section.nav_label || "Story"}}</p>`
         where `indexStr = String(sectionIndex + 1).padStart(2, "0")` and `sectionIndex` is the
-        SECTION_INDEX value provided in the user message (NOT a hardcoded number).
+        SECTION_INDEX value provided in the user message (NOT a hardcoded number). The label is
+        `section.nav_label`; when nav_label is empty, WRITE a 1-3 word label in brand voice
+        yourself as the fallback literal ("Guest Stories", "The Rooms", "Why Direct").
+        NEVER render `section.role` — it is internal design rationale ("subtle social proof
+        to reduce friction immediately") and printed on the page it reads as a leaked spec
+        note, instantly cheapening the whole site.
       Examples of valid eyebrows: "01 — STORY", "02 — MENU", "03 — RESERVATIONS", "04 — PRESS".
       The hero (index 0) and CTA-band sections may use a plain eyebrow label without the number
       (the hero's eyebrow is a brand tagline, not a section index). Every other section MUST
@@ -1429,7 +1468,7 @@ SECTION LAYOUT ARCHETYPES (every section is ONE of 4 shapes — reuse breeds cle
       Card grid count matches data count — never pad to fill 3-up when you have 2 items.
 
     ARCHETYPE 3 — FULL-WIDTH BAND
-      Use for: cta, mid_cta_banner, trust_bar, stats, awards strip, single quote.
+      Use for: cta, mid_cta_banner, stats, single quote.
       Shape: `bg-primary text-primary-foreground` OR `bg-foreground text-background`, no card chrome,
       content centered with generous py-24 md:py-32, ONE primary message + ONE primary action.
       Use 1-2 bands per page max — more turns the page into a marketing brochure.
@@ -1439,6 +1478,15 @@ SECTION LAYOUT ARCHETYPES (every section is ONE of 4 shapes — reuse breeds cle
       Shape: `grid lg:grid-cols-2 gap-8 lg:gap-12`. Form on one side, info panel (address /
       hours / phone / map) on the other. Form has real `<form>` element with labeled inputs +
       submit. Info panel uses brand.business_info exclusively.
+
+    ARCHETYPE 5 — COMPACT STRIP (a seam, not a destination)
+      Use for: trust_bar, trust_ticker, logo_strip, awards strip, marquee.
+      Shape: root `py-8 md:py-12` MAX (never py-16+, never min-h-*), content in ONE slim row:
+      inline stats with thin vertical dividers (`value font-semibold` + `label text-xs uppercase
+      tracking-wide text-muted-foreground`), or a wordmark/logo row, or a scrolling marquee.
+      NO headline block, NO cards, NO grid of tiles — at most a tiny centered eyebrow. The strip
+      is glue between the hero and the first real section; a full-screen trust section reads as
+      a padding farm. If section.items has 3-4 stats, they ALL fit in one row at md+.
 
   PICKING THE ARCHETYPE: the section's `role` / `type` field decides — there is ONE correct
   archetype per type. Don't reach for a fancier shape because it feels more original.
@@ -1910,26 +1958,62 @@ DROPDOWN / POPOVER STACKING (custom selects, autocompletes, calendars)
     open the panel UPWARD: `absolute bottom-full mb-2` instead of
     `top-full mt-2` — a downward panel there hangs over the section edge.
 
-DATE INPUTS (booking bars, reservation/contact forms) — LOCALE-PROOF PATTERN
-  • NEVER show the raw text of a native `<input type="date">`: browsers
-    render its value in the OS locale (\"12.06.2026\", Cyrillic/Arabic month
-    names in the popup) with segment styling you can't control — it clashes
-    with the site typography and reads as a foreign widget.
-  • Use the overlay pattern (native picker still works, display is yours):
-      <label className="relative flex items-center gap-2 cursor-pointer">
-        <CalendarIcon className="h-4 w-4 text-primary" aria-hidden="true" />
-        <span className="text-sm font-medium text-foreground">
-          {{dayjs(checkIn).format("DD MMM YYYY")}}
-        </span>
-        <input type="date" value={{checkIn}} onChange={{...}}
-               aria-label="Check-in date"
-               className="absolute inset-0 h-full w-full opacity-0 cursor-pointer" />
-      </label>
-    `import dayjs from "dayjs"` — dayjs IS preinstalled in the template.
-    The invisible input keeps the native calendar + keyboard + mobile UX;
-    the visible `<span>` keeps the typography consistent in every locale.
-  • Exactly ONE calendar icon per field (yours). The native indicator is
-    invisible along with the input — never render a second icon.
+DATE FIELDS (booking bars, reservation forms) — CUSTOM CALENDAR, NEVER NATIVE
+  • NEVER use `<input type="date">` ANYWHERE — visible, hidden, or overlaid.
+    The native POPUP renders in the OS locale (Cyrillic month names, blue
+    Chrome highlight) and cannot be styled — a foreign-looking widget on the
+    page's most conversion-critical control breaks the brand instantly.
+  • Build the brand-styled calendar with dayjs (preinstalled):
+      const [month, setMonth] = useState(() => dayjs().startOf("month"));
+      const days = useMemo(() => {{
+        const start = month.startOf("week");
+        return Array.from({{ length: 42 }}, (_, i) => start.add(i, "day"));
+      }}, [month]);
+    Panel: `absolute top-full left-0 mt-2 z-[80] w-[19rem] rounded-2xl border
+    border-border bg-background p-4 shadow-xl` (respects the dropdown
+    CLIPPING rules — section root must be overflow-x-clip).
+    Header row: `{{month.format("MMMM YYYY")}}` + ChevronLeft/ChevronRight
+    buttons calling `setMonth(month.subtract(1, "month"))` / `add`.
+    Weekday row: hardcode ["Mo","Tu","We","Th","Fr","Sa","Su"]
+    (`text-[10px] uppercase tracking-wide text-muted-foreground text-center`).
+    Day grid: `grid grid-cols-7 gap-1`; each day is a
+    `<button type="button">` with:
+      base       `h-9 w-9 rounded-full text-sm transition-colors hover:bg-muted`
+      off-month  `text-muted-foreground/40`
+      past       `disabled opacity-30 pointer-events-none`
+      selected   `bg-primary text-primary-foreground`
+      in-range   `bg-primary/10 rounded-none` (days between check-in/out)
+  • RANGE SELECTION (check-in + check-out): ONE shared calendar panel
+    anchored under the active field. First click sets check-in, second sets
+    check-out (swap if earlier), then close. The active trigger field gets
+    `ring-1 ring-primary`. Close on outside click + Escape.
+  • Trigger fields display `{{dayjs(value).format("DD MMM YYYY")}}` (or a
+    "Select date" placeholder) — dayjs keeps the typography identical in
+    every locale. `import dayjs from "dayjs"`.
+  • Guest/party-size selectors follow the same rule: custom stepper or
+    styled listbox, never a bare native `<select>` inside a booking bar.
+
+BENTO / MOSAIC GRIDS — EQUAL ROW HEIGHTS (the #1 gallery failure)
+  • CSS grid rows size to the TALLEST tile in the row: mixing `aspect-[4/3]`,
+    `aspect-[3/4]`, and `aspect-square` tiles side by side leaves big empty
+    voids under every shorter tile (shipped failure: suites bento with
+    random dark gaps reading as broken layout).
+  • THE RECIPE — explicit row spans, not aspect ratios:
+      <div className="grid grid-cols-12 auto-rows-[170px] md:auto-rows-[200px] gap-3 md:gap-4">
+        tile A  `col-span-12 md:col-span-7 md:row-span-2 relative overflow-hidden rounded-2xl`
+        tile B  `col-span-12 md:col-span-5 md:row-span-2 relative overflow-hidden rounded-2xl`
+        tile C-E `col-span-12 sm:col-span-6 md:col-span-4 md:row-span-1 ...`
+      Every tile: `<Image fill className="object-cover" />` inside the
+      relative cell — `fill` + fixed row units means EVERY cell is fully
+      covered no matter the photo's intrinsic ratio. ZERO voids by
+      construction.
+  • NEVER mix different `aspect-*` utilities between sibling tiles of one
+    grid. Either every tile shares ONE aspect class (uniform grid), or the
+    grid uses `auto-rows-[*]` + `row-span-*` (bento). If your layout plan
+    says "row-span-2", the class MUST appear in the JSX — a comment is not
+    a layout.
+  • Tile labels live INSIDE the tile (absolute bottom-0 gradient scrim +
+    caption), never floating between tiles.
 
 IMAGE RENDERING — NEVER SHIP A BROKEN OR PARTIAL IMAGE
   • EVERY `<Image>` / `<img>` MUST have a real URL coming from
@@ -2246,7 +2330,8 @@ COMPONENT:     {component_name}
 SECTION ID:    {section.get('id')}
 SECTION TYPE:  {section.get('type')}
 LAYOUT HINT:   {section.get('layout_hint')}
-ROLE:          {section.get('role','')}
+ROLE:          {section.get('role','')}   (internal design rationale — it shapes your layout/scale
+               decisions; NEVER render this text anywhere in the UI)
 POSITION:      section {section_index + 1} of {section_count}.
 SECTION_INDEX: {section_index}  (zero-based; use for editorial-numbering eyebrow as `String({section_index}+1).padStart(2,"0")` → `"{section_index + 1:02d}"`)
 SECTION BG:    `{bg_hint}` — use this on the outer <section>. Previous section was `{prev_bg_hint}`, so DO NOT
@@ -2271,6 +2356,76 @@ ANTI-MONOTONY RULE — CRITICAL:
 Generate the component now. Output via write_project_files with exactly ONE file."""
 
 
+# Light-family surfaces all pair with text-foreground, so swapping one for
+# another on a section root is contrast-safe. Anything else (bg-foreground,
+# bg-primary, gradients) means the section's text colors were written for
+# THAT surface — swapping the background alone would ship invisible text.
+_LIGHT_BG_TOKEN_RE = re.compile(r"bg-(?:background|card|muted)(?:/\d+)?")
+_ANY_BG_TOKEN_RE = re.compile(r"\bbg-[A-Za-z][\w/.-]*")
+
+
+def _enforce_rhythm_surface(
+    content: str,
+    rhythm_assignment: dict[str, Any] | None,
+    *,
+    section_id: str = "",
+) -> str:
+    """Make the section root carry the page-rhythm plan's surface.
+
+    The ART DIRECTION prompt block states the planned surface, but models
+    drift (bg-card where the plan said bg-muted/40 — 3 of 8 sections in the
+    Luminary Austin run). Light↔light drift is repaired deterministically;
+    light↔dark drift stays warn-only telemetry.
+    """
+    if not rhythm_assignment:
+        return content
+    surface = rhythm_assignment.get("surface") or ""
+    if surface in ("media", ""):
+        return content
+    from app.services.landing_section_lint import SECTION_ROOT_RE
+    m = SECTION_ROOT_RE.search(content)
+    if not m:
+        return content
+    classes = m.group(3)
+    planned = (rhythm_assignment.get("surface_classes") or "").split()
+    bg_token = planned[0] if planned else ""
+    if not bg_token or bg_token in classes:
+        return content
+
+    repaired = False
+    if surface in ("base", "tint"):
+        existing = _ANY_BG_TOKEN_RE.findall(classes)
+        if all(_LIGHT_BG_TOKEN_RE.fullmatch(t) for t in existing):
+            stripped = _ANY_BG_TOKEN_RE.sub("", classes)
+            new_classes = re.sub(r"\s{2,}", " ", f"{stripped} {bg_token}").strip()
+            content = (
+                content[: m.start()]
+                + f'<section{m.group(1)}className={m.group(2)}{new_classes}{m.group(2)}'
+                + content[m.end():]
+            )
+            repaired = True
+            logger.info(
+                "section %s: rhythm surface enforced — root bg → %s",
+                section_id, bg_token,
+            )
+    if not repaired:
+        logger.warning(
+            "section %s: rhythm mismatch — expected %s on root, got %r",
+            section_id, bg_token, classes[:120],
+        )
+    try:
+        from app.services.telemetry import emit as _t_emit
+        _t_emit(
+            "section.rhythm_mismatch",
+            section_id=section_id,
+            expected=bg_token,
+            repaired=repaired,
+        )
+    except Exception:
+        pass
+    return content
+
+
 async def _generate_one_section(
     section: dict[str, Any],
     siblings: list[dict[str, Any]],
@@ -2291,6 +2446,8 @@ async def _generate_one_section(
     visual_dna: dict | None = None,
     header_archetype: str = "transparent-pill",
     reference_images: list[bytes] | None = None,
+    rhythm_assignment: dict[str, Any] | None = None,
+    locked_design: dict | None = None,
 ) -> dict[str, str] | None:
     """Generate one section component. Returns {'path', 'content'} or None on failure."""
     from app.services.llm_json_client import call_claude_for_json
@@ -2304,6 +2461,7 @@ async def _generate_one_section(
         personality=personality, references=references,
         design_tokens=design_tokens,
         visual_dna=visual_dna,
+        locked_design=locked_design,
     )
     usr_p = _user_prompt(
         section, siblings, component, file_path,
@@ -2312,6 +2470,9 @@ async def _generate_one_section(
         visual_dna=visual_dna,
         header_archetype=header_archetype,
     )
+    if rhythm_assignment:
+        from app.services.landing_page_rhythm import rhythm_prompt_block
+        usr_p = usr_p + rhythm_prompt_block(rhythm_assignment)
 
     # One retry per section. The model-fallback inside call_claude_for_json
     # handles upstream errors (sonnet → opus) but doesn't retry when Claude
@@ -2416,11 +2577,35 @@ async def _generate_one_section(
                 # remaining attempt as a guided retry. "fixable" violations
                 # never cost an API call: post_generation_fixer repairs them.
                 from app.services.landing_section_lint import (
-                    lint_section_source, regen_feedback,
+                    SECTION_ROOT_RE, lint_section_source, regen_feedback,
                 )
                 violations = lint_section_source(
                     content, section=section, filename=filename,
                 )
+
+                # Planned-light sections coming back on a dark solid surface
+                # break the composed page arc (two adjacent dark slabs:
+                # Saint Cecilia story+suites 2026-06-13) and can't be
+                # repaired post-hoc — the section's text colors were written
+                # for the dark surface. Joins the regen class so the guided
+                # retry restates the plan.
+                if rhythm_assignment and rhythm_assignment.get("surface") in ("base", "tint"):
+                    _root_m = SECTION_ROOT_RE.search(content)
+                    _root_cls = _root_m.group(3) if _root_m else ""
+                    if re.search(r"\bbg-(?:foreground|primary|secondary)\b(?!/)", _root_cls):
+                        violations.append({
+                            "code": "rhythm_dark_drift",
+                            "severity": "regen",
+                            "message": (
+                                "the ART DIRECTION plan assigns this section the light surface "
+                                f"`{rhythm_assignment.get('surface_classes', '')}` but the section root "
+                                "uses a dark solid background — the page's surface arc is planned "
+                                "globally and a rogue dark band creates two adjacent dark slabs; apply "
+                                "the planned surface classes on the root and color text for a light "
+                                "surface (text-foreground / text-muted-foreground)"
+                            ),
+                        })
+
                 regen_violations = [v for v in violations if v["severity"] == "regen"]
                 if regen_violations and attempt < max_attempts:
                     codes = ", ".join(v["code"] for v in regen_violations)
@@ -2455,6 +2640,18 @@ async def _generate_one_section(
                         )
                     except Exception:
                         pass
+
+                # Rhythm adherence — light↔light surface drift is repaired
+                # deterministically (all light surfaces share
+                # text-foreground); light↔dark drift stays warn-only since
+                # the text colors were written for the model's surface.
+                try:
+                    content = _enforce_rhythm_surface(
+                        content, rhythm_assignment,
+                        section_id=str(section_id or ""),
+                    )
+                except Exception:
+                    pass
 
                 if attempt > 1:
                     logger.info("section %s: succeeded on retry (attempt %d)", section_id, attempt)
@@ -2570,10 +2767,28 @@ async def generate_landing_sections(
     if not design_tokens:
         from app.services.landing_brief import _build_design_tokens
         design_tokens = _build_design_tokens(design_system)
+    # Locked Design Director system (when the pipeline ran the Director) —
+    # surfaced to every section as the authoritative card/radius/motion recipe.
+    locked_design = brief.get("locked_design") or None
 
     # Visual DNA — concrete cultural cues from research. Lead design
     # directive when present; codegen falls back to enums-only if absent.
     visual_dna = dict(brief.get("visual_dna") or {})
+
+    # Page rhythm — the deterministic "art director" plan. Sections render
+    # in parallel, so global decisions (which surface each section sits on,
+    # where the dark bands land, which sections are flagships) are made
+    # HERE, once, before any codegen call. Each section receives only its
+    # own assignment + its neighbors' surfaces.
+    from app.services.landing_page_rhythm import compose_page_rhythm
+    _rhythm_seed = f"{brand_name}|{(brief.get('brand') or {}).get('tagline', '')}".lower()
+    page_rhythm = compose_page_rhythm(sections, visual_dna, seed=_rhythm_seed)
+    if page_rhythm:
+        logger.info(
+            "generate_landing_sections: page rhythm (%s) — %s",
+            (visual_dna.get("surface_rhythm") or "alternating"),
+            {sid: a["surface"] for sid, a in page_rhythm.items()},
+        )
 
     # Voice/context fields populated by enrich_brief_with_signals when the
     # research stage succeeded. Absent on briefs built without research,
@@ -2646,6 +2861,8 @@ async def generate_landing_sections(
                     visual_dna=visual_dna,
                     header_archetype=header_archetype,
                     reference_images=_refs,
+                    rhythm_assignment=page_rhythm.get((s.get("id") or "").strip()),
+                    locked_design=locked_design,
                 )
             except Exception as exc:
                 logger.warning("section %s: unhandled exception in _bounded — %s", s.get("id"), exc)
@@ -2926,32 +3143,65 @@ def _layout_system_prompt(
             "typography, social row treatment, footer accent) from the VISUAL DNA block above."
         )
 
-    return f"""You are a senior front-end engineer writing ONE Next.js layout component (header OR footer) for a landing page.
+    # ── Kind-scoped blocks ────────────────────────────────────────────────
+    # The header call used to see the FULL footer spec (columns, newsletter,
+    # bottom bar) in this same prompt — and the model dutifully implemented
+    # it, co-locating a second footer INSIDE MarketingHeader.jsx that
+    # rendered above the hero (double footer, Luminary Austin 2026-06-12).
+    # Each kind now sees only its own spec plus an exclusivity contract.
+    is_header = component_name == "MarketingHeader"
 
-OUTPUT — ONE file via the write_project_files tool:
-  • path: {file_path}
-  • content: full source ready to import
-
-MANDATORY RULES
-1. The component reads its content from `@/content/landing.json` — never hardcode brand name, links, or copy. Pattern:
-     import landing from "@/content/landing.json";
-     const brand = landing.brand;
-     const nav = landing.nav || [];     // header only
-     const footer = landing.footer || {{}};   // footer only
-     const cta = landing.ctas?.primary;
-     const social = brand.social || [];
-     const info = brand.business_info || {{}};
-2. Use TAILWIND CLASSES ONLY. NEVER use the `style={{}}` prop on any element — not for colors, not for fonts, not for spacing, not for anything. The ONLY exception is `style={{ backgroundImage: `url(...)` }}` when applying a dynamic image. For fonts: brand wordmark, headlines, and any serif/display copy use the Tailwind class `font-[family-name:var(--font-heading)]`. Body / nav / button text inherits the body font from `<body>` automatically — do NOT re-declare it. NEVER write `style={{ fontFamily: ... }}` — that ships a hardcoded family name that paints UNDER the next/font CSS variable and produces a visible double-rendered text artifact (regular + serif overlapping). The `typography.heading_font` value below is INFORMATIONAL ONLY (it tells you what font is loaded as `--font-heading`); never embed the literal name in JSX.
-3. Default-export a React function named `{component_name}` (matching filename).
-4. Mark `'use client';` as the FIRST line if you use useState / useEffect / onClick.
-5. Lucide-react icons for social (Instagram, Twitter, Facebook, Linkedin, Youtube, Github) and any UI affordances (Menu, X, ChevronDown). Map social.label string → icon via a small const dict.
-6. NO CSS modules, NO styled-components, NO dynamic class strings Tailwind can't parse.
-7. BORDER-RADIUS IS MANDATORY. Buttons, CTAs, and pill-style nav items use the
-   PROJECT_DESIGN_TOKENS button_radius_class (below). Mobile-menu icon buttons use the same.
-   Newsletter input/email-capture inputs use `rounded-md`. Logo lockup container `rounded-md`
-   if it has a background color, no radius if it's transparent. NEVER use `rounded-none`
-   on any header/footer element.
-8. FOOTER COLUMNS — DRIVEN BY DATA, NEVER PADDED:
+    if is_header:
+        exclusivity_block = """EXCLUSIVITY — HEADER ONLY (hard contract):
+  • A SEPARATE MarketingFooter.jsx is generated by another call; layout.jsx renders it AFTER
+    the page content. Your file must NOT define, import, or render ANY footer — no <footer>
+    element, no link columns, no newsletter form, no copyright bar.
+  • Your component renders exactly ONE <header> element (plus its mobile-menu overlay and
+    backdrop). Nothing else may appear in page flow.
+"""
+        footer_rules_block = ""
+        interactivity_block = """INTERACTIVITY (REQUIRED)
+  • Sticky/fixed headers: useEffect listens to window.scrollY → setScrolled(true) past 8px → flips classes (transparent → solid w/ backdrop-blur). NO exceptions on mobile-only headers.
+  • Mobile menu: useState `open`. Hamburger button toggles. ESC closes. Click outside closes (use a backdrop div with onClick).
+  • Mega-menu: useState tracks open panel by index. Hover or click opens. Esc / clicking another link closes.
+  • Every <Link> / <a> MUST resolve to a valid in-page anchor (`#features`, `#contact`) or external URL — never `href="#"` placeholders. Use anchors derived from `landing.nav`.
+  • aria-label on all icon-only buttons; aria-expanded on toggles."""
+        contrast_block = """CONTRAST & READABILITY — CLEAN & MODERN (NOT frosted clutter)
+  • ONE clean header row. The #1 "dated / cluttered" header failure is wrapping the wordmark,
+    the nav, AND the social icons EACH in its own translucent `bg-background/NN backdrop-blur`
+    pill — that stacks 3-4 frosted chips over the hero and reads as a muddy grey smear. NEVER do
+    this. At most ONE surface on the header (the root), and only in the cases below.
+  • UNSCROLLED state — choose by what the hero behind the header is (read header_archetype + the
+    hero archetype in the anatomy):
+      A. Over a MEDIA / full-bleed / dark hero (header_archetype transparent-pill / floating-glass,
+         or a photo/video/dark hero): keep the header root `bg-transparent` (NO bar, NO pills) and
+         use LIGHT text — wordmark + nav links `text-white` with `hover:text-white/80`. Guarantee
+         contrast with ONE subtle top scrim placed BEHIND the header content (never a bar, never
+         per-element chips):
+           <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-20 bg-gradient-to-b from-black/40 to-transparent" />
+         Literal black/white over the photo is correct here — it matches the hero's own over-photo
+         text and is robust on any palette.
+      B. Over a LIGHT / non-media hero (solid header_archetype, or a light split hero): a clean
+         thin SOLID bar — header root `bg-background/80 backdrop-blur-md border-b border-border`
+         with `text-foreground/80 hover:text-foreground` links. Still NO per-element pills.
+  • SCROLLED (always, past 8px): flip the header root to a solid `bg-background/95 backdrop-blur-md
+    border-b border-border` surface with `text-foreground/80 hover:text-foreground` links. This is
+    the ONLY background change the header ever makes — one transition, clean → solid.
+  • NEVER ship naked `text-foreground` (dark) links on a `bg-transparent` header over a dark hero —
+    that's the invisible-at-load failure. Over a dark/media hero use case A (`text-white` + scrim).
+  • Header CTA button: `bg-primary text-primary-foreground` (or a single solid chip that contrasts
+    the hero) — ALWAYS solid, the ONE filled accent in the header. Never a low-opacity outline that
+    vanishes on a photo, and never wrapped in an extra frosted pill."""
+        quality_extra = """  • Header: max 6 nav links, each 1 short word. The nav array passed in is already short — DO NOT repeat words or
+    re-expand them ("Stays" stays "Stays", never "Accommodations Showcase")."""
+    else:
+        exclusivity_block = """EXCLUSIVITY — FOOTER ONLY (hard contract):
+  • A SEPARATE MarketingHeader.jsx is generated by another call; layout.jsx renders it BEFORE
+    the page content. Your file must NOT define, import, or render ANY header, nav bar, or
+    <header> element.
+  • Your component renders exactly ONE <footer> element. Nothing else may appear in page flow.
+"""
+        footer_rules_block = f"""8. FOOTER COLUMNS — DRIVEN BY DATA, NEVER PADDED:
    • Render footer columns ONLY from the groups that actually exist in
      `landing.footer.links` (group by the `group` field; if absent, fall
      back to a single 'Explore' column).
@@ -3008,18 +3258,60 @@ MANDATORY RULES
     • NEVER spread the bottom bar across multiple rows with large gaps.
       `flex flex-col gap-3 md:flex-row md:items-center md:justify-between`
       with `py-6` padding. No extra blank space below.
+"""
+        interactivity_block = """INTERACTIVITY (REQUIRED)
+  • Footer newsletter form (if the anatomy includes one): useState for email + submitted; client-side email validation; success state.
+  • Every <Link> / <a> MUST resolve to a valid in-page anchor (`#features`, `#contact`) or external URL — never `href="#"` placeholders. Use anchors derived from `landing.footer.links`.
+  • aria-label on all icon-only buttons."""
+        contrast_block = """CONTRAST & READABILITY (NON-NEGOTIABLE)
+  • Footer link text: `text-muted-foreground hover:text-foreground` (full opacity). Footer headings: `text-foreground`.
+  • DARK FOOTER SURFACES — when the footer wrapper uses `bg-foreground`,
+    `bg-secondary` (dark brand color), or any dark `bg-*`:
+      ✗ NEVER `text-foreground` or `text-muted-foreground` (invisible — same hue as bg).
+      ✗ NEVER `text-primary-foreground` (only pairs with `bg-primary`, NOT secondary).
+      ✓ Body / nav links: `text-background hover:text-background/80`.
+      ✓ Muted descriptions (newsletter sublabel, copyright): `text-background/70`.
+      ✓ Headings (column labels): `text-background` full opacity.
+      ✓ Newsletter input: `bg-background/10 text-background placeholder:text-background/50 border-background/20`.
+      ✓ Section divider line: `border-background/15`.
+    This is the #1 footer failure: white-on-white or brown-on-brown text
+    because the writer reached for `text-foreground` / `text-muted-foreground`
+    on an inverse surface. Always invert text colors on inverse surfaces."""
+        quality_extra = "  • The whole footer fits comfortably under one viewport at desktop."
 
+    kind_label = "the HEADER" if is_header else "the FOOTER"
+    return f"""You are a senior front-end engineer writing ONE Next.js layout component ({kind_label}) for a landing page.
+
+OUTPUT — ONE file via the write_project_files tool:
+  • path: {file_path}
+  • content: full source ready to import
+
+MANDATORY RULES
+1. The component reads its content from `@/content/landing.json` — never hardcode brand name, links, or copy. Pattern:
+     import landing from "@/content/landing.json";
+     const brand = landing.brand;
+     const nav = landing.nav || [];     // header only
+     const footer = landing.footer || {{}};   // footer only
+     const cta = landing.ctas?.primary;
+     const social = brand.social || [];
+     const info = brand.business_info || {{}};
+2. Use TAILWIND CLASSES ONLY. NEVER use the `style={{}}` prop on any element — not for colors, not for fonts, not for spacing, not for anything. The ONLY exception is `style={{ backgroundImage: `url(...)` }}` when applying a dynamic image. For fonts: brand wordmark, headlines, and any serif/display copy use the Tailwind class `font-[family-name:var(--font-heading)]`. Body / nav / button text inherits the body font from `<body>` automatically — do NOT re-declare it. NEVER write `style={{ fontFamily: ... }}` — that ships a hardcoded family name that paints UNDER the next/font CSS variable and produces a visible double-rendered text artifact (regular + serif overlapping). The `typography.heading_font` value below is INFORMATIONAL ONLY (it tells you what font is loaded as `--font-heading`); never embed the literal name in JSX.
+3. Default-export a React function named `{component_name}` (matching filename).
+4. Mark `'use client';` as the FIRST line if you use useState / useEffect / onClick.
+5. Lucide-react icons for social (Instagram, Twitter, Facebook, Linkedin, Youtube, Github) and any UI affordances (Menu, X, ChevronDown). Map social.label string → icon via a small const dict.
+6. NO CSS modules, NO styled-components, NO dynamic class strings Tailwind can't parse.
+7. BORDER-RADIUS IS MANDATORY. Buttons, CTAs, and pill-style nav items use the
+   PROJECT_DESIGN_TOKENS button_radius_class (below). Mobile-menu icon buttons use the same.
+   Newsletter input/email-capture inputs use `rounded-md`. Logo lockup container `rounded-md`
+   if it has a background color, no radius if it's transparent. NEVER use `rounded-none`
+   on any header/footer element.
+{footer_rules_block}
+{exclusivity_block}
 ANATOMY — {anatomy_intro}:
 {anatomy}
 {anatomy_outro}
 
-INTERACTIVITY (REQUIRED)
-  • Sticky/fixed headers: useEffect listens to window.scrollY → setScrolled(true) past 8px → flips classes (transparent → solid w/ backdrop-blur). NO exceptions on mobile-only headers.
-  • Mobile menu: useState `open`. Hamburger button toggles. ESC closes. Click outside closes (use a backdrop div with onClick).
-  • Mega-menu: useState tracks open panel by index. Hover or click opens. Esc / clicking another link closes.
-  • Footer newsletter form (if applicable): useState for email + submitted; client-side email validation; success state.
-  • Every <Link> / <a> MUST resolve to a valid in-page anchor (`#features`, `#contact`) or external URL — never `href="#"` placeholders. Use anchors derived from `landing.nav` and `landing.footer.links`.
-  • aria-label on all icon-only buttons; aria-expanded on toggles.
+{interactivity_block}
 
 DESIGN CONTEXT
   Brand: {brand_name}
@@ -3040,35 +3332,13 @@ PROJECT_DESIGN_TOKENS — USE THESE EXACT TAILWIND CLASS STRINGS VERBATIM in the
     <button aria-label="Open menu" className="{dt.get("button_radius_class", "rounded-md")} p-2 {dt.get("transition_class", "transition-all duration-300")} hover:bg-muted">
 {brand_block}{visual_dna_block}{pers_block}{ref_block}
 
-CONTRAST & READABILITY (NON-NEGOTIABLE)
-  • Nav links: `text-foreground/80 hover:text-foreground` on solid header surfaces; on transparent-pill / floating-glass
-    headers add `backdrop-blur-md bg-background/80` to the pill so links remain readable over any photo behind. Never put
-    `text-white` on a transparent header that sits above a light hero image.
-  • Header CTA button: `bg-primary text-primary-foreground` (solid). On a transparent-pill, the CTA still uses the SAME
-    solid pill chip — never a low-opacity outline that disappears on light photos.
-  • The header MUST remain readable when scrolled past the hero (where the page surface is `bg-background`, light): when
-    the user scrolls past 8px, swap to a SOLID surface (`bg-background/95 backdrop-blur` + `border-b border-border`) so
-    the navigation never becomes invisible.
-  • Footer link text: `text-muted-foreground hover:text-foreground` (full opacity). Footer headings: `text-foreground`.
-  • DARK FOOTER SURFACES — when the footer wrapper uses `bg-foreground`,
-    `bg-secondary` (dark brand color), or any dark `bg-*`:
-      ✗ NEVER `text-foreground` or `text-muted-foreground` (invisible — same hue as bg).
-      ✗ NEVER `text-primary-foreground` (only pairs with `bg-primary`, NOT secondary).
-      ✓ Body / nav links: `text-background hover:text-background/80`.
-      ✓ Muted descriptions (newsletter sublabel, copyright): `text-background/70`.
-      ✓ Headings (column labels): `text-background` full opacity.
-      ✓ Newsletter input: `bg-background/10 text-background placeholder:text-background/50 border-background/20`.
-      ✓ Section divider line: `border-background/15`.
-    This is the #1 footer failure: white-on-white or brown-on-brown text
-    because the writer reached for `text-foreground` / `text-muted-foreground`
-    on an inverse surface. Always invert text colors on inverse surfaces.
+{contrast_block}
 
 QUALITY BAR
   • Looks like a real, professional layout for this brand — not a generic template.
   • Real interactivity (state + handlers), not stubs.
   • Pixel-clean spacing (gap-6 / gap-8 / py-3 / py-4 / h-14 / h-16, not random values).
-  • Header: max 6 nav links, each 1 short word. The nav array passed in is already short — DO NOT repeat words or
-    re-expand them ("Stays" stays "Stays", never "Accommodations Showcase").
+{quality_extra}
 """
 
 
@@ -3077,7 +3347,11 @@ def _layout_user_prompt(
     component_name: str,
     file_path: str,
 ) -> str:
-    return f"""Build ONE layout component.
+    counterpart = (
+        "MarketingFooter" if component_name == "MarketingHeader" else "MarketingHeader"
+    )
+    return f"""Build ONE layout component — ONLY the {component_name}. The {counterpart} is
+generated by a separate call and composed by layout.jsx; do not include any part of it.
 
 FILE PATH:    {file_path}
 COMPONENT:    {component_name}

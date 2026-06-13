@@ -111,3 +111,174 @@ class TestFixBrInHeadings:
     def test_noop_without_sections_dir(self, tmp_path):
         assert fix_br_in_headings(str(tmp_path)) == []
         assert fix_popover_overflow_clip(str(tmp_path)) == []
+
+
+# ── 2026-06-12 second wave: double footer, role leak, strip scale, rhythm ──
+from app.services.post_generation_fixer import (
+    fix_layout_cross_embed,
+    fix_section_role_leak,
+    fix_strip_section_scale,
+)
+
+
+def _write_layout(tmp_path, name: str, content: str) -> str:
+    layout = tmp_path / "src" / "components" / "layout"
+    layout.mkdir(parents=True, exist_ok=True)
+    path = layout / name
+    path.write_text(content, encoding="utf-8")
+    return str(path)
+
+
+HEADER_WITH_COLOCATED_FOOTER = """export default function MarketingHeader() {
+  return (
+    <>
+      <header className="fixed top-0">nav</header>
+      <MarketingFooter />
+    </>
+  );
+}
+function MarketingFooter() {
+  return <footer className="bg-foreground">links</footer>;
+}
+"""
+
+
+class TestFixLayoutCrossEmbed:
+    def test_strips_footer_self_render_from_header(self, tmp_path):
+        path = _write_layout(tmp_path, "MarketingHeader.jsx", HEADER_WITH_COLOCATED_FOOTER)
+        assert fix_layout_cross_embed(str(tmp_path)) == [path]
+        out = open(path, encoding="utf-8").read()
+        assert "<MarketingFooter />" not in out
+        # the local definition stays (unused dead code beats unbalanced JSX)
+        assert "function MarketingFooter" in out
+
+    def test_strips_inline_footer_markup_when_no_local_function(self, tmp_path):
+        src = (
+            "export default function MarketingHeader() {\n"
+            "  return (<>\n"
+            "    <header>nav</header>\n"
+            '    <footer className="bg-foreground"><p>links</p></footer>\n'
+            "  </>);\n"
+            "}\n"
+        )
+        path = _write_layout(tmp_path, "MarketingHeader.jsx", src)
+        assert fix_layout_cross_embed(str(tmp_path)) == [path]
+        out = open(path, encoding="utf-8").read()
+        assert "<footer" not in out and "links" not in out
+        assert "<header>nav</header>" in out
+
+    def test_clean_header_untouched(self, tmp_path):
+        src = "export default function MarketingHeader() { return <header>nav</header>; }\n"
+        path = _write_layout(tmp_path, "MarketingHeader.jsx", src)
+        assert fix_layout_cross_embed(str(tmp_path)) == []
+        assert open(path, encoding="utf-8").read() == src
+
+    def test_footer_embedding_header_also_stripped(self, tmp_path):
+        src = (
+            "export default function MarketingFooter() {\n"
+            "  return (<>\n"
+            "    <header className=\"fixed\">dup nav</header>\n"
+            "    <footer>links</footer>\n"
+            "  </>);\n"
+            "}\n"
+        )
+        path = _write_layout(tmp_path, "MarketingFooter.jsx", src)
+        assert fix_layout_cross_embed(str(tmp_path)) == [path]
+        out = open(path, encoding="utf-8").read()
+        assert "<header" not in out
+        assert "<footer>links</footer>" in out
+
+
+class TestFixSectionRoleLeak:
+    def test_section_role_swapped_for_nav_label(self, tmp_path):
+        src = '<p>{indexStr} &mdash; {section.role || "Trust"}</p>'
+        path = _write_section(tmp_path, "TrustTickerSection.jsx", src)
+        assert fix_section_role_leak(str(tmp_path)) == [path]
+        out = open(path, encoding="utf-8").read()
+        assert "section.role" not in out
+        assert '{section.nav_label || "Trust"}' in out
+
+    def test_item_role_untouched(self, tmp_path):
+        src = "<p>{t.role}</p>"
+        path = _write_section(tmp_path, "ReviewsSection.jsx", src)
+        assert fix_section_role_leak(str(tmp_path)) == []
+        assert open(path, encoding="utf-8").read() == src
+
+
+class TestFixStripSectionScale:
+    def test_trust_ticker_padding_capped(self, tmp_path):
+        src = '<section className="bg-muted/40 py-16 md:py-20 lg:py-24 relative">x</section>'
+        path = _write_section(tmp_path, "TrustTickerSection.jsx", src)
+        assert fix_strip_section_scale(str(tmp_path)) == [path]
+        out = open(path, encoding="utf-8").read()
+        assert 'className="bg-muted/40 py-10 md:py-12 lg:py-14 relative"' in out
+
+    def test_non_strip_filenames_untouched(self, tmp_path):
+        src = '<section className="py-20 md:py-24">cards</section>'
+        path = _write_section(tmp_path, "RoomsSection.jsx", src)
+        assert fix_strip_section_scale(str(tmp_path)) == []
+        assert open(path, encoding="utf-8").read() == src
+
+
+class TestEnforceRhythmSurface:
+    def _enforce(self, *args, **kwargs):
+        from app.services.landing_section_codegen import _enforce_rhythm_surface
+        return _enforce_rhythm_surface(*args, **kwargs)
+
+    def test_light_drift_repaired(self):
+        src = '<section className="scroll-mt-24 bg-card py-20 relative">x</section>'
+        out = self._enforce(
+            src, {"surface": "tint", "surface_classes": "bg-muted/40 text-foreground"},
+        )
+        assert "bg-muted/40" in out and "bg-card" not in out
+
+    def test_missing_bg_injected(self):
+        src = '<section className="py-20 relative">x</section>'
+        out = self._enforce(
+            src, {"surface": "base", "surface_classes": "bg-background text-foreground"},
+        )
+        assert "bg-background" in out
+
+    def test_dark_root_left_alone(self):
+        src = '<section className="bg-foreground text-background py-20">x</section>'
+        out = self._enforce(
+            src, {"surface": "base", "surface_classes": "bg-background text-foreground"},
+        )
+        assert out == src
+
+    def test_adherent_root_untouched(self):
+        src = '<section className="bg-muted/40 py-20">x</section>'
+        out = self._enforce(
+            src, {"surface": "tint", "surface_classes": "bg-muted/40 text-foreground"},
+        )
+        assert out == src
+
+    def test_media_and_empty_assignments_noop(self):
+        src = '<section className="bg-card py-20">x</section>'
+        assert self._enforce(src, None) == src
+        assert self._enforce(src, {"surface": "media", "surface_classes": "x"}) == src
+
+
+# ── 2026-06-13: icon-name-as-text leak ──
+from app.services.post_generation_fixer import fix_icon_name_as_text
+
+
+class TestFixIconNameAsText:
+    def test_removes_icon_name_text_span(self, tmp_path):
+        src = (
+            '<div className="chip">'
+            '<IconComp className="h-4 w-4" />'
+            '<span className="uppercase">{item.icon}</span>'
+            '</div>'
+        )
+        path = _write_section(tmp_path, "SleepScienceSection.jsx", src)
+        assert fix_icon_name_as_text(str(tmp_path)) == [path]
+        out = open(path, encoding="utf-8").read()
+        assert "{item.icon}" not in out
+        assert "<IconComp" in out  # the real icon stays
+
+    def test_no_icon_text_is_noop(self, tmp_path):
+        src = '<div><IconComp className="h-4" /><span>{item.label}</span></div>'
+        path = _write_section(tmp_path, "Faq.jsx", src)
+        assert fix_icon_name_as_text(str(tmp_path)) == []
+        assert open(path, encoding="utf-8").read() == src

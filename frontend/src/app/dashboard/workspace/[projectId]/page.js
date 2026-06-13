@@ -9,6 +9,7 @@ import {useState, useRef, useEffect, useCallback, use} from "react";
 import {useRouter} from "next/navigation";
 import {cn} from "@/lib/utils";
 import {WorkspaceErrorBoundary} from "@/components/WorkspaceErrorBoundary";
+import LimitUpgradeModal from "@/components/LimitUpgradeModal";
 import {
   Settings,
   X,
@@ -610,6 +611,11 @@ function ConversationPageInner({params}) {
   // full export flow runs end-to-end on the user's actual plan.
   const [exportBypassLimits, setExportBypassLimits] = useState(false);
   const [showExportUpgradeModal, setShowExportUpgradeModal] = useState(false);
+  // Project/token limit modal for the in-workspace intake gate. Set to
+  // {type: 'project'|'token'} when check-create answers 402; its Skip
+  // button re-runs the saved prompt with bypassLimits=true — the
+  // testing-only escape hatch, same contract as the dashboard modal.
+  const [limitModal, setLimitModal] = useState(null);
 
   // ── Click-to-edit (Base44-style) ──────────────────────────────────
   // When the user clicks the "Edit" toggle in the preview toolbar and
@@ -757,12 +763,16 @@ function ConversationPageInner({params}) {
         body: JSON.stringify({bypassLimits}),
       });
       if (gateRes.status === 402) {
+        const data = await gateRes.json().catch(() => ({}));
         addLocalChatMessage(
           "assistant",
-          "You've reached your project limit on your current plan. Upgrade in Billing to start a new project — your message above is saved.",
+          data?.limitType === "token"
+            ? "You've used your monthly token quota. Upgrade in Billing to keep building — your message above is saved."
+            : "You've reached your project limit on your current plan. Upgrade in Billing to start a new project — your message above is saved.",
         );
         rememberPendingProjectIntake(text);
         setProjectIntakeStatus("clarifying");
+        setLimitModal({type: data?.limitType === "token" ? "token" : "project"});
         return false;
       }
       if (!gateRes.ok) {
@@ -811,6 +821,24 @@ function ConversationPageInner({params}) {
   const submitProjectIntake = useCallback((prompt) => {
     return runProjectIntakeGate(prompt, {echoUser: true});
   }, [runProjectIntakeGate]);
+
+  // "Skip for testing" on the limit modal — re-run the saved prompt with
+  // bypassLimits=true (the only server-honored way past the gates) and
+  // remember the override for the rest of this workspace session so
+  // follow-up gates don't re-block mid-test.
+  const handleLimitModalSkip = useCallback(() => {
+    setLimitModal(null);
+    projectIntakeBypassRef.current = true;
+    let pending = "";
+    try {
+      const cid = decodeURIComponent(projectId || "unknown");
+      sessionStorage.setItem(`wizard_bypass_${cid}`, "1");
+      pending = sessionStorage.getItem(`wizard_pending_validation_${cid}`) || "";
+    } catch {}
+    if (pending) {
+      runProjectIntakeGate(pending, {bypassLimits: true});
+    }
+  }, [projectId, runProjectIntakeGate]);
 
   // Keep the client-side analyzing state visible between intent approval and
   // the backend's first acknowledgement. Once a real task state or phase
@@ -1373,6 +1401,22 @@ function ConversationPageInner({params}) {
             </svg>
             Reconnecting to workspace…
           </div>
+        )}
+        {/* ── Limit modal (project/token cap hit by the intake gate) ──
+             Upgrade goes to Billing; Skip re-runs the saved prompt with
+             bypassLimits=true (testing-only escape hatch). */}
+        {limitModal && (
+          <LimitUpgradeModal
+            limitType={limitModal.type}
+            planName={
+              subscription?.plan
+                ? subscription.plan.charAt(0).toUpperCase() + subscription.plan.slice(1)
+                : "Free"
+            }
+            onClose={() => setLimitModal(null)}
+            onSkip={handleLimitModalSkip}
+            skipLabel="Skip for testing"
+          />
         )}
         {/* ── Upgrade modal (shown when Free/Starter user clicks Export) ── */}
         {showExportUpgradeModal && (

@@ -178,3 +178,194 @@ class TestViewportHeightFixer:
         path = _write(tmp_path, "src/components/sections/Gallery.jsx", src)
         assert fix_nonhero_viewport_heights(str(tmp_path)) == []
         assert open(path, encoding="utf-8").read() == src
+
+
+class TestLayoutCrossEmbed:
+    """Header co-locating a footer rendered a double footer (one ABOVE the
+    hero) — Luminary Austin 2026-06-12."""
+
+    HEADER_WITH_FOOTER = (
+        "export default function MarketingHeader() {\n"
+        "  return (<><header className=\"fixed\">nav</header><MarketingFooter /></>);\n"
+        "}\n"
+        "function MarketingFooter() { return <footer>links</footer>; }\n"
+    )
+
+    def test_header_embedding_footer_is_regen(self):
+        v = lint_section_source(self.HEADER_WITH_FOOTER, filename="MarketingHeader")
+        hits = _by_code(v, "header_embeds_footer")
+        assert hits and hits[0]["severity"] == "regen"
+
+    def test_clean_header_passes(self):
+        src = "export default function MarketingHeader() { return <header>nav</header>; }"
+        assert not _by_code(
+            lint_section_source(src, filename="MarketingHeader"), "header_embeds_footer",
+        )
+
+    def test_footer_embedding_header_is_regen(self):
+        src = "export default function MarketingFooter() { return (<><header>nav</header><footer>x</footer></>); }"
+        v = lint_section_source(src, filename="MarketingFooter")
+        assert _by_code(v, "footer_embeds_header")
+
+    def test_clean_footer_passes(self):
+        src = "export default function MarketingFooter() { return <footer className=\"bg-foreground\">x</footer>; }"
+        assert not _by_code(
+            lint_section_source(src, filename="MarketingFooter"), "footer_embeds_header",
+        )
+
+    def test_regular_sections_never_gated(self):
+        # a section may legitimately contain <header> (card header) markup
+        src = "<section className=\"py-20\"><header>card head</header><footer>card foot</footer></section>"
+        codes = _codes(lint_section_source(src, filename="StorySection"))
+        assert "header_embeds_footer" not in codes
+        assert "footer_embeds_header" not in codes
+
+
+class TestSectionRoleLeak:
+    def test_rendered_section_role_flagged_fixable(self):
+        src = '<p className="eyebrow">{indexStr} &mdash; {section.role || "Trust"}</p>'
+        hits = _by_code(lint_section_source(src), "section_role_leak")
+        assert hits and hits[0]["severity"] == "fixable"
+
+    def test_item_role_is_fine(self):
+        # a testimonial author's job title is real content, not rationale
+        src = "<p>{t.role}</p><span>{member.role}</span>"
+        assert not _by_code(lint_section_source(src), "section_role_leak")
+
+
+class TestStripSectionScale:
+    def test_oversized_trust_bar_flagged(self):
+        src = '<section className="bg-muted/40 py-16 md:py-20 lg:py-24">stats</section>'
+        v = lint_section_source(src, section={"type": "trust_bar"})
+        hits = _by_code(v, "strip_section_oversized")
+        assert hits and hits[0]["severity"] == "fixable"
+
+    def test_compact_strip_passes(self):
+        src = '<section className="bg-muted/40 py-8 md:py-12">stats</section>'
+        assert not _by_code(
+            lint_section_source(src, section={"type": "trust_bar"}),
+            "strip_section_oversized",
+        )
+
+    def test_non_strip_types_keep_their_padding(self):
+        src = '<section className="py-20 md:py-24">cards</section>'
+        assert not _by_code(
+            lint_section_source(src, section={"type": "features"}),
+            "strip_section_oversized",
+        )
+
+
+class TestNativeDateInput:
+    def test_native_date_input_is_regen(self):
+        src = '<input type="date" value={checkIn} className="opacity-0" />'
+        hits = _by_code(lint_section_source(src), "native_date_input")
+        assert hits and hits[0]["severity"] == "regen"
+
+    def test_custom_calendar_passes(self):
+        src = (
+            '<button type="button" className="h-9 w-9 rounded-full">{d.date()}</button>'
+            '<input type="number" min="1" />'
+        )
+        assert not _by_code(lint_section_source(src), "native_date_input")
+
+
+class TestBentoAspectMix:
+    def test_mixed_aspects_without_rowspan_is_regen(self):
+        src = (
+            '<div className="grid grid-cols-12 gap-4">'
+            '<div className="aspect-[4/3]" /><div className="aspect-[3/4]" />'
+            '<div className="aspect-square" /></div>'
+        )
+        hits = _by_code(lint_section_source(src), "bento_aspect_mix")
+        assert hits and hits[0]["severity"] == "regen"
+
+    def test_rowspan_in_comment_does_not_satisfy(self):
+        # the shipped suites bento PLANNED row-span-2 in a comment but never
+        # applied the class — comments must not pass the structural check
+        src = (
+            "// Tile 0: col-span-7 row-span-2 (large hero tile)\n"
+            '<div className="grid grid-cols-12 gap-4">'
+            '<div className="aspect-[4/3]" /><div className="aspect-[3/4]" /></div>'
+        )
+        assert _by_code(lint_section_source(src), "bento_aspect_mix")
+
+    def test_real_rowspan_passes(self):
+        src = (
+            '<div className="grid grid-cols-12 auto-rows-[200px] gap-4">'
+            '<div className="md:row-span-2 aspect-[4/3]" /><div className="aspect-square" /></div>'
+        )
+        assert not _by_code(lint_section_source(src), "bento_aspect_mix")
+
+    def test_uniform_aspect_passes(self):
+        src = (
+            '<div className="grid grid-cols-12 gap-4">'
+            '<div className="aspect-[4/3]" /><div className="aspect-[4/3]" /></div>'
+        )
+        assert not _by_code(lint_section_source(src), "bento_aspect_mix")
+
+
+class TestHeaderOverfrosted:
+    # wordmark + nav + social each in their own translucent frosted chip
+    FROSTED = (
+        "export default function MarketingHeader() {\n"
+        '  return (<header className="bg-background/60 backdrop-blur-md">'
+        '    <div className="rounded-full bg-background/70 backdrop-blur-md px-4">Logo</div>'
+        '    <nav className="rounded-full bg-background/70 backdrop-blur-md px-2">links</nav>'
+        '    <div className="rounded-full bg-background/70 backdrop-blur-md p-1">social</div>'
+        "  </header>);\n}\n"
+    )
+
+    def test_stacked_frosted_chips_flagged_regen(self):
+        hits = _by_code(
+            lint_section_source(self.FROSTED, filename="MarketingHeader"),
+            "header_overfrosted",
+        )
+        assert hits and hits[0]["severity"] == "regen"
+
+    def test_clean_transparent_header_passes(self):
+        clean = (
+            "export default function MarketingHeader() {\n"
+            '  const cls = scrolled ? "bg-background/95 backdrop-blur-md border-b" : "bg-transparent";\n'
+            '  return <header className={cls}><nav className="flex gap-1 text-white">links</nav></header>;\n'
+            "}\n"
+        )
+        assert not _by_code(
+            lint_section_source(clean, filename="MarketingHeader"), "header_overfrosted",
+        )
+
+    def test_solid_header_passes(self):
+        src = (
+            'export default function MarketingHeader() {\n'
+            '  return <header className="bg-background/80 backdrop-blur-md border-b">'
+            '<nav className="text-foreground/80">links</nav></header>;\n}\n'
+        )
+        assert not _by_code(
+            lint_section_source(src, filename="MarketingHeader"), "header_overfrosted",
+        )
+
+    def test_sections_not_gated(self):
+        # a section may use frosted chips legitimately — only the header file is gated
+        src = (
+            '<section className="bg-background/60 backdrop-blur-md">'
+            '<div className="bg-background/70 backdrop-blur-md">a</div>'
+            '<div className="bg-background/70 backdrop-blur-md">b</div>'
+            '<div className="bg-background/70 backdrop-blur-md">c</div></section>'
+        )
+        assert not _by_code(
+            lint_section_source(src, filename="HeroSection"), "header_overfrosted",
+        )
+
+
+class TestIconNameAsText:
+    def test_icon_name_as_text_child_is_fixable(self):
+        src = '<span className="uppercase">{item.icon}</span>'
+        hits = _by_code(lint_section_source(src), "icon_name_as_text")
+        assert hits and hits[0]["severity"] == "fixable"
+
+    def test_component_render_not_flagged(self):
+        # <item.icon /> renders the COMPONENT — legitimate
+        assert not _by_code(lint_section_source('<item.icon className="h-4 w-4" />'), "icon_name_as_text")
+
+    def test_prop_and_data_usage_not_flagged(self):
+        assert not _by_code(lint_section_source('<Icon icon={item.icon} />'), "icon_name_as_text")
+        assert not _by_code(lint_section_source('const x = { icon: item.icon };'), "icon_name_as_text")

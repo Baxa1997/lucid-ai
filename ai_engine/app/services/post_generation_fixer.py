@@ -820,6 +820,226 @@ def fix_nonhero_viewport_heights(workspace_path: str) -> list[str]:
     return fixed
 
 
+def fix_layout_cross_embed(workspace_path: str) -> list[str]:
+    """Strip a footer embedded inside MarketingHeader.jsx (and vice versa).
+
+    The header generator co-located a full footer in the header file and
+    rendered it after `</header>` — since layout.jsx renders MarketingHeader
+    BEFORE the page content, the embedded footer appeared ABOVE the hero,
+    plus the real MarketingFooter at the page end (double footer, Luminary
+    Austin 2026-06-12). Removing the cross-render restores the layout's
+    Header → sections → Footer flow; a leftover unused local function
+    definition is harmless dead code, so it stays (cutting its body risks
+    unbalanced JSX).
+    """
+    fixed: list[str] = []
+    layout_dir = os.path.join(workspace_path, "src", "components", "layout")
+    targets = [
+        # (file, cross-component render to strip, raw tag to strip when inlined)
+        ("MarketingHeader.jsx", "MarketingFooter", "footer"),
+        ("MarketingFooter.jsx", "MarketingHeader", "header"),
+    ]
+    for fname, cross_name, cross_tag in targets:
+        path = os.path.join(layout_dir, fname)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except OSError:
+            continue
+
+        new_content = re.sub(rf"[ \t]*<{cross_name}\s*/>\n?", "", content)
+
+        # Raw <footer>/<header> markup inlined directly in the wrong file —
+        # only strippable when there's NO local function holding it (cutting
+        # inside a function body would leave unbalanced JSX behind).
+        if f"function {cross_name}" not in new_content:
+            open_idx = new_content.find(f"<{cross_tag}")
+            close_token = f"</{cross_tag}>"
+            close_idx = new_content.find(close_token)
+            if open_idx != -1 and close_idx > open_idx:
+                new_content = (
+                    new_content[:open_idx] + new_content[close_idx + len(close_token):]
+                )
+
+        if new_content == content:
+            continue
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            fixed.append(path)
+            logger.info(
+                "fix_layout_cross_embed: stripped embedded %s from %s",
+                cross_name, fname,
+            )
+        except OSError as exc:
+            logger.warning("fix_layout_cross_embed: failed to write %s: %s", path, exc)
+    return fixed
+
+
+def fix_icon_name_as_text(workspace_path: str) -> list[str]:
+    """Strip elements that render a lucide icon NAME as visible text.
+
+    `item.icon` holds a PascalCase lucide component name ("BatteryCharging")
+    used to select an <Icon/>. Printed as a JSX text child (`<span>{item.icon}
+    </span>`), it ships the raw identifier as a label (Pitch & Pavilion stays
+    bento 2026-06-13 — "BATTERYCHARGING" next to the battery icon). These
+    chips already render the real icon component alongside, so the text node
+    is redundant; removing the whole single-purpose element is the safe,
+    balanced fix.
+    """
+    from app.services.landing_section_lint import ICON_TEXT_ELEMENT_RE
+
+    fixed: list[str] = []
+    sections_dir = os.path.join(workspace_path, "src", "components", "sections")
+    if not os.path.isdir(sections_dir):
+        return fixed
+
+    for root, _, files in os.walk(sections_dir):
+        for name in files:
+            if not name.endswith((".jsx", ".tsx", ".js", ".ts")):
+                continue
+            path = os.path.join(root, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except OSError:
+                continue
+
+            new_content = ICON_TEXT_ELEMENT_RE.sub("", content)
+            if new_content == content:
+                continue
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                fixed.append(path)
+                logger.info(
+                    "fix_icon_name_as_text: removed icon-name text label in %s",
+                    os.path.relpath(path, workspace_path),
+                )
+            except OSError as exc:
+                logger.warning(
+                    "fix_icon_name_as_text: failed to write %s: %s", path, exc,
+                )
+    return fixed
+
+
+def fix_section_role_leak(workspace_path: str) -> list[str]:
+    """Swap rendered `section.role` for `section.nav_label` in section files.
+
+    `role` is the brief's internal design rationale; printed on the page it
+    reads as a leaked spec note ("02 — SUBTLE SOCIAL PROOF TO REDUCE FRICTION
+    IMMEDIATELY", Luminary Austin 2026-06-12). `nav_label` is real copy, and
+    existing `|| "fallback"` chains still apply when it's empty. Item-level
+    `.role` (a testimonial author's job title) is untouched — only the
+    `section.` accessor is rationale.
+    """
+    from app.services.landing_section_lint import SECTION_ROLE_LEAK_RE
+
+    fixed: list[str] = []
+    sections_dir = os.path.join(workspace_path, "src", "components", "sections")
+    if not os.path.isdir(sections_dir):
+        return fixed
+
+    for root, _, files in os.walk(sections_dir):
+        for name in files:
+            if not name.endswith((".jsx", ".tsx", ".js", ".ts")):
+                continue
+            path = os.path.join(root, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except OSError:
+                continue
+
+            new_content = SECTION_ROLE_LEAK_RE.sub("section.nav_label", content)
+            if new_content == content:
+                continue
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                fixed.append(path)
+                logger.info(
+                    "fix_section_role_leak: section.role → section.nav_label in %s",
+                    os.path.relpath(path, workspace_path),
+                )
+            except OSError as exc:
+                logger.warning(
+                    "fix_section_role_leak: failed to write %s: %s", path, exc,
+                )
+    return fixed
+
+
+# Strip-type section filenames (TrustTickerSection, LogoStripSection, …).
+_STRIP_FILENAME_RE = re.compile(
+    r"trust|logostrip|logobar|logos|pressbar|pressstrip|ticker|marquee",
+)
+
+
+def fix_strip_section_scale(workspace_path: str) -> list[str]:
+    """Cap root padding on strip sections (trust bars, logo strips, tickers).
+
+    A trust_bar whose role is "subtle social proof" rendered as a full-screen
+    bento of giant stat cards (Luminary Austin 2026-06-12) — scale mismatch
+    between the section's job (a slim seam under the hero) and its rendering.
+    Roots get py-10/md:py-12 caps; the lint side uses the section TYPE, this
+    post-hoc net uses the filename.
+    """
+    fixed: list[str] = []
+    sections_dir = os.path.join(workspace_path, "src", "components", "sections")
+    if not os.path.isdir(sections_dir):
+        return fixed
+
+    def _cap(m: "re.Match[str]") -> str:
+        prefix = m.group(1) or ""
+        caps = {"": "py-10", "sm:": "sm:py-10", "md:": "md:py-12"}
+        return caps.get(prefix, f"{prefix}py-14")
+
+    for root, _, files in os.walk(sections_dir):
+        for name in files:
+            if not name.endswith((".jsx", ".tsx", ".js", ".ts")):
+                continue
+            if not _STRIP_FILENAME_RE.search(name.lower()):
+                continue
+            path = os.path.join(root, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except OSError:
+                continue
+
+            match = _SECTION_ROOT_RE.search(content)
+            if not match:
+                continue
+            classes = match.group(3)
+            new_classes = re.sub(
+                r"\b((?:sm|md|lg|xl|2xl):)?py-(?:1[6-9]|[2-9]\d)\b", _cap, classes,
+            )
+            new_classes = re.sub(r"\s{2,}", " ", new_classes).strip()
+            if new_classes == classes:
+                continue
+
+            new_content = (
+                content[: match.start()]
+                + f'<section{match.group(1)}className={match.group(2)}{new_classes}{match.group(2)}'
+                + content[match.end():]
+            )
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                fixed.append(path)
+                logger.info(
+                    "fix_strip_section_scale: %s → %s in %s",
+                    classes, new_classes, os.path.relpath(path, workspace_path),
+                )
+            except OSError as exc:
+                logger.warning(
+                    "fix_strip_section_scale: failed to write %s: %s", path, exc,
+                )
+    return fixed
+
+
 # Detect duplicate-text watermark pattern: same JSX interpolation appears
 # inside a huge-text absolute element AND a normal label element within the
 # same card. Renders as a "ghost" name behind the readable name (saw this on

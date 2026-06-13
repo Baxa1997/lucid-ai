@@ -76,20 +76,28 @@ def _palette_vars(palette: dict[str, str]) -> str:
         lines.append(f"    --{k}: {v};")
         if k == "background":
             lines.append(f"    --foreground-on-bg: {palette.get('foreground', '0 0% 10%')};")
-    # Derived foregrounds for shadcn semantic pairs (best-effort — generated
-    # palette never gives us these explicitly, so we mirror foreground/background).
+    # Foregrounds for shadcn semantic pairs. When a token is supplied
+    # explicitly — the Design Director emits CONTRAST-VALIDATED foregrounds —
+    # use it verbatim. Otherwise fall back to mirroring background/foreground
+    # (the legacy best-effort, used when only a Gemini-typed 8-key palette
+    # exists). The mirror is lossy (a light primary gets a near-white
+    # primary-foreground = low contrast), so explicit always wins.
+    def _pick(explicit_key: str, fallback: str) -> str:
+        v = (palette.get(explicit_key) or "").strip()
+        return v or fallback
+
     derived = {
-        "primary-foreground":   palette.get("background", "0 0% 100%"),
-        "secondary-foreground": palette.get("foreground", "0 0% 10%"),
-        "accent-foreground":    palette.get("background", "0 0% 100%"),
-        "muted-foreground":     palette.get("foreground", "0 0% 40%"),
-        "card-foreground":      palette.get("foreground", "0 0% 10%"),
-        "popover":              palette.get("card", "0 0% 100%"),
-        "popover-foreground":   palette.get("foreground", "0 0% 10%"),
-        "input":                palette.get("border", "0 0% 90%"),
-        "ring":                 palette.get("primary", "220 90% 56%"),
-        "destructive":          "0 84% 60%",
-        "destructive-foreground": "0 0% 100%",
+        "primary-foreground":   _pick("primary_foreground", palette.get("background", "0 0% 100%")),
+        "secondary-foreground": _pick("secondary_foreground", palette.get("foreground", "0 0% 10%")),
+        "accent-foreground":    _pick("accent_foreground", palette.get("background", "0 0% 100%")),
+        "muted-foreground":     _pick("muted_foreground", palette.get("foreground", "0 0% 40%")),
+        "card-foreground":      _pick("card_foreground", palette.get("foreground", "0 0% 10%")),
+        "popover":              _pick("popover", palette.get("card", "0 0% 100%")),
+        "popover-foreground":   _pick("popover_foreground", palette.get("foreground", "0 0% 10%")),
+        "input":                _pick("input", palette.get("border", "0 0% 90%")),
+        "ring":                 _pick("ring", palette.get("primary", "220 90% 56%")),
+        "destructive":          _pick("destructive", "0 84% 60%"),
+        "destructive-foreground": _pick("destructive_foreground", "0 0% 100%"),
     }
     for k, v in derived.items():
         lines.append(f"    --{k}: {v};")
@@ -173,6 +181,10 @@ _GOOGLE_FONT_ALLOWLIST = {
     "Archivo", "Archivo_Narrow", "Bebas_Neue", "Oswald", "Raleway",
     "Quicksand", "Karla", "Mulish", "Rubik", "Urbanist",
     "Cardo", "Spectral", "Vollkorn",
+    # Design Director curated-pairing fonts (design_system_builder._FONT_PAIRINGS).
+    # Without these the locked typography silently falls back to Inter.
+    "Source_Sans_3", "Instrument_Serif", "Instrument_Sans", "Archivo_Black",
+    "Unbounded", "Young_Serif", "Bodoni_Moda",
 }
 
 # Map common commercial / non-Google font names to the closest free equivalent.
@@ -220,6 +232,12 @@ _FONT_WEIGHTS: dict[str, list[str]] = {
     "Vollkorn": ["400", "500", "600", "700"],
     "Spectral": ["400", "500", "600", "700"],
     "Oswald": ["400", "500", "600", "700"],  # variable 200-700 — no 800/900
+    # Static / single-weight Director fonts — passing an unsupported weight
+    # aborts the next/font build.
+    "Instrument_Serif": ["400"],   # only 400 (regular + italic)
+    "Archivo_Black": ["400"],      # only 400
+    "Young_Serif": ["400"],        # only 400
+    "Instrument_Sans": ["400", "500", "600", "700"],  # variable 400-700
 }
 
 # Sane default weights for fonts not in the explicit map. 400 (regular) and

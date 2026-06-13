@@ -18,8 +18,9 @@
 
 import { NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/gatekeeper';
-import { canCreateProject } from '@/lib/subscription';
+import { canCreateProject, canConsumeTokens } from '@/lib/subscription';
 import { recordProjectCreated } from '@/lib/usage';
+import { isTokenBypassActive } from '@/lib/devQuotaBypass';
 
 export async function POST(req) {
   const authResult = await requireAuth();
@@ -27,15 +28,33 @@ export async function POST(req) {
   const { ctx } = authResult;
 
   // `bypassLimits` is the established testing escape hatch — set by the
-  // dashboard's upgrade modal Skip button. It's the ONLY way to proceed
-  // past the project cap; nothing else (env var, devtools, direct call)
-  // skips this gate.
+  // upgrade modal's Skip button (dashboard composer AND the in-workspace
+  // intake gate). It's the ONLY way to proceed past the caps; nothing
+  // else (env var, devtools, direct call) skips the project gate.
   let body = {};
   try { body = await req.json(); } catch {}
   const bypassLimits = body?.bypassLimits === true;
 
   let gate = null;
   if (!bypassLimits) {
+    // Token gate FIRST: a token-exhausted generation burns real LLM cost,
+    // so it must block (with the token variant of the upgrade modal) even
+    // when the user still has project headroom.
+    if (!isTokenBypassActive()) {
+      const tokenGate = await canConsumeTokens(ctx.userId);
+      if (!tokenGate.allowed) {
+        return NextResponse.json(
+          {
+            error: tokenGate.reason,
+            upgradeRequired: true,
+            limitType: 'token',
+            plan: tokenGate.plan,
+          },
+          { status: 402 },
+        );
+      }
+    }
+
     gate = await canCreateProject(ctx.userId);
     if (!gate.allowed) {
       return NextResponse.json(

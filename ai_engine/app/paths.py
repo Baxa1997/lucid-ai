@@ -28,7 +28,18 @@ PREVIEW_WORKSPACE_PREFIX: str = "lucid_ws_"
 NEW_PROJECT_WORKSPACE_PREFIX: str = "lucid_new_"
 CONVERSATION_WORKSPACE_PREFIX: str = "lucid_conv_"
 RESEARCH_CACHE_DIR: str = os.path.join(TMP_ROOT, "lucid_research_cache")
-NODE_MODULES_CACHE_ROOT: str = os.path.join(TMP_ROOT, "lucid_nm_cache")
+
+# The node_modules cache holds large native binaries (e.g. @next/swc ≈ 135 MB).
+# It must NOT live on the macOS Docker Desktop bind mount (TMP_ROOT=/app/storage):
+# large file writes there truncate over FUSE, producing a corrupt .node that
+# SIGBUSes the moment Next mmaps/dlopens it ("Dev server crashed on startup",
+# and a SIGBUS in `next build`). Point LUCID_NM_CACHE_ROOT at a Docker *named
+# volume* (VM-local ext4) so large writes are reliable and mmap works. Defaults
+# to TMP_ROOT for back-compat (Linux prod bind mounts and tests are unaffected).
+NODE_MODULES_CACHE_ROOT: str = (
+    os.environ.get("LUCID_NM_CACHE_ROOT")
+    or os.path.join(TMP_ROOT, "lucid_nm_cache")
+)
 
 
 # ── Preview workspaces (shared across reconnects) ───────────────────────

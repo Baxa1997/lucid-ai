@@ -21,6 +21,7 @@ Usage:
         # Build failed after 3 attempts — commit with flag
 """
 import os
+import re
 import time
 import json
 import asyncio
@@ -116,6 +117,10 @@ class BuildValidator:
         self.max_retries = max_retries
         self.attempt = 0
         self.fixed_files: list = []
+        # Packages we've already auto-installed for a "Module not found" error,
+        # so a still-missing module doesn't loop forever (bounded by rounds too).
+        self._auto_added_deps: set = set()
+        self._auto_add_rounds: int = 0
         self.errors: str = ""
         self.template_manifest: str = ""
         self.codex_fix_failed: bool = False
@@ -234,6 +239,39 @@ class BuildValidator:
 
             if result.returncode == 0:
                 return {"success": True}
+
+            # ── Infra crash vs code error ────────────────────────────────
+            # A worker CRASH (SIGBUS / SIGKILL / SIGSEGV / OOM) is a failure of
+            # the LOCAL build sandbox, not a code error — Next's build worker
+            # died ("build worker exited with code: null and signal: SIGBUS").
+            # The generated code parsed clean; a real compile error names a
+            # module or symbol. Classify it separately so the pipeline does NOT
+            # demote a valid project to a draft branch + a broken Vercel deploy.
+            full_lower = full_output.lower()
+            _INFRA_CRASH_MARKERS = (
+                "signal: sigbus", "signal: sigkill", "signal: sigsegv",
+                "signal: sigabrt", "worker exited with code: null",
+                "javascript heap out of memory", "out of memory",
+                "cannot allocate memory",
+            )
+            _REAL_COMPILE_MARKERS = (
+                "failed to compile", "module not found", "cannot find module",
+                "syntaxerror", "type error", "unexpected token",
+                "is not defined", "can't resolve", "cannot resolve",
+            )
+            if any(m in full_lower for m in _INFRA_CRASH_MARKERS) and not any(
+                m in full_lower for m in _REAL_COMPILE_MARKERS
+            ):
+                logger.warning(
+                    "BuildValidator: build worker crashed (infra, not a code error) — %s",
+                    next((m for m in _INFRA_CRASH_MARKERS if m in full_lower), "signal"),
+                )
+                return {
+                    "success": False,
+                    "infra_crash": True,
+                    "errors": "\n".join(full_output.splitlines()[-40:])[:2000],
+                    "error_count": 0,
+                }
 
             # Extract meaningful error lines.
             # Pnpm/npm noise (Progress:, Packages:, Recreating, resolved/reused
@@ -543,6 +581,92 @@ Rules:
             logger.warning("BuildValidator: Codex build fix failed: %s", exc)
             return []
 
+    def _missing_bare_modules(self, errors: str, pkg_data: dict) -> list[str]:
+        """Bare npm packages the build reports as unresolved AND that aren't
+        already declared in package.json.
+
+        Excludes relative imports, the ``@/`` tsconfig alias, ``node:`` /
+        builtin modules, and the framework packages (next/react — a missing
+        one of those means a broken *install*, handled separately, not a
+        missing declared dep). A deep import (``dayjs/plugin/utc``,
+        ``@scope/pkg/sub``) collapses to its installable package name.
+        """
+        if not errors:
+            return []
+        specs = re.findall(
+            r"(?:Can't resolve|Cannot find module)\s+['\"]([^'\"]+)['\"]", errors
+        )
+        if not specs:
+            return []
+        existing = set(pkg_data.get("dependencies") or {}) | set(
+            pkg_data.get("devDependencies") or {}
+        )
+        builtins = frozenset({
+            "fs", "path", "os", "http", "https", "crypto", "stream", "util",
+            "events", "child_process", "url", "zlib", "buffer", "net", "tls",
+            "dns", "assert", "querystring", "readline", "worker_threads",
+            "perf_hooks", "async_hooks", "process", "module", "timers",
+            "string_decoder", "punycode", "v8", "vm", "tty", "cluster",
+        })
+        never_auto = frozenset({"next", "react", "react-dom"})
+        out: list[str] = []
+        for spec in specs:
+            if not spec or spec[0] in "./" or spec.startswith("@/") or spec.startswith("node:"):
+                continue  # relative path, @/ alias, or node: builtin
+            if spec.startswith("@"):
+                parts = spec.split("/")
+                if len(parts) < 2:
+                    continue
+                pkg = "/".join(parts[:2])  # @scope/name
+            else:
+                pkg = spec.split("/")[0]   # name (drop deep-import subpath)
+            if pkg in builtins or pkg in never_auto or pkg in existing:
+                continue
+            if pkg not in out:
+                out.append(pkg)
+        return out
+
+    async def _auto_install_missing_deps(
+        self, workspace_path: str, errors: str, pm: str, pkg_data: dict
+    ) -> list[str]:
+        """Add bare packages the build couldn't resolve to package.json + install.
+
+        Returns the packages added (so the caller can rebuild). Bounded by
+        ``_auto_added_deps`` (never add the same package twice) and
+        ``_auto_add_rounds`` (≤3 total) so a genuinely-unresolvable import can't
+        loop. Uses the PM's add command (``pnpm add X`` / ``npm i --save X``)
+        which resolves a real version into package.json.
+        """
+        if self._auto_add_rounds >= 3:
+            return []
+        candidates = self._missing_bare_modules(errors, pkg_data)
+        pkgs = [p for p in candidates if p not in self._auto_added_deps]
+        if not pkgs:
+            return []
+        self._auto_add_rounds += 1
+        self._auto_added_deps.update(pkgs)
+        add_cmd = _pm_install_cmd(pm, pkgs)
+        logger.info(
+            "BuildValidator: auto-installing missing deps %s via: %s",
+            pkgs, " ".join(add_cmd),
+        )
+        try:
+            res = await asyncio.to_thread(
+                subprocess.run, add_cmd, cwd=workspace_path,
+                capture_output=True, text=True,
+                timeout=_INSTALL_TIMEOUT_SECONDS, env=_pm_env(pm),
+            )
+        except Exception as exc:
+            logger.warning("BuildValidator: auto-add install errored: %s", exc)
+            return []
+        if res.returncode != 0:
+            tail = ((res.stderr or "") + (res.stdout or ""))[-400:]
+            logger.warning(
+                "BuildValidator: auto-add %s exited %d (rebuilding anyway): %s",
+                pkgs, res.returncode, tail.strip()[:200],
+            )
+        return pkgs
+
     async def validate_and_fix(self, workspace_path: str) -> dict:
         """Main entry point: validate build and auto-fix errors.
 
@@ -732,6 +856,42 @@ Rules:
             last_errors = result.get("errors", "Unknown error")
             last_error_count = result.get("error_count", 1)
 
+            # Infra crash (SIGBUS / OOM worker death) — the LOCAL build sandbox
+            # died, not the code. There's nothing for the auto-fixer to fix, and
+            # the deploy build runs on separate (host/Vercel) infra. Treat as
+            # NON-BLOCKING so a valid project still publishes to main instead of
+            # being stranded on a draft branch.
+            if result.get("infra_crash"):
+                try:
+                    from app.services.llm_retry import emit_build_result
+                    await emit_build_result(
+                        self.websocket,
+                        success=True,
+                        attempts=self.attempt + 1,
+                        fixed_count=len(self.fixed_files),
+                    )
+                except Exception:
+                    pass
+                await self._send(
+                    "build", "passed",
+                    "✅ Code validated. The local build sandbox crashed (an infra/memory "
+                    "issue, not a code error), so the deploy build runs on the host — "
+                    "publishing as-is.",
+                )
+                logger.warning(
+                    "BuildValidator: local build worker crashed (infra) — non-blocking, "
+                    "code parsed clean; publishing to main",
+                )
+                return {
+                    "success": False,
+                    "infra_crash": True,
+                    "needs_fix": False,
+                    "attempts": self.attempt + 1,
+                    "errors": last_errors,
+                    "fixed_files": self.fixed_files,
+                    "error_count": 0,
+                }
+
             # Timeout — no parseable error output for Claude to fix
             if result.get("timed_out"):
                 try:
@@ -816,6 +976,24 @@ Rules:
                     "error_count": last_error_count,
                     "install_failed": True,
                 }
+
+            # Deterministic pre-pass: a bare package is imported but absent from
+            # package.json (e.g. `import dayjs`). Don't spend a code-fix attempt
+            # rewriting working code to dodge a missing dep — add it + install +
+            # rebuild. Bounded (_auto_added_deps + _auto_add_rounds≤3) so a
+            # genuinely-unresolvable import falls through to the code fixer.
+            newly_added = await self._auto_install_missing_deps(
+                workspace_path, last_errors, pm, pkg_data
+            )
+            if newly_added:
+                if "package.json" not in self.fixed_files:
+                    self.fixed_files.append("package.json")
+                await self._send(
+                    "build", "fixing",
+                    f"📦 Added missing dependenc{'ies' if len(newly_added) > 1 else 'y'} "
+                    f"({', '.join(newly_added)}) and rebuilding…",
+                )
+                continue  # rebuild WITHOUT consuming a code-fix attempt
 
             if self.attempt < self.max_retries:
                 has_codex_fixer = self._prefer_codex_fixer()

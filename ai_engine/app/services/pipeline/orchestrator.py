@@ -378,28 +378,91 @@ def _route_edit_mode(
     return "direct"
 
 
+def _node_binary_truncated(path: str) -> bool:
+    """True if an ELF64 ``.node`` file is shorter than its own headers declare.
+
+    A truncated native addon (e.g. a 15 MB @next/swc where the real binary is
+    ~135 MB — the result of a large write truncating over the macOS FUSE bind
+    mount) still has a valid ELF header that references segment/section offsets
+    past the real end of file. ``dlopen`` mmaps those regions and the first
+    access SIGBUSes — exactly how a corrupt SWC binary crashes ``next dev`` /
+    ``next build`` with no JS error and no stack trace.
+
+    We validate WITHOUT executing the binary (executing it would SIGBUS this
+    process): parse the ELF program + section header tables and require the
+    file to be at least as large as the furthest referenced offset. Non-ELF64
+    / unreadable files return False (never flag what we can't verify).
+    """
+    import struct
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            hdr = fh.read(64)
+            if len(hdr) < 64 or hdr[:4] != b"\x7fELF" or hdr[4] != 2:
+                return False  # not 64-bit ELF → don't judge
+            e_phoff = struct.unpack_from("<Q", hdr, 0x20)[0]
+            e_shoff = struct.unpack_from("<Q", hdr, 0x28)[0]
+            e_phentsize = struct.unpack_from("<H", hdr, 0x36)[0]
+            e_phnum = struct.unpack_from("<H", hdr, 0x38)[0]
+            e_shentsize = struct.unpack_from("<H", hdr, 0x3A)[0]
+            e_shnum = struct.unpack_from("<H", hdr, 0x3C)[0]
+            need = 0
+            if e_shoff and e_shnum:
+                need = max(need, e_shoff + e_shnum * e_shentsize)
+            if e_phoff and e_phnum:
+                fh.seek(e_phoff)
+                ph = fh.read(e_phentsize * e_phnum)
+                for i in range(e_phnum):
+                    off = i * e_phentsize
+                    if off + 0x28 > len(ph):
+                        break
+                    p_offset = struct.unpack_from("<Q", ph, off + 0x08)[0]
+                    p_filesz = struct.unpack_from("<Q", ph, off + 0x20)[0]
+                    need = max(need, p_offset + p_filesz)
+            return size < need
+    except OSError:
+        return False
+
+
+def _first_truncated_native(nm_root: str) -> str | None:
+    """Path of the first truncated native (``.node``) binary under ``nm_root``,
+    or None. Only ``.node`` addons are parsed — that's where write truncation
+    on the bind mount actually bit (@next/swc, sharp, …)."""
+    try:
+        for root, _dirs, files in os.walk(nm_root):
+            for f in files:
+                if f.endswith(".node"):
+                    p = os.path.join(root, f)
+                    if _node_binary_truncated(p):
+                        return p
+    except OSError:
+        pass
+    return None
+
+
 async def _cached_install(
     workspace_path: str,
     pm: str,
     websocket,
 ) -> None:
-    """Install node_modules ON THE OVERLAY FS, symlink into the workspace.
+    """Install node_modules into the nm_cache volume, symlink into the workspace.
 
-    Cache layout (under /tmp/lucid_nm_cache/<pm>_<pkg-hash>/):
+    Cache layout (under NODE_MODULES_CACHE_ROOT/<pm>_<pkg-hash>/):
       package.json, lockfile, .npmrc   — copied from workspace
-      node_modules/                    — installed in place (hardlinks, fast)
+      node_modules/                    — installed in place
 
     Workspace just gets a symlink: workspace/node_modules → cache/node_modules.
 
     Why this design: the workspace lives on `/app/storage/...` which is a macOS
-    Docker Desktop bind mount (fuse). Installing 730 packages there is 5–10×
-    slower than overlay FS because every syscall is RPC, and pnpm hardlinks
-    fail with errno -116 forcing the slower `copy` import method. Installing
-    in the cache dir (on overlay) sidesteps all of it — hardlinks work, IO is
-    native, install completes in 60–120s instead of 6–9 min.
+    Docker Desktop bind mount (FUSE). Installing 730 packages there is 5–10×
+    slower (every syscall is RPC) AND large binary writes truncate, producing a
+    corrupt @next/swc that SIGBUSes on load. The cache root is therefore pinned
+    to a Docker *named volume* (ext4 in the VM) via LUCID_NM_CACHE_ROOT — native
+    IO, reliable large writes — and a post-install integrity pass re-installs
+    once if any .node binary still landed truncated.
 
     Cache hit  → symlink existing node_modules into workspace  (~0.1s)
-    Cache miss → install in cache_dir, then symlink                (~60-120s)
+    Cache miss → install in cache_dir, verify, then symlink     (~60-120s)
     Always non-fatal: any exception is logged and swallowed.
     """
     pkg_path = os.path.join(workspace_path, "package.json")
@@ -479,52 +542,71 @@ async def _cached_install(
         except Exception:
             pass
 
-        os.makedirs(cache_dir, exist_ok=True)
+        def _copy_manifests() -> None:
+            # Copy package.json + lockfiles + .npmrc into cache_dir so the PM
+            # has everything it needs to resolve from the workspace's lockfile.
+            os.makedirs(cache_dir, exist_ok=True)
+            for fname in ("package.json", "pnpm-lock.yaml", "package-lock.json",
+                          "yarn.lock", "bun.lockb", ".npmrc", ".nvmrc"):
+                src = os.path.join(workspace_path, fname)
+                if os.path.isfile(src):
+                    try:
+                        shutil.copy2(src, os.path.join(cache_dir, fname))
+                    except OSError as cexc:
+                        logger.debug("_cached_install: copy %s skipped: %s", fname, cexc)
 
-        # Copy package.json + lockfiles + .npmrc into cache_dir so pnpm
-        # has everything it needs to resolve from the workspace's lockfile.
-        for fname in ("package.json", "pnpm-lock.yaml", "package-lock.json",
-                      "yarn.lock", "bun.lockb", ".npmrc", ".nvmrc"):
-            src = os.path.join(workspace_path, fname)
-            if os.path.isfile(src):
-                try:
-                    shutil.copy2(src, os.path.join(cache_dir, fname))
-                except OSError as cexc:
-                    logger.debug("_cached_install: copy %s skipped: %s", fname, cexc)
+        async def _run_install():
+            # Use the package-manager's default import method (copy). The cache
+            # lives on the nm_cache named volume (ext4) — a DIFFERENT device
+            # from the pnpm store — so cross-device hardlinks aren't possible
+            # anyway, and copy onto ext4 is reliable (the old forced-hardlink
+            # path fell back to copying onto the macOS bind mount, which
+            # truncated 100 MB+ binaries → SIGBUS on load).
+            return await asyncio.to_thread(
+                subprocess.run,
+                _pm_install_cmd(pm),
+                cwd=cache_dir,
+                capture_output=True,
+                text=True,
+                # 600s cap — install of 730 packages usually finishes in
+                # 60–120s; cold downloads on a fresh container can push to 4-5
+                # min. 600s leaves headroom without blocking forever.
+                timeout=600,
+                env=dict(_pm_env(pm)),
+            )
 
-        # Override package_import_method to hardlink — cache_dir is on overlay,
-        # pnpm store is on overlay (/tmp/pnpm_store), so hardlinks work across
-        # the same FS and are ~5× faster than copy. The env's default `copy`
-        # is only needed when installing onto the bind mount (fallback paths).
-        cache_env = dict(_pm_env(pm))
-        cache_env["npm_config_package_import_method"] = "hardlink"
+        # pnpm advisory exits (rc=1) for benign things (lockfile up to date,
+        # ERR_PNPM_IGNORED_BUILDS, peer-dep warnings). The structural truth is:
+        # did node_modules end up with the framework binary present AND are its
+        # native .node binaries intact? Install once, then make ONE repair pass
+        # if any native binary landed truncated (corrupt → SIGBUS on load).
+        result = None
+        install_ok = False
+        truncated_after_retry = False
+        for _attempt in range(2):
+            _copy_manifests()
+            result = await _run_install()
+            if not (os.path.isdir(cache_nm) and _framework_binary_present(cache_nm)):
+                install_ok = False
+                break
+            bad = _first_truncated_native(cache_nm)
+            if not bad:
+                install_ok = True
+                break
+            logger.warning(
+                "_cached_install: truncated native binary in cache (%s) — wiping + reinstalling once",
+                os.path.relpath(bad, cache_dir),
+            )
+            shutil.rmtree(cache_dir, ignore_errors=True)
+            install_ok = False
+            truncated_after_retry = (_attempt == 1)
+        if truncated_after_retry:
+            logger.error(
+                "_cached_install: native binary STILL truncated after reinstall (%s) — "
+                "not symlinking cache; local_preview will fall back to a fresh install",
+                cache_key,
+            )
 
-        # Strip the explicit --package-import-method=copy flag from the install
-        # command so the hardlink env wins. Other flags (store-dir, prefer-offline)
-        # stay as-is.
-        install_cmd = [c for c in _pm_install_cmd(pm) if c != "--package-import-method=copy"]
-
-        result = await asyncio.to_thread(
-            subprocess.run,
-            install_cmd,
-            cwd=cache_dir,
-            capture_output=True,
-            text=True,
-            # 600s cap — overlay-FS hardlink install of 730 packages usually
-            # finishes in 60–120s, but cold downloads on a fresh container can
-            # push to 4-5 min. 600s leaves headroom without blocking forever.
-            timeout=600,
-            env=cache_env,
-        )
-
-        # pnpm advisory exits (rc=1) for things like "Lockfile is up to date,
-        # resolution step is skipped", ERR_PNPM_IGNORED_BUILDS, or peer-dep
-        # warnings — all benign. The structural truth is: did node_modules end
-        # up with the framework binary present? If yes, treat as success even
-        # when rc != 0. Without this rc-agnostic check, every cache install
-        # was being marked "failed" and local_preview was re-installing the
-        # ENTIRE tree (12+ minutes on macOS bind mount).
-        install_ok = os.path.isdir(cache_nm) and _framework_binary_present(cache_nm)
         if install_ok:
             _symlink_cache_to_ws()
             _write_marker()

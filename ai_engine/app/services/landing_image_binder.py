@@ -506,9 +506,16 @@ async def bind_landing_images(
             # Fall back to subject-filtered originals (still better than the
             # raw unfiltered pool), then to raw — so the slot is never empty.
             filtered = [p for p in photos if not _photo_subject_disallowed(p)] or photos
+        # Return a RANKED candidate list (seeded rotation) instead of one
+        # URL: similar queries within one section ("suite vinyl studio" /
+        # "hotel suite interior") often resolve to the same top photo, and
+        # the same image twice in one bento reads as a rendering bug
+        # (Saint Cecilia suites 2026-06-13). The assignment loop picks the
+        # first candidate not already used in that section.
         idx = _project_offset(project_seed, query, len(filtered))
-        chosen = filtered[idx]
-        return chosen["url_hero"] if is_hero else chosen["url_card"]
+        rotated = filtered[idx:] + filtered[:idx]
+        key = "url_hero" if is_hero else "url_card"
+        return [p[key] for p in rotated[:4] if p.get(key)]
 
     fetched = await asyncio.gather(
         *(_fetch(q, hero) for _, _, q, hero in jobs),
@@ -517,14 +524,20 @@ async def bind_landing_images(
 
     bound = 0
     unbound: list[tuple[int, int]] = []
-    for (s_idx, i_idx, query, _), url in zip(jobs, fetched):
-        if not url:
+    used_per_section: dict[int, set[str]] = {}
+    for (s_idx, i_idx, query, _), candidates in zip(jobs, fetched):
+        if not candidates:
             # Track the failed slot so the post-pass can substitute a fallback
             # query (we don't drop the URL — that leaves an empty `<Image src=""/>`
             # which renders as a broken placeholder + reveals the hover-VIEW
             # button underneath, the "broken image" failure mode).
             unbound.append((s_idx, i_idx))
             continue
+        used = used_per_section.setdefault(s_idx, set())
+        url = next((c for c in candidates if c not in used), candidates[0])
+        if url in used:
+            counters["dup_in_section"] = counters.get("dup_in_section", 0) + 1
+        used.add(url)
         try:
             sections[s_idx]["images"][i_idx]["url"] = url
             sections[s_idx]["images"][i_idx].setdefault("alt", query)
